@@ -103,3 +103,38 @@ zenforge/
 Implementation should begin only after the boundaries in these documents are
 accepted.
 
+Start with [docs/preparation-plan.md](./docs/preparation-plan.md) before
+porting implementation code. It captures the current extraction strategy after
+reviewing `agent-platform` and `agent-container-hub`.
+
+For the full path from project start to MVP and the first usable product, see
+[docs/product-roadmap.md](./docs/product-roadmap.md).
+
+The design document index is [docs/README.md](./docs/README.md).
+
+The detailed durable runtime design for S1 is
+[docs/s1-durable-runtime-spec.md](./docs/s1-durable-runtime-spec.md).
+
+The tool runtime design for S2 is
+[docs/s2-tool-runtime-spec.md](./docs/s2-tool-runtime-spec.md).
+
+The safety and workspace design for S3 is
+[docs/s3-safety-workspace-spec.md](./docs/s3-safety-workspace-spec.md).
+
+The minimal harness design for S4 is
+[docs/s4-minimal-harness-spec.md](./docs/s4-minimal-harness-spec.md).
+
+The planner and todo design for S5 is
+[docs/s5-planner-todo-spec.md](./docs/s5-planner-todo-spec.md).
+
+The approval and HITL design for S6 is
+[docs/s6-approval-hitl-spec.md](./docs/s6-approval-hitl-spec.md).
+
+The sub-agent runtime design for S7 is
+[docs/s7-subagent-runtime-spec.md](./docs/s7-subagent-runtime-spec.md).
+
+The sandbox adapter design for S8 is
+[docs/s8-sandbox-adapter-spec.md](./docs/s8-sandbox-adapter-spec.md).
+
+The MVP assembly plan is
+[docs/mvp-assembly-plan.md](./docs/mvp-assembly-plan.md).

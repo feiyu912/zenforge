@@ -3,6 +3,9 @@
 S0 is the project setup and boundary-freeze stage. Its job is not to port all
 runtime code. Its job is to make the extraction safe, scoped, and reviewable.
 
+Read `preparation-plan.md` first. It is the current source of truth for what
+must be designed before implementation code is copied from `agent-platform`.
+
 ## S0 Goal
 
 Create a standalone ZenForge repo skeleton and freeze the public runtime
@@ -101,4 +104,3 @@ OpenAI-compatible model
 
 That gives ZenForge a real demo without dragging the entire platform across the
 boundary.
-
