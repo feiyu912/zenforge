@@ -129,6 +129,11 @@ type Model interface {
 }
 ```
 
+`model/openai` is the first concrete adapter. It targets OpenAI-compatible Chat
+Completions, sends ZenForge tools as function tool definitions, streams SSE
+chunks into normalized model events, and accumulates streaming `tool_calls`
+before the harness invokes tools.
+
 ### Tool
 
 ```go

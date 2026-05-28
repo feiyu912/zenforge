@@ -5,6 +5,11 @@ This is a draft API. Names can change after the first implementation spike.
 ## Create An Agent
 
 ```go
+model := openai.New(openai.Config{
+    APIKey: os.Getenv("OPENAI_API_KEY"),
+    Model:  "gpt-4.1",
+})
+
 agent := zenforge.New(zenforge.Config{
     Model: model,
     Instructions: "You are a senior Go backend engineer.",
