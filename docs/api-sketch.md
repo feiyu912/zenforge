@@ -95,6 +95,22 @@ if err != nil {
 }
 ```
 
+## Todo Tools
+
+```go
+todoManager := planner.NewMemoryManager(planner.MemoryConfig{})
+todoTools, err := todo.Tools(todo.Config{Manager: todoManager})
+if err != nil {
+    return err
+}
+
+agent := zenforge.New(zenforge.Config{
+    Model:    model,
+    Planning: zenforge.PlanningEnabled,
+    Tools:    append(workspaceTools, shellTool),
+})
+```
+
 ## Durable Runtime Stores
 
 S1 exposes replaceable durable runtime pieces:

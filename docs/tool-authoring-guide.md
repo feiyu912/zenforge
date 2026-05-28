@@ -172,3 +172,25 @@ if err != nil {
 The `shell` tool requires a description, blocks commands outside the allowlist
 by default, caps output, enforces timeout, and keeps `cwd` inside the configured
 working directory.
+
+## Todo Tools
+
+```go
+todoManager := planner.NewMemoryManager(planner.MemoryConfig{})
+todoTools, err := todo.Tools(todo.Config{Manager: todoManager})
+if err != nil {
+    return err
+}
+```
+
+The core todo tools are:
+
+- `todo_write`
+- `todo_read`
+- `todo_update`
+
+Compatibility aliases are available through `todo.CompatibilityAliases`:
+
+- `plan_add_tasks`
+- `plan_get_tasks`
+- `plan_update_task`

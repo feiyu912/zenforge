@@ -5,6 +5,7 @@ import (
 
 	"github.com/feiyu912/zenforge/checkpoint"
 	"github.com/feiyu912/zenforge/model"
+	"github.com/feiyu912/zenforge/planner"
 	"github.com/feiyu912/zenforge/tool"
 	"github.com/feiyu912/zenforge/trace"
 	"github.com/feiyu912/zenforge/workspace"
@@ -39,6 +40,7 @@ type Config struct {
 	Tools        []tool.Tool
 	ToolInvoker  tool.Invoker
 	ToolRuntime  []tool.Middleware
+	Todos        planner.Manager
 	Workspace    workspace.Workspace
 	Events       EventStore
 	Checkpoints  checkpoint.Store

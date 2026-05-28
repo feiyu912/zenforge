@@ -103,6 +103,48 @@ func TestAgentStreamRunsToolAndContinuesModelLoop(t *testing.T) {
 	}
 }
 
+func TestAgentPlanningAddsTodoToolsAndCheckpointsTodos(t *testing.T) {
+	checkpoints := checkpointmemory.New()
+	model := &scriptedModel{turns: []scriptedTurn{
+		{
+			events: []model.Event{{
+				Message: &model.Message{
+					ToolCalls: []model.ToolCallSpec{{
+						ID:        "call_1",
+						Name:      "todo_write",
+						Arguments: json.RawMessage(`{"todos":[{"content":"Inspect repo"}]}`),
+					}},
+				},
+			}},
+		},
+		{events: []model.Event{{Delta: "planned"}}},
+	}}
+	agent := New(Config{
+		Model:       model,
+		Planning:    PlanningEnabled,
+		Checkpoints: checkpoints,
+	})
+
+	events, err := agent.Stream(context.Background(), Task{RunID: "run_plan", Input: "make a plan"})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	var types []EventType
+	for event := range events {
+		types = append(types, event.Type)
+	}
+	assertContainsEvent(t, types, EventTodoUpdated)
+	assertContainsEvent(t, types, EventRunDone)
+
+	cp, err := checkpoints.Load(context.Background(), "run_plan")
+	if err != nil {
+		t.Fatalf("Load checkpoint returned error: %v", err)
+	}
+	if len(cp.State.Todos) != 1 || cp.State.Todos[0].Content != "Inspect repo" {
+		t.Fatalf("expected checkpointed todos, got %#v", cp.State.Todos)
+	}
+}
+
 func assertContainsEvent(t *testing.T, events []EventType, want EventType) {
 	t.Helper()
 	for _, event := range events {

@@ -10,17 +10,24 @@ import (
 	"github.com/feiyu912/zenforge/checkpoint"
 	"github.com/feiyu912/zenforge/harness"
 	"github.com/feiyu912/zenforge/model"
+	"github.com/feiyu912/zenforge/planner"
 	"github.com/feiyu912/zenforge/tool"
+	todotools "github.com/feiyu912/zenforge/tools/todo"
 )
 
 // Agent is the high-level batteries-included runtime entrypoint.
 type Agent struct {
 	config Config
+	todos  planner.Manager
 }
 
 // New creates an Agent with the provided runtime configuration.
 func New(config Config) *Agent {
-	return &Agent{config: config}
+	todos := config.Todos
+	if todos == nil && config.Planning == PlanningEnabled {
+		todos = planner.NewMemoryManager(planner.MemoryConfig{})
+	}
+	return &Agent{config: config, todos: todos}
 }
 
 // Run executes a task and returns the final result.
@@ -329,6 +336,12 @@ func (a *Agent) runPendingTools(ctx context.Context, emit func(EventType, map[st
 			Error:      result.Error,
 			ExitCode:   result.ExitCode,
 		}
+		if todos, ok := plannerTodos(result.Structured["todos"]); ok {
+			state.Todos = todos
+			emit(EventTodoUpdated, map[string]any{
+				"todos": result.Structured["todos"],
+			})
+		}
 		state.Messages = append(state.Messages, harness.MessageState{
 			Role:       "tool",
 			Content:    toolResultContent(result),
@@ -348,10 +361,34 @@ func (a *Agent) runPendingTools(ctx context.Context, emit func(EventType, map[st
 	return nil
 }
 
+func plannerTodos(value any) ([]harness.TodoState, bool) {
+	todos, ok := value.([]planner.Todo)
+	if !ok {
+		return nil, false
+	}
+	out := make([]harness.TodoState, 0, len(todos))
+	for _, todo := range todos {
+		out = append(out, harness.TodoState{
+			ID:      todo.ID,
+			Content: todo.Content,
+			Status:  harness.TodoStatus(todo.Status),
+		})
+	}
+	return out, true
+}
+
 func (a *Agent) invokeTool(ctx context.Context, state harness.RunState, call harness.ToolCallState) (tool.Result, error) {
 	invoker := a.config.ToolInvoker
 	if invoker == nil {
-		registry, err := tool.NewRegistry(a.config.Tools...)
+		configuredTools := append([]tool.Tool(nil), a.config.Tools...)
+		if a.todos != nil {
+			todoTools, err := todotools.Tools(todotools.Config{Manager: a.todos})
+			if err != nil {
+				return tool.Result{Error: err.Error(), ExitCode: 1}, err
+			}
+			configuredTools = append(configuredTools, todoTools...)
+		}
+		registry, err := tool.NewRegistry(configuredTools...)
 		if err != nil {
 			return tool.Result{Error: err.Error(), ExitCode: 1}, err
 		}
