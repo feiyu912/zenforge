@@ -79,6 +79,22 @@ agent := zenforge.New(zenforge.Config{
 })
 ```
 
+## Shell Tool
+
+```go
+shellTool, err := shell.New(shell.Config{
+    Policy: policy.ShellPolicy{
+        WorkingDir:     "./repo",
+        AllowCommands:  []string{"go test ./...", "go vet ./...", "grep", "find"},
+        MaxTimeout:     30 * time.Second,
+        MaxOutputBytes: 256_000,
+    },
+})
+if err != nil {
+    return err
+}
+```
+
 ## Durable Runtime Stores
 
 S1 exposes replaceable durable runtime pieces:

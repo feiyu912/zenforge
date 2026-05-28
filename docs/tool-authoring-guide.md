@@ -151,3 +151,24 @@ The first S3 workspace tools are:
 - `workspace_list`
 - `workspace_grep`
 - `workspace_write`
+
+## Shell Tool
+
+```go
+shellTool, err := shell.New(shell.Config{
+    Policy: policy.ShellPolicy{
+        WorkingDir:     ".",
+        AllowCommands:  []string{"go test ./...", "go vet ./...", "grep", "find"},
+        DenyCommands:   []string{"rm", "curl"},
+        MaxTimeout:     30 * time.Second,
+        MaxOutputBytes: 64_000,
+    },
+})
+if err != nil {
+    return err
+}
+```
+
+The `shell` tool requires a description, blocks commands outside the allowlist
+by default, caps output, enforces timeout, and keeps `cwd` inside the configured
+working directory.
