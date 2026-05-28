@@ -53,6 +53,32 @@ for event := range events {
 events, err := agent.Resume(ctx, "run_123")
 ```
 
+## Workspace Tools
+
+```go
+ws, err := local.New(local.Config{
+    Root:            "./repo",
+    MaxReadBytes:    256_000,
+    MaxWriteBytes:   256_000,
+    CreateParentDir: true,
+})
+if err != nil {
+    return err
+}
+
+workspaceTools, err := workspacetools.Tools(workspacetools.Config{
+    Workspace: ws,
+})
+if err != nil {
+    return err
+}
+
+agent := zenforge.New(zenforge.Config{
+    Model: model,
+    Tools: workspaceTools,
+})
+```
+
 ## Durable Runtime Stores
 
 S1 exposes replaceable durable runtime pieces:

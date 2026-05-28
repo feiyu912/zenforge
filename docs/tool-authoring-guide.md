@@ -118,3 +118,36 @@ wrapped with middleware:
 
 The default built-in shell and workspace tools will use conservative safety
 defaults.
+
+## Workspace Tools
+
+```go
+ws, err := local.New(local.Config{
+    Root:            ".",
+    MaxReadBytes:    256_000,
+    MaxWriteBytes:   256_000,
+    CreateParentDir: true,
+})
+if err != nil {
+    return err
+}
+
+workspaceTools, err := workspacetools.Tools(workspacetools.Config{
+    Workspace: ws,
+})
+if err != nil {
+    return err
+}
+
+agent := zenforge.New(zenforge.Config{
+    Model: model,
+    Tools: workspaceTools,
+})
+```
+
+The first S3 workspace tools are:
+
+- `workspace_read`
+- `workspace_list`
+- `workspace_grep`
+- `workspace_write`
