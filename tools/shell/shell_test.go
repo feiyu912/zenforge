@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/feiyu912/zenforge/approval"
 	"github.com/feiyu912/zenforge/policy"
 	"github.com/feiyu912/zenforge/tool"
 )
@@ -54,8 +55,15 @@ func TestShellApprovalRequiredShape(t *testing.T) {
 	if err == nil || result.ExitCode == 0 {
 		t.Fatalf("expected approval error, got result=%#v err=%v", result, err)
 	}
-	if result.Error == "" || result.Error[:17] != approvalRequired {
+	if result.Error != approval.ErrorRequired {
 		t.Fatalf("expected approval_required result, got %#v", result)
+	}
+	req, ok := approval.RequestFromResult(result)
+	if !ok {
+		t.Fatalf("expected structured approval request, got %#v", result.Structured)
+	}
+	if req.Operation != "shell.command" || req.ToolName != "shell" {
+		t.Fatalf("unexpected approval request: %#v", req)
 	}
 }
 

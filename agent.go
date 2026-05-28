@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/feiyu912/zenforge/approval"
 	"github.com/feiyu912/zenforge/checkpoint"
 	"github.com/feiyu912/zenforge/harness"
 	"github.com/feiyu912/zenforge/model"
@@ -413,11 +414,23 @@ func (a *Agent) runPendingTools(ctx context.Context, emit func(EventType, map[st
 		})
 
 		result, err := a.invokeTool(ctx, *state, call)
-		if err != nil {
+		if err != nil && result.Error == "" {
 			result = tool.Result{Error: err.Error(), ExitCode: 1}
 		}
 		if result.Error != "" && result.ExitCode == 0 {
 			result.ExitCode = 1
+		}
+		if req, ok := approval.RequestFromResult(result); ok {
+			state.SetWaitingApproval(approvalRequestState(req, call))
+			checkpointState()
+			emit(EventApprovalRequested, map[string]any{
+				"requestId":  req.ID,
+				"toolCallId": call.ID,
+				"toolName":   call.Name,
+				"operation":  req.Operation,
+				"risk":       string(req.Risk),
+				"request":    req,
+			})
 		}
 		status := harness.ToolCallDone
 		eventType := EventToolResult
@@ -457,6 +470,31 @@ func (a *Agent) runPendingTools(ctx context.Context, emit func(EventType, map[st
 		})
 	}
 	return nil
+}
+
+func approvalRequestState(req approval.Request, call harness.ToolCallState) harness.ApprovalRequestState {
+	options := make([]string, 0, len(req.Options))
+	for _, option := range req.Options {
+		if option.Label != "" {
+			options = append(options, option.Label)
+			continue
+		}
+		options = append(options, string(option.Action))
+	}
+	toolCallID := req.ToolCallID
+	if toolCallID == "" {
+		toolCallID = call.ID
+	}
+	return harness.ApprovalRequestState{
+		ID:          req.ID,
+		ToolCallID:  toolCallID,
+		Title:       req.Title,
+		Description: req.Description,
+		Risk:        string(req.Risk),
+		Options:     options,
+		Payload:     req.Payload,
+		ExpiresAt:   req.ExpiresAt,
+	}
 }
 
 func plannerTodos(value any) ([]harness.TodoState, bool) {

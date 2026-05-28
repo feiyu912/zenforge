@@ -56,6 +56,22 @@ func TestEventsPrintsTimeline(t *testing.T) {
 	}
 }
 
+func TestRenderApprovalRequested(t *testing.T) {
+	var stdout bytes.Buffer
+	renderEvent(&stdout, zenforge.NewEvent(zenforge.EventApprovalRequested, "run_1", map[string]any{
+		"operation": "shell.command",
+		"risk":      "high",
+		"request": map[string]any{
+			"title":       "Approve shell command",
+			"description": "Run tests",
+		},
+	}))
+	output := stdout.String()
+	if !strings.Contains(output, "approval required: shell.command (high)") || !strings.Contains(output, "Approve shell command") {
+		t.Fatalf("unexpected output: %q", output)
+	}
+}
+
 func TestPlanningModeParsing(t *testing.T) {
 	tests := map[string]zenforge.PlanningMode{
 		"enabled":      zenforge.PlanningEnabled,

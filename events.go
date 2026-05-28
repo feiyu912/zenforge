@@ -30,6 +30,7 @@ const (
 	EventWorkspaceChanged  EventType = "workspace.changed"
 	EventApprovalRequested EventType = "approval.requested"
 	EventApprovalResolved  EventType = "approval.resolved"
+	EventApprovalExpired   EventType = "approval.expired"
 	EventSubtaskStarted    EventType = "subtask.started"
 	EventSubtaskDone       EventType = "subtask.done"
 	EventTaskStarted       EventType = "task.started"

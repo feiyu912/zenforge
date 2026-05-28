@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
+	"github.com/feiyu912/zenforge/approval"
 	checkpointmemory "github.com/feiyu912/zenforge/checkpoint/memory"
 	"github.com/feiyu912/zenforge/model"
 	"github.com/feiyu912/zenforge/tool"
@@ -145,6 +147,51 @@ func TestAgentPlanningAddsTodoToolsAndCheckpointsTodos(t *testing.T) {
 	}
 }
 
+func TestAgentRecordsApprovalRequiredToolResult(t *testing.T) {
+	checkpoints := checkpointmemory.New()
+	fakeModel := &scriptedModel{turns: []scriptedTurn{
+		{
+			events: []model.Event{{
+				Message: &model.Message{
+					ToolCalls: []model.ToolCallSpec{{
+						ID:        "call_approval",
+						Name:      "needs_approval",
+						Arguments: json.RawMessage(`{}`),
+					}},
+				},
+			}},
+		},
+		{events: []model.Event{{Delta: "final after approval request"}}},
+	}}
+	agent := New(Config{
+		Model:       fakeModel,
+		Tools:       []Tool{approvalTool{}},
+		Checkpoints: checkpoints,
+	})
+
+	events, err := agent.Stream(context.Background(), Task{RunID: "run_approval", Input: "try risky thing"})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	var types []EventType
+	for event := range events {
+		types = append(types, event.Type)
+	}
+	assertContainsEvent(t, types, EventApprovalRequested)
+	assertContainsEvent(t, types, EventToolError)
+
+	cp, err := checkpoints.Load(context.Background(), "run_approval")
+	if err != nil {
+		t.Fatalf("Load checkpoint returned error: %v", err)
+	}
+	if cp.State.Approval.Waiting == nil {
+		t.Fatalf("expected checkpointed waiting approval, got %#v", cp.State.Approval)
+	}
+	if cp.State.Approval.Waiting.ToolCallID != "call_approval" {
+		t.Fatalf("approval tool call id = %q", cp.State.Approval.Waiting.ToolCallID)
+	}
+}
+
 func TestAgentPlanExecutePresetPlansExecutesAndSummarizes(t *testing.T) {
 	fakeModel := &scriptedModel{turns: []scriptedTurn{
 		{
@@ -280,4 +327,27 @@ func (echoTool) Call(ctx context.Context, input json.RawMessage, call tool.Conte
 		return tool.Result{Error: err.Error(), ExitCode: 1}, nil
 	}
 	return tool.Result{Output: args.Text}, nil
+}
+
+type approvalTool struct{}
+
+func (approvalTool) Name() string { return "needs_approval" }
+
+func (approvalTool) Description() string { return "Requires approval" }
+
+func (approvalTool) Schema() map[string]any { return nil }
+
+func (approvalTool) Call(ctx context.Context, input json.RawMessage, call tool.Context) (tool.Result, error) {
+	req := approval.Request{
+		ID:         "approval_test",
+		RunID:      call.RunID,
+		ToolCallID: call.ToolCallID,
+		ToolName:   "needs_approval",
+		Operation:  "test.approval",
+		Title:      "Approve test tool",
+		Risk:       approval.RiskMedium,
+		Options:    approval.DefaultOptions(),
+		CreatedAt:  time.Now().UTC(),
+	}
+	return approval.RequiredResult(req), approval.ErrRequired
 }

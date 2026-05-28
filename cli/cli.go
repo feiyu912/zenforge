@@ -252,6 +252,16 @@ func renderEvent(out io.Writer, event zenforge.Event) {
 		_, _ = fmt.Fprintf(out, "\ntool %s %s\n", stringValue(event.Payload["toolName"]), jsonValue(event.Payload["arguments"]))
 	case zenforge.EventTodoUpdated:
 		renderTodos(out, event.Payload["todos"])
+	case zenforge.EventApprovalRequested:
+		_, _ = fmt.Fprintf(out, "\napproval required: %s (%s)\n", stringValue(event.Payload["operation"]), stringValue(event.Payload["risk"]))
+		if request, ok := mapValue(event.Payload["request"]); ok {
+			if title := stringValue(request["title"]); title != "" {
+				_, _ = fmt.Fprintf(out, "%s\n", title)
+			}
+			if description := stringValue(request["description"]); description != "" {
+				_, _ = fmt.Fprintf(out, "%s\n", description)
+			}
+		}
 	case zenforge.EventRunDone:
 		if output := stringValue(event.Payload["output"]); output != "" {
 			_, _ = fmt.Fprintf(out, "\n%s\n", output)
@@ -286,6 +296,21 @@ func jsonValue(value any) string {
 		return "{}"
 	}
 	return string(data)
+}
+
+func mapValue(value any) (map[string]any, bool) {
+	fields, ok := value.(map[string]any)
+	if ok {
+		return fields, true
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		return nil, false
+	}
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return nil, false
+	}
+	return fields, true
 }
 
 func stringValue(value any) string {
