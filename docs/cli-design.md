@@ -18,6 +18,16 @@ zenforge version
 zenforge run "Analyze this repo"
 ```
 
+Initial implementation:
+
+```bash
+OPENAI_API_KEY=... zenforge run \
+  --workspace . \
+  --checkpoint-dir .zenforge/runs \
+  --planning plan_execute \
+  "Analyze this repo"
+```
+
 Behavior:
 
 - loads config;
@@ -35,6 +45,9 @@ Behavior:
 zenforge resume run_123
 ```
 
+Initial implementation uses the same model/tool assembly flags as `run` and
+loads checkpoint state from `--checkpoint-dir`.
+
 Behavior:
 
 - loads checkpoint;
@@ -47,6 +60,9 @@ Behavior:
 ```bash
 zenforge events run_123
 ```
+
+Initial implementation reads JSONL events from `--checkpoint-dir` and can print
+compact timeline text or raw JSON with `--json`.
 
 Behavior:
 
@@ -104,4 +120,3 @@ Command: rm -rf build
 - `3`: run cancelled;
 - `4`: approval rejected;
 - `5`: unsupported resume state.
-
