@@ -111,6 +111,20 @@ agent := zenforge.New(zenforge.Config{
 })
 ```
 
+## Plan/Execute Preset
+
+```go
+agent := zenforge.New(zenforge.Config{
+    Model:    model,
+    Planning: zenforge.PlanningPlanExecute,
+    Tools:    append(workspaceTools, shellTool),
+})
+
+result, err := agent.Run(ctx, zenforge.Task{
+    Input: "Analyze this repo and produce a refactor plan.",
+})
+```
+
 ## Durable Runtime Stores
 
 S1 exposes replaceable durable runtime pieces:

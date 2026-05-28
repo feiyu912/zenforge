@@ -32,6 +32,10 @@ const (
 	EventApprovalResolved  EventType = "approval.resolved"
 	EventSubtaskStarted    EventType = "subtask.started"
 	EventSubtaskDone       EventType = "subtask.done"
+	EventTaskStarted       EventType = "task.started"
+	EventTaskDone          EventType = "task.done"
+	EventTaskError         EventType = "task.error"
+	EventTaskCancelled     EventType = "task.cancelled"
 	EventCheckpointCreated EventType = "checkpoint.created"
 )
 

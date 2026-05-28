@@ -14,8 +14,9 @@ import (
 type PlanningMode string
 
 const (
-	PlanningDisabled PlanningMode = "disabled"
-	PlanningEnabled  PlanningMode = "enabled"
+	PlanningDisabled    PlanningMode = "disabled"
+	PlanningEnabled     PlanningMode = "enabled"
+	PlanningPlanExecute PlanningMode = "plan_execute"
 )
 
 type SubAgentMode string

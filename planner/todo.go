@@ -51,6 +51,27 @@ func TerminalStatus(status TodoStatus) bool {
 	}
 }
 
+func AllTerminal(todos []Todo) bool {
+	if len(todos) == 0 {
+		return false
+	}
+	for _, todo := range todos {
+		if !TerminalStatus(todo.Status) {
+			return false
+		}
+	}
+	return true
+}
+
+func FirstNonTerminal(todos []Todo) (Todo, bool) {
+	for _, todo := range todos {
+		if !TerminalStatus(todo.Status) {
+			return todo, true
+		}
+	}
+	return Todo{}, false
+}
+
 func NormalizeTodos(todos []Todo, now time.Time) ([]Todo, error) {
 	if len(todos) == 0 {
 		return nil, fmt.Errorf("todo list cannot be empty")

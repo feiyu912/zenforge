@@ -24,7 +24,7 @@ type Agent struct {
 // New creates an Agent with the provided runtime configuration.
 func New(config Config) *Agent {
 	todos := config.Todos
-	if todos == nil && config.Planning == PlanningEnabled {
+	if todos == nil && (config.Planning == PlanningEnabled || config.Planning == PlanningPlanExecute) {
 		todos = planner.NewMemoryManager(planner.MemoryConfig{})
 	}
 	return &Agent{config: config, todos: todos}
@@ -58,6 +58,14 @@ func (a *Agent) Stream(ctx context.Context, task Task) (<-chan Event, error) {
 	}
 	if a.config.Model == nil {
 		return a.streamNoop(ctx, runID, task.Input), nil
+	}
+	if a.config.Planning == PlanningPlanExecute {
+		events := make(chan Event, 64)
+		go func() {
+			defer close(events)
+			a.runPlanExecute(ctx, events, runID, task)
+		}()
+		return events, nil
 	}
 
 	state := newRunState(runID, task.Input, task.Meta)
@@ -109,6 +117,96 @@ func (a *Agent) streamNoop(ctx context.Context, runID, input string) <-chan Even
 		events <- NewEvent(EventRunDone, runID, map[string]any{"output": ""})
 	}()
 	return events
+}
+
+func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID string, task Task) {
+	emit := func(eventType EventType, data map[string]any) {
+		event := NewEvent(eventType, runID, data)
+		if a.config.Events != nil {
+			_ = a.config.Events.Append(ctx, event)
+		}
+		select {
+		case out <- event:
+		case <-ctx.Done():
+		}
+	}
+	fail := func(err error) {
+		emit(EventRunError, map[string]any{"error": err.Error()})
+	}
+	if a.todos == nil {
+		fail(fmt.Errorf("todo manager is not configured"))
+		return
+	}
+	emit(EventRunStarted, map[string]any{"input": task.Input, "preset": string(PlanningPlanExecute)})
+
+	planInput := task.Input + "\n\n" + planner.PlanPrompt
+	planState := newRunState(runID, planInput, task.Meta)
+	a.runLoop(ctx, out, planState, false)
+	todos, err := a.todos.List(ctx, runID)
+	if err != nil {
+		fail(err)
+		return
+	}
+	if len(todos) == 0 {
+		fail(fmt.Errorf("plan_not_created"))
+		return
+	}
+
+	for {
+		current, ok := planner.FirstNonTerminal(todos)
+		if !ok {
+			break
+		}
+		if err := ctx.Err(); err != nil {
+			emit(EventTaskCancelled, map[string]any{"todoId": current.ID, "error": err.Error()})
+			emit(EventRunCancelled, map[string]any{"error": err.Error()})
+			return
+		}
+		emit(EventTaskStarted, map[string]any{"todoId": current.ID, "content": current.Content})
+		inProgress := planner.TodoInProgress
+		todos, err = a.todos.Update(ctx, runID, current.ID, planner.Patch{Status: &inProgress})
+		if err != nil {
+			fail(err)
+			return
+		}
+		emit(EventTodoUpdated, map[string]any{"todos": todos})
+
+		executeState := newRunState(runID, taskPrompt(todos, current), task.Meta)
+		a.runLoop(ctx, out, executeState, true)
+		todos, err = a.todos.List(ctx, runID)
+		if err != nil {
+			fail(err)
+			return
+		}
+		updated, ok := findTodo(todos, current.ID)
+		if !ok {
+			fail(fmt.Errorf("todo %q disappeared", current.ID))
+			return
+		}
+		if !planner.TerminalStatus(updated.Status) {
+			failed := planner.TodoFailed
+			notes := "task ended without terminal todo_update"
+			todos, _ = a.todos.Update(ctx, runID, current.ID, planner.Patch{Status: &failed, Notes: &notes})
+			emit(EventTodoUpdated, map[string]any{"todos": todos})
+			emit(EventTaskError, map[string]any{"todoId": current.ID, "error": notes})
+			fail(fmt.Errorf(notes))
+			return
+		}
+		emit(EventTaskDone, map[string]any{"todoId": current.ID, "status": string(updated.Status)})
+		if updated.Status == planner.TodoFailed {
+			fail(fmt.Errorf("todo %q failed", current.ID))
+			return
+		}
+	}
+
+	summaryState := newRunState(runID, summaryPrompt(task.Input, todos), task.Meta)
+	summaryState.Phase = harness.RunPhaseFinalizing
+	assistant, _, err := a.callModel(ctx, emit, summaryState, model.ToolChoiceNone)
+	if err != nil {
+		fail(err)
+		return
+	}
+	emit(EventRunDone, map[string]any{"output": assistant.Content, "todos": todos})
 }
 
 func newRunState(runID, input string, meta map[string]any) harness.RunState {
@@ -380,13 +478,9 @@ func plannerTodos(value any) ([]harness.TodoState, bool) {
 func (a *Agent) invokeTool(ctx context.Context, state harness.RunState, call harness.ToolCallState) (tool.Result, error) {
 	invoker := a.config.ToolInvoker
 	if invoker == nil {
-		configuredTools := append([]tool.Tool(nil), a.config.Tools...)
-		if a.todos != nil {
-			todoTools, err := todotools.Tools(todotools.Config{Manager: a.todos})
-			if err != nil {
-				return tool.Result{Error: err.Error(), ExitCode: 1}, err
-			}
-			configuredTools = append(configuredTools, todoTools...)
+		configuredTools, err := a.configuredTools()
+		if err != nil {
+			return tool.Result{Error: err.Error(), ExitCode: 1}, err
 		}
 		registry, err := tool.NewRegistry(configuredTools...)
 		if err != nil {
@@ -421,8 +515,12 @@ func (a *Agent) modelMessages(state harness.RunState) []model.Message {
 }
 
 func (a *Agent) toolSpecs() []model.ToolSpec {
-	specs := make([]model.ToolSpec, 0, len(a.config.Tools))
-	for _, tool := range a.config.Tools {
+	configuredTools, err := a.configuredTools()
+	if err != nil {
+		configuredTools = a.config.Tools
+	}
+	specs := make([]model.ToolSpec, 0, len(configuredTools))
+	for _, tool := range configuredTools {
 		specs = append(specs, model.ToolSpec{
 			Name:        tool.Name(),
 			Description: tool.Description(),
@@ -430,6 +528,28 @@ func (a *Agent) toolSpecs() []model.ToolSpec {
 		})
 	}
 	return specs
+}
+
+func (a *Agent) configuredTools() ([]tool.Tool, error) {
+	configuredTools := append([]tool.Tool(nil), a.config.Tools...)
+	if a.todos == nil {
+		return configuredTools, nil
+	}
+	todoTools, err := todotools.Tools(todotools.Config{Manager: a.todos})
+	if err != nil {
+		return nil, err
+	}
+	existing := make(map[string]struct{}, len(configuredTools))
+	for _, current := range configuredTools {
+		existing[strings.ToLower(current.Name())] = struct{}{}
+	}
+	for _, current := range todoTools {
+		if _, ok := existing[strings.ToLower(current.Name())]; ok {
+			continue
+		}
+		configuredTools = append(configuredTools, current)
+	}
+	return configuredTools, nil
 }
 
 func modelToolCallsToHarness(calls []model.ToolCallSpec) []harness.ToolCallSpec {
@@ -504,4 +624,26 @@ func cloneMap(in map[string]any) map[string]any {
 		out[key] = value
 	}
 	return out
+}
+
+func taskPrompt(todos []planner.Todo, current planner.Todo) string {
+	prompt := strings.ReplaceAll(planner.TaskPromptTemplate, "{{todo_list}}", planner.FormatTodos(todos))
+	prompt = strings.ReplaceAll(prompt, "{{todo_id}}", current.ID)
+	prompt = strings.ReplaceAll(prompt, "{{todo_content}}", current.Content)
+	return prompt
+}
+
+func summaryPrompt(input string, todos []planner.Todo) string {
+	prompt := strings.ReplaceAll(planner.SummaryPromptTemplate, "{{input}}", input)
+	prompt = strings.ReplaceAll(prompt, "{{todo_list}}", planner.FormatTodos(todos))
+	return prompt
+}
+
+func findTodo(todos []planner.Todo, id string) (planner.Todo, bool) {
+	for _, todo := range todos {
+		if todo.ID == id {
+			return todo, true
+		}
+	}
+	return planner.Todo{}, false
 }

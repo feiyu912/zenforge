@@ -194,3 +194,13 @@ Compatibility aliases are available through `todo.CompatibilityAliases`:
 - `plan_add_tasks`
 - `plan_get_tasks`
 - `plan_update_task`
+
+`zenforge.PlanningPlanExecute` enables the default plan/execute/summary preset:
+
+```go
+agent := zenforge.New(zenforge.Config{
+    Model:    model,
+    Planning: zenforge.PlanningPlanExecute,
+    Tools:    append(workspaceTools, shellTool),
+})
+```

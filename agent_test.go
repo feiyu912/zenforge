@@ -53,7 +53,7 @@ func TestAgentRunReturnsModelText(t *testing.T) {
 
 func TestAgentStreamRunsToolAndContinuesModelLoop(t *testing.T) {
 	checkpoints := checkpointmemory.New()
-	model := &scriptedModel{turns: []scriptedTurn{
+	fakeModel := &scriptedModel{turns: []scriptedTurn{
 		{
 			events: []model.Event{{
 				Message: &model.Message{
@@ -68,7 +68,7 @@ func TestAgentStreamRunsToolAndContinuesModelLoop(t *testing.T) {
 		{events: []model.Event{{Delta: "final answer"}}},
 	}}
 	agent := New(Config{
-		Model:       model,
+		Model:       fakeModel,
 		Tools:       []Tool{echoTool{}},
 		Checkpoints: checkpoints,
 	})
@@ -86,10 +86,10 @@ func TestAgentStreamRunsToolAndContinuesModelLoop(t *testing.T) {
 	if types[len(types)-1] != EventRunDone {
 		t.Fatalf("last event = %s, want %s; all events: %v", types[len(types)-1], EventRunDone, types)
 	}
-	if len(model.requests) != 2 {
-		t.Fatalf("model calls = %d, want 2", len(model.requests))
+	if len(fakeModel.requests) != 2 {
+		t.Fatalf("model calls = %d, want 2", len(fakeModel.requests))
 	}
-	second := model.requests[1]
+	second := fakeModel.requests[1]
 	if second.Messages[len(second.Messages)-1].Role != "tool" || second.Messages[len(second.Messages)-1].Content != "from tool" {
 		t.Fatalf("tool result was not fed back to model: %#v", second.Messages)
 	}
@@ -145,6 +145,57 @@ func TestAgentPlanningAddsTodoToolsAndCheckpointsTodos(t *testing.T) {
 	}
 }
 
+func TestAgentPlanExecutePresetPlansExecutesAndSummarizes(t *testing.T) {
+	fakeModel := &scriptedModel{turns: []scriptedTurn{
+		{
+			events: []model.Event{{
+				Message: &model.Message{
+					ToolCalls: []model.ToolCallSpec{{
+						ID:        "plan_call",
+						Name:      "todo_write",
+						Arguments: json.RawMessage(`{"todos":[{"id":"task_1","content":"Inspect repo"}]}`),
+					}},
+				},
+			}},
+		},
+		{events: []model.Event{{Delta: "plan created"}}},
+		{
+			events: []model.Event{{
+				Message: &model.Message{
+					ToolCalls: []model.ToolCallSpec{{
+						ID:        "done_call",
+						Name:      "todo_update",
+						Arguments: json.RawMessage(`{"id":"task_1","status":"done","notes":"finished"}`),
+					}},
+				},
+			}},
+		},
+		{events: []model.Event{{Delta: "task done"}}},
+		{events: []model.Event{{Delta: "summary done"}}},
+	}}
+	agent := New(Config{
+		Model:    fakeModel,
+		Planning: PlanningPlanExecute,
+	})
+
+	result, err := agent.Run(context.Background(), Task{RunID: "run_plan_execute", Input: "do the work"})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if result.Output != "summary done" {
+		t.Fatalf("unexpected summary output: %q", result.Output)
+	}
+	if len(fakeModel.requests) != 5 {
+		t.Fatalf("model calls = %d, want 5", len(fakeModel.requests))
+	}
+	if !hasTool(fakeModel.requests[0].Tools, "todo_write") {
+		t.Fatalf("plan request missing todo_write tool: %#v", fakeModel.requests[0].Tools)
+	}
+	if fakeModel.requests[4].ToolChoice != model.ToolChoiceNone {
+		t.Fatalf("summary request tool choice = %q, want none", fakeModel.requests[4].ToolChoice)
+	}
+}
+
 func assertContainsEvent(t *testing.T, events []EventType, want EventType) {
 	t.Helper()
 	for _, event := range events {
@@ -153,6 +204,15 @@ func assertContainsEvent(t *testing.T, events []EventType, want EventType) {
 		}
 	}
 	t.Fatalf("events %v did not contain %s", events, want)
+}
+
+func hasTool(tools []model.ToolSpec, name string) bool {
+	for _, tool := range tools {
+		if tool.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 type scriptedTurn struct {
