@@ -7,6 +7,7 @@ import (
 	"github.com/feiyu912/zenforge/checkpoint"
 	"github.com/feiyu912/zenforge/model"
 	"github.com/feiyu912/zenforge/planner"
+	"github.com/feiyu912/zenforge/subagent"
 	"github.com/feiyu912/zenforge/tool"
 	"github.com/feiyu912/zenforge/trace"
 	"github.com/feiyu912/zenforge/workspace"
@@ -37,20 +38,24 @@ type EventStore interface {
 
 // Config describes the default high-level ZenForge agent.
 type Config struct {
-	Model        model.Model
-	Instructions string
-	Tools        []tool.Tool
-	ToolInvoker  tool.Invoker
-	ToolRuntime  []tool.Middleware
-	Approval     approval.Broker
-	Todos        planner.Manager
-	Workspace    workspace.Workspace
-	Events       EventStore
-	Checkpoints  checkpoint.Store
-	Trace        trace.Sink
-	MaxSteps     int
-	Planning     PlanningMode
-	SubAgents    SubAgentMode
+	Model                model.Model
+	Instructions         string
+	Tools                []tool.Tool
+	ToolInvoker          tool.Invoker
+	ToolRuntime          []tool.Middleware
+	Approval             approval.Broker
+	Todos                planner.Manager
+	SubAgentSpecs        []subagent.SubAgentSpec
+	SubAgentRegistry     subagent.Registry
+	SubAgentOrchestrator subagent.Orchestrator
+	SubAgentRunner       subagent.Runner
+	Workspace            workspace.Workspace
+	Events               EventStore
+	Checkpoints          checkpoint.Store
+	Trace                trace.Sink
+	MaxSteps             int
+	Planning             PlanningMode
+	SubAgents            SubAgentMode
 }
 
 // Tool is re-exported for the high-level API.
@@ -58,3 +63,6 @@ type Tool = tool.Tool
 
 // Model is re-exported for the high-level API.
 type Model = model.Model
+
+// SubAgentSpec is re-exported for configuring delegated child agents.
+type SubAgentSpec = subagent.SubAgentSpec

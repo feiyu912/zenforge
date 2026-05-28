@@ -3,12 +3,14 @@ package zenforge
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/feiyu912/zenforge/approval"
 	checkpointmemory "github.com/feiyu912/zenforge/checkpoint/memory"
 	"github.com/feiyu912/zenforge/model"
+	"github.com/feiyu912/zenforge/subagent"
 	"github.com/feiyu912/zenforge/tool"
 )
 
@@ -287,6 +289,65 @@ func TestAgentApprovalTimeoutEmitsExpired(t *testing.T) {
 	}
 }
 
+func TestAgentRunsSubAgentTaskTool(t *testing.T) {
+	checkpoints := checkpointmemory.New()
+	fakeModel := &scriptedModel{turns: []scriptedTurn{
+		{
+			events: []model.Event{{
+				Message: &model.Message{
+					ToolCalls: []model.ToolCallSpec{{
+						ID:   "call_task",
+						Name: "task",
+						Arguments: json.RawMessage(`{"tasks":[` +
+							`{"agent":"researcher","name":"Read docs","input":"summarize docs"},` +
+							`{"agent":"reviewer","name":"Review risk","input":"find bugs"}` +
+							`]}`),
+					}},
+				},
+			}},
+		},
+		{events: []model.Event{{Delta: "parent final"}}},
+	}}
+	registry := subagent.MustRegistry(subagent.SubAgentSpec{Name: "researcher"}, subagent.SubAgentSpec{Name: "reviewer"})
+	agent := New(Config{
+		Model:            fakeModel,
+		SubAgents:        SubAgentsEnabled,
+		SubAgentRegistry: registry,
+		SubAgentRunner: subagent.RunnerFunc(func(ctx context.Context, spec subagent.SubAgentSpec, task subagent.TaskSpec, req subagent.Request) (subagent.TaskResult, error) {
+			return subagent.TaskResult{Output: spec.Name + " handled " + task.Input}, nil
+		}),
+		Checkpoints: checkpoints,
+	})
+
+	events, err := agent.Stream(context.Background(), Task{RunID: "run_subagent", Input: "delegate"})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	var types []EventType
+	for event := range events {
+		types = append(types, event.Type)
+	}
+	assertContainsEvent(t, types, EventSubtaskStarted)
+	assertContainsEvent(t, types, EventSubtaskDone)
+	assertContainsEvent(t, types, EventToolResult)
+
+	cp, err := checkpoints.Load(context.Background(), "run_subagent")
+	if err != nil {
+		t.Fatalf("Load checkpoint returned error: %v", err)
+	}
+	if len(cp.State.Subtasks) != 2 || cp.State.Subtasks[0].Status != "completed" {
+		t.Fatalf("expected completed subtasks in checkpoint, got %#v", cp.State.Subtasks)
+	}
+	second := fakeModel.requests[1]
+	toolMessage := second.Messages[len(second.Messages)-1]
+	if toolMessage.Role != "tool" || toolMessage.ToolCallID != "call_task" {
+		t.Fatalf("missing task tool message: %#v", toolMessage)
+	}
+	if !contains(toolMessage.Content, "researcher handled summarize docs") || !contains(toolMessage.Content, "reviewer handled find bugs") {
+		t.Fatalf("unexpected aggregate content: %q", toolMessage.Content)
+	}
+}
+
 func TestAgentPlanExecutePresetPlansExecutesAndSummarizes(t *testing.T) {
 	fakeModel := &scriptedModel{turns: []scriptedTurn{
 		{
@@ -355,6 +416,10 @@ func hasTool(tools []model.ToolSpec, name string) bool {
 		}
 	}
 	return false
+}
+
+func contains(text, sub string) bool {
+	return strings.Contains(text, sub)
 }
 
 type scriptedTurn struct {

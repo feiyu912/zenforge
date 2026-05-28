@@ -12,7 +12,9 @@ import (
 	"github.com/feiyu912/zenforge/harness"
 	"github.com/feiyu912/zenforge/model"
 	"github.com/feiyu912/zenforge/planner"
+	"github.com/feiyu912/zenforge/subagent"
 	"github.com/feiyu912/zenforge/tool"
+	tasktool "github.com/feiyu912/zenforge/tools/task"
 	todotools "github.com/feiyu912/zenforge/tools/todo"
 )
 
@@ -413,7 +415,7 @@ func (a *Agent) runPendingTools(ctx context.Context, emit func(EventType, map[st
 			"arguments":  rawJSONValue(call.Arguments),
 		})
 
-		result, err := a.invokeTool(ctx, *state, call)
+		result, err := a.invokeToolOrRuntime(ctx, emit, checkpointState, state, call)
 		if err != nil && result.Error == "" {
 			result = tool.Result{Error: err.Error(), ExitCode: 1}
 		}
@@ -511,6 +513,71 @@ func (a *Agent) runPendingTools(ctx context.Context, emit func(EventType, map[st
 	return nil
 }
 
+func (a *Agent) invokeToolOrRuntime(ctx context.Context, emit func(EventType, map[string]any), checkpointState func(), state *harness.RunState, call harness.ToolCallState) (tool.Result, error) {
+	if tasktool.IsTaskTool(call.Name) {
+		return a.invokeSubAgentTool(ctx, emit, checkpointState, state, call)
+	}
+	return a.invokeTool(ctx, *state, call)
+}
+
+func (a *Agent) invokeSubAgentTool(ctx context.Context, emit func(EventType, map[string]any), checkpointState func(), state *harness.RunState, call harness.ToolCallState) (tool.Result, error) {
+	orchestrator, err := a.subAgentOrchestrator()
+	if err != nil {
+		return tool.Result{Error: err.Error(), ExitCode: 1}, err
+	}
+	req, err := tasktool.Decode(call.Arguments)
+	if err != nil {
+		return tool.Result{Error: err.Error(), ExitCode: 1}, err
+	}
+	req.RunID = state.RunID
+	req.ParentStep = state.Step
+	req.ToolCallID = call.ID
+	if depth, ok := intFromMeta(state.Meta["subagent.depth"]); ok {
+		req.Depth = depth
+	}
+	startSubtasks(state, req)
+	checkpointState()
+	for _, task := range req.Tasks {
+		emit(EventSubtaskStarted, map[string]any{
+			"subtaskId": task.ID,
+			"agentName": task.NormalizedAgentName(),
+			"name":      task.Name,
+		})
+	}
+	result, invokeErr := orchestrator.Invoke(ctx, req)
+	applySubtaskResults(state, result)
+	checkpointState()
+	for _, task := range result.Tasks {
+		eventType := EventSubtaskDone
+		if task.Status == subagent.StatusFailed {
+			eventType = EventSubtaskError
+		}
+		emit(eventType, map[string]any{
+			"subtaskId": task.ID,
+			"agentName": task.AgentName,
+			"status":    task.Status,
+			"output":    task.Output,
+			"error":     task.Error,
+			"runId":     task.RunID,
+		})
+	}
+	output, structured, err := result.ToolResultJSON()
+	if err != nil {
+		return tool.Result{Error: err.Error(), ExitCode: 1}, err
+	}
+	toolResult := tool.Result{Output: output, Structured: structured}
+	if invokeErr != nil {
+		toolResult.Error = invokeErr.Error()
+		toolResult.ExitCode = 1
+	}
+	for _, task := range result.Tasks {
+		if task.Status == subagent.StatusFailed && toolResult.ExitCode == 0 {
+			toolResult.ExitCode = 1
+		}
+	}
+	return toolResult, invokeErr
+}
+
 func approvalRequestState(req approval.Request, call harness.ToolCallState) harness.ApprovalRequestState {
 	options := make([]string, 0, len(req.Options))
 	for _, option := range req.Options {
@@ -585,6 +652,124 @@ func (a *Agent) invokeTool(ctx context.Context, state harness.RunState, call har
 	})
 }
 
+func (a *Agent) subAgentOrchestrator() (subagent.Orchestrator, error) {
+	if a.config.SubAgentOrchestrator != nil {
+		return a.config.SubAgentOrchestrator, nil
+	}
+	registry := a.config.SubAgentRegistry
+	var err error
+	if registry == nil && len(a.config.SubAgentSpecs) > 0 {
+		registry, err = subagent.NewRegistry(a.config.SubAgentSpecs...)
+		if err != nil {
+			return nil, err
+		}
+	}
+	runner := a.config.SubAgentRunner
+	if runner == nil {
+		runner = subagent.RunnerFunc(a.runChildSubAgent)
+	}
+	return subagent.NewOrchestrator(subagent.OrchestratorConfig{
+		Registry: registry,
+		Runner:   runner,
+		Options:  subagent.Options{MaxTasks: 8},
+	}), nil
+}
+
+func (a *Agent) runChildSubAgent(ctx context.Context, spec subagent.SubAgentSpec, task subagent.TaskSpec, req subagent.Request) (subagent.TaskResult, error) {
+	childModel := spec.Model
+	if childModel == nil {
+		childModel = a.config.Model
+	}
+	childInstructions := spec.Instructions
+	if childInstructions == "" {
+		childInstructions = a.config.Instructions
+	}
+	maxSteps := spec.MaxSteps
+	if maxSteps <= 0 {
+		maxSteps = a.config.MaxSteps
+	}
+	childRunID := fmt.Sprintf("%s_sub_%s", req.RunID, task.ID)
+	childMeta := cloneMap(spec.Metadata)
+	if childMeta == nil {
+		childMeta = map[string]any{}
+	}
+	childMeta["parentRunId"] = req.RunID
+	childMeta["subtaskId"] = task.ID
+	childMeta["subagent.depth"] = req.Depth + 1
+	child := New(Config{
+		Model:        childModel,
+		Instructions: childInstructions,
+		Tools:        spec.Tools,
+		Approval:     a.config.Approval,
+		Checkpoints:  a.config.Checkpoints,
+		Events:       a.config.Events,
+		MaxSteps:     maxSteps,
+		Planning:     PlanningDisabled,
+	})
+	result, err := child.Run(ctx, Task{RunID: childRunID, Input: task.Input, Meta: childMeta})
+	taskResult := subagent.TaskResult{
+		ID:        task.ID,
+		AgentName: spec.Name,
+		Name:      task.Name,
+		Output:    result.Output,
+		RunID:     childRunID,
+		Status:    subagent.StatusCompleted,
+		Metadata:  cloneMap(task.Metadata),
+	}
+	if err != nil {
+		taskResult.Status = subagent.StatusFailed
+		taskResult.Error = err.Error()
+	}
+	return taskResult, err
+}
+
+func startSubtasks(state *harness.RunState, req subagent.Request) {
+	for i, task := range req.Tasks {
+		if task.ID == "" {
+			task.ID = fmt.Sprintf("subtask_%d", i+1)
+			req.Tasks[i].ID = task.ID
+		}
+		state.Subtasks = append(state.Subtasks, harness.SubtaskState{
+			ID:        task.ID,
+			ParentID:  req.ParentTaskID,
+			AgentName: task.NormalizedAgentName(),
+			Input:     task.Input,
+			Status:    harness.SubtaskRunning,
+			Meta:      cloneMap(task.Metadata),
+		})
+	}
+	state.Phase = harness.RunPhaseSubtask
+}
+
+func applySubtaskResults(state *harness.RunState, result subagent.Result) {
+	for _, task := range result.Tasks {
+		for i := range state.Subtasks {
+			if state.Subtasks[i].ID != task.ID {
+				continue
+			}
+			state.Subtasks[i].RunID = task.RunID
+			state.Subtasks[i].Output = task.Output
+			state.Subtasks[i].Error = task.Error
+			state.Subtasks[i].Status = harness.SubtaskCompleted
+			if task.Status == subagent.StatusFailed {
+				state.Subtasks[i].Status = harness.SubtaskFailed
+			}
+			break
+		}
+	}
+}
+
+func intFromMeta(value any) (int, bool) {
+	switch v := value.(type) {
+	case int:
+		return v, true
+	case float64:
+		return int(v), true
+	default:
+		return 0, false
+	}
+}
+
 func toolCallMetadata(stateMeta, callMeta map[string]any) map[string]any {
 	out := cloneMap(stateMeta)
 	if len(callMeta) == 0 {
@@ -650,6 +835,18 @@ func (a *Agent) configuredTools() ([]tool.Tool, error) {
 			continue
 		}
 		configuredTools = append(configuredTools, current)
+	}
+	if a.config.SubAgents == SubAgentsEnabled || a.config.SubAgentOrchestrator != nil || a.config.SubAgentRegistry != nil || len(a.config.SubAgentSpecs) > 0 {
+		taskTools, err := tasktool.Tools(tasktool.Config{})
+		if err != nil {
+			return nil, err
+		}
+		for _, current := range taskTools {
+			if _, ok := existing[strings.ToLower(current.Name())]; ok {
+				continue
+			}
+			configuredTools = append(configuredTools, current)
+		}
 	}
 	return configuredTools, nil
 }
