@@ -67,6 +67,29 @@ func TestShellApprovalRequiredShape(t *testing.T) {
 	}
 }
 
+func TestShellRunsWithApprovalMetadata(t *testing.T) {
+	root := t.TempDir()
+	command := "printf ok"
+	review := policy.ReviewCommand(policy.ShellPolicy{WorkingDir: root, RequireApproval: true}, command)
+	shell := Must(Config{Policy: policy.ShellPolicy{
+		WorkingDir:      root,
+		RequireApproval: true,
+		MaxTimeout:      time.Second,
+	}})
+	result, err := shell.Call(context.Background(), json.RawMessage(`{"command":"printf ok","description":"approved command"}`), tool.Context{
+		Metadata: map[string]any{
+			approval.MetadataDecisionAction: string(approval.DecisionApprove),
+			approval.MetadataFingerprint:    review.Fingerprint,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Call returned error: %v", err)
+	}
+	if result.Structured["output"] != "ok" {
+		t.Fatalf("unexpected result: %#v", result.Structured)
+	}
+}
+
 func TestShellTimeoutAndOutputCap(t *testing.T) {
 	root := t.TempDir()
 	shell := Must(Config{Policy: policy.ShellPolicy{

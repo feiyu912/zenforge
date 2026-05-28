@@ -431,6 +431,45 @@ func (a *Agent) runPendingTools(ctx context.Context, emit func(EventType, map[st
 				"risk":       string(req.Risk),
 				"request":    req,
 			})
+			if a.config.Approval != nil {
+				decision, approvalErr := a.config.Approval.Request(ctx, req)
+				if approvalErr != nil {
+					return approvalErr
+				}
+				state.ResolveApproval(approvalDecisionState(decision))
+				checkpointState()
+				resolvedType := EventApprovalResolved
+				if decision.Action == approval.DecisionReject && decision.Reason == approval.ErrorExpired {
+					resolvedType = EventApprovalExpired
+				}
+				emit(resolvedType, map[string]any{
+					"requestId":  decision.RequestID,
+					"toolCallId": call.ID,
+					"toolName":   call.Name,
+					"action":     string(decision.Action),
+					"scope":      string(decision.Scope),
+					"reason":     decision.Reason,
+				})
+				if decision.Action == approval.DecisionAbort {
+					return fmt.Errorf("approval aborted: %s", decision.Reason)
+				}
+				if approval.IsApprovedAction(decision.Action) {
+					approvedCall := call
+					approvedCall.Meta = approval.ApprovedMetadata(call.Meta, req, decision)
+					result, err = a.invokeTool(ctx, *state, approvedCall)
+					if err != nil && result.Error == "" {
+						result = tool.Result{Error: err.Error(), ExitCode: 1}
+					}
+					if result.Error != "" && result.ExitCode == 0 {
+						result.ExitCode = 1
+					}
+				} else {
+					result = tool.Result{Error: approval.ErrorRejected, ExitCode: 1, Structured: map[string]any{
+						"approval": req,
+						"decision": decision,
+					}}
+				}
+			}
 		}
 		status := harness.ToolCallDone
 		eventType := EventToolResult
@@ -497,6 +536,17 @@ func approvalRequestState(req approval.Request, call harness.ToolCallState) harn
 	}
 }
 
+func approvalDecisionState(decision approval.Decision) harness.ApprovalDecisionState {
+	return harness.ApprovalDecisionState{
+		RequestID: decision.RequestID,
+		Action:    string(decision.Action),
+		Scope:     string(decision.Scope),
+		Reason:    decision.Reason,
+		Payload:   decision.Payload,
+		DecidedAt: decision.DecidedAt,
+	}
+}
+
 func plannerTodos(value any) ([]harness.TodoState, bool) {
 	todos, ok := value.([]planner.Todo)
 	if !ok {
@@ -531,8 +581,22 @@ func (a *Agent) invokeTool(ctx context.Context, state harness.RunState, call har
 		RunID:     state.RunID,
 		Name:      call.Name,
 		Arguments: call.Arguments,
-		Metadata:  cloneMap(state.Meta),
+		Metadata:  toolCallMetadata(state.Meta, call.Meta),
 	})
+}
+
+func toolCallMetadata(stateMeta, callMeta map[string]any) map[string]any {
+	out := cloneMap(stateMeta)
+	if len(callMeta) == 0 {
+		return out
+	}
+	if out == nil {
+		out = map[string]any{}
+	}
+	for key, value := range callMeta {
+		out[key] = value
+	}
+	return out
 }
 
 func (a *Agent) modelMessages(state harness.RunState) []model.Message {

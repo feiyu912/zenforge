@@ -17,6 +17,13 @@ const (
 
 var ErrRequired = errors.New(ErrorRequired)
 
+const (
+	MetadataDecisionAction = "approval.decisionAction"
+	MetadataFingerprint    = "approval.fingerprint"
+	MetadataRequestID      = "approval.requestId"
+	MetadataRuleKey        = "approval.ruleKey"
+)
+
 type RiskLevel string
 
 const (
@@ -137,6 +144,28 @@ func RequiredResult(req Request) tool.Result {
 	}
 }
 
+func ApprovedMetadata(metadata map[string]any, req Request, decision Decision) map[string]any {
+	out := cloneMetadata(metadata)
+	out[MetadataRequestID] = req.ID
+	out[MetadataDecisionAction] = string(decision.Action)
+	if fingerprint, ok := stringFromPayload(req.Payload, "fingerprint"); ok {
+		out[MetadataFingerprint] = fingerprint
+	}
+	if ruleKey, ok := stringFromPayload(req.Payload, "ruleKey"); ok {
+		out[MetadataRuleKey] = ruleKey
+	}
+	return out
+}
+
+func IsApprovedAction(action any) bool {
+	switch action {
+	case string(DecisionApprove), string(DecisionAlways), DecisionApprove, DecisionAlways:
+		return true
+	default:
+		return false
+	}
+}
+
 func RequestFromResult(result tool.Result) (Request, bool) {
 	if result.Error != ErrorRequired || result.Structured == nil {
 		return Request{}, false
@@ -164,4 +193,24 @@ func RequestFromResult(result tool.Result) (Request, bool) {
 		}
 		return decoded, true
 	}
+}
+
+func cloneMetadata(metadata map[string]any) map[string]any {
+	if metadata == nil {
+		return map[string]any{}
+	}
+	out := make(map[string]any, len(metadata)+4)
+	for key, value := range metadata {
+		out[key] = value
+	}
+	return out
+}
+
+func stringFromPayload(payload map[string]any, key string) (string, bool) {
+	value, ok := payload[key]
+	if !ok {
+		return "", false
+	}
+	text, ok := value.(string)
+	return text, ok
 }

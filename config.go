@@ -3,6 +3,7 @@ package zenforge
 import (
 	"context"
 
+	"github.com/feiyu912/zenforge/approval"
 	"github.com/feiyu912/zenforge/checkpoint"
 	"github.com/feiyu912/zenforge/model"
 	"github.com/feiyu912/zenforge/planner"
@@ -41,6 +42,7 @@ type Config struct {
 	Tools        []tool.Tool
 	ToolInvoker  tool.Invoker
 	ToolRuntime  []tool.Middleware
+	Approval     approval.Broker
 	Todos        planner.Manager
 	Workspace    workspace.Workspace
 	Events       EventStore

@@ -192,6 +192,101 @@ func TestAgentRecordsApprovalRequiredToolResult(t *testing.T) {
 	}
 }
 
+func TestAgentApprovalBrokerApprovesAndRetriesTool(t *testing.T) {
+	checkpoints := checkpointmemory.New()
+	fakeModel := &scriptedModel{turns: []scriptedTurn{
+		{
+			events: []model.Event{{
+				Message: &model.Message{
+					ToolCalls: []model.ToolCallSpec{{
+						ID:        "call_approval",
+						Name:      "needs_approval",
+						Arguments: json.RawMessage(`{}`),
+					}},
+				},
+			}},
+		},
+		{events: []model.Event{{Delta: "done"}}},
+	}}
+	agent := New(Config{
+		Model:       fakeModel,
+		Tools:       []Tool{approvalTool{}},
+		Approval:    approval.AlwaysAllow(),
+		Checkpoints: checkpoints,
+	})
+
+	events, err := agent.Stream(context.Background(), Task{RunID: "run_approval_approved", Input: "try approved thing"})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	var types []EventType
+	for event := range events {
+		types = append(types, event.Type)
+	}
+	assertContainsEvent(t, types, EventApprovalRequested)
+	assertContainsEvent(t, types, EventApprovalResolved)
+	assertContainsEvent(t, types, EventToolResult)
+
+	cp, err := checkpoints.Load(context.Background(), "run_approval_approved")
+	if err != nil {
+		t.Fatalf("Load checkpoint returned error: %v", err)
+	}
+	if cp.State.Approval.Waiting != nil || len(cp.State.Approval.Resolved) != 1 {
+		t.Fatalf("expected resolved approval, got %#v", cp.State.Approval)
+	}
+	if got := fakeModel.requests[1].Messages[len(fakeModel.requests[1].Messages)-1].Content; got != "approved result" {
+		t.Fatalf("tool content = %q", got)
+	}
+}
+
+func TestAgentApprovalTimeoutEmitsExpired(t *testing.T) {
+	checkpoints := checkpointmemory.New()
+	fakeModel := &scriptedModel{turns: []scriptedTurn{
+		{
+			events: []model.Event{{
+				Message: &model.Message{
+					ToolCalls: []model.ToolCallSpec{{
+						ID:        "call_approval",
+						Name:      "needs_approval",
+						Arguments: json.RawMessage(`{}`),
+					}},
+				},
+			}},
+		},
+		{events: []model.Event{{Delta: "done after timeout"}}},
+	}}
+	blocking := approval.BrokerFunc(func(ctx context.Context, req approval.Request) (approval.Decision, error) {
+		<-ctx.Done()
+		return approval.Decision{}, ctx.Err()
+	})
+	agent := New(Config{
+		Model:       fakeModel,
+		Tools:       []Tool{approvalTool{}},
+		Approval:    approval.WithTimeout(blocking, time.Millisecond),
+		Checkpoints: checkpoints,
+	})
+
+	events, err := agent.Stream(context.Background(), Task{RunID: "run_approval_expired", Input: "try timed approval"})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	var types []EventType
+	for event := range events {
+		types = append(types, event.Type)
+	}
+	assertContainsEvent(t, types, EventApprovalRequested)
+	assertContainsEvent(t, types, EventApprovalExpired)
+	assertContainsEvent(t, types, EventToolError)
+
+	cp, err := checkpoints.Load(context.Background(), "run_approval_expired")
+	if err != nil {
+		t.Fatalf("Load checkpoint returned error: %v", err)
+	}
+	if len(cp.State.Approval.Resolved) != 1 || cp.State.Approval.Resolved[0].Reason != approval.ErrorExpired {
+		t.Fatalf("expected expired approval decision, got %#v", cp.State.Approval)
+	}
+}
+
 func TestAgentPlanExecutePresetPlansExecutesAndSummarizes(t *testing.T) {
 	fakeModel := &scriptedModel{turns: []scriptedTurn{
 		{
@@ -338,6 +433,9 @@ func (approvalTool) Description() string { return "Requires approval" }
 func (approvalTool) Schema() map[string]any { return nil }
 
 func (approvalTool) Call(ctx context.Context, input json.RawMessage, call tool.Context) (tool.Result, error) {
+	if approval.IsApprovedAction(call.Metadata[approval.MetadataDecisionAction]) {
+		return tool.Result{Output: "approved result"}, nil
+	}
 	req := approval.Request{
 		ID:         "approval_test",
 		RunID:      call.RunID,

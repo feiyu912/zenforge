@@ -108,24 +108,31 @@ func (t shellTool) run(ctx context.Context, in input, call tool.Context) (tool.R
 		return tool.Result{}, err
 	}
 	if review.Decision == policy.ReviewRequireApproval {
-		req := approval.Request{
-			ID:          approval.NewRequestID(call.RunID, call.ToolCallID, "shell_command"),
-			RunID:       call.RunID,
-			ToolCallID:  call.ToolCallID,
-			ToolName:    "shell",
-			Operation:   "shell.command",
-			Title:       "Approve shell command",
-			Description: in.Description,
-			Risk:        approval.RiskHigh,
-			Options:     approval.DefaultOptions(),
-			Payload: map[string]any{
-				"command": in.Command,
-				"cwd":     cwd,
-				"review":  review,
-			},
-			CreatedAt: time.Now().UTC(),
+		if approvedByMetadata(call.Metadata, review) {
+			review.Decision = policy.ReviewAllow
+			review.Reason = "command approved by broker"
+		} else {
+			req := approval.Request{
+				ID:          approval.NewRequestID(call.RunID, call.ToolCallID, "shell_command"),
+				RunID:       call.RunID,
+				ToolCallID:  call.ToolCallID,
+				ToolName:    "shell",
+				Operation:   "shell.command",
+				Title:       "Approve shell command",
+				Description: in.Description,
+				Risk:        approval.RiskHigh,
+				Options:     approval.DefaultOptions(),
+				Payload: map[string]any{
+					"command":     in.Command,
+					"cwd":         cwd,
+					"fingerprint": review.Fingerprint,
+					"ruleKey":     review.RuleKey,
+					"review":      review,
+				},
+				CreatedAt: time.Now().UTC(),
+			}
+			return approval.RequiredResult(req), approval.ErrRequired
 		}
-		return approval.RequiredResult(req), approval.ErrRequired
 	}
 
 	timeout := time.Duration(in.TimeoutMs) * time.Millisecond
@@ -163,6 +170,19 @@ func (t shellTool) run(ctx context.Context, in input, call tool.Context) (tool.R
 		return encodeOutput(out, tool.ErrTimeout)
 	}
 	return encodeOutput(out, err)
+}
+
+func approvedByMetadata(metadata map[string]any, review policy.CommandReview) bool {
+	if metadata == nil || !approval.IsApprovedAction(metadata[approval.MetadataDecisionAction]) {
+		return false
+	}
+	if fingerprint, _ := metadata[approval.MetadataFingerprint].(string); fingerprint != "" && fingerprint == review.Fingerprint {
+		return true
+	}
+	if ruleKey, _ := metadata[approval.MetadataRuleKey].(string); ruleKey != "" && ruleKey == review.RuleKey {
+		return true
+	}
+	return false
 }
 
 func encodeOutput(out output, err error) (tool.Result, error) {
