@@ -42,35 +42,41 @@ package main
 
 import (
     "context"
+    "os"
+    "time"
 
-    "github.com/zenmind-ai/zenforge"
-    "github.com/zenmind-ai/zenforge/model/openai"
-    "github.com/zenmind-ai/zenforge/tools"
+    "github.com/feiyu912/zenforge"
+    checkpointjsonl "github.com/feiyu912/zenforge/checkpoint/jsonl"
+    eventlogjsonl "github.com/feiyu912/zenforge/eventlog/jsonl"
+    "github.com/feiyu912/zenforge/model/openai"
+    "github.com/feiyu912/zenforge/policy"
+    shelltool "github.com/feiyu912/zenforge/tools/shell"
+    workspacetools "github.com/feiyu912/zenforge/tools/workspace"
+    workspacelocal "github.com/feiyu912/zenforge/workspace/local"
 )
 
 func main() {
     ctx := context.Background()
 
+    ws, _ := workspacelocal.New(workspacelocal.Config{Root: "."})
+    workspaceTools, _ := workspacetools.Tools(workspacetools.Config{Workspace: ws})
+    shellTool, _ := shelltool.New(shelltool.Config{Policy: policy.ShellPolicy{
+        WorkingDir:     ".",
+        AllowCommands:  []string{"go test ./...", "grep", "find"},
+        MaxTimeout:     30 * time.Second,
+        MaxOutputBytes: 256_000,
+    }})
+
     agent := zenforge.New(zenforge.Config{
         Model: openai.New(openai.Config{
+            APIKey: os.Getenv("OPENAI_API_KEY"),
             Model: "gpt-4.1",
         }),
         Instructions: "You are a senior Go backend engineer.",
-        Tools: []zenforge.Tool{
-            tools.FileSystem("./repo"),
-            tools.Shell(tools.ShellConfig{
-                WorkingDir: "./repo",
-                AllowCommands: []string{
-                    "go test ./...",
-                    "go vet ./...",
-                    "grep",
-                    "find",
-                },
-            }),
-            tools.HTTP(),
-        },
-        Planning:  zenforge.PlanningEnabled,
-        SubAgents: zenforge.SubAgentsEnabled,
+        Tools: append(workspaceTools, shellTool),
+        Events: eventlogjsonl.New(".zenforge/runs"),
+        Checkpoints: checkpointjsonl.New(".zenforge/runs"),
+        Planning: zenforge.PlanningPlanExecute,
     })
 
     events, err := agent.Stream(ctx, zenforge.Task{
@@ -84,6 +90,20 @@ func main() {
         println(event.String())
     }
 }
+```
+
+## CLI Quick Start
+
+```bash
+OPENAI_API_KEY=... go run ./cmd/zenforge run "Analyze this repo"
+```
+
+Useful examples:
+
+```bash
+OPENAI_API_KEY=... go run ./examples/repo-refactor-agent
+OPENAI_API_KEY=... go run ./examples/code-review-agent
+OPENAI_API_KEY=... go run ./examples/simple-tool-agent
 ```
 
 ## Repository Layout
