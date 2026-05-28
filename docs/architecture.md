@@ -16,13 +16,16 @@ zenforge/
   task.go
   events.go
 
+eventlog/
+  interface.go
+  memory/
+  jsonl/
+
 harness/
-  runner.go
-  loop.go
   state.go
-  checkpoint.go
-  resume.go
-  run_control.go
+
+recorder/
+  recorder.go
 
 model/
   interface.go
@@ -65,7 +68,6 @@ approval/
 
 checkpoint/
   memory/
-  sqlite/
   jsonl/
 
 trace/
@@ -105,6 +107,16 @@ Write event + checkpoint
   ↓
 Continue, delegate, finish, or await
 ```
+
+S1 keeps durable runtime state in two separate streams:
+
+- `checkpoint.Store` saves `checkpoint.Checkpoint` records with schema version
+  `zenforge.checkpoint.v1`; this is the source of truth for resume.
+- `eventlog.Store` appends public `zenforge.Event` records using the flattened
+  event JSON shape extracted from `agent-platform/internal/stream`; this is the
+  observable history for users, CLI, trace adapters, and tests.
+
+The `recorder` package coordinates the write order between those streams.
 
 ## Core Interfaces
 
@@ -185,4 +197,3 @@ checkpoint.created
 
 The existing `agent-platform/internal/stream` events can be mapped to these
 public names by an adapter while the old UI keeps using its current payloads.
-

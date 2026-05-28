@@ -5,28 +5,30 @@ Status: proposed
 ## Context
 
 ZenForge needs a stable event stream for CLI, SDK consumers, server adapters,
-trace systems, and UI adapters. The existing platform has rich events, but some
-names and payloads are tied to chat UI and Java compatibility.
+trace systems, and UI adapters. `agent-platform/internal/stream` already has a
+proven event wire shape, but some event names and payload fields are tied to
+chat UI and Java compatibility.
 
 ## Decision
 
-ZenForge will expose a small stable event contract. Adapters may map this to
-platform-specific events.
+ZenForge will preserve the platform event wire shape and expose a smaller stable
+set of core event names. Adapters may map between core names and
+platform-specific UI names.
 
 ## Event Shape
 
 ```go
 type Event struct {
-    Version   string         `json:"version"`
-    Seq       int64          `json:"seq"`
-    Type      EventType      `json:"type"`
-    RunID     string         `json:"runId"`
-    ParentID  string         `json:"parentId,omitempty"`
-    TaskID    string         `json:"taskId,omitempty"`
-    Timestamp time.Time      `json:"timestamp"`
-    Data      map[string]any `json:"data,omitempty"`
+    Seq       int64
+    Type      EventType
+    Timestamp int64
+    Payload   map[string]any
 }
 ```
+
+JSON follows the platform `stream.EventData` convention: `seq`, `type`,
+payload fields such as `runId` and `taskId`, and `timestamp` are flattened into
+one object. There is no `data` wrapper in the persisted wire format.
 
 ## Initial Event Types
 
@@ -93,7 +95,8 @@ Checkpoint:
   some storage backends, but CLI streaming should receive it.
 - Tool arguments may be redacted by policy before persistence.
 - Secrets must never be stored by default.
-- Adapters can add vendor/platform fields under `data.adapter`.
+- Adapter-specific fields should use explicit payload keys, not a nested
+  `data.adapter` wrapper.
 
 ## Compatibility Mapping
 
@@ -111,4 +114,3 @@ ZenMind adapter can map:
 - `subtask.done` -> `task.complete`
 
 The core should not emit ZenMind UI names directly.
-

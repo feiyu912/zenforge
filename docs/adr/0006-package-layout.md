@@ -25,7 +25,6 @@ harness/
   runner.go
   state.go
   loop.go
-  checkpoint.go
 
 model/
   interface.go
@@ -59,6 +58,9 @@ eventlog/
   interface.go
 eventlog/memory/
 eventlog/jsonl/
+
+recorder/
+  recorder.go
 
 approval/
   interface.go
@@ -104,4 +106,3 @@ It should re-export only the most important interfaces:
 - hidden global registries;
 - requiring CLI/server code for SDK use;
 - forcing Container Hub dependency for local tools.
-

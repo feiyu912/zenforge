@@ -131,6 +131,9 @@ model adapters.
 
 ## Model Interface Requirements
 
+The model-facing event type is internal to model adapters. It is not the public
+durable `zenforge.Event` wire shape from S1.
+
 The current placeholder model interface may need to evolve into:
 
 ```go
@@ -294,4 +297,3 @@ Minimum tests:
 - event log replay shows meaningful progress;
 - no ZenMind platform imports;
 - root `Agent.Stream` uses the harness runner.
-

@@ -1,6 +1,9 @@
 package model
 
-import "context"
+import (
+	"context"
+	"encoding/json"
+)
 
 type Model interface {
 	Generate(ctx context.Context, req Request) (*Response, error)
@@ -8,9 +11,10 @@ type Model interface {
 }
 
 type Request struct {
-	Messages []Message
-	Tools    []ToolSpec
-	Meta     map[string]any
+	Messages   []Message
+	Tools      []ToolSpec
+	ToolChoice ToolChoice
+	Meta       map[string]any
 }
 
 type Response struct {
@@ -20,14 +24,35 @@ type Response struct {
 }
 
 type Event struct {
-	Type  string
-	Delta string
-	Meta  map[string]any
+	Type      EventType
+	Delta     string
+	Message   *Message
+	ToolCalls []ToolCallSpec
+	Usage     Usage
+	Error     error
+	Meta      map[string]any
 }
 
+type EventType string
+
+const (
+	EventDelta EventType = "delta"
+	EventDone  EventType = "done"
+	EventError EventType = "error"
+)
+
 type Message struct {
-	Role    string
-	Content string
+	Role       string
+	Content    string
+	Name       string
+	ToolCallID string
+	ToolCalls  []ToolCallSpec
+}
+
+type ToolCallSpec struct {
+	ID        string          `json:"id"`
+	Name      string          `json:"name"`
+	Arguments json.RawMessage `json:"arguments,omitempty"`
 }
 
 type ToolSpec struct {
@@ -36,9 +61,15 @@ type ToolSpec struct {
 	Schema      map[string]any
 }
 
+type ToolChoice string
+
+const (
+	ToolChoiceAuto ToolChoice = "auto"
+	ToolChoiceNone ToolChoice = "none"
+)
+
 type Usage struct {
 	PromptTokens     int
 	CompletionTokens int
 	TotalTokens      int
 }
-

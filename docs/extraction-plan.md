@@ -37,8 +37,10 @@ Platform concepts:
 
 ## Phase 1: Create Public Types In ZenForge
 
-In the new repo, define interfaces and structs only. Avoid copying large logic
-at first.
+In the new repo, define interfaces and structs from existing platform shapes
+where those shapes already exist. Avoid copying large logic at first, but do not
+invent replacement wire/storage schemas when the platform already has a proven
+one.
 
 Deliverables:
 
@@ -52,7 +54,8 @@ Deliverables:
 - `RunState`
 - `Agent`
 
-This lets the API shape stabilize before implementation details arrive.
+This lets the API shape stabilize before implementation details arrive while
+keeping the extraction faithful to platform behavior.
 
 ## Phase 2: Port Event Stream
 
@@ -64,7 +67,9 @@ Port from:
 agent-platform/internal/stream
 ```
 
-But publish a cleaned-up event contract:
+Keep the platform `stream.EventData` wire shape: flattened `seq`, `type`,
+payload fields, and `timestamp`. Publish a smaller core event name set on top of
+that shape:
 
 ```text
 run.started
@@ -77,7 +82,7 @@ checkpoint.created
 run.done
 ```
 
-Keep a compatibility mapper for ZenMind UI separately.
+Keep compatibility mappers for ZenMind UI names separately.
 
 ## Phase 3: Port Tool Runtime
 
@@ -157,7 +162,9 @@ Changes:
 
 Do not treat current chat JSONL as the only checkpoint.
 
-Create a purpose-built checkpoint:
+There is no single platform checkpoint package to copy. Create the thinnest
+purpose-built checkpoint that captures platform runtime state needed for durable
+resume:
 
 ```text
 run id
@@ -191,4 +198,3 @@ zenforge code ./repo "task"
 ```
 
 Examples should be small but real. Avoid demos that only print model output.
-

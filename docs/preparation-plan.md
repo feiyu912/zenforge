@@ -8,6 +8,8 @@ The most important conclusion:
 ```text
 Do not start by copying packages.
 Start by freezing the runtime boundary and durable state model.
+Where agent-platform already has a proven wire/storage/runtime shape, extract it.
+Where it does not, add only the thinnest ZenForge adapter needed for durability.
 ```
 
 The existing project already has a strong runtime, but core execution logic is
@@ -46,9 +48,9 @@ ZenMind-specific layers should remain adapters:
 | Bash security | Strong | Very good |
 | HITL rules | Strong | Good, but approval protocol must be abstracted |
 | Sub-agent | Works | Medium, server-coupled |
-| Event stream | Strong for UI | Medium, needs public event contract |
+| Event stream | Strong for UI | Good, preserve platform wire shape and narrow core names |
 | Live attach | Works in-process | Not durable |
-| Checkpoint/resume | Partial trace only | Needs new core design |
+| Checkpoint/resume | Partial trace only | Needs thin durable adapter around platform runtime state |
 | Memory | Rich | Defer; adapter after MVP |
 | Container Hub | Strong external sandbox | Adapter/backend |
 
@@ -70,7 +72,9 @@ It cannot yet:
 - restore sub-agent execution state;
 - guarantee every stream event is durably written before a crash.
 
-Therefore ZenForge needs first-class durable runtime primitives:
+Therefore ZenForge needs first-class durable runtime primitives. These should
+reuse platform shapes where they exist, especially stream events and run-control
+state names:
 
 ```text
 RunEventLog
@@ -118,7 +122,8 @@ Build:
 Reason:
 
 The agent loop, HITL, tools, sub-agents, and resume all depend on this boundary.
-If this is wrong, later extraction will inherit platform assumptions.
+If this is wrong, later extraction will either inherit platform coupling or drift
+from platform behavior.
 
 ### S2: Tool Runtime Core
 
@@ -360,4 +365,3 @@ The adapter can call Container Hub HTTP APIs.
 3. Add package skeletons, but keep implementations minimal.
 
 4. Do not port `llmRunStream` until S1/S2 compile.
-

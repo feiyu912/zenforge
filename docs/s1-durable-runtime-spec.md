@@ -6,6 +6,10 @@ The goal is not to run a full agent yet. The goal is to define and test the
 state model that can later support agent loop, tools, approvals, sub-agents, and
 resume.
 
+The event wire format is extracted from `agent-platform/internal/stream`: event
+JSON is flattened as `seq`, `type`, payload fields, then `timestamp`, instead of
+wrapping payload under a separate `data` field.
+
 ## S1 Outcome
 
 After S1, ZenForge should have:
@@ -47,6 +51,9 @@ harness/
   state.go
   run_control.go
   resume.go
+
+recorder/
+  recorder.go
 ```
 
 ## Core Types
@@ -262,6 +269,8 @@ type Checkpoint struct {
 }
 ```
 
+The checkpoint schema version is `zenforge.checkpoint.v1`.
+
 ## Event Log
 
 The event log stores events by run:
@@ -276,6 +285,12 @@ The event log stores events by run:
 
 For MVP, JSONL is enough. Later, SQLite should become the default local durable
 store.
+
+JSONL event reads use `json.Decoder`, matching platform storage behavior: both
+single-line JSON objects and pretty-printed JSON objects are accepted. Corrupt
+event JSON fails fast with a parse error. JSONL checkpoint loads use
+`latest.json` as the source of truth, so a corrupt historical line in
+`checkpoints.jsonl` does not block loading the latest checkpoint.
 
 ## Resume Semantics
 
@@ -324,4 +339,3 @@ Minimum tests:
 - `go test ./...` passes;
 - docs explain unsupported resume points;
 - no model or tool execution logic is required yet.
-

@@ -20,7 +20,7 @@ platform.
 8. Built-in shell tool with allowlist, timeout, and output limit
 9. Event stream
 10. In-memory checkpoint store
-11. JSONL checkpoint/trace store
+11. JSONL event/checkpoint store
 12. Basic resume by `runID`
 13. Sub-agent task tool
 14. CLI: `zenforge run`
@@ -65,4 +65,3 @@ zenforge run "Analyze this repo and produce a refactor plan"
 - A run produces a checkpoint after every step.
 - A process restart can resume from the latest checkpoint for non-awaiting runs.
 - The public API does not import `agent-platform/internal/...`.
-

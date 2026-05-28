@@ -1,6 +1,17 @@
 package checkpoint
 
-import "context"
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/feiyu912/zenforge/harness"
+)
+
+const CheckpointVersion = "zenforge.checkpoint.v1"
+
+var ErrNotFound = errors.New("checkpoint not found")
 
 type Store interface {
 	Save(ctx context.Context, checkpoint Checkpoint) error
@@ -9,22 +20,34 @@ type Store interface {
 }
 
 type Checkpoint struct {
-	RunID    string
-	Input    string
-	Step     int
-	Messages []Message
-	Todos    []Todo
-	Meta     map[string]any
+	Version string           `json:"version"`
+	RunID   string           `json:"runId"`
+	Seq     int64            `json:"seq"`
+	State   harness.RunState `json:"state"`
+	SavedAt time.Time        `json:"savedAt"`
 }
 
-type Message struct {
-	Role    string
-	Content string
+func Validate(checkpoint Checkpoint) error {
+	if checkpoint.Version == "" {
+		return fmt.Errorf("checkpoint version is required")
+	}
+	if checkpoint.Version != CheckpointVersion {
+		return fmt.Errorf("unsupported checkpoint version %q", checkpoint.Version)
+	}
+	if checkpoint.RunID == "" {
+		return fmt.Errorf("checkpoint runId is required")
+	}
+	if checkpoint.Seq <= 0 {
+		return fmt.Errorf("checkpoint seq is required")
+	}
+	if checkpoint.State.RunID == "" {
+		return fmt.Errorf("checkpoint state runId is required")
+	}
+	if checkpoint.State.RunID != checkpoint.RunID {
+		return fmt.Errorf("checkpoint runId %q does not match state runId %q", checkpoint.RunID, checkpoint.State.RunID)
+	}
+	if checkpoint.SavedAt.IsZero() {
+		return fmt.Errorf("checkpoint savedAt is required")
+	}
+	return nil
 }
-
-type Todo struct {
-	ID      string
-	Content string
-	Status  string
-}
-

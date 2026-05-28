@@ -4,8 +4,17 @@ This document turns `s1-durable-runtime-spec.md` into implementation tasks.
 
 ## Goal
 
-Implement durable event/checkpoint foundations without implementing the full
-agent loop yet.
+Extract the durable event/checkpoint foundations from `agent-platform` shapes
+without implementing the full agent loop yet.
+
+S1 should preserve platform-proven wire/storage conventions where they exist:
+
+- event JSON follows `agent-platform/internal/stream.EventData`: `seq`, `type`,
+  `timestamp`, and payload fields are flattened into one object;
+- JSONL reading follows `agent-platform/internal/chat.readJSONLines` and uses
+  `json.Decoder`, so pretty-printed JSON objects are accepted too;
+- run-control state names mirror `agent-platform/internal/contracts.RunLoopState`
+  semantics where possible.
 
 ## Task List
 
@@ -18,6 +27,7 @@ eventlog/
 eventlog/memory/
 eventlog/jsonl/
 harness/
+recorder/
 checkpoint/memory/
 checkpoint/jsonl/
 ```
@@ -149,7 +159,7 @@ Acceptance:
 
 ### 9. Run Recorder
 
-Add helper:
+Add helper in `recorder`:
 
 ```go
 type Recorder struct {
@@ -195,6 +205,5 @@ Acceptance:
 - `go test ./...` passes;
 - S1 tests are meaningful, not just compile tests;
 - no dependency on `agent-platform`;
-- checkpoint schema version is documented;
+- checkpoint schema version is documented as `zenforge.checkpoint.v1`;
 - JSONL stores are usable by S4 harness.
-

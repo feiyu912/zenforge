@@ -101,7 +101,8 @@ Make runtime state durable before extracting the agent loop.
 Why first:
 
 The current platform has trace/replay but not true resume. If ZenForge copies
-the loop before designing checkpoint, it will inherit this weakness.
+the loop before extracting event/run-control shapes and adding a thin durable
+checkpoint adapter, it will inherit this weakness.
 
 Deliverables:
 
@@ -514,4 +515,3 @@ Safe execution.
 Recoverable runs.
 Go-native deployment.
 ```
-

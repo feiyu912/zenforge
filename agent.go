@@ -2,8 +2,15 @@ package zenforge
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
+
+	"github.com/feiyu912/zenforge/checkpoint"
+	"github.com/feiyu912/zenforge/harness"
+	"github.com/feiyu912/zenforge/model"
+	"github.com/feiyu912/zenforge/tool"
 )
 
 // Agent is the high-level batteries-included runtime entrypoint.
@@ -25,37 +32,32 @@ func (a *Agent) Run(ctx context.Context, task Task) (*Result, error) {
 	var result Result
 	for event := range events {
 		if event.Type == EventRunDone {
-			result.RunID = event.RunID
-			result.Output = stringValue(event.Data["output"])
+			result.RunID = event.RunID()
+			result.Output = stringValue(event.Payload["output"])
 		}
 		if event.Type == EventRunError {
-			result.RunID = event.RunID
-			return &result, fmt.Errorf("%s", stringValue(event.Data["error"]))
+			result.RunID = event.RunID()
+			return &result, fmt.Errorf("%s", stringValue(event.Payload["error"]))
 		}
 	}
 	return &result, nil
 }
 
 // Stream executes a task and returns a stream of runtime events.
-//
-// S0 intentionally keeps this as a minimal no-op runtime. S1 will replace the
-// body with the real harness loop extracted from agent-platform.
 func (a *Agent) Stream(ctx context.Context, task Task) (<-chan Event, error) {
 	runID := task.RunID
 	if runID == "" {
 		runID = newRunID()
 	}
-	events := make(chan Event, 2)
+	if a.config.Model == nil {
+		return a.streamNoop(ctx, runID, task.Input), nil
+	}
+
+	state := newRunState(runID, task.Input, task.Meta)
+	events := make(chan Event, 32)
 	go func() {
 		defer close(events)
-		select {
-		case <-ctx.Done():
-			events <- NewEvent(EventRunError, runID, map[string]any{"error": ctx.Err().Error()})
-			return
-		default:
-		}
-		events <- NewEvent(EventRunStarted, runID, map[string]any{"input": task.Input})
-		events <- NewEvent(EventRunDone, runID, map[string]any{"output": ""})
+		a.runLoop(ctx, events, state, false)
 	}()
 	return events, nil
 }
@@ -69,7 +71,12 @@ func (a *Agent) Resume(ctx context.Context, runID string) (<-chan Event, error) 
 	if err != nil {
 		return nil, err
 	}
-	return a.Stream(ctx, Task{RunID: checkpoint.RunID, Input: checkpoint.Input})
+	events := make(chan Event, 32)
+	go func() {
+		defer close(events)
+		a.runLoop(ctx, events, checkpoint.State, true)
+	}()
+	return events, nil
 }
 
 func newRunID() string {
@@ -81,3 +88,386 @@ func stringValue(value any) string {
 	return text
 }
 
+func (a *Agent) streamNoop(ctx context.Context, runID, input string) <-chan Event {
+	events := make(chan Event, 2)
+	go func() {
+		defer close(events)
+		select {
+		case <-ctx.Done():
+			events <- NewEvent(EventRunError, runID, map[string]any{"error": ctx.Err().Error()})
+			return
+		default:
+		}
+		events <- NewEvent(EventRunStarted, runID, map[string]any{"input": input})
+		events <- NewEvent(EventRunDone, runID, map[string]any{"output": ""})
+	}()
+	return events
+}
+
+func newRunState(runID, input string, meta map[string]any) harness.RunState {
+	now := time.Now().UTC()
+	return harness.RunState{
+		Version:   harness.RunStateVersion,
+		RunID:     runID,
+		Input:     input,
+		Phase:     harness.RunPhaseCreated,
+		CreatedAt: now,
+		UpdatedAt: now,
+		Messages: []harness.MessageState{
+			{Role: "user", Content: input},
+		},
+		Control: harness.RunControlState{Status: harness.RunStatusRunning},
+		Meta:    cloneMap(meta),
+	}
+}
+
+func (a *Agent) runLoop(ctx context.Context, out chan<- Event, state harness.RunState, resumed bool) {
+	runID := state.RunID
+	emit := func(eventType EventType, data map[string]any) {
+		event := NewEvent(eventType, runID, data)
+		if a.config.Events != nil {
+			_ = a.config.Events.Append(ctx, event)
+		}
+		select {
+		case out <- event:
+		case <-ctx.Done():
+		}
+	}
+	checkpointSeq := int64(0)
+	checkpointState := func() {
+		if a.config.Checkpoints == nil {
+			return
+		}
+		checkpointSeq++
+		state.UpdatedAt = time.Now().UTC()
+		_ = a.config.Checkpoints.Save(ctx, checkpoint.Checkpoint{
+			Version: checkpoint.CheckpointVersion,
+			RunID:   runID,
+			Seq:     checkpointSeq,
+			State:   state,
+			SavedAt: time.Now().UTC(),
+		})
+		emit(EventCheckpointCreated, map[string]any{
+			"checkpointSeq": checkpointSeq,
+			"phase":         string(state.Phase),
+		})
+	}
+	fail := func(err error) {
+		state.Phase = harness.RunPhaseFailed
+		state.Control.Status = harness.RunStatusFailed
+		checkpointState()
+		emit(EventRunError, map[string]any{"error": err.Error()})
+	}
+
+	if err := ctx.Err(); err != nil {
+		state.Phase = harness.RunPhaseCancelled
+		state.Control.Status = harness.RunStatusCancelled
+		checkpointState()
+		emit(EventRunCancelled, map[string]any{"error": err.Error()})
+		return
+	}
+	if resumed {
+		emit(EventRunResumed, map[string]any{"input": state.Input})
+	} else {
+		emit(EventRunStarted, map[string]any{"input": state.Input})
+	}
+
+	maxSteps := a.config.MaxSteps
+	if maxSteps <= 0 {
+		maxSteps = 8
+	}
+	for state.Step < maxSteps {
+		if err := ctx.Err(); err != nil {
+			state.Phase = harness.RunPhaseCancelled
+			state.Control.Status = harness.RunStatusCancelled
+			checkpointState()
+			emit(EventRunCancelled, map[string]any{"error": err.Error()})
+			return
+		}
+		if len(state.Tool.Pending) > 0 {
+			if err := a.runPendingTools(ctx, emit, checkpointState, &state); err != nil {
+				fail(err)
+				return
+			}
+			continue
+		}
+
+		state.Step++
+		state.Phase = harness.RunPhaseModel
+		state.Control.Status = harness.RunStatusModelStreaming
+		emit(EventStepStarted, map[string]any{"step": state.Step})
+		checkpointState()
+		emit(EventModelStarted, map[string]any{"step": state.Step})
+
+		assistant, usage, err := a.callModel(ctx, emit, state, model.ToolChoiceAuto)
+		if err != nil {
+			fail(err)
+			return
+		}
+		state.Messages = append(state.Messages, assistant)
+		applyUsage(&state, usage)
+		state.Phase = harness.RunPhaseModel
+		state.Control.Status = harness.RunStatusRunning
+		state.Tool.Pending = toolCallsToState(assistant.ToolCalls)
+		checkpointState()
+		emit(EventModelDone, map[string]any{"step": state.Step, "toolCallCount": len(assistant.ToolCalls)})
+
+		if len(state.Tool.Pending) == 0 {
+			state.Phase = harness.RunPhaseCompleted
+			state.Control.Status = harness.RunStatusCompleted
+			checkpointState()
+			emit(EventRunDone, map[string]any{"output": assistant.Content})
+			return
+		}
+	}
+
+	state.Phase = harness.RunPhaseFinalizing
+	state.Control.Status = harness.RunStatusModelStreaming
+	state.Messages = append(state.Messages, harness.MessageState{
+		Role:    "user",
+		Content: "You have reached the tool-use limit. Provide the best final answer using the available context.",
+	})
+	checkpointState()
+	assistant, usage, err := a.callModel(ctx, emit, state, model.ToolChoiceNone)
+	if err != nil {
+		fail(err)
+		return
+	}
+	state.Messages = append(state.Messages, assistant)
+	applyUsage(&state, usage)
+	state.Phase = harness.RunPhaseCompleted
+	state.Control.Status = harness.RunStatusCompleted
+	checkpointState()
+	emit(EventRunDone, map[string]any{"output": assistant.Content})
+}
+
+func (a *Agent) callModel(ctx context.Context, emit func(EventType, map[string]any), state harness.RunState, choice model.ToolChoice) (harness.MessageState, model.Usage, error) {
+	stream, err := a.config.Model.Stream(ctx, model.Request{
+		Messages:   a.modelMessages(state),
+		Tools:      a.toolSpecs(),
+		ToolChoice: choice,
+		Meta:       cloneMap(state.Meta),
+	})
+	if err != nil {
+		return harness.MessageState{}, model.Usage{}, err
+	}
+	var content strings.Builder
+	var message *model.Message
+	var calls []model.ToolCallSpec
+	var usage model.Usage
+	for event := range stream {
+		if event.Error != nil {
+			return harness.MessageState{}, model.Usage{}, event.Error
+		}
+		if event.Delta != "" {
+			content.WriteString(event.Delta)
+			emit(EventModelDelta, map[string]any{"textDelta": event.Delta, "step": state.Step})
+		}
+		if event.Message != nil {
+			message = event.Message
+		}
+		if len(event.ToolCalls) > 0 {
+			calls = append(calls, event.ToolCalls...)
+		}
+		if event.Usage.TotalTokens > 0 || event.Usage.PromptTokens > 0 || event.Usage.CompletionTokens > 0 {
+			usage = event.Usage
+		}
+	}
+	if message != nil {
+		if message.Content != "" {
+			content.Reset()
+			content.WriteString(message.Content)
+		}
+		calls = append(calls, message.ToolCalls...)
+	}
+	return harness.MessageState{
+		Role:      "assistant",
+		Content:   content.String(),
+		ToolCalls: modelToolCallsToHarness(calls),
+	}, usage, nil
+}
+
+func (a *Agent) runPendingTools(ctx context.Context, emit func(EventType, map[string]any), checkpointState func(), state *harness.RunState) error {
+	for len(state.Tool.Pending) > 0 {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		call := state.Tool.Pending[0]
+		state.Tool.Pending = state.Tool.Pending[1:]
+		now := time.Now().UTC()
+		call.Status = harness.ToolCallRunning
+		call.StartedAt = &now
+		state.Tool.Active = &call
+		state.Phase = harness.RunPhaseTool
+		state.Control.Status = harness.RunStatusToolExecuting
+		checkpointState()
+		emit(EventToolCall, map[string]any{
+			"toolCallId": call.ID,
+			"toolName":   call.Name,
+			"arguments":  rawJSONValue(call.Arguments),
+		})
+
+		result, err := a.invokeTool(ctx, *state, call)
+		if err != nil {
+			result = tool.Result{Error: err.Error(), ExitCode: 1}
+		}
+		if result.Error != "" && result.ExitCode == 0 {
+			result.ExitCode = 1
+		}
+		status := harness.ToolCallDone
+		eventType := EventToolResult
+		if result.Error != "" || result.ExitCode != 0 {
+			status = harness.ToolCallFailed
+			eventType = EventToolError
+		}
+		call.Status = status
+		state.Tool.Active = nil
+		state.Tool.Last = &harness.ToolResultState{
+			ToolCallID: call.ID,
+			Output:     result.Output,
+			Structured: result.Structured,
+			Error:      result.Error,
+			ExitCode:   result.ExitCode,
+		}
+		state.Messages = append(state.Messages, harness.MessageState{
+			Role:       "tool",
+			Content:    toolResultContent(result),
+			ToolCallID: call.ID,
+			Name:       call.Name,
+		})
+		state.Control.Status = harness.RunStatusRunning
+		checkpointState()
+		emit(eventType, map[string]any{
+			"toolCallId": call.ID,
+			"toolName":   call.Name,
+			"output":     result.Output,
+			"error":      result.Error,
+			"exitCode":   result.ExitCode,
+		})
+	}
+	return nil
+}
+
+func (a *Agent) invokeTool(ctx context.Context, state harness.RunState, call harness.ToolCallState) (tool.Result, error) {
+	selected, ok := a.lookupTool(call.Name)
+	if !ok {
+		return tool.Result{Error: fmt.Sprintf("tool %q not found", call.Name), ExitCode: 1}, nil
+	}
+	return selected.Call(ctx, call.Arguments, tool.Context{
+		RunID:      state.RunID,
+		ToolCallID: call.ID,
+		Meta:       cloneMap(state.Meta),
+	})
+}
+
+func (a *Agent) lookupTool(name string) (tool.Tool, bool) {
+	for _, candidate := range a.config.Tools {
+		if candidate.Name() == name || strings.EqualFold(candidate.Name(), name) {
+			return candidate, true
+		}
+	}
+	return nil, false
+}
+
+func (a *Agent) modelMessages(state harness.RunState) []model.Message {
+	messages := make([]model.Message, 0, len(state.Messages)+1)
+	if a.config.Instructions != "" {
+		messages = append(messages, model.Message{Role: "system", Content: a.config.Instructions})
+	}
+	for _, message := range state.Messages {
+		messages = append(messages, model.Message{
+			Role:       message.Role,
+			Content:    message.Content,
+			Name:       message.Name,
+			ToolCallID: message.ToolCallID,
+			ToolCalls:  harnessToolCallsToModel(message.ToolCalls),
+		})
+	}
+	return messages
+}
+
+func (a *Agent) toolSpecs() []model.ToolSpec {
+	specs := make([]model.ToolSpec, 0, len(a.config.Tools))
+	for _, tool := range a.config.Tools {
+		specs = append(specs, model.ToolSpec{
+			Name:        tool.Name(),
+			Description: tool.Description(),
+			Schema:      tool.Schema(),
+		})
+	}
+	return specs
+}
+
+func modelToolCallsToHarness(calls []model.ToolCallSpec) []harness.ToolCallSpec {
+	out := make([]harness.ToolCallSpec, 0, len(calls))
+	for _, call := range calls {
+		out = append(out, harness.ToolCallSpec{ID: call.ID, Name: call.Name, Arguments: call.Arguments})
+	}
+	return out
+}
+
+func harnessToolCallsToModel(calls []harness.ToolCallSpec) []model.ToolCallSpec {
+	out := make([]model.ToolCallSpec, 0, len(calls))
+	for _, call := range calls {
+		out = append(out, model.ToolCallSpec{ID: call.ID, Name: call.Name, Arguments: call.Arguments})
+	}
+	return out
+}
+
+func toolCallsToState(calls []harness.ToolCallSpec) []harness.ToolCallState {
+	out := make([]harness.ToolCallState, 0, len(calls))
+	for _, call := range calls {
+		out = append(out, harness.ToolCallState{
+			ID:        call.ID,
+			Name:      call.Name,
+			Arguments: call.Arguments,
+			Status:    harness.ToolCallPending,
+		})
+	}
+	return out
+}
+
+func applyUsage(state *harness.RunState, usage model.Usage) {
+	state.Usage.InputTokens += usage.PromptTokens
+	state.Usage.OutputTokens += usage.CompletionTokens
+	state.Usage.TotalTokens += usage.TotalTokens
+}
+
+func toolResultContent(result tool.Result) string {
+	if result.Error != "" {
+		return result.Error
+	}
+	if result.Output != "" {
+		return result.Output
+	}
+	if len(result.Structured) == 0 {
+		return ""
+	}
+	data, err := json.Marshal(result.Structured)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+func rawJSONValue(raw json.RawMessage) any {
+	if len(raw) == 0 {
+		return nil
+	}
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return string(raw)
+	}
+	return value
+}
+
+func cloneMap(in map[string]any) map[string]any {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]any, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}

@@ -17,7 +17,7 @@ agent := zenforge.New(zenforge.Config{
             MaxOutputBytes: 256_000,
         }),
     },
-    Checkpoints: checkpoint.JSONL("./.zenforge/runs"),
+    Checkpoints: checkpointjsonl.New("./.zenforge/runs"),
     Trace: trace.Stdout(),
     Planning: zenforge.PlanningEnabled,
 })
@@ -52,6 +52,24 @@ for event := range events {
 ```go
 events, err := agent.Resume(ctx, "run_123")
 ```
+
+## Durable Runtime Stores
+
+S1 exposes replaceable durable runtime pieces:
+
+```go
+events := eventlogjsonl.New("./.zenforge/runs")
+checkpoints := checkpointjsonl.New("./.zenforge/runs")
+
+rec := recorder.Recorder{
+    Events: events,
+    Checkpoints: checkpoints,
+}
+```
+
+The checkpoint schema version is `zenforge.checkpoint.v1`. The checkpoint
+store is the resumable execution source of truth, while the event log is the
+observable run history.
 
 ## Define A Typed Tool
 
@@ -135,4 +153,3 @@ checkpoint:
   type: jsonl
   path: ./.zenforge/runs
 ```
-
