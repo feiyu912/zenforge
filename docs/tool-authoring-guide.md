@@ -14,7 +14,7 @@ type SearchOutput struct {
     Results []string `json:"results"`
 }
 
-search := tools.New("search", "Search internal documents",
+search, err := tools.New("search", "Search internal documents",
     func(ctx context.Context, in SearchInput) (SearchOutput, error) {
         if in.Limit <= 0 {
             in.Limit = 5
@@ -22,6 +22,32 @@ search := tools.New("search", "Search internal documents",
         return SearchOutput{Results: []string{"example"}}, nil
     },
 )
+if err != nil {
+    return err
+}
+```
+
+## Registry And Middleware
+
+```go
+registry, err := tool.NewRegistry(search)
+if err != nil {
+    return err
+}
+
+invoker := tool.NewInvoker(registry,
+    tool.RecoverPanic(),
+    tool.Timeout(30*time.Second),
+    tool.Retry(2),
+    tool.MaxOutputBytes(64_000),
+)
+
+result, err := invoker.Invoke(ctx, tool.Call{
+    ID:        "call_1",
+    RunID:     "run_123",
+    Name:      "search",
+    Arguments: json.RawMessage(`{"query":"zenforge"}`),
+})
 ```
 
 ## Manual Tool
@@ -92,4 +118,3 @@ wrapped with middleware:
 
 The default built-in shell and workspace tools will use conservative safety
 defaults.
-

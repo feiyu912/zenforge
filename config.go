@@ -37,6 +37,8 @@ type Config struct {
 	Model        model.Model
 	Instructions string
 	Tools        []tool.Tool
+	ToolInvoker  tool.Invoker
+	ToolRuntime  []tool.Middleware
 	Workspace    workspace.Workspace
 	Events       EventStore
 	Checkpoints  checkpoint.Store

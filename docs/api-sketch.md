@@ -82,11 +82,36 @@ type SearchOutput struct {
     Results []string `json:"results"`
 }
 
-search := tools.New("search", "Search internal documents",
+search, err := tools.New("search", "Search internal documents",
     func(ctx context.Context, in SearchInput) (SearchOutput, error) {
         return SearchOutput{Results: []string{"example"}}, nil
     },
 )
+if err != nil {
+    return err
+}
+```
+
+## Invoke Tools Directly
+
+```go
+registry, err := tool.NewRegistry(search)
+if err != nil {
+    return err
+}
+
+invoker := tool.NewInvoker(registry,
+    tool.RecoverPanic(),
+    tool.Timeout(30*time.Second),
+    tool.MaxOutputBytes(256_000),
+)
+
+result, err := invoker.Invoke(ctx, tool.Call{
+    ID:        "call_1",
+    RunID:     "run_123",
+    Name:      "search",
+    Arguments: json.RawMessage(`{"query":"example"}`),
+})
 ```
 
 ## Add Sub-Agents

@@ -349,24 +349,21 @@ func (a *Agent) runPendingTools(ctx context.Context, emit func(EventType, map[st
 }
 
 func (a *Agent) invokeTool(ctx context.Context, state harness.RunState, call harness.ToolCallState) (tool.Result, error) {
-	selected, ok := a.lookupTool(call.Name)
-	if !ok {
-		return tool.Result{Error: fmt.Sprintf("tool %q not found", call.Name), ExitCode: 1}, nil
-	}
-	return selected.Call(ctx, call.Arguments, tool.Context{
-		RunID:      state.RunID,
-		ToolCallID: call.ID,
-		Meta:       cloneMap(state.Meta),
-	})
-}
-
-func (a *Agent) lookupTool(name string) (tool.Tool, bool) {
-	for _, candidate := range a.config.Tools {
-		if candidate.Name() == name || strings.EqualFold(candidate.Name(), name) {
-			return candidate, true
+	invoker := a.config.ToolInvoker
+	if invoker == nil {
+		registry, err := tool.NewRegistry(a.config.Tools...)
+		if err != nil {
+			return tool.Result{Error: err.Error(), ExitCode: 1}, err
 		}
+		invoker = tool.NewInvoker(registry, a.config.ToolRuntime...)
 	}
-	return nil, false
+	return invoker.Invoke(ctx, tool.Call{
+		ID:        call.ID,
+		RunID:     state.RunID,
+		Name:      call.Name,
+		Arguments: call.Arguments,
+		Metadata:  cloneMap(state.Meta),
+	})
 }
 
 func (a *Agent) modelMessages(state harness.RunState) []model.Message {
