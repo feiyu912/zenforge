@@ -170,6 +170,9 @@ The current MVP validation evidence is
 The release checklist is
 [docs/release-checklist.md](./docs/release-checklist.md).
 
+The server/SSE adapter guide is
+[docs/server-sse-guide.md](./docs/server-sse-guide.md).
+
 The CLI config reference is
 [docs/config-reference.md](./docs/config-reference.md).
 
