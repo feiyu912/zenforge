@@ -173,6 +173,9 @@ The release checklist is
 The server/SSE adapter guide is
 [docs/server-sse-guide.md](./docs/server-sse-guide.md).
 
+The server/HTTP adapter guide is
+[docs/server-http-guide.md](./docs/server-http-guide.md).
+
 The CLI config reference is
 [docs/config-reference.md](./docs/config-reference.md).
 

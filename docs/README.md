@@ -39,9 +39,10 @@ Recommended reading order:
 35. [approval-guide.md](./approval-guide.md)
 36. [planner-guide.md](./planner-guide.md)
 37. [harness-state-machine.md](./harness-state-machine.md)
-38. [server-sse-guide.md](./server-sse-guide.md)
-39. [security-guide.md](./security-guide.md)
-40. [tool-authoring-guide.md](./tool-authoring-guide.md)
+38. [server-http-guide.md](./server-http-guide.md)
+39. [server-sse-guide.md](./server-sse-guide.md)
+40. [security-guide.md](./security-guide.md)
+41. [tool-authoring-guide.md](./tool-authoring-guide.md)
 
 ## Architecture Decision Records
 
