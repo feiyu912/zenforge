@@ -158,3 +158,6 @@ The sandbox adapter design for S8 is
 
 The MVP assembly plan is
 [docs/mvp-assembly-plan.md](./docs/mvp-assembly-plan.md).
+
+The CLI config reference is
+[docs/config-reference.md](./docs/config-reference.md).

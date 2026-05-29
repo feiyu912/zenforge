@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -48,6 +49,8 @@ func Main(ctx context.Context, args []string, ioStreams IO) int {
 		err = resume(ctx, args[1:], ioStreams)
 	case "events":
 		err = events(ctx, args[1:], ioStreams)
+	case "init":
+		err = initConfig(args[1:], ioStreams)
 	case "version":
 		_, err = fmt.Fprintln(ioStreams.Stdout, Version)
 	default:
@@ -64,7 +67,10 @@ func Main(ctx context.Context, args []string, ioStreams IO) int {
 func run(ctx context.Context, args []string, ioStreams IO) error {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	fs.SetOutput(ioStreams.Stderr)
-	opts := defaultOptions()
+	opts, err := optionsFromArgs(args)
+	if err != nil {
+		return err
+	}
 	bindOptions(fs, &opts)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -87,7 +93,10 @@ func run(ctx context.Context, args []string, ioStreams IO) error {
 func resume(ctx context.Context, args []string, ioStreams IO) error {
 	fs := flag.NewFlagSet("resume", flag.ContinueOnError)
 	fs.SetOutput(ioStreams.Stderr)
-	opts := defaultOptions()
+	opts, err := optionsFromArgs(args)
+	if err != nil {
+		return err
+	}
 	bindOptions(fs, &opts)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -109,11 +118,17 @@ func resume(ctx context.Context, args []string, ioStreams IO) error {
 func events(ctx context.Context, args []string, ioStreams IO) error {
 	fs := flag.NewFlagSet("events", flag.ContinueOnError)
 	fs.SetOutput(ioStreams.Stderr)
-	checkpointDir := fs.String("checkpoint-dir", ".zenforge/runs", "event/checkpoint directory")
+	opts, err := optionsFromArgs(args)
+	if err != nil {
+		return err
+	}
+	configPath := fs.String("config", opts.configPath, "config file path")
+	checkpointDir := fs.String("checkpoint-dir", opts.checkpointDir, "event/checkpoint directory")
 	jsonOut := fs.Bool("json", false, "print JSON events")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	_ = configPath
 	if fs.NArg() != 1 {
 		return fmt.Errorf("events requires run id")
 	}
@@ -136,32 +151,75 @@ func events(ctx context.Context, args []string, ioStreams IO) error {
 	return nil
 }
 
+func initConfig(args []string, ioStreams IO) error {
+	fs := flag.NewFlagSet("init", flag.ContinueOnError)
+	fs.SetOutput(ioStreams.Stderr)
+	configPath := fs.String("config", "zenforge.json", "config file path")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("init does not accept positional arguments")
+	}
+	if err := os.MkdirAll(".zenforge/runs", 0o755); err != nil {
+		return err
+	}
+	if _, err := os.Stat(*configPath); err == nil {
+		return fmt.Errorf("%s already exists", *configPath)
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	data, err := json.MarshalIndent(defaultConfigFile(), "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	if err := os.MkdirAll(filepath.Dir(*configPath), 0o755); err != nil && filepath.Dir(*configPath) != "." {
+		return err
+	}
+	if err := os.WriteFile(*configPath, data, 0o644); err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(ioStreams.Stdout, "created %s\n", *configPath)
+	_, _ = fmt.Fprintln(ioStreams.Stdout, "created .zenforge/runs")
+	return nil
+}
+
 type options struct {
-	workspace     string
-	model         string
-	apiKeyEnv     string
-	baseURL       string
-	checkpointDir string
-	maxSteps      int
-	planning      string
-	noShell       bool
-	shellAllow    multiFlag
+	configPath          string
+	workspace           string
+	instructions        string
+	model               string
+	apiKeyEnv           string
+	baseURL             string
+	checkpointDir       string
+	maxSteps            int
+	planning            string
+	noShell             bool
+	shellTimeout        time.Duration
+	shellMaxOutputBytes int64
+	shellAllow          multiFlag
 }
 
 func defaultOptions() options {
 	return options{
-		workspace:     ".",
-		model:         "gpt-4.1",
-		apiKeyEnv:     "OPENAI_API_KEY",
-		checkpointDir: ".zenforge/runs",
-		maxSteps:      20,
-		planning:      "plan_execute",
-		shellAllow:    multiFlag{"go test ./...", "go vet ./...", "grep", "find"},
+		workspace:           ".",
+		instructions:        "You are a senior Go backend engineer. Be concise, careful, and use tools when helpful.",
+		model:               "gpt-4.1",
+		apiKeyEnv:           "OPENAI_API_KEY",
+		checkpointDir:       ".zenforge/runs",
+		maxSteps:            20,
+		planning:            "plan_execute",
+		shellTimeout:        30 * time.Second,
+		shellMaxOutputBytes: 256_000,
+		shellAllow:          multiFlag{"go test ./...", "go vet ./...", "grep", "find"},
 	}
 }
 
 func bindOptions(fs *flag.FlagSet, opts *options) {
+	fs.StringVar(&opts.configPath, "config", opts.configPath, "config file path")
 	fs.StringVar(&opts.workspace, "workspace", opts.workspace, "workspace root")
+	fs.StringVar(&opts.instructions, "instructions", opts.instructions, "agent instructions")
 	fs.StringVar(&opts.model, "model", opts.model, "OpenAI-compatible model name")
 	fs.StringVar(&opts.apiKeyEnv, "api-key-env", opts.apiKeyEnv, "environment variable containing API key")
 	fs.StringVar(&opts.baseURL, "base-url", opts.baseURL, "OpenAI-compatible base URL")
@@ -170,6 +228,21 @@ func bindOptions(fs *flag.FlagSet, opts *options) {
 	fs.StringVar(&opts.planning, "planning", opts.planning, "planning mode: disabled|enabled|plan_execute")
 	fs.BoolVar(&opts.noShell, "no-shell", opts.noShell, "disable shell tool")
 	fs.Var(&opts.shellAllow, "shell-allow", "allowlisted shell command prefix; repeatable")
+}
+
+func optionsFromArgs(args []string) (options, error) {
+	opts := defaultOptions()
+	configPath := configPathFromArgs(args)
+	if configPath == "" {
+		return opts, nil
+	}
+	config, err := loadConfigFile(configPath)
+	if err != nil {
+		return opts, err
+	}
+	opts.configPath = configPath
+	applyConfig(&opts, config)
+	return opts, nil
 }
 
 func buildAgent(opts options) (*zenforge.Agent, error) {
@@ -195,8 +268,8 @@ func buildAgent(opts options) (*zenforge.Agent, error) {
 		shell, err := shelltool.New(shelltool.Config{Policy: policy.ShellPolicy{
 			WorkingDir:     opts.workspace,
 			AllowCommands:  []string(opts.shellAllow),
-			MaxTimeout:     30 * time.Second,
-			MaxOutputBytes: 256_000,
+			MaxTimeout:     opts.shellTimeout,
+			MaxOutputBytes: opts.shellMaxOutputBytes,
 		}})
 		if err != nil {
 			return nil, err
@@ -209,7 +282,7 @@ func buildAgent(opts options) (*zenforge.Agent, error) {
 			Model:   opts.model,
 			BaseURL: opts.baseURL,
 		}),
-		Instructions: "You are a senior Go backend engineer. Be concise, careful, and use tools when helpful.",
+		Instructions: opts.instructions,
 		Tools:        tools,
 		Events:       eventlogjsonl.New(opts.checkpointDir),
 		Checkpoints:  checkpointjsonl.New(opts.checkpointDir),
@@ -319,7 +392,7 @@ func stringValue(value any) string {
 }
 
 func printUsage(out io.Writer) {
-	_, _ = fmt.Fprintln(out, "usage: zenforge <run|resume|events|version> [options]")
+	_, _ = fmt.Fprintln(out, "usage: zenforge <run|resume|events|init|version> [options]")
 }
 
 type multiFlag []string
