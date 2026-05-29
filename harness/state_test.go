@@ -28,6 +28,7 @@ func TestRunStateJSONRoundTrip(t *testing.T) {
 		Control:   RunControlState{Status: RunStatusToolExecuting},
 		Usage:     UsageState{InputTokens: 10, OutputTokens: 4, TotalTokens: 14},
 		Workspace: WorkspaceState{Root: "/tmp/work"},
+		Sandbox:   SandboxState{SessionID: "session_1", EnvironmentID: "go", WorkingDir: "/workspace"},
 		Model:     ModelState{Provider: "test", Name: "model"},
 		Meta:      map[string]any{"k": "v"},
 	}
@@ -45,6 +46,9 @@ func TestRunStateJSONRoundTrip(t *testing.T) {
 	}
 	if got.Messages[1].ToolCalls[0].Name != "echo" {
 		t.Fatalf("unexpected tool call after round trip: %#v", got.Messages[1].ToolCalls[0])
+	}
+	if got.Sandbox.SessionID != "session_1" {
+		t.Fatalf("unexpected sandbox state after round trip: %#v", got.Sandbox)
 	}
 }
 

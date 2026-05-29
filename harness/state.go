@@ -39,6 +39,7 @@ type RunState struct {
 	Control     RunControlState `json:"control"`
 	Usage       UsageState      `json:"usage,omitempty"`
 	Workspace   WorkspaceState  `json:"workspace,omitempty"`
+	Sandbox     SandboxState    `json:"sandbox,omitempty"`
 	Model       ModelState      `json:"model,omitempty"`
 	Meta        map[string]any  `json:"meta,omitempty"`
 }
@@ -194,6 +195,13 @@ type WorkspaceState struct {
 	SandboxID  string         `json:"sandboxId,omitempty"`
 	DirtyPaths []string       `json:"dirtyPaths,omitempty"`
 	Meta       map[string]any `json:"meta,omitempty"`
+}
+
+type SandboxState struct {
+	SessionID     string         `json:"sessionId,omitempty"`
+	EnvironmentID string         `json:"environmentId,omitempty"`
+	WorkingDir    string         `json:"workingDir,omitempty"`
+	Meta          map[string]any `json:"meta,omitempty"`
 }
 
 type ModelState struct {

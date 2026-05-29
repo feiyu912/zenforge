@@ -13,12 +13,24 @@ import (
 
 	"github.com/feiyu912/zenforge/approval"
 	"github.com/feiyu912/zenforge/policy"
+	"github.com/feiyu912/zenforge/sandbox"
 	"github.com/feiyu912/zenforge/tool"
 	"github.com/feiyu912/zenforge/tool/jsonschema"
 )
 
+type ShellBackend string
+
+const (
+	ShellBackendLocal   ShellBackend = "local"
+	ShellBackendSandbox ShellBackend = "sandbox"
+)
+
 type Config struct {
-	Policy policy.ShellPolicy
+	Policy        policy.ShellPolicy
+	Backend       ShellBackend
+	Sandbox       sandbox.Sandbox
+	EnvironmentID string
+	Mounts        []sandbox.Mount
 }
 
 func New(config Config) (tool.Tool, error) {
@@ -44,10 +56,12 @@ type output struct {
 	Command   string               `json:"command"`
 	CWD       string               `json:"cwd"`
 	Output    string               `json:"output"`
+	Backend   ShellBackend         `json:"backend"`
 	ExitCode  int                  `json:"exitCode"`
 	TimedOut  bool                 `json:"timedOut"`
 	Truncated bool                 `json:"truncated"`
 	Review    policy.CommandReview `json:"review"`
+	Sandbox   *sandbox.State       `json:"sandbox,omitempty"`
 }
 
 type shellTool struct {
@@ -145,10 +159,7 @@ func (t shellTool) run(ctx context.Context, in input, call tool.Context) (tool.R
 	if t.config.Policy.MaxTimeout > 0 && timeout > t.config.Policy.MaxTimeout {
 		timeout = t.config.Policy.MaxTimeout
 	}
-	runCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	stdout, stderr, exitCode, err := run(runCtx, cwd, t.config.Policy, in.Command)
+	stdout, stderr, exitCode, backend, sandboxState, err := t.execute(ctx, call, in.Command, cwd, timeout)
 	combined := joinOutput(stdout, stderr)
 	truncated := false
 	maxOutput := t.config.Policy.MaxOutputBytes
@@ -160,16 +171,78 @@ func (t shellTool) run(ctx context.Context, in input, call tool.Context) (tool.R
 		Command:   in.Command,
 		CWD:       cwd,
 		Output:    combined,
+		Backend:   backend,
 		ExitCode:  exitCode,
 		Truncated: truncated,
 		Review:    review,
+		Sandbox:   sandboxState,
 	}
-	if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, sandbox.ErrTimeout) {
 		out.ExitCode = 124
 		out.TimedOut = true
 		return encodeOutput(out, tool.ErrTimeout)
 	}
 	return encodeOutput(out, err)
+}
+
+func (t shellTool) execute(ctx context.Context, call tool.Context, command, cwd string, timeout time.Duration) (string, string, int, ShellBackend, *sandbox.State, error) {
+	backend := t.config.Backend
+	if backend == "" {
+		backend = ShellBackendLocal
+	}
+	switch backend {
+	case ShellBackendLocal:
+		runCtx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		stdout, stderr, exitCode, err := run(runCtx, cwd, t.config.Policy, command)
+		if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+			err = context.DeadlineExceeded
+		}
+		return stdout, stderr, exitCode, backend, nil, err
+	case ShellBackendSandbox:
+		return t.executeSandbox(ctx, call, command, cwd, timeout)
+	default:
+		return "", "", 1, backend, nil, fmt.Errorf("unknown shell backend: %s", backend)
+	}
+}
+
+func (t shellTool) executeSandbox(ctx context.Context, call tool.Context, command, cwd string, timeout time.Duration) (string, string, int, ShellBackend, *sandbox.State, error) {
+	if t.config.Sandbox == nil {
+		return "", "", 1, ShellBackendSandbox, nil, sandbox.ErrSandboxUnavailable
+	}
+	session, err := t.config.Sandbox.Open(ctx, sandbox.OpenRequest{
+		RunID:         call.RunID,
+		SubtaskID:     stringFromMetadata(call.Metadata, "subtaskId"),
+		EnvironmentID: t.config.EnvironmentID,
+		WorkingDir:    t.config.Policy.WorkingDir,
+		Env:           allowedEnvMap(t.config.Policy),
+		Mounts:        append([]sandbox.Mount(nil), t.config.Mounts...),
+		Metadata: map[string]any{
+			"toolCallId": call.ToolCallID,
+		},
+	})
+	if err != nil {
+		return "", "", 1, ShellBackendSandbox, nil, err
+	}
+	state := &sandbox.State{
+		SessionID:     session.ID,
+		EnvironmentID: session.EnvironmentID,
+		WorkingDir:    session.WorkingDir,
+		Metadata:      cloneAnyMap(session.Metadata),
+	}
+	result, err := t.config.Sandbox.Execute(ctx, session, sandbox.ExecuteRequest{
+		Command: command,
+		CWD:     cwd,
+		Timeout: timeout,
+		Env:     allowedEnvMap(t.config.Policy),
+		Metadata: map[string]any{
+			"toolCallId": call.ToolCallID,
+		},
+	})
+	if closeErr := t.config.Sandbox.Close(ctx, session); closeErr != nil && err == nil {
+		err = closeErr
+	}
+	return result.Stdout, result.Stderr, result.ExitCode, ShellBackendSandbox, state, err
 }
 
 func approvedByMetadata(metadata map[string]any, review policy.CommandReview) bool {
@@ -216,6 +289,37 @@ func run(ctx context.Context, cwd string, shellPolicy policy.ShellPolicy, comman
 		}
 	}
 	return stdout.String(), stderr.String(), exitCode, err
+}
+
+func allowedEnvMap(shellPolicy policy.ShellPolicy) map[string]string {
+	allowed := policy.AllowedEnv(shellPolicy)
+	if len(allowed) == 0 {
+		return nil
+	}
+	env := make(map[string]string, len(allowed))
+	for _, item := range allowed {
+		key, value, ok := strings.Cut(item, "=")
+		if ok {
+			env[key] = value
+		}
+	}
+	return env
+}
+
+func stringFromMetadata(metadata map[string]any, key string) string {
+	value, _ := metadata[key].(string)
+	return value
+}
+
+func cloneAnyMap(in map[string]any) map[string]any {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]any, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
 }
 
 func shellCommand(command string) (string, []string) {
