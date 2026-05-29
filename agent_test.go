@@ -314,7 +314,13 @@ func TestAgentRunsSubAgentTaskTool(t *testing.T) {
 		SubAgents:        SubAgentsEnabled,
 		SubAgentRegistry: registry,
 		SubAgentRunner: subagent.RunnerFunc(func(ctx context.Context, spec subagent.SubAgentSpec, task subagent.TaskSpec, req subagent.Request) (subagent.TaskResult, error) {
-			return subagent.TaskResult{Output: spec.Name + " handled " + task.Input}, nil
+			return subagent.TaskResult{
+				Output: spec.Name + " handled " + task.Input,
+				Events: []subagent.Event{{
+					Type:    "child.note",
+					Payload: map[string]any{"input": task.Input},
+				}},
+			}, nil
 		}),
 		Checkpoints: checkpoints,
 	})
@@ -328,6 +334,7 @@ func TestAgentRunsSubAgentTaskTool(t *testing.T) {
 		types = append(types, event.Type)
 	}
 	assertContainsEvent(t, types, EventSubtaskStarted)
+	assertContainsEvent(t, types, EventSubtaskEvent)
 	assertContainsEvent(t, types, EventSubtaskDone)
 	assertContainsEvent(t, types, EventToolResult)
 

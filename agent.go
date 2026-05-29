@@ -548,6 +548,15 @@ func (a *Agent) invokeSubAgentTool(ctx context.Context, emit func(EventType, map
 	applySubtaskResults(state, result)
 	checkpointState()
 	for _, task := range result.Tasks {
+		for _, childEvent := range task.Events {
+			emit(EventSubtaskEvent, map[string]any{
+				"subtaskId":      task.ID,
+				"agentName":      task.AgentName,
+				"childRunId":     task.RunID,
+				"childEventType": childEvent.Type,
+				"childEvent":     childEvent,
+			})
+		}
 		eventType := EventSubtaskDone
 		if task.Status == subagent.StatusFailed {
 			eventType = EventSubtaskError
@@ -706,21 +715,50 @@ func (a *Agent) runChildSubAgent(ctx context.Context, spec subagent.SubAgentSpec
 		MaxSteps:     maxSteps,
 		Planning:     PlanningDisabled,
 	})
-	result, err := child.Run(ctx, Task{RunID: childRunID, Input: task.Input, Meta: childMeta})
+	events, err := child.Stream(ctx, Task{RunID: childRunID, Input: task.Input, Meta: childMeta})
+	if err != nil {
+		return subagent.TaskResult{
+			ID:        task.ID,
+			AgentName: spec.Name,
+			Name:      task.Name,
+			RunID:     childRunID,
+			Status:    subagent.StatusFailed,
+			Error:     err.Error(),
+			Metadata:  cloneMap(task.Metadata),
+		}, err
+	}
+	var output string
+	var childEvents []subagent.Event
+	var runErr error
+	for event := range events {
+		childEvents = append(childEvents, subagent.Event{
+			Seq:       event.Seq,
+			Type:      string(event.Type),
+			Timestamp: event.Timestamp,
+			Payload:   cloneMap(event.Payload),
+		})
+		if event.Type == EventRunDone {
+			output = stringValue(event.Payload["output"])
+		}
+		if event.Type == EventRunError {
+			runErr = fmt.Errorf("%s", stringValue(event.Payload["error"]))
+		}
+	}
 	taskResult := subagent.TaskResult{
 		ID:        task.ID,
 		AgentName: spec.Name,
 		Name:      task.Name,
-		Output:    result.Output,
+		Output:    output,
 		RunID:     childRunID,
 		Status:    subagent.StatusCompleted,
 		Metadata:  cloneMap(task.Metadata),
+		Events:    childEvents,
 	}
-	if err != nil {
+	if runErr != nil {
 		taskResult.Status = subagent.StatusFailed
-		taskResult.Error = err.Error()
+		taskResult.Error = runErr.Error()
 	}
-	return taskResult, err
+	return taskResult, runErr
 }
 
 func startSubtasks(state *harness.RunState, req subagent.Request) {

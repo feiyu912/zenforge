@@ -65,6 +65,14 @@ type TaskResult struct {
 	Error     string         `json:"error,omitempty"`
 	RunID     string         `json:"runId,omitempty"`
 	Metadata  map[string]any `json:"metadata,omitempty"`
+	Events    []Event        `json:"-"`
+}
+
+type Event struct {
+	Seq       int64          `json:"seq,omitempty"`
+	Type      string         `json:"type"`
+	Timestamp int64          `json:"timestamp,omitempty"`
+	Payload   map[string]any `json:"payload,omitempty"`
 }
 
 func (s SubAgentSpec) Validate() error {
