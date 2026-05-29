@@ -167,6 +167,9 @@ The MVP assembly plan is
 The current MVP validation evidence is
 [docs/mvp-validation.md](./docs/mvp-validation.md).
 
+The release checklist is
+[docs/release-checklist.md](./docs/release-checklist.md).
+
 The CLI config reference is
 [docs/config-reference.md](./docs/config-reference.md).
 
