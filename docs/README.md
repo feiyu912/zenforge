@@ -30,13 +30,15 @@ Recommended reading order:
 26. [v0.1-release-plan.md](./v0.1-release-plan.md)
 27. [cli-design.md](./cli-design.md)
 28. [config-reference.md](./config-reference.md)
-29. [sandbox-guide.md](./sandbox-guide.md)
-30. [subagent-guide.md](./subagent-guide.md)
-31. [approval-guide.md](./approval-guide.md)
-32. [planner-guide.md](./planner-guide.md)
-33. [harness-state-machine.md](./harness-state-machine.md)
-34. [security-guide.md](./security-guide.md)
-35. [tool-authoring-guide.md](./tool-authoring-guide.md)
+29. [quickstart.md](./quickstart.md)
+30. [limitations.md](./limitations.md)
+31. [sandbox-guide.md](./sandbox-guide.md)
+32. [subagent-guide.md](./subagent-guide.md)
+33. [approval-guide.md](./approval-guide.md)
+34. [planner-guide.md](./planner-guide.md)
+35. [harness-state-machine.md](./harness-state-machine.md)
+36. [security-guide.md](./security-guide.md)
+37. [tool-authoring-guide.md](./tool-authoring-guide.md)
 
 ## Architecture Decision Records
 

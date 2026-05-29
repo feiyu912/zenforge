@@ -95,8 +95,13 @@ func main() {
 ## CLI Quick Start
 
 ```bash
-OPENAI_API_KEY=... go run ./cmd/zenforge run "Analyze this repo"
+go run ./cmd/zenforge init
+export OPENAI_API_KEY=...
+go run ./cmd/zenforge run --config zenforge.json "Analyze this repo"
 ```
+
+More CLI setup, event inspection, resume, approval modes, and examples are in
+[docs/quickstart.md](./docs/quickstart.md).
 
 Useful examples:
 
@@ -161,3 +166,6 @@ The MVP assembly plan is
 
 The CLI config reference is
 [docs/config-reference.md](./docs/config-reference.md).
+
+The MVP limitations are
+[docs/limitations.md](./docs/limitations.md).
