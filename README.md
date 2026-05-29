@@ -176,6 +176,9 @@ The server/SSE adapter guide is
 The server/HTTP adapter guide is
 [docs/server-http-guide.md](./docs/server-http-guide.md).
 
+The ZenMind adapter guide is
+[docs/zenmind-adapter-guide.md](./docs/zenmind-adapter-guide.md).
+
 The CLI config reference is
 [docs/config-reference.md](./docs/config-reference.md).
 
