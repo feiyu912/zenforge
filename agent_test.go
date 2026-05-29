@@ -12,6 +12,7 @@ import (
 	"github.com/feiyu912/zenforge/model"
 	"github.com/feiyu912/zenforge/subagent"
 	"github.com/feiyu912/zenforge/tool"
+	"github.com/feiyu912/zenforge/trace"
 )
 
 func TestAgentStreamEmitsLifecycleEvents(t *testing.T) {
@@ -36,6 +37,55 @@ func TestAgentStreamEmitsLifecycleEvents(t *testing.T) {
 			t.Fatalf("unexpected event types: got %v want %v", types, want)
 		}
 	}
+}
+
+func TestAgentStreamEmitsTraceEvents(t *testing.T) {
+	traces := trace.NewMemorySink()
+	agent := New(Config{Events: &testEventStore{}, Trace: traces})
+
+	events, err := agent.Stream(context.Background(), Task{RunID: "run_trace", Input: "hello"})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	for range events {
+	}
+
+	got := traces.Events()
+	if len(got) != 2 {
+		t.Fatalf("trace event count = %d, want 2: %#v", len(got), got)
+	}
+	if got[0].Type != string(EventRunStarted) || got[0].RunID != "run_trace" {
+		t.Fatalf("unexpected first trace event: %#v", got[0])
+	}
+	if got[0].Seq != 1 || got[1].Seq != 2 {
+		t.Fatalf("trace seqs = %d,%d; want 1,2", got[0].Seq, got[1].Seq)
+	}
+	if got[0].Data["input"] != "hello" || got[0].Data["runId"] != "run_trace" {
+		t.Fatalf("trace data did not include event payload: %#v", got[0].Data)
+	}
+	if got[1].Type != string(EventRunDone) {
+		t.Fatalf("unexpected second trace event: %#v", got[1])
+	}
+}
+
+type testEventStore struct {
+	events []Event
+}
+
+func (s *testEventStore) Append(ctx context.Context, event Event) error {
+	s.events = append(s.events, event)
+	return nil
+}
+
+func (s *testEventStore) Read(ctx context.Context, runID string, afterSeq int64, limit int) ([]Event, error) {
+	return nil, nil
+}
+
+func (s *testEventStore) LatestSeq(ctx context.Context, runID string) (int64, error) {
+	if len(s.events) == 0 {
+		return 0, nil
+	}
+	return s.events[len(s.events)-1].Seq, nil
 }
 
 func TestAgentRunReturnsModelText(t *testing.T) {

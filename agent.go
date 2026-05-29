@@ -16,6 +16,7 @@ import (
 	"github.com/feiyu912/zenforge/tool"
 	tasktool "github.com/feiyu912/zenforge/tools/task"
 	todotools "github.com/feiyu912/zenforge/tools/todo"
+	"github.com/feiyu912/zenforge/trace"
 )
 
 // Agent is the high-level batteries-included runtime entrypoint.
@@ -106,32 +107,59 @@ func stringValue(value any) string {
 	return text
 }
 
+func (a *Agent) emit(ctx context.Context, out chan<- Event, eventType EventType, runID string, data map[string]any) {
+	event := NewEvent(eventType, runID, data)
+	if a.config.Events != nil {
+		if event.Seq == 0 {
+			if latest, err := a.config.Events.LatestSeq(ctx, event.RunID()); err == nil {
+				event = event.WithSeq(NextEventSeq(latest))
+			}
+		}
+		_ = a.config.Events.Append(ctx, event)
+	}
+	if a.config.Trace != nil {
+		_ = a.config.Trace.Emit(ctx, traceEvent(event))
+	}
+	select {
+	case out <- event:
+		return
+	default:
+	}
+	select {
+	case out <- event:
+	case <-ctx.Done():
+	}
+}
+
+func traceEvent(event Event) trace.Event {
+	return trace.Event{
+		Type:      string(event.Type),
+		RunID:     event.RunID(),
+		Seq:       event.Seq,
+		Timestamp: event.Timestamp,
+		Data:      event.Map(),
+	}
+}
+
 func (a *Agent) streamNoop(ctx context.Context, runID, input string) <-chan Event {
 	events := make(chan Event, 2)
 	go func() {
 		defer close(events)
 		select {
 		case <-ctx.Done():
-			events <- NewEvent(EventRunError, runID, map[string]any{"error": ctx.Err().Error()})
+			a.emit(ctx, events, EventRunError, runID, map[string]any{"error": ctx.Err().Error()})
 			return
 		default:
 		}
-		events <- NewEvent(EventRunStarted, runID, map[string]any{"input": input})
-		events <- NewEvent(EventRunDone, runID, map[string]any{"output": ""})
+		a.emit(ctx, events, EventRunStarted, runID, map[string]any{"input": input})
+		a.emit(ctx, events, EventRunDone, runID, map[string]any{"output": ""})
 	}()
 	return events
 }
 
 func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID string, task Task) {
 	emit := func(eventType EventType, data map[string]any) {
-		event := NewEvent(eventType, runID, data)
-		if a.config.Events != nil {
-			_ = a.config.Events.Append(ctx, event)
-		}
-		select {
-		case out <- event:
-		case <-ctx.Done():
-		}
+		a.emit(ctx, out, eventType, runID, data)
 	}
 	fail := func(err error) {
 		emit(EventRunError, map[string]any{"error": err.Error()})
@@ -232,14 +260,7 @@ func newRunState(runID, input string, meta map[string]any) harness.RunState {
 func (a *Agent) runLoop(ctx context.Context, out chan<- Event, state harness.RunState, resumed bool) {
 	runID := state.RunID
 	emit := func(eventType EventType, data map[string]any) {
-		event := NewEvent(eventType, runID, data)
-		if a.config.Events != nil {
-			_ = a.config.Events.Append(ctx, event)
-		}
-		select {
-		case out <- event:
-		case <-ctx.Done():
-		}
+		a.emit(ctx, out, eventType, runID, data)
 	}
 	checkpointSeq := int64(0)
 	checkpointState := func() {
@@ -712,6 +733,7 @@ func (a *Agent) runChildSubAgent(ctx context.Context, spec subagent.SubAgentSpec
 		Approval:     a.config.Approval,
 		Checkpoints:  a.config.Checkpoints,
 		Events:       a.config.Events,
+		Trace:        a.config.Trace,
 		MaxSteps:     maxSteps,
 		Planning:     PlanningDisabled,
 	})
