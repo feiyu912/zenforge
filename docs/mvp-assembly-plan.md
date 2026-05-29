@@ -273,41 +273,41 @@ Manual smoke:
 
 Runtime:
 
-- [ ] `Agent.Stream` works with fake model.
-- [ ] `Agent.Run` returns final output.
-- [ ] OpenAI-compatible model can stream text.
-- [ ] Model tool calls invoke tools.
-- [ ] Checkpoints written at boundaries.
-- [ ] Resume works for supported boundaries.
+- [x] `Agent.Stream` works with fake model.
+- [x] `Agent.Run` returns final output.
+- [x] OpenAI-compatible model can stream text.
+- [x] Model tool calls invoke tools.
+- [x] Checkpoints written at boundaries.
+- [x] Resume works for supported boundaries.
 
 Tools:
 
-- [ ] typed tool helper works.
-- [ ] workspace read/list/grep works.
-- [ ] workspace write respects roots.
-- [ ] shell command allowlist works.
-- [ ] risky shell returns approval request or prompt.
+- [x] typed tool helper works.
+- [x] workspace read/list/grep works.
+- [x] workspace write respects roots.
+- [x] shell command allowlist works.
+- [x] risky shell returns approval request or prompt.
 
 Planning:
 
-- [ ] todo tools work.
-- [ ] plan/execute preset works with fake model.
-- [ ] todo updates stream.
+- [x] todo tools work.
+- [x] plan/execute preset works with fake model.
+- [x] todo updates stream.
 
 CLI:
 
-- [ ] `zenforge run` works.
-- [ ] `zenforge resume` works.
-- [ ] config file works.
-- [ ] approval prompt works.
+- [x] `zenforge run` works.
+- [x] `zenforge resume` works.
+- [x] config file works.
+- [x] approval prompt works.
 
 Docs:
 
-- [ ] quickstart.
-- [ ] config reference.
-- [ ] tool authoring guide.
-- [ ] security guide.
-- [ ] limitations section.
+- [x] quickstart.
+- [x] config reference.
+- [x] tool authoring guide.
+- [x] security guide.
+- [x] limitations section.
 
 ## MVP Limitations To State Clearly
 
@@ -330,4 +330,3 @@ Before tagging MVP:
 - no hardcoded ZenMind paths;
 - generated checkpoint/event files have documented schema version;
 - README quickstart works.
-
