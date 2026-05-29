@@ -25,6 +25,7 @@ OPENAI_API_KEY=... zenforge run \
   --workspace . \
   --checkpoint-dir .zenforge/runs \
   --planning plan_execute \
+  --approve prompt \
   "Analyze this repo"
 ```
 

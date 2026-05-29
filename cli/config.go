@@ -14,6 +14,7 @@ type configFile struct {
 	Agent      agentConfig      `json:"agent"`
 	Workspace  workspaceConfig  `json:"workspace"`
 	Shell      shellConfig      `json:"shell"`
+	Approval   approvalConfig   `json:"approval"`
 	Checkpoint checkpointConfig `json:"checkpoint"`
 }
 
@@ -42,6 +43,10 @@ type shellConfig struct {
 	Allow          []string `json:"allow,omitempty"`
 	Timeout        string   `json:"timeout,omitempty"`
 	MaxOutputBytes int64    `json:"maxOutputBytes,omitempty"`
+}
+
+type approvalConfig struct {
+	Mode string `json:"mode,omitempty"`
 }
 
 type checkpointConfig struct {
@@ -74,6 +79,9 @@ func defaultConfigFile() configFile {
 			Allow:          []string(defaults.shellAllow),
 			Timeout:        defaults.shellTimeout.String(),
 			MaxOutputBytes: defaults.shellMaxOutputBytes,
+		},
+		Approval: approvalConfig{
+			Mode: defaults.approve,
 		},
 		Checkpoint: checkpointConfig{
 			Type: "jsonl",
@@ -132,6 +140,9 @@ func applyConfig(opts *options, config configFile) {
 	}
 	if config.Shell.MaxOutputBytes > 0 {
 		opts.shellMaxOutputBytes = config.Shell.MaxOutputBytes
+	}
+	if config.Approval.Mode != "" {
+		opts.approve = config.Approval.Mode
 	}
 	if config.Checkpoint.Path != "" {
 		opts.checkpointDir = config.Checkpoint.Path

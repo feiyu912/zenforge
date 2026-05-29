@@ -100,6 +100,7 @@ func TestOptionsFromConfig(t *testing.T) {
 			Timeout:        "5s",
 			MaxOutputBytes: 99,
 		},
+		Approval:   approvalConfig{Mode: "always"},
 		Checkpoint: checkpointConfig{Path: "runs"},
 	}
 	data, err := json.Marshal(config)
@@ -122,6 +123,9 @@ func TestOptionsFromConfig(t *testing.T) {
 	if opts.workspace != "repo" || !opts.noShell || opts.shellTimeout.String() != "5s" || opts.shellMaxOutputBytes != 99 {
 		t.Fatalf("tool opts not applied: %#v", opts)
 	}
+	if opts.approve != "always" {
+		t.Fatalf("approval opts not applied: %#v", opts)
+	}
 }
 
 func TestInitCreatesDefaultConfig(t *testing.T) {
@@ -143,8 +147,29 @@ func TestInitCreatesDefaultConfig(t *testing.T) {
 	if config.Model.Name == "" || config.Checkpoint.Path == "" {
 		t.Fatalf("default config incomplete: %#v", config)
 	}
+	if config.Approval.Mode != "prompt" {
+		t.Fatalf("default approval mode = %q", config.Approval.Mode)
+	}
 	if !strings.Contains(stdout.String(), "created") {
 		t.Fatalf("unexpected stdout: %q", stdout.String())
+	}
+}
+
+func TestApprovalBrokerModes(t *testing.T) {
+	always, err := approvalBroker(options{approve: "always"}, IO{})
+	if err != nil || always == nil {
+		t.Fatalf("always broker = %#v err=%v", always, err)
+	}
+	never, err := approvalBroker(options{approve: "never"}, IO{})
+	if err != nil || never == nil {
+		t.Fatalf("never broker = %#v err=%v", never, err)
+	}
+	prompt, err := approvalBroker(options{approve: "prompt"}, IO{Stdin: strings.NewReader("1\n"), Stderr: &bytes.Buffer{}})
+	if err != nil || prompt == nil {
+		t.Fatalf("prompt broker = %#v err=%v", prompt, err)
+	}
+	if _, err := approvalBroker(options{approve: "later"}, IO{}); err == nil {
+		t.Fatalf("expected unknown approval mode error")
 	}
 }
 

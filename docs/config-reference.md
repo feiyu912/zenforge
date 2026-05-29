@@ -38,6 +38,9 @@ zenforge events --config zenforge.json run_123
     "timeout": "30s",
     "maxOutputBytes": 256000
   },
+  "approval": {
+    "mode": "prompt"
+  },
   "checkpoint": {
     "type": "jsonl",
     "path": ".zenforge/runs"
@@ -59,6 +62,7 @@ zenforge events --config zenforge.json run_123
 - `shell.allow`: allowlisted shell command prefixes.
 - `shell.timeout`: Go duration string, for example `30s`.
 - `shell.maxOutputBytes`: output cap for shell command output.
+- `approval.mode`: `prompt`, `always`, or `never`.
 - `checkpoint.path`: JSONL event/checkpoint directory.
 
 Flags override values loaded from the config file.

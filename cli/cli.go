@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/feiyu912/zenforge"
+	"github.com/feiyu912/zenforge/approval"
+	approvalcli "github.com/feiyu912/zenforge/approval/cli"
 	checkpointjsonl "github.com/feiyu912/zenforge/checkpoint/jsonl"
 	eventlogjsonl "github.com/feiyu912/zenforge/eventlog/jsonl"
 	"github.com/feiyu912/zenforge/model/openai"
@@ -33,6 +35,9 @@ type IO struct {
 func Main(ctx context.Context, args []string, ioStreams IO) int {
 	if ioStreams.Stdout == nil {
 		ioStreams.Stdout = os.Stdout
+	}
+	if ioStreams.Stdin == nil {
+		ioStreams.Stdin = os.Stdin
 	}
 	if ioStreams.Stderr == nil {
 		ioStreams.Stderr = os.Stderr
@@ -79,7 +84,7 @@ func run(ctx context.Context, args []string, ioStreams IO) error {
 	if input == "" {
 		return fmt.Errorf("run input is required")
 	}
-	agent, err := buildAgent(opts)
+	agent, err := buildAgent(opts, ioStreams)
 	if err != nil {
 		return err
 	}
@@ -104,7 +109,7 @@ func resume(ctx context.Context, args []string, ioStreams IO) error {
 	if fs.NArg() != 1 {
 		return fmt.Errorf("resume requires run id")
 	}
-	agent, err := buildAgent(opts)
+	agent, err := buildAgent(opts, ioStreams)
 	if err != nil {
 		return err
 	}
@@ -196,6 +201,7 @@ type options struct {
 	maxSteps            int
 	planning            string
 	noShell             bool
+	approve             string
 	shellTimeout        time.Duration
 	shellMaxOutputBytes int64
 	shellAllow          multiFlag
@@ -210,6 +216,7 @@ func defaultOptions() options {
 		checkpointDir:       ".zenforge/runs",
 		maxSteps:            20,
 		planning:            "plan_execute",
+		approve:             "prompt",
 		shellTimeout:        30 * time.Second,
 		shellMaxOutputBytes: 256_000,
 		shellAllow:          multiFlag{"go test ./...", "go vet ./...", "grep", "find"},
@@ -226,6 +233,7 @@ func bindOptions(fs *flag.FlagSet, opts *options) {
 	fs.StringVar(&opts.checkpointDir, "checkpoint-dir", opts.checkpointDir, "event/checkpoint directory")
 	fs.IntVar(&opts.maxSteps, "max-steps", opts.maxSteps, "max harness steps")
 	fs.StringVar(&opts.planning, "planning", opts.planning, "planning mode: disabled|enabled|plan_execute")
+	fs.StringVar(&opts.approve, "approve", opts.approve, "approval mode: always|never|prompt")
 	fs.BoolVar(&opts.noShell, "no-shell", opts.noShell, "disable shell tool")
 	fs.Var(&opts.shellAllow, "shell-allow", "allowlisted shell command prefix; repeatable")
 }
@@ -245,7 +253,7 @@ func optionsFromArgs(args []string) (options, error) {
 	return opts, nil
 }
 
-func buildAgent(opts options) (*zenforge.Agent, error) {
+func buildAgent(opts options, ioStreams IO) (*zenforge.Agent, error) {
 	apiKey := os.Getenv(opts.apiKeyEnv)
 	if apiKey == "" {
 		return nil, fmt.Errorf("%s is not set", opts.apiKeyEnv)
@@ -266,15 +274,20 @@ func buildAgent(opts options) (*zenforge.Agent, error) {
 	tools := append([]tool.Tool(nil), workspaceTools...)
 	if !opts.noShell {
 		shell, err := shelltool.New(shelltool.Config{Policy: policy.ShellPolicy{
-			WorkingDir:     opts.workspace,
-			AllowCommands:  []string(opts.shellAllow),
-			MaxTimeout:     opts.shellTimeout,
-			MaxOutputBytes: opts.shellMaxOutputBytes,
+			WorkingDir:      opts.workspace,
+			AllowCommands:   []string(opts.shellAllow),
+			RequireApproval: opts.approve != "never",
+			MaxTimeout:      opts.shellTimeout,
+			MaxOutputBytes:  opts.shellMaxOutputBytes,
 		}})
 		if err != nil {
 			return nil, err
 		}
 		tools = append(tools, shell)
+	}
+	approvalBroker, err := approvalBroker(opts, ioStreams)
+	if err != nil {
+		return nil, err
 	}
 	return zenforge.New(zenforge.Config{
 		Model: openai.New(openai.Config{
@@ -284,11 +297,25 @@ func buildAgent(opts options) (*zenforge.Agent, error) {
 		}),
 		Instructions: opts.instructions,
 		Tools:        tools,
+		Approval:     approvalBroker,
 		Events:       eventlogjsonl.New(opts.checkpointDir),
 		Checkpoints:  checkpointjsonl.New(opts.checkpointDir),
 		MaxSteps:     opts.maxSteps,
 		Planning:     planningMode(opts.planning),
 	}), nil
+}
+
+func approvalBroker(opts options, ioStreams IO) (approval.Broker, error) {
+	switch opts.approve {
+	case "", "prompt":
+		return approvalcli.New(ioStreams.Stdin, ioStreams.Stderr), nil
+	case "always":
+		return approval.AlwaysAllow(), nil
+	case "never":
+		return approval.AlwaysDeny("approval disabled"), nil
+	default:
+		return nil, fmt.Errorf("unknown approval mode: %s", opts.approve)
+	}
 }
 
 func planningMode(value string) zenforge.PlanningMode {
