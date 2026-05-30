@@ -212,7 +212,7 @@ func TestOptionsFromConfig(t *testing.T) {
 	configPath := filepath.Join(dir, "zenforge.json")
 	enabled := false
 	config := configFile{
-		Model:     modelConfig{Name: "gpt-test", APIKeyEnv: "TEST_KEY", BaseURL: "https://api.example"},
+		Model:     modelConfig{Provider: "anthropic", Name: "claude-test", APIKeyEnv: "TEST_KEY", BaseURL: "https://api.example"},
 		Agent:     agentConfig{Instructions: "Be exact.", MaxSteps: 3, Planning: false},
 		Workspace: workspaceConfig{Root: "repo"},
 		Shell: shellConfig{
@@ -235,7 +235,7 @@ func TestOptionsFromConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("optionsFromArgs returned error: %v", err)
 	}
-	if opts.model != "gpt-test" || opts.apiKeyEnv != "TEST_KEY" || opts.baseURL != "https://api.example" {
+	if opts.provider != "anthropic" || opts.model != "claude-test" || opts.apiKeyEnv != "TEST_KEY" || opts.baseURL != "https://api.example" {
 		t.Fatalf("model opts not applied: %#v", opts)
 	}
 	if opts.instructions != "Be exact." || opts.maxSteps != 3 || opts.planning != "disabled" {

@@ -59,7 +59,7 @@ func defaultConfigFile() configFile {
 	defaults := defaultOptions()
 	return configFile{
 		Model: modelConfig{
-			Provider:  "openai",
+			Provider:  defaults.provider,
 			Name:      defaults.model,
 			APIKeyEnv: defaults.apiKeyEnv,
 		},
@@ -103,6 +103,9 @@ func loadConfigFile(path string) (configFile, error) {
 }
 
 func applyConfig(opts *options, config configFile) {
+	if config.Model.Provider != "" {
+		opts.provider = config.Model.Provider
+	}
 	if config.Model.Name != "" {
 		opts.model = config.Model.Name
 	}

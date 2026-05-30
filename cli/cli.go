@@ -20,6 +20,8 @@ import (
 	"github.com/feiyu912/zenforge/eventlog"
 	eventlogjsonl "github.com/feiyu912/zenforge/eventlog/jsonl"
 	eventlogsqlite "github.com/feiyu912/zenforge/eventlog/sqlite"
+	"github.com/feiyu912/zenforge/model"
+	"github.com/feiyu912/zenforge/model/anthropic"
 	"github.com/feiyu912/zenforge/model/openai"
 	"github.com/feiyu912/zenforge/policy"
 	"github.com/feiyu912/zenforge/tool"
@@ -253,6 +255,7 @@ type options struct {
 	configPath          string
 	workspace           string
 	instructions        string
+	provider            string
 	model               string
 	apiKeyEnv           string
 	baseURL             string
@@ -271,6 +274,7 @@ func defaultOptions() options {
 	return options{
 		workspace:           ".",
 		instructions:        "You are a senior Go backend engineer. Be concise, careful, and use tools when helpful.",
+		provider:            "openai",
 		model:               "gpt-4.1",
 		apiKeyEnv:           "OPENAI_API_KEY",
 		checkpointType:      "jsonl",
@@ -288,6 +292,7 @@ func bindOptions(fs *flag.FlagSet, opts *options) {
 	fs.StringVar(&opts.configPath, "config", opts.configPath, "config file path")
 	fs.StringVar(&opts.workspace, "workspace", opts.workspace, "workspace root")
 	fs.StringVar(&opts.instructions, "instructions", opts.instructions, "agent instructions")
+	fs.StringVar(&opts.provider, "provider", opts.provider, "model provider: openai|anthropic")
 	fs.StringVar(&opts.model, "model", opts.model, "OpenAI-compatible model name")
 	fs.StringVar(&opts.apiKeyEnv, "api-key-env", opts.apiKeyEnv, "environment variable containing API key")
 	fs.StringVar(&opts.baseURL, "base-url", opts.baseURL, "OpenAI-compatible base URL")
@@ -316,10 +321,6 @@ func optionsFromArgs(args []string) (options, error) {
 }
 
 func buildAgent(ctx context.Context, opts options, ioStreams IO) (*zenforge.Agent, error) {
-	apiKey := os.Getenv(opts.apiKeyEnv)
-	if apiKey == "" {
-		return nil, fmt.Errorf("%s is not set", opts.apiKeyEnv)
-	}
 	ws, err := workspacelocal.New(workspacelocal.Config{
 		Root:            opts.workspace,
 		MaxReadBytes:    1_000_000,
@@ -360,12 +361,13 @@ func buildAgent(ctx context.Context, opts options, ioStreams IO) (*zenforge.Agen
 		_ = closeEvents()
 		return nil, err
 	}
+	modelAdapter, err := buildModel(opts)
+	if err != nil {
+		_ = closeEvents()
+		return nil, err
+	}
 	return zenforge.New(zenforge.Config{
-		Model: openai.New(openai.Config{
-			APIKey:  apiKey,
-			Model:   opts.model,
-			BaseURL: opts.baseURL,
-		}),
+		Model:        modelAdapter,
 		Instructions: opts.instructions,
 		Tools:        tools,
 		Approval:     approvalBroker,
@@ -374,6 +376,29 @@ func buildAgent(ctx context.Context, opts options, ioStreams IO) (*zenforge.Agen
 		MaxSteps:     opts.maxSteps,
 		Planning:     planningMode(opts.planning),
 	}), nil
+}
+
+func buildModel(opts options) (model.Model, error) {
+	apiKey := os.Getenv(opts.apiKeyEnv)
+	if apiKey == "" {
+		return nil, fmt.Errorf("%s is not set", opts.apiKeyEnv)
+	}
+	switch strings.ToLower(opts.provider) {
+	case "", "openai":
+		return openai.New(openai.Config{
+			APIKey:  apiKey,
+			Model:   opts.model,
+			BaseURL: opts.baseURL,
+		}), nil
+	case "anthropic":
+		return anthropic.New(anthropic.Config{
+			APIKey:  apiKey,
+			Model:   opts.model,
+			BaseURL: opts.baseURL,
+		}), nil
+	default:
+		return nil, fmt.Errorf("unknown model provider: %s", opts.provider)
+	}
 }
 
 type runSummary struct {

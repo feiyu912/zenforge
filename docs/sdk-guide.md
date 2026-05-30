@@ -69,6 +69,17 @@ if err != nil {
 events, err := agent.Stream(ctx, task)
 ```
 
+Use the provider adapter that matches your deployment:
+
+```go
+agent := zenforge.New(zenforge.Config{
+    Model: anthropic.New(anthropic.Config{
+        APIKey: os.Getenv("ANTHROPIC_API_KEY"),
+        Model:  "claude-model",
+    }),
+})
+```
+
 ## Run Once
 
 ```go

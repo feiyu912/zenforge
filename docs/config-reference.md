@@ -63,8 +63,9 @@ For SQLite local storage:
 ## Fields
 
 - `model.name`: OpenAI-compatible model name.
+- `model.provider`: `openai` or `anthropic`.
 - `model.apiKeyEnv`: environment variable containing the API key.
-- `model.baseUrl`: optional OpenAI-compatible API base URL.
+- `model.baseUrl`: optional provider API base URL.
 - `agent.instructions`: system instructions for the harness.
 - `agent.maxSteps`: maximum model/tool loop steps.
 - `agent.planning`: `disabled`, `enabled`, `plan_execute`, or boolean.

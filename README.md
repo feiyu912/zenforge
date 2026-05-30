@@ -147,6 +147,8 @@ The design document index is [docs/README.md](./docs/README.md).
 
 The SDK guide is [docs/sdk-guide.md](./docs/sdk-guide.md).
 
+The provider guide is [docs/provider-guide.md](./docs/provider-guide.md).
+
 The detailed durable runtime design for S1 is
 [docs/s1-durable-runtime-spec.md](./docs/s1-durable-runtime-spec.md).
 
