@@ -84,7 +84,7 @@ func defaultConfigFile() configFile {
 			Mode: defaults.approve,
 		},
 		Checkpoint: checkpointConfig{
-			Type: "jsonl",
+			Type: defaults.checkpointType,
 			Path: defaults.checkpointDir,
 		},
 	}
@@ -143,6 +143,9 @@ func applyConfig(opts *options, config configFile) {
 	}
 	if config.Approval.Mode != "" {
 		opts.approve = config.Approval.Mode
+	}
+	if config.Checkpoint.Type != "" {
+		opts.checkpointType = config.Checkpoint.Type
 	}
 	if config.Checkpoint.Path != "" {
 		opts.checkpointDir = config.Checkpoint.Path

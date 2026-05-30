@@ -49,6 +49,17 @@ zenforge runs --config zenforge.json
 }
 ```
 
+For SQLite local storage:
+
+```json
+{
+  "checkpoint": {
+    "type": "sqlite",
+    "path": ".zenforge/runs.db"
+  }
+}
+```
+
 ## Fields
 
 - `model.name`: OpenAI-compatible model name.
@@ -64,7 +75,8 @@ zenforge runs --config zenforge.json
 - `shell.timeout`: Go duration string, for example `30s`.
 - `shell.maxOutputBytes`: output cap for shell command output.
 - `approval.mode`: `prompt`, `always`, or `never`.
-- `checkpoint.path`: JSONL event/checkpoint directory.
+- `checkpoint.type`: `jsonl` or `sqlite`.
+- `checkpoint.path`: JSONL event/checkpoint directory, or SQLite database file.
 
 Flags override values loaded from the config file.
 

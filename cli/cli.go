@@ -14,8 +14,12 @@ import (
 	"github.com/feiyu912/zenforge"
 	"github.com/feiyu912/zenforge/approval"
 	approvalcli "github.com/feiyu912/zenforge/approval/cli"
+	"github.com/feiyu912/zenforge/checkpoint"
 	checkpointjsonl "github.com/feiyu912/zenforge/checkpoint/jsonl"
+	checkpointsqlite "github.com/feiyu912/zenforge/checkpoint/sqlite"
+	"github.com/feiyu912/zenforge/eventlog"
 	eventlogjsonl "github.com/feiyu912/zenforge/eventlog/jsonl"
+	eventlogsqlite "github.com/feiyu912/zenforge/eventlog/sqlite"
 	"github.com/feiyu912/zenforge/model/openai"
 	"github.com/feiyu912/zenforge/policy"
 	"github.com/feiyu912/zenforge/tool"
@@ -86,7 +90,7 @@ func run(ctx context.Context, args []string, ioStreams IO) error {
 	if input == "" {
 		return fmt.Errorf("run input is required")
 	}
-	agent, err := buildAgent(opts, ioStreams)
+	agent, err := buildAgent(ctx, opts, ioStreams)
 	if err != nil {
 		return err
 	}
@@ -111,7 +115,7 @@ func resume(ctx context.Context, args []string, ioStreams IO) error {
 	if fs.NArg() != 1 {
 		return fmt.Errorf("resume requires run id")
 	}
-	agent, err := buildAgent(opts, ioStreams)
+	agent, err := buildAgent(ctx, opts, ioStreams)
 	if err != nil {
 		return err
 	}
@@ -130,6 +134,7 @@ func events(ctx context.Context, args []string, ioStreams IO) error {
 		return err
 	}
 	configPath := fs.String("config", opts.configPath, "config file path")
+	checkpointType := fs.String("checkpoint-type", opts.checkpointType, "event/checkpoint store type: jsonl|sqlite")
 	checkpointDir := fs.String("checkpoint-dir", opts.checkpointDir, "event/checkpoint directory")
 	jsonOut := fs.Bool("json", false, "print JSON events")
 	if err := fs.Parse(args); err != nil {
@@ -139,7 +144,11 @@ func events(ctx context.Context, args []string, ioStreams IO) error {
 	if fs.NArg() != 1 {
 		return fmt.Errorf("events requires run id")
 	}
-	store := eventlogjsonl.New(*checkpointDir)
+	store, closeStore, err := openEventStore(ctx, *checkpointType, *checkpointDir)
+	if err != nil {
+		return err
+	}
+	defer closeStore()
 	events, err := store.Read(ctx, fs.Arg(0), 0, 0)
 	if err != nil {
 		return err
@@ -166,6 +175,7 @@ func runs(ctx context.Context, args []string, ioStreams IO) error {
 		return err
 	}
 	configPath := fs.String("config", opts.configPath, "config file path")
+	checkpointType := fs.String("checkpoint-type", opts.checkpointType, "event/checkpoint store type: jsonl|sqlite")
 	checkpointDir := fs.String("checkpoint-dir", opts.checkpointDir, "event/checkpoint directory")
 	jsonOut := fs.Bool("json", false, "print JSON summaries")
 	if err := fs.Parse(args); err != nil {
@@ -175,11 +185,11 @@ func runs(ctx context.Context, args []string, ioStreams IO) error {
 	if fs.NArg() != 0 {
 		return fmt.Errorf("runs does not accept positional arguments")
 	}
-	store := checkpointjsonl.New(*checkpointDir)
-	summaries, err := store.List(ctx)
+	summaries, closeStore, err := listRuns(ctx, *checkpointType, *checkpointDir)
 	if err != nil {
 		return err
 	}
+	defer closeStore()
 	if *jsonOut {
 		data, err := json.Marshal(summaries)
 		if err != nil {
@@ -246,6 +256,7 @@ type options struct {
 	model               string
 	apiKeyEnv           string
 	baseURL             string
+	checkpointType      string
 	checkpointDir       string
 	maxSteps            int
 	planning            string
@@ -262,6 +273,7 @@ func defaultOptions() options {
 		instructions:        "You are a senior Go backend engineer. Be concise, careful, and use tools when helpful.",
 		model:               "gpt-4.1",
 		apiKeyEnv:           "OPENAI_API_KEY",
+		checkpointType:      "jsonl",
 		checkpointDir:       ".zenforge/runs",
 		maxSteps:            20,
 		planning:            "plan_execute",
@@ -279,6 +291,7 @@ func bindOptions(fs *flag.FlagSet, opts *options) {
 	fs.StringVar(&opts.model, "model", opts.model, "OpenAI-compatible model name")
 	fs.StringVar(&opts.apiKeyEnv, "api-key-env", opts.apiKeyEnv, "environment variable containing API key")
 	fs.StringVar(&opts.baseURL, "base-url", opts.baseURL, "OpenAI-compatible base URL")
+	fs.StringVar(&opts.checkpointType, "checkpoint-type", opts.checkpointType, "event/checkpoint store type: jsonl|sqlite")
 	fs.StringVar(&opts.checkpointDir, "checkpoint-dir", opts.checkpointDir, "event/checkpoint directory")
 	fs.IntVar(&opts.maxSteps, "max-steps", opts.maxSteps, "max harness steps")
 	fs.StringVar(&opts.planning, "planning", opts.planning, "planning mode: disabled|enabled|plan_execute")
@@ -302,7 +315,7 @@ func optionsFromArgs(args []string) (options, error) {
 	return opts, nil
 }
 
-func buildAgent(opts options, ioStreams IO) (*zenforge.Agent, error) {
+func buildAgent(ctx context.Context, opts options, ioStreams IO) (*zenforge.Agent, error) {
 	apiKey := os.Getenv(opts.apiKeyEnv)
 	if apiKey == "" {
 		return nil, fmt.Errorf("%s is not set", opts.apiKeyEnv)
@@ -338,6 +351,15 @@ func buildAgent(opts options, ioStreams IO) (*zenforge.Agent, error) {
 	if err != nil {
 		return nil, err
 	}
+	events, closeEvents, err := openEventStore(ctx, opts.checkpointType, opts.checkpointDir)
+	if err != nil {
+		return nil, err
+	}
+	checkpoints, _, err := openCheckpointStore(ctx, opts.checkpointType, opts.checkpointDir)
+	if err != nil {
+		_ = closeEvents()
+		return nil, err
+	}
 	return zenforge.New(zenforge.Config{
 		Model: openai.New(openai.Config{
 			APIKey:  apiKey,
@@ -347,11 +369,79 @@ func buildAgent(opts options, ioStreams IO) (*zenforge.Agent, error) {
 		Instructions: opts.instructions,
 		Tools:        tools,
 		Approval:     approvalBroker,
-		Events:       eventlogjsonl.New(opts.checkpointDir),
-		Checkpoints:  checkpointjsonl.New(opts.checkpointDir),
+		Events:       events,
+		Checkpoints:  checkpoints,
 		MaxSteps:     opts.maxSteps,
 		Planning:     planningMode(opts.planning),
 	}), nil
+}
+
+type runSummary struct {
+	RunID   string    `json:"runId"`
+	Seq     int64     `json:"seq"`
+	Phase   string    `json:"phase"`
+	Status  string    `json:"status"`
+	Step    int       `json:"step"`
+	SavedAt time.Time `json:"savedAt"`
+}
+
+func openEventStore(ctx context.Context, storeType, path string) (eventlog.Store, func() error, error) {
+	switch strings.ToLower(storeType) {
+	case "", "jsonl":
+		return eventlogjsonl.New(path), func() error { return nil }, nil
+	case "sqlite":
+		store, err := eventlogsqlite.Open(ctx, path)
+		if err != nil {
+			return nil, nil, err
+		}
+		return store, store.Close, nil
+	default:
+		return nil, nil, fmt.Errorf("unknown checkpoint type: %s", storeType)
+	}
+}
+
+func openCheckpointStore(ctx context.Context, storeType, path string) (checkpoint.Store, func() error, error) {
+	switch strings.ToLower(storeType) {
+	case "", "jsonl":
+		return checkpointjsonl.New(path), func() error { return nil }, nil
+	case "sqlite":
+		store, err := checkpointsqlite.Open(ctx, path)
+		if err != nil {
+			return nil, nil, err
+		}
+		return store, store.Close, nil
+	default:
+		return nil, nil, fmt.Errorf("unknown checkpoint type: %s", storeType)
+	}
+}
+
+func listRuns(ctx context.Context, storeType, path string) ([]runSummary, func() error, error) {
+	switch strings.ToLower(storeType) {
+	case "", "jsonl":
+		summaries, err := checkpointjsonl.New(path).List(ctx)
+		return mapSummaries(summaries, func(in checkpointjsonl.Summary) runSummary {
+			return runSummary(in)
+		}), func() error { return nil }, err
+	case "sqlite":
+		store, err := checkpointsqlite.Open(ctx, path)
+		if err != nil {
+			return nil, nil, err
+		}
+		summaries, err := store.List(ctx)
+		return mapSummaries(summaries, func(in checkpointsqlite.Summary) runSummary {
+			return runSummary(in)
+		}), store.Close, err
+	default:
+		return nil, nil, fmt.Errorf("unknown checkpoint type: %s", storeType)
+	}
+}
+
+func mapSummaries[T any](in []T, convert func(T) runSummary) []runSummary {
+	out := make([]runSummary, 0, len(in))
+	for _, item := range in {
+		out = append(out, convert(item))
+	}
+	return out
 }
 
 func approvalBroker(opts options, ioStreams IO) (approval.Broker, error) {

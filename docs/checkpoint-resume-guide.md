@@ -19,6 +19,15 @@ agent := zenforge.New(zenforge.Config{
 })
 ```
 
+For a single SQLite file:
+
+```go
+events, err := eventlogsqlite.Open(ctx, ".zenforge/runs.db")
+checkpoints, err := checkpointsqlite.Open(ctx, ".zenforge/runs.db")
+defer events.Close()
+defer checkpoints.Close()
+```
+
 Resume from the latest checkpoint:
 
 ```go

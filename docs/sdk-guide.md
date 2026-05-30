@@ -23,6 +23,15 @@ agent := zenforge.New(zenforge.Config{
 - events are the observable run history;
 - checkpoints are the resume source of truth.
 
+For a single local database file, use the SQLite stores:
+
+```go
+events, _ := eventlogsqlite.Open(ctx, ".zenforge/runs.db")
+checkpoints, _ := checkpointsqlite.Open(ctx, ".zenforge/runs.db")
+defer events.Close()
+defer checkpoints.Close()
+```
+
 ## Run Once
 
 ```go

@@ -20,6 +20,10 @@ zenforge.json
 Edit `zenforge.json` if you want to change model, workspace, shell allowlist,
 approval mode, or checkpoint path.
 
+The default store is JSONL under `.zenforge/runs`. For one SQLite database file,
+set `checkpoint.type` to `sqlite` and `checkpoint.path` to
+`.zenforge/runs.db`.
+
 ## 2. Set API Key
 
 ```bash

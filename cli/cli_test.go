@@ -13,7 +13,9 @@ import (
 	"github.com/feiyu912/zenforge"
 	"github.com/feiyu912/zenforge/checkpoint"
 	checkpointjsonl "github.com/feiyu912/zenforge/checkpoint/jsonl"
+	checkpointsqlite "github.com/feiyu912/zenforge/checkpoint/sqlite"
 	eventlogjsonl "github.com/feiyu912/zenforge/eventlog/jsonl"
+	eventlogsqlite "github.com/feiyu912/zenforge/eventlog/sqlite"
 	"github.com/feiyu912/zenforge/harness"
 )
 
@@ -90,6 +92,27 @@ func TestEventsLoadsCheckpointDirFromConfig(t *testing.T) {
 	}
 }
 
+func TestEventsCanReadSQLiteStore(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "runs.db")
+	store, err := eventlogsqlite.Open(context.Background(), path)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer store.Close()
+	if err := store.Append(context.Background(), zenforge.NewEvent(zenforge.EventRunStarted, "run_sqlite", nil)); err != nil {
+		t.Fatalf("Append returned error: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	code := Main(context.Background(), []string{"events", "--checkpoint-type", "sqlite", "--checkpoint-dir", path, "run_sqlite"}, IO{Stdout: &stdout})
+	if code != 0 {
+		t.Fatalf("code = %d, want 0", code)
+	}
+	if !strings.Contains(stdout.String(), "run run_sqlite started") {
+		t.Fatalf("unexpected output: %q", stdout.String())
+	}
+}
+
 func TestRunsPrintsCheckpointSummaries(t *testing.T) {
 	dir := t.TempDir()
 	store := checkpointjsonl.New(dir)
@@ -109,6 +132,30 @@ func TestRunsPrintsCheckpointSummaries(t *testing.T) {
 	output := stdout.String()
 	if !strings.Contains(output, "RUN ID") || !strings.Contains(output, "run_cli") || !strings.Contains(output, "completed") {
 		t.Fatalf("unexpected output: %q", output)
+	}
+}
+
+func TestRunsCanReadSQLiteStore(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "runs.db")
+	store, err := checkpointsqlite.Open(context.Background(), path)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer store.Close()
+	cp := testCLICheckpoint("run_sqlite", 2)
+	cp.State.Phase = harness.RunPhaseCompleted
+	cp.State.Control.Status = harness.RunStatusCompleted
+	if err := store.Save(context.Background(), cp); err != nil {
+		t.Fatalf("Save returned error: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	code := Main(context.Background(), []string{"runs", "--checkpoint-type", "sqlite", "--checkpoint-dir", path}, IO{Stdout: &stdout})
+	if code != 0 {
+		t.Fatalf("code = %d, want 0", code)
+	}
+	if !strings.Contains(stdout.String(), "run_sqlite") || !strings.Contains(stdout.String(), "completed") {
+		t.Fatalf("unexpected output: %q", stdout.String())
 	}
 }
 
@@ -175,7 +222,7 @@ func TestOptionsFromConfig(t *testing.T) {
 			MaxOutputBytes: 99,
 		},
 		Approval:   approvalConfig{Mode: "always"},
-		Checkpoint: checkpointConfig{Path: "runs"},
+		Checkpoint: checkpointConfig{Type: "sqlite", Path: "runs.db"},
 	}
 	data, err := json.Marshal(config)
 	if err != nil {
@@ -199,6 +246,9 @@ func TestOptionsFromConfig(t *testing.T) {
 	}
 	if opts.approve != "always" {
 		t.Fatalf("approval opts not applied: %#v", opts)
+	}
+	if opts.checkpointType != "sqlite" || opts.checkpointDir != "runs.db" {
+		t.Fatalf("checkpoint opts not applied: %#v", opts)
 	}
 }
 

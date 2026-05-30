@@ -103,6 +103,12 @@ go run ./cmd/zenforge run --config zenforge.json "Analyze this repo"
 More CLI setup, event inspection, resume, approval modes, and examples are in
 [docs/quickstart.md](./docs/quickstart.md).
 
+Local runs can use JSONL files or a SQLite database:
+
+```bash
+go run ./cmd/zenforge run --checkpoint-type sqlite --checkpoint-dir .zenforge/runs.db "Analyze this repo"
+```
+
 Useful examples:
 
 ```bash
