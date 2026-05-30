@@ -105,6 +105,70 @@ func TestServeResumeRejectsMissingRunID(t *testing.T) {
 	}
 }
 
+func TestServeEventsReplaysStoredEvents(t *testing.T) {
+	store := &fakeEventStore{
+		events: []zenforge.Event{
+			zenforge.NewEvent(zenforge.EventRunStarted, "run_http", map[string]any{"input": "hi"}).WithSeq(1),
+			zenforge.NewEvent(zenforge.EventRunDone, "run_http", map[string]any{"output": "done"}).WithSeq(2),
+		},
+	}
+	handler := New(&fakeAgent{}, sse.Options{RetryMillis: 250})
+	handler.Events = store
+	req := httptest.NewRequest(http.MethodGet, "/events?runId=run_http&afterSeq=1&limit=1", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeEvents(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if store.runID != "run_http" || store.afterSeq != 1 || store.limit != 1 {
+		t.Fatalf("unexpected Read args: runID=%q afterSeq=%d limit=%d", store.runID, store.afterSeq, store.limit)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "retry: 250\n\n") || !strings.Contains(body, "event: run.done\n") {
+		t.Fatalf("unexpected SSE body: %q", body)
+	}
+	if strings.Contains(body, "event: run.started\n") {
+		t.Fatalf("afterSeq filter was not applied: %q", body)
+	}
+}
+
+func TestServeEventsRejectsInvalidQuery(t *testing.T) {
+	handler := New(&fakeAgent{}, sse.Options{})
+	handler.Events = &fakeEventStore{}
+	req := httptest.NewRequest(http.MethodGet, "/events?runId=run_http&afterSeq=-1", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeEvents(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "invalid_after_seq") {
+		t.Fatalf("unexpected error body: %s", rec.Body.String())
+	}
+}
+
+func TestServeEventsRequiresStoreAndRunID(t *testing.T) {
+	handler := New(&fakeAgent{}, sse.Options{})
+	rec := httptest.NewRecorder()
+
+	handler.ServeEvents(rec, httptest.NewRequest(http.MethodGet, "/events?runId=run_http", nil))
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+
+	handler.Events = &fakeEventStore{}
+	rec = httptest.NewRecorder()
+	handler.ServeEvents(rec, httptest.NewRequest(http.MethodGet, "/events", nil))
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
 func TestServeRunReportsAgentError(t *testing.T) {
 	handler := New(&fakeAgent{streamErr: errors.New("boom")}, sse.Options{})
 	req := httptest.NewRequest(http.MethodPost, "/run", strings.NewReader(`{"input":"hello"}`))
@@ -118,6 +182,45 @@ func TestServeRunReportsAgentError(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "run_failed") {
 		t.Fatalf("unexpected error body: %s", rec.Body.String())
 	}
+}
+
+type fakeEventStore struct {
+	events   []zenforge.Event
+	runID    string
+	afterSeq int64
+	limit    int
+}
+
+func (s *fakeEventStore) Append(ctx context.Context, event zenforge.Event) error {
+	s.events = append(s.events, event)
+	return nil
+}
+
+func (s *fakeEventStore) Read(ctx context.Context, runID string, afterSeq int64, limit int) ([]zenforge.Event, error) {
+	s.runID = runID
+	s.afterSeq = afterSeq
+	s.limit = limit
+	var out []zenforge.Event
+	for _, event := range s.events {
+		if event.RunID() != runID || event.Seq <= afterSeq {
+			continue
+		}
+		out = append(out, event)
+		if limit > 0 && len(out) == limit {
+			break
+		}
+	}
+	return out, nil
+}
+
+func (s *fakeEventStore) LatestSeq(ctx context.Context, runID string) (int64, error) {
+	var latest int64
+	for _, event := range s.events {
+		if event.RunID() == runID && event.Seq > latest {
+			latest = event.Seq
+		}
+	}
+	return latest, nil
 }
 
 type fakeAgent struct {

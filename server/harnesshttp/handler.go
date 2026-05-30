@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/feiyu912/zenforge"
@@ -17,10 +18,12 @@ type Agent interface {
 	Resume(ctx context.Context, runID string) (<-chan zenforge.Event, error)
 }
 
-// Handler exposes run and resume endpoints for an already configured agent.
+// Handler exposes run, resume, and event replay endpoints for an already
+// configured agent.
 type Handler struct {
-	Agent Agent
-	SSE   sse.Options
+	Agent  Agent
+	Events zenforge.EventStore
+	SSE    sse.Options
 }
 
 // RunRequest is the JSON body accepted by Handler.ServeRun.
@@ -99,6 +102,41 @@ func (h *Handler) ServeResume(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// ServeEvents replays persisted events for a run as Server-Sent Events.
+func (h *Handler) ServeEvents(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "events requires GET")
+		return
+	}
+	if h.Events == nil {
+		writeError(w, http.StatusInternalServerError, "event_store_not_configured", "event store is not configured")
+		return
+	}
+	runID := strings.TrimSpace(r.URL.Query().Get("runId"))
+	if runID == "" {
+		writeError(w, http.StatusBadRequest, "run_id_required", "runId is required")
+		return
+	}
+	afterSeq, err := int64Query(r, "afterSeq")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_after_seq", err.Error())
+		return
+	}
+	limit, err := intQuery(r, "limit")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_limit", err.Error())
+		return
+	}
+	events, err := h.Events.Read(r.Context(), runID, afterSeq, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "events_failed", err.Error())
+		return
+	}
+	if err := sse.StreamHTTP(r.Context(), w, sliceEvents(events), h.SSE); err != nil && !errors.Is(err, context.Canceled) {
+		writeError(w, http.StatusInternalServerError, "stream_failed", err.Error())
+	}
+}
+
 func resumeRunID(r *http.Request) (string, bool) {
 	if r.Method == http.MethodGet {
 		runID := strings.TrimSpace(r.URL.Query().Get("runId"))
@@ -110,6 +148,45 @@ func resumeRunID(r *http.Request) (string, bool) {
 	}
 	runID := strings.TrimSpace(req.RunID)
 	return runID, runID != ""
+}
+
+func int64Query(r *http.Request, key string) (int64, error) {
+	raw := strings.TrimSpace(r.URL.Query().Get(key))
+	if raw == "" {
+		return 0, nil
+	}
+	value, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	if value < 0 {
+		return 0, errors.New(key + " must be non-negative")
+	}
+	return value, nil
+}
+
+func intQuery(r *http.Request, key string) (int, error) {
+	raw := strings.TrimSpace(r.URL.Query().Get(key))
+	if raw == "" {
+		return 0, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, err
+	}
+	if value < 0 {
+		return 0, errors.New(key + " must be non-negative")
+	}
+	return value, nil
+}
+
+func sliceEvents(events []zenforge.Event) <-chan zenforge.Event {
+	out := make(chan zenforge.Event, len(events))
+	for _, event := range events {
+		out <- event
+	}
+	close(out)
+	return out
 }
 
 func writeError(w http.ResponseWriter, status int, code, message string) {
