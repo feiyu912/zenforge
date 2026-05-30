@@ -17,7 +17,25 @@ agent := zenforge.New(zenforge.Config{
 - `trace.NewJSONSink(w)` writes JSONL trace events to any `io.Writer`.
 - `trace.NewMemorySink()` stores trace events in memory for tests and embedded
   observers.
+- `trace/otel.New(tracer)` emits each runtime trace event as an OpenTelemetry
+  span with ZenForge attributes.
 - `trace.Discard()` ignores events while still honoring context cancellation.
+
+## OpenTelemetry
+
+Use the OpenTelemetry sink when the host service already owns exporter setup:
+
+```go
+sink := trace.Redact(oteltrace.New(provider.Tracer("zenforge")))
+
+agent := zenforge.New(zenforge.Config{
+    Trace: sink,
+})
+```
+
+The sink records short spans named like `zenforge.tool.call` and attaches
+attributes such as `zenforge.run_id`, `zenforge.seq`, `zenforge.event.type`,
+and `zenforge.data.*`.
 
 ## Redaction
 
@@ -52,6 +70,6 @@ sink := trace.RedactWith(trace.Stdout(), trace.Redactor{
 
 ## Adapter Boundary
 
-Application and platform adapters decide where traces go: stdout, local files,
-OpenTelemetry, service logs, or internal chat trace stores. ZenForge only
-defines the sink interface and safe local helpers.
+Application and platform adapters decide exporter configuration, sampling,
+resource metadata, service names, and retention. ZenForge only defines the sink
+interface and local helpers.

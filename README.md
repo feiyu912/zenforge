@@ -27,6 +27,7 @@ ZenForge is:
   runtime inside Go services.
 - A runtime core that can power HTTP servers, CLIs, desktop apps, gateways, and
   private deployments.
+- Pluggable observability through JSON trace sinks and OpenTelemetry spans.
 
 ZenForge is not:
 

@@ -32,6 +32,15 @@ defer events.Close()
 defer checkpoints.Close()
 ```
 
+Trace sinks are equally replaceable. For services that already configure
+OpenTelemetry exporters, use `trace/otel`:
+
+```go
+agent := zenforge.New(zenforge.Config{
+    Trace: trace.Redact(oteltrace.New(tracer)),
+})
+```
+
 ## Run Once
 
 ```go

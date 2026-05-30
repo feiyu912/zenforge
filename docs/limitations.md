@@ -33,7 +33,8 @@ what is experimental, and what remains adapter territory.
 
 - Full memory extraction is not included.
 - MCP integration is not included.
-- OpenTelemetry tracing is not included.
+- OpenTelemetry exporter setup is not included; host services provide tracer
+  providers/exporters and can use `trace/otel` as the sink adapter.
 - YAML config is not included; the current CLI config format is JSON.
 - Container Hub is optional and lives behind `sandbox/containerhub`.
 
