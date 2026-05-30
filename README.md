@@ -182,6 +182,9 @@ The current MVP validation evidence is
 The release checklist is
 [docs/release-checklist.md](./docs/release-checklist.md).
 
+The V0.1 release notes draft is
+[docs/release-notes-v0.1.md](./docs/release-notes-v0.1.md).
+
 The checkpoint/resume guide is
 [docs/checkpoint-resume-guide.md](./docs/checkpoint-resume-guide.md).
 

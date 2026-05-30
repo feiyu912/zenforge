@@ -14,6 +14,7 @@ Expected results:
 
 - all tests pass;
 - examples compile;
+- local Markdown doc links resolve through `docs.TestMarkdownLinksResolve`;
 - platform-boundary search returns no Go-source matches.
 
 ## CLI Smoke
@@ -39,9 +40,10 @@ go run ./cmd/zenforge run --approve never "Run a useful shell check"
 - README quickstart is current.
 - `docs/quickstart.md` is current.
 - `docs/config-reference.md` matches `zenforge init` output.
-- `docs/limitations.md` mentions known resume, shell, memory, MCP, sub-agent,
-  and sandbox limitations.
+- `docs/limitations.md` mentions known resume, shell, memory, MCP, tracing,
+  config, sub-agent, and sandbox limitations.
 - `docs/mvp-validation.md` maps acceptance items to evidence.
+- `docs/release-notes-v0.1.md` summarizes highlights and limitations.
 - GitHub Actions CI is green.
 
 ## Tagging
