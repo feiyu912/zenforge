@@ -38,6 +38,7 @@ go run ./cmd/zenforge run --approve never "Run a useful shell check"
 ## Repository Checks
 
 - README quickstart is current.
+- `VERSION`, `cli.Version`, and release notes agree on the chosen version.
 - `docs/quickstart.md` is current.
 - `docs/config-reference.md` matches `zenforge init` output.
 - `docs/limitations.md` mentions known resume, shell, memory, MCP, tracing,
@@ -49,6 +50,6 @@ go run ./cmd/zenforge run --approve never "Run a useful shell check"
 ## Tagging
 
 - Choose version.
-- Update changelog or release notes.
+- Update changelog and release notes.
 - Include limitations in release notes.
 - Push tag only after CI is green.

@@ -1,6 +1,6 @@
-# V0.1 Release Notes Draft
+# V0.1 Release Notes
 
-V0.1 is the first usable ZenForge release candidate: a Go-native harness for
+V0.1.0 is the first usable ZenForge release candidate: a Go-native harness for
 long-running, tool-using, observable, and recoverable agents.
 
 ## Highlights

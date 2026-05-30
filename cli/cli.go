@@ -30,7 +30,7 @@ import (
 	workspacelocal "github.com/feiyu912/zenforge/workspace/local"
 )
 
-const Version = "0.0.0-dev"
+const Version = "0.1.0"
 
 type IO struct {
 	Stdin  io.Reader

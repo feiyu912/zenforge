@@ -42,7 +42,7 @@ func (c *JSONRPCClient) Initialize(ctx context.Context, params InitializeParams)
 		params.ProtocolVersion = "2024-11-05"
 	}
 	if params.ClientInfo.Name == "" {
-		params.ClientInfo = Implementation{Name: "zenforge", Version: "0.0.0"}
+		params.ClientInfo = Implementation{Name: "zenforge", Version: "0.1.0"}
 	}
 	var result map[string]any
 	if err := c.call(ctx, "initialize", params, &result); err != nil {

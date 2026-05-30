@@ -17,6 +17,8 @@ delegation, memory, sandbox execution, event streaming, and chat trace storage.
 ZenForge extracts the reusable runtime core from that platform so it can become
 a standalone Go library and CLI.
 
+Current release candidate: `0.1.0`.
+
 ## Product Positioning
 
 ZenForge is:
@@ -182,7 +184,7 @@ The current MVP validation evidence is
 The release checklist is
 [docs/release-checklist.md](./docs/release-checklist.md).
 
-The V0.1 release notes draft is
+The V0.1 release notes are
 [docs/release-notes-v0.1.md](./docs/release-notes-v0.1.md).
 
 The checkpoint/resume guide is

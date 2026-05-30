@@ -102,6 +102,49 @@ func TestJSONRPCClientReturnsRemoteError(t *testing.T) {
 	}
 }
 
+func TestDefaultInitializeParamsUseReleaseVersion(t *testing.T) {
+	params := InitializeParams{}
+	if params.ClientInfo.Version != "" {
+		t.Fatalf("zero value should not set version")
+	}
+	serverRead, clientWrite := io.Pipe()
+	clientRead, serverWrite := io.Pipe()
+	defer serverRead.Close()
+	defer clientWrite.Close()
+	defer clientRead.Close()
+	defer serverWrite.Close()
+
+	done := make(chan Implementation, 1)
+	go func() {
+		reader := bufio.NewReader(serverRead)
+		var req request
+		if err := readFrame(reader, &req); err != nil {
+			done <- Implementation{}
+			return
+		}
+		raw, _ := json.Marshal(req.Params)
+		var got InitializeParams
+		_ = json.Unmarshal(raw, &got)
+		_ = writeFrame(serverWrite, response{
+			JSONRPC: "2.0",
+			ID:      &req.ID,
+			Result:  rawJSON(`{"protocolVersion":"2024-11-05","serverInfo":{"name":"test","version":"1"}}`),
+		})
+		var notify request
+		_ = readFrame(reader, &notify)
+		done <- got.ClientInfo
+	}()
+
+	client := NewJSONRPCClient(clientRead, clientWrite)
+	if err := client.Initialize(context.Background(), InitializeParams{}); err != nil {
+		t.Fatalf("Initialize returned error: %v", err)
+	}
+	info := <-done
+	if info.Name != "zenforge" || info.Version != "0.1.0" {
+		t.Fatalf("client info = %#v", info)
+	}
+}
+
 func rawJSON(s string) json.RawMessage {
 	return json.RawMessage(s)
 }
