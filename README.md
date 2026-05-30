@@ -192,6 +192,9 @@ The server/HTTP adapter guide is
 The ZenMind adapter guide is
 [docs/zenmind-adapter-guide.md](./docs/zenmind-adapter-guide.md).
 
+The MCP adapter guide is
+[docs/mcp-adapter-guide.md](./docs/mcp-adapter-guide.md).
+
 The trace guide is
 [docs/trace-guide.md](./docs/trace-guide.md).
 

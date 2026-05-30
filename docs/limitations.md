@@ -32,7 +32,8 @@ what is experimental, and what remains adapter territory.
 ## Deferred Systems
 
 - Full memory extraction is not included.
-- MCP integration is not included.
+- MCP tools can be adapted through `adapters/mcp`, but resources, prompts,
+  sampling, discovery, and OAuth flows remain host/platform responsibilities.
 - OpenTelemetry exporter setup is not included; host services provide tracer
   providers/exporters and can use `trace/otel` as the sink adapter.
 - YAML config is not included; the current CLI config format is JSON.

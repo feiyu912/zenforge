@@ -41,6 +41,20 @@ agent := zenforge.New(zenforge.Config{
 })
 ```
 
+MCP tools can be bridged at the edge:
+
+```go
+mcpClient, _ := mcp.NewStdioClient(ctx, mcp.StdioConfig{
+    Command: "my-mcp-server",
+    Args:    []string{"--stdio"},
+})
+mcpTools, _ := mcp.Tools(ctx, mcpClient)
+
+agent := zenforge.New(zenforge.Config{
+    Tools: mcpTools,
+})
+```
+
 ## Run Once
 
 ```go
