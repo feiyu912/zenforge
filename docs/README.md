@@ -42,8 +42,9 @@ Recommended reading order:
 38. [server-http-guide.md](./server-http-guide.md)
 39. [server-sse-guide.md](./server-sse-guide.md)
 40. [zenmind-adapter-guide.md](./zenmind-adapter-guide.md)
-41. [security-guide.md](./security-guide.md)
-42. [tool-authoring-guide.md](./tool-authoring-guide.md)
+41. [trace-guide.md](./trace-guide.md)
+42. [security-guide.md](./security-guide.md)
+43. [tool-authoring-guide.md](./tool-authoring-guide.md)
 
 ## Architecture Decision Records
 

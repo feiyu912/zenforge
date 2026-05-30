@@ -54,3 +54,70 @@ func TestMemorySinkCopiesEvents(t *testing.T) {
 		t.Fatalf("Events returned mutable backing data")
 	}
 }
+
+func TestRedactSinkRedactsSensitiveKeys(t *testing.T) {
+	memory := NewMemorySink()
+	sink := Redact(memory)
+
+	event := Event{
+		Type:  "tool.result",
+		RunID: "run_123",
+		Data: map[string]any{
+			"apiKey":        "sk-secret",
+			"Authorization": "Bearer token",
+			"nested": map[string]any{
+				"access_token": "secret-token",
+				"safe":         "visible",
+			},
+			"items": []any{
+				map[string]any{"password": "p@ss"},
+				"plain",
+			},
+		},
+	}
+
+	if err := sink.Emit(context.Background(), event); err != nil {
+		t.Fatalf("Emit returned error: %v", err)
+	}
+
+	got := memory.Events()[0]
+	if got.Data["apiKey"] != "[REDACTED]" || got.Data["Authorization"] != "[REDACTED]" {
+		t.Fatalf("top-level secrets were not redacted: %#v", got.Data)
+	}
+	nested := got.Data["nested"].(map[string]any)
+	if nested["access_token"] != "[REDACTED]" || nested["safe"] != "visible" {
+		t.Fatalf("nested redaction mismatch: %#v", nested)
+	}
+	items := got.Data["items"].([]any)
+	item := items[0].(map[string]any)
+	if item["password"] != "[REDACTED]" || items[1] != "plain" {
+		t.Fatalf("slice redaction mismatch: %#v", items)
+	}
+	if event.Data["apiKey"] != "sk-secret" {
+		t.Fatalf("redaction mutated source event: %#v", event.Data)
+	}
+}
+
+func TestRedactWithCustomKeysAndReplacement(t *testing.T) {
+	memory := NewMemorySink()
+	sink := RedactWith(memory, Redactor{
+		Keys:        []string{"session_id"},
+		Replacement: "***",
+	})
+
+	if err := sink.Emit(context.Background(), Event{
+		Type:  "run.started",
+		RunID: "run_123",
+		Data:  map[string]any{"sessionId": "abc", "token": "kept"},
+	}); err != nil {
+		t.Fatalf("Emit returned error: %v", err)
+	}
+
+	got := memory.Events()[0]
+	if got.Data["sessionId"] != "***" {
+		t.Fatalf("custom key was not redacted: %#v", got.Data)
+	}
+	if got.Data["token"] != "kept" {
+		t.Fatalf("unexpected default key redaction with custom keys: %#v", got.Data)
+	}
+}
