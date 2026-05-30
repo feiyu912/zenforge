@@ -297,6 +297,24 @@ func (a *Agent) runLoop(ctx context.Context, out chan<- Event, state harness.Run
 	}
 	if resumed {
 		emit(EventRunResumed, map[string]any{"input": state.Input})
+		if a.resumeTerminal(emit, state) {
+			return
+		}
+		if state.Approval.Waiting != nil {
+			if err := a.resumeWaitingApproval(ctx, emit, checkpointState, &state); err != nil {
+				fail(err)
+				return
+			}
+		}
+		if state.Tool.Active != nil {
+			call := *state.Tool.Active
+			call.Status = harness.ToolCallPending
+			call.StartedAt = nil
+			state.Tool.Pending = append([]harness.ToolCallState{call}, state.Tool.Pending...)
+			state.Tool.Active = nil
+			state.Control.Status = harness.RunStatusRunning
+			checkpointState()
+		}
 	} else {
 		emit(EventRunStarted, map[string]any{"input": state.Input})
 	}
@@ -368,6 +386,105 @@ func (a *Agent) runLoop(ctx context.Context, out chan<- Event, state harness.Run
 	state.Control.Status = harness.RunStatusCompleted
 	checkpointState()
 	emit(EventRunDone, map[string]any{"output": assistant.Content})
+}
+
+func (a *Agent) resumeTerminal(emit func(EventType, map[string]any), state harness.RunState) bool {
+	switch state.Phase {
+	case harness.RunPhaseCompleted:
+		emit(EventRunDone, map[string]any{"output": lastAssistantContent(state)})
+		return true
+	case harness.RunPhaseFailed:
+		emit(EventRunError, map[string]any{"error": terminalError(state, "run failed before resume")})
+		return true
+	case harness.RunPhaseCancelled:
+		emit(EventRunCancelled, map[string]any{"error": terminalError(state, "run cancelled before resume")})
+		return true
+	default:
+		return false
+	}
+}
+
+func (a *Agent) resumeWaitingApproval(ctx context.Context, emit func(EventType, map[string]any), checkpointState func(), state *harness.RunState) error {
+	if state.Approval.Waiting == nil {
+		return nil
+	}
+	if state.Tool.Active == nil {
+		return fmt.Errorf("resume waiting approval requires active tool call")
+	}
+	if a.config.Approval == nil {
+		return fmt.Errorf("resume waiting approval requires approval broker")
+	}
+	call := *state.Tool.Active
+	req := approvalRequestFromState(*state.Approval.Waiting, state.RunID, call)
+	emit(EventApprovalRequested, map[string]any{
+		"requestId":  req.ID,
+		"toolCallId": call.ID,
+		"toolName":   call.Name,
+		"operation":  req.Operation,
+		"risk":       string(req.Risk),
+		"request":    req,
+		"resumed":    true,
+	})
+	decision, err := a.config.Approval.Request(ctx, req)
+	if err != nil {
+		return err
+	}
+	state.ResolveApproval(approvalDecisionState(decision))
+	checkpointState()
+	resolvedType := EventApprovalResolved
+	if decision.Action == approval.DecisionReject && decision.Reason == approval.ErrorExpired {
+		resolvedType = EventApprovalExpired
+	}
+	emit(resolvedType, map[string]any{
+		"requestId":  decision.RequestID,
+		"toolCallId": call.ID,
+		"toolName":   call.Name,
+		"action":     string(decision.Action),
+		"scope":      string(decision.Scope),
+		"reason":     decision.Reason,
+		"resumed":    true,
+	})
+	if decision.Action == approval.DecisionAbort {
+		return fmt.Errorf("approval aborted: %s", decision.Reason)
+	}
+	if approval.IsApprovedAction(decision.Action) {
+		call.Meta = approval.ApprovedMetadata(call.Meta, req, decision)
+		call.Status = harness.ToolCallPending
+		call.StartedAt = nil
+		state.Tool.Pending = append([]harness.ToolCallState{call}, state.Tool.Pending...)
+		state.Tool.Active = nil
+		state.Control.Status = harness.RunStatusRunning
+		checkpointState()
+		return nil
+	}
+	result := tool.Result{Error: approval.ErrorRejected, ExitCode: 1, Structured: map[string]any{
+		"approval": req,
+		"decision": decision,
+	}}
+	call.Status = harness.ToolCallFailed
+	state.Tool.Active = nil
+	state.Tool.Last = &harness.ToolResultState{
+		ToolCallID: call.ID,
+		Structured: result.Structured,
+		Error:      result.Error,
+		ExitCode:   result.ExitCode,
+	}
+	state.Messages = append(state.Messages, harness.MessageState{
+		Role:       "tool",
+		Content:    toolResultContent(result),
+		ToolCallID: call.ID,
+		Name:       call.Name,
+	})
+	state.Control.Status = harness.RunStatusRunning
+	checkpointState()
+	emit(EventToolError, map[string]any{
+		"toolCallId": call.ID,
+		"toolName":   call.Name,
+		"error":      result.Error,
+		"exitCode":   result.ExitCode,
+		"resumed":    true,
+	})
+	return nil
 }
 
 func (a *Agent) callModel(ctx context.Context, emit func(EventType, map[string]any), state harness.RunState, choice model.ToolChoice) (harness.MessageState, model.Usage, error) {
@@ -623,13 +740,53 @@ func approvalRequestState(req approval.Request, call harness.ToolCallState) harn
 	}
 	return harness.ApprovalRequestState{
 		ID:          req.ID,
+		RunID:       req.RunID,
 		ToolCallID:  toolCallID,
+		ToolName:    req.ToolName,
+		Operation:   req.Operation,
 		Title:       req.Title,
 		Description: req.Description,
 		Risk:        string(req.Risk),
 		Options:     options,
 		Payload:     req.Payload,
 		ExpiresAt:   req.ExpiresAt,
+	}
+}
+
+func approvalRequestFromState(state harness.ApprovalRequestState, runID string, call harness.ToolCallState) approval.Request {
+	requestRunID := state.RunID
+	if requestRunID == "" {
+		requestRunID = runID
+	}
+	toolCallID := state.ToolCallID
+	if toolCallID == "" {
+		toolCallID = call.ID
+	}
+	toolName := state.ToolName
+	if toolName == "" {
+		toolName = call.Name
+	}
+	operation := state.Operation
+	if operation == "" {
+		operation = "approval.resume"
+	}
+	risk := approval.RiskLevel(state.Risk)
+	if risk == "" {
+		risk = approval.RiskMedium
+	}
+	return approval.Request{
+		ID:          state.ID,
+		RunID:       requestRunID,
+		ToolCallID:  toolCallID,
+		ToolName:    toolName,
+		Operation:   operation,
+		Title:       state.Title,
+		Description: state.Description,
+		Risk:        risk,
+		Options:     approval.DefaultOptions(),
+		Payload:     cloneMap(state.Payload),
+		CreatedAt:   time.Now().UTC(),
+		ExpiresAt:   state.ExpiresAt,
 	}
 }
 
@@ -944,6 +1101,25 @@ func applyUsage(state *harness.RunState, usage model.Usage) {
 	state.Usage.InputTokens += usage.PromptTokens
 	state.Usage.OutputTokens += usage.CompletionTokens
 	state.Usage.TotalTokens += usage.TotalTokens
+}
+
+func lastAssistantContent(state harness.RunState) string {
+	for i := len(state.Messages) - 1; i >= 0; i-- {
+		if state.Messages[i].Role == "assistant" {
+			return state.Messages[i].Content
+		}
+	}
+	return ""
+}
+
+func terminalError(state harness.RunState, fallback string) string {
+	if state.Tool.Last != nil && state.Tool.Last.Error != "" {
+		return state.Tool.Last.Error
+	}
+	if value, ok := state.Meta["error"].(string); ok && value != "" {
+		return value
+	}
+	return fallback
 }
 
 func toolResultContent(result tool.Result) string {

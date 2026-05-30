@@ -116,7 +116,10 @@ type ApprovalState struct {
 
 type ApprovalRequestState struct {
 	ID          string         `json:"id"`
+	RunID       string         `json:"runId,omitempty"`
 	ToolCallID  string         `json:"toolCallId,omitempty"`
+	ToolName    string         `json:"toolName,omitempty"`
+	Operation   string         `json:"operation,omitempty"`
 	Title       string         `json:"title"`
 	Description string         `json:"description,omitempty"`
 	Risk        string         `json:"risk,omitempty"`

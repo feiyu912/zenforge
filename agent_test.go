@@ -8,7 +8,9 @@ import (
 	"time"
 
 	"github.com/feiyu912/zenforge/approval"
+	"github.com/feiyu912/zenforge/checkpoint"
 	checkpointmemory "github.com/feiyu912/zenforge/checkpoint/memory"
+	"github.com/feiyu912/zenforge/harness"
 	"github.com/feiyu912/zenforge/model"
 	"github.com/feiyu912/zenforge/subagent"
 	"github.com/feiyu912/zenforge/tool"
@@ -155,6 +157,152 @@ func TestAgentStreamRunsToolAndContinuesModelLoop(t *testing.T) {
 	if cp.State.Phase != "completed" {
 		t.Fatalf("checkpoint phase = %s, want completed", cp.State.Phase)
 	}
+}
+
+func TestAgentResumeCompletedDoesNotCallModelAgain(t *testing.T) {
+	checkpoints := checkpointmemory.New()
+	now := time.Now().UTC()
+	state := newRunState("run_completed", "done already", nil)
+	state.Phase = harness.RunPhaseCompleted
+	state.Control.Status = harness.RunStatusCompleted
+	state.Messages = append(state.Messages, harness.MessageState{Role: "assistant", Content: "already done"})
+	if err := checkpoints.Save(context.Background(), checkpoint.Checkpoint{
+		Version: checkpoint.CheckpointVersion,
+		RunID:   "run_completed",
+		Seq:     1,
+		State:   state,
+		SavedAt: now,
+	}); err != nil {
+		t.Fatalf("Save returned error: %v", err)
+	}
+	fakeModel := &scriptedModel{turns: []scriptedTurn{{events: []model.Event{{Delta: "should not run"}}}}}
+	agent := New(Config{Model: fakeModel, Checkpoints: checkpoints})
+
+	events, err := agent.Resume(context.Background(), "run_completed")
+	if err != nil {
+		t.Fatalf("Resume returned error: %v", err)
+	}
+	var types []EventType
+	var output string
+	for event := range events {
+		types = append(types, event.Type)
+		if event.Type == EventRunDone {
+			output = stringValue(event.Payload["output"])
+		}
+	}
+	if len(fakeModel.requests) != 0 {
+		t.Fatalf("model calls = %d, want 0", len(fakeModel.requests))
+	}
+	if len(types) != 2 || types[0] != EventRunResumed || types[1] != EventRunDone {
+		t.Fatalf("unexpected events: %v", types)
+	}
+	if output != "already done" {
+		t.Fatalf("output = %q, want terminal assistant output", output)
+	}
+}
+
+func TestAgentResumeActiveToolRetriesTool(t *testing.T) {
+	checkpoints := checkpointmemory.New()
+	state := newRunState("run_active_tool", "use echo", nil)
+	state.Step = 1
+	state.Phase = harness.RunPhaseTool
+	state.Control.Status = harness.RunStatusToolExecuting
+	now := time.Now().UTC()
+	state.Tool.Active = &harness.ToolCallState{
+		ID:        "call_1",
+		Name:      "echo",
+		Arguments: json.RawMessage(`{"text":"resumed tool"}`),
+		Status:    harness.ToolCallRunning,
+		StartedAt: &now,
+	}
+	if err := checkpoints.Save(context.Background(), checkpoint.Checkpoint{
+		Version: checkpoint.CheckpointVersion,
+		RunID:   "run_active_tool",
+		Seq:     1,
+		State:   state,
+		SavedAt: now,
+	}); err != nil {
+		t.Fatalf("Save returned error: %v", err)
+	}
+	fakeModel := &scriptedModel{turns: []scriptedTurn{{events: []model.Event{{Delta: "final after retry"}}}}}
+	agent := New(Config{
+		Model:       fakeModel,
+		Tools:       []Tool{echoTool{}},
+		Checkpoints: checkpoints,
+	})
+
+	events, err := agent.Resume(context.Background(), "run_active_tool")
+	if err != nil {
+		t.Fatalf("Resume returned error: %v", err)
+	}
+	var types []EventType
+	for event := range events {
+		types = append(types, event.Type)
+	}
+	assertContainsEvent(t, types, EventRunResumed)
+	assertContainsEvent(t, types, EventToolCall)
+	assertContainsEvent(t, types, EventToolResult)
+	assertContainsEvent(t, types, EventRunDone)
+	if len(fakeModel.requests) != 1 {
+		t.Fatalf("model calls = %d, want 1", len(fakeModel.requests))
+	}
+}
+
+func TestAgentResumeWaitingApprovalUsesBroker(t *testing.T) {
+	checkpoints := checkpointmemory.New()
+	state := newRunState("run_waiting_approval", "approve then continue", nil)
+	state.Step = 1
+	state.Phase = harness.RunPhaseApproval
+	state.Control.Status = harness.RunStatusWaitingSubmit
+	now := time.Now().UTC()
+	state.Tool.Active = &harness.ToolCallState{
+		ID:        "call_approval",
+		Name:      "needs_approval",
+		Arguments: json.RawMessage(`{}`),
+		Status:    harness.ToolCallRunning,
+		StartedAt: &now,
+	}
+	state.Approval.Waiting = &harness.ApprovalRequestState{
+		ID:         "approval_resume",
+		RunID:      "run_waiting_approval",
+		ToolCallID: "call_approval",
+		ToolName:   "needs_approval",
+		Operation:  "test.approval",
+		Title:      "Approve resume",
+		Risk:       string(approval.RiskMedium),
+		Options:    []string{"Approve", "Reject"},
+		Payload:    map[string]any{"fingerprint": "fp"},
+	}
+	state.Control.AwaitingIDs = []string{"approval_resume"}
+	if err := checkpoints.Save(context.Background(), checkpoint.Checkpoint{
+		Version: checkpoint.CheckpointVersion,
+		RunID:   "run_waiting_approval",
+		Seq:     1,
+		State:   state,
+		SavedAt: now,
+	}); err != nil {
+		t.Fatalf("Save returned error: %v", err)
+	}
+	fakeModel := &scriptedModel{turns: []scriptedTurn{{events: []model.Event{{Delta: "done after approval resume"}}}}}
+	agent := New(Config{
+		Model:       fakeModel,
+		Tools:       []Tool{approvalTool{}},
+		Approval:    approval.AlwaysAllow(),
+		Checkpoints: checkpoints,
+	})
+
+	events, err := agent.Resume(context.Background(), "run_waiting_approval")
+	if err != nil {
+		t.Fatalf("Resume returned error: %v", err)
+	}
+	var types []EventType
+	for event := range events {
+		types = append(types, event.Type)
+	}
+	assertContainsEvent(t, types, EventApprovalRequested)
+	assertContainsEvent(t, types, EventApprovalResolved)
+	assertContainsEvent(t, types, EventToolResult)
+	assertContainsEvent(t, types, EventRunDone)
 }
 
 func TestAgentPlanningAddsTodoToolsAndCheckpointsTodos(t *testing.T) {
