@@ -287,6 +287,8 @@ Tools:
 - [x] workspace write respects roots.
 - [x] shell command allowlist works.
 - [x] risky shell returns approval request or prompt.
+- [x] MCP tools can be adapted into ZenForge tools.
+- [x] retrieved memory can be normalized into a task.
 
 Planning:
 
@@ -300,24 +302,32 @@ CLI:
 - [x] `zenforge resume` works.
 - [x] config file works.
 - [x] approval prompt works.
+- [x] SQLite run stores can be inspected with CLI.
+- [x] provider selection supports OpenAI-compatible and Anthropic adapters.
 
 Docs:
 
 - [x] quickstart.
 - [x] config reference.
+- [x] SDK guide.
+- [x] provider guide.
 - [x] tool authoring guide.
 - [x] security guide.
 - [x] limitations section.
+- [x] release evidence and release notes draft.
 
 ## MVP Limitations To State Clearly
 
 - Resume does not continue mid-token model streams.
 - Resume does not continue an OS command already running at crash time.
 - Shell is deny-by-default.
-- Memory is not included.
-- MCP is not included.
-- Sub-agents may be experimental or absent from MVP.
-- Container Hub may be experimental or absent from MVP.
+- Full platform memory extraction is not included; `adapters/memory` accepts
+  retrieved memory and injects it into normalized tasks.
+- MCP support starts with tool adaptation; resources, prompts, sampling,
+  discovery, and OAuth remain host/platform responsibilities.
+- Sub-agents are available as a runtime tool, with advanced nested/resume
+  behavior still intentionally limited.
+- Container Hub remains an optional beta sandbox adapter.
 
 ## Release Candidate Criteria
 
@@ -325,6 +335,7 @@ Before tagging MVP:
 
 - all tests pass;
 - examples run from clean checkout;
+- Markdown doc links resolve through `docs.TestMarkdownLinksResolve`;
 - CLI has useful error messages;
 - no imports from `agent-platform`;
 - no hardcoded ZenMind paths;
