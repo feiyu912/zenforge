@@ -81,3 +81,8 @@ rg -n "agent-platform|ZenMind" --glob "*.go" .
 ```
 
 The expected result is no matches in Go source files.
+
+## CI Evidence
+
+GitHub Actions `CI` completed successfully for commit `739090d` in run
+`26685128780`.
