@@ -31,7 +31,8 @@ what is experimental, and what remains adapter territory.
 
 ## Deferred Systems
 
-- Full memory extraction is not included.
+- Full platform memory extraction is not included. Retrieved memory can be
+  adapted into normalized tasks through `adapters/memory`.
 - MCP tools can be adapted through `adapters/mcp`, but resources, prompts,
   sampling, discovery, and OAuth flows remain host/platform responsibilities.
 - OpenTelemetry exporter setup is not included; host services provide tracer

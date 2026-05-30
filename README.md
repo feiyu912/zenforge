@@ -195,6 +195,9 @@ The ZenMind adapter guide is
 The MCP adapter guide is
 [docs/mcp-adapter-guide.md](./docs/mcp-adapter-guide.md).
 
+The memory adapter guide is
+[docs/memory-adapter-guide.md](./docs/memory-adapter-guide.md).
+
 The trace guide is
 [docs/trace-guide.md](./docs/trace-guide.md).
 

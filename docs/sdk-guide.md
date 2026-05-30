@@ -55,6 +55,20 @@ agent := zenforge.New(zenforge.Config{
 })
 ```
 
+Retrieved memory can be normalized into a task before execution:
+
+```go
+augmenter := memory.Augmenter{Store: memoryStore, MaxEntries: 5}
+task, _, err := augmenter.AugmentTask(ctx, zenforge.Task{
+    Input: "Summarize the current project direction.",
+})
+if err != nil {
+    return err
+}
+
+events, err := agent.Stream(ctx, task)
+```
+
 ## Run Once
 
 ```go

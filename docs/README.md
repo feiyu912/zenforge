@@ -45,9 +45,10 @@ Recommended reading order:
 41. [server-sse-guide.md](./server-sse-guide.md)
 42. [zenmind-adapter-guide.md](./zenmind-adapter-guide.md)
 43. [mcp-adapter-guide.md](./mcp-adapter-guide.md)
-44. [trace-guide.md](./trace-guide.md)
-45. [security-guide.md](./security-guide.md)
-46. [tool-authoring-guide.md](./tool-authoring-guide.md)
+44. [memory-adapter-guide.md](./memory-adapter-guide.md)
+45. [trace-guide.md](./trace-guide.md)
+46. [security-guide.md](./security-guide.md)
+47. [tool-authoring-guide.md](./tool-authoring-guide.md)
 
 ## Architecture Decision Records
 
