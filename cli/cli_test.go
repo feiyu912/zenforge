@@ -8,9 +8,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/feiyu912/zenforge"
+	"github.com/feiyu912/zenforge/checkpoint"
+	checkpointjsonl "github.com/feiyu912/zenforge/checkpoint/jsonl"
 	eventlogjsonl "github.com/feiyu912/zenforge/eventlog/jsonl"
+	"github.com/feiyu912/zenforge/harness"
 )
 
 func TestMainVersion(t *testing.T) {
@@ -86,6 +90,76 @@ func TestEventsLoadsCheckpointDirFromConfig(t *testing.T) {
 	}
 }
 
+func TestRunsPrintsCheckpointSummaries(t *testing.T) {
+	dir := t.TempDir()
+	store := checkpointjsonl.New(dir)
+	cp := testCLICheckpoint("run_cli", 2)
+	cp.State.Phase = harness.RunPhaseCompleted
+	cp.State.Control.Status = harness.RunStatusCompleted
+	cp.State.Step = 3
+	if err := store.Save(context.Background(), cp); err != nil {
+		t.Fatalf("Save returned error: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	code := Main(context.Background(), []string{"runs", "--checkpoint-dir", dir}, IO{Stdout: &stdout})
+	if code != 0 {
+		t.Fatalf("code = %d, want 0", code)
+	}
+	output := stdout.String()
+	if !strings.Contains(output, "RUN ID") || !strings.Contains(output, "run_cli") || !strings.Contains(output, "completed") {
+		t.Fatalf("unexpected output: %q", output)
+	}
+}
+
+func TestRunsJSONOutput(t *testing.T) {
+	dir := t.TempDir()
+	store := checkpointjsonl.New(dir)
+	if err := store.Save(context.Background(), testCLICheckpoint("run_json", 1)); err != nil {
+		t.Fatalf("Save returned error: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	code := Main(context.Background(), []string{"runs", "--checkpoint-dir", dir, "--json"}, IO{Stdout: &stdout})
+	if code != 0 {
+		t.Fatalf("code = %d, want 0", code)
+	}
+	var summaries []checkpointjsonl.Summary
+	if err := json.Unmarshal(stdout.Bytes(), &summaries); err != nil {
+		t.Fatalf("Unmarshal returned error: %v; output=%q", err, stdout.String())
+	}
+	if len(summaries) != 1 || summaries[0].RunID != "run_json" {
+		t.Fatalf("unexpected summaries: %#v", summaries)
+	}
+}
+
+func TestRunsLoadsCheckpointDirFromConfig(t *testing.T) {
+	dir := t.TempDir()
+	runDir := filepath.Join(dir, "runs")
+	configPath := filepath.Join(dir, "zenforge.json")
+	config := configFile{Checkpoint: checkpointConfig{Path: runDir}}
+	data, err := json.Marshal(config)
+	if err != nil {
+		t.Fatalf("Marshal returned error: %v", err)
+	}
+	if err := os.WriteFile(configPath, data, 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	store := checkpointjsonl.New(runDir)
+	if err := store.Save(context.Background(), testCLICheckpoint("run_config", 1)); err != nil {
+		t.Fatalf("Save returned error: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	code := Main(context.Background(), []string{"runs", "--config", configPath}, IO{Stdout: &stdout})
+	if code != 0 {
+		t.Fatalf("code = %d, want 0", code)
+	}
+	if !strings.Contains(stdout.String(), "run_config") {
+		t.Fatalf("unexpected output: %q", stdout.String())
+	}
+}
+
 func TestOptionsFromConfig(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "zenforge.json")
@@ -125,6 +199,25 @@ func TestOptionsFromConfig(t *testing.T) {
 	}
 	if opts.approve != "always" {
 		t.Fatalf("approval opts not applied: %#v", opts)
+	}
+}
+
+func testCLICheckpoint(runID string, seq int64) checkpoint.Checkpoint {
+	now := time.Date(2026, 5, 30, 12, 0, 0, 0, time.UTC)
+	return checkpoint.Checkpoint{
+		Version: checkpoint.CheckpointVersion,
+		RunID:   runID,
+		Seq:     seq,
+		State: harness.RunState{
+			Version:   harness.RunStateVersion,
+			RunID:     runID,
+			Input:     "hello",
+			Phase:     harness.RunPhaseCreated,
+			CreatedAt: now,
+			UpdatedAt: now,
+			Control:   harness.RunControlState{Status: harness.RunStatusIdle},
+		},
+		SavedAt: now,
 	}
 }
 

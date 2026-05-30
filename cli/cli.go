@@ -54,6 +54,8 @@ func Main(ctx context.Context, args []string, ioStreams IO) int {
 		err = resume(ctx, args[1:], ioStreams)
 	case "events":
 		err = events(ctx, args[1:], ioStreams)
+	case "runs":
+		err = runs(ctx, args[1:], ioStreams)
 	case "init":
 		err = initConfig(args[1:], ioStreams)
 	case "version":
@@ -152,6 +154,53 @@ func events(ctx context.Context, args []string, ioStreams IO) error {
 			continue
 		}
 		renderEvent(ioStreams.Stdout, event)
+	}
+	return nil
+}
+
+func runs(ctx context.Context, args []string, ioStreams IO) error {
+	fs := flag.NewFlagSet("runs", flag.ContinueOnError)
+	fs.SetOutput(ioStreams.Stderr)
+	opts, err := optionsFromArgs(args)
+	if err != nil {
+		return err
+	}
+	configPath := fs.String("config", opts.configPath, "config file path")
+	checkpointDir := fs.String("checkpoint-dir", opts.checkpointDir, "event/checkpoint directory")
+	jsonOut := fs.Bool("json", false, "print JSON summaries")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	_ = configPath
+	if fs.NArg() != 0 {
+		return fmt.Errorf("runs does not accept positional arguments")
+	}
+	store := checkpointjsonl.New(*checkpointDir)
+	summaries, err := store.List(ctx)
+	if err != nil {
+		return err
+	}
+	if *jsonOut {
+		data, err := json.Marshal(summaries)
+		if err != nil {
+			return err
+		}
+		_, _ = fmt.Fprintln(ioStreams.Stdout, string(data))
+		return nil
+	}
+	if len(summaries) == 0 {
+		_, _ = fmt.Fprintln(ioStreams.Stdout, "no runs found")
+		return nil
+	}
+	_, _ = fmt.Fprintln(ioStreams.Stdout, "RUN ID\tPHASE\tSTATUS\tSTEP\tSAVED")
+	for _, summary := range summaries {
+		_, _ = fmt.Fprintf(ioStreams.Stdout, "%s\t%s\t%s\t%d\t%s\n",
+			summary.RunID,
+			summary.Phase,
+			summary.Status,
+			summary.Step,
+			summary.SavedAt.Format(time.RFC3339),
+		)
 	}
 	return nil
 }
@@ -419,7 +468,7 @@ func stringValue(value any) string {
 }
 
 func printUsage(out io.Writer) {
-	_, _ = fmt.Fprintln(out, "usage: zenforge <run|resume|events|init|version> [options]")
+	_, _ = fmt.Fprintln(out, "usage: zenforge <run|resume|events|runs|init|version> [options]")
 }
 
 type multiFlag []string

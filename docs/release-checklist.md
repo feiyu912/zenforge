@@ -21,6 +21,7 @@ Expected results:
 ```bash
 go run ./cmd/zenforge init --config /tmp/zenforge.json
 OPENAI_API_KEY=... go run ./cmd/zenforge run --config /tmp/zenforge.json "Analyze this repo"
+go run ./cmd/zenforge runs --config /tmp/zenforge.json
 go run ./cmd/zenforge events --config /tmp/zenforge.json run_123
 go run ./cmd/zenforge resume --config /tmp/zenforge.json run_123
 ```

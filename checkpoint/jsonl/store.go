@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
+	"time"
 
 	"github.com/feiyu912/zenforge/checkpoint"
 )
@@ -20,6 +22,16 @@ const (
 type Store struct {
 	root string
 	mu   sync.Mutex
+}
+
+// Summary is the latest checkpoint metadata for a run.
+type Summary struct {
+	RunID   string    `json:"runId"`
+	Seq     int64     `json:"seq"`
+	Phase   string    `json:"phase"`
+	Status  string    `json:"status"`
+	Step    int       `json:"step"`
+	SavedAt time.Time `json:"savedAt"`
 }
 
 func New(root string) *Store {
@@ -125,4 +137,78 @@ func (s *Store) Delete(ctx context.Context, runID string) error {
 		return err
 	}
 	return os.RemoveAll(path)
+}
+
+// List returns latest checkpoint summaries sorted by newest saved time first.
+func (s *Store) List(ctx context.Context) ([]Summary, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if s.root == "" {
+		return nil, fmt.Errorf("checkpoint root is required")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entries, err := os.ReadDir(s.root)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	summaries := make([]Summary, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		cp, err := s.loadLocked(ctx, entry.Name())
+		if errors.Is(err, checkpoint.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		summaries = append(summaries, Summary{
+			RunID:   cp.RunID,
+			Seq:     cp.Seq,
+			Phase:   string(cp.State.Phase),
+			Status:  string(cp.State.Control.Status),
+			Step:    cp.State.Step,
+			SavedAt: cp.SavedAt,
+		})
+	}
+	sort.Slice(summaries, func(i, j int) bool {
+		if summaries[i].SavedAt.Equal(summaries[j].SavedAt) {
+			return summaries[i].RunID < summaries[j].RunID
+		}
+		return summaries[i].SavedAt.After(summaries[j].SavedAt)
+	})
+	return summaries, nil
+}
+
+func (s *Store) loadLocked(ctx context.Context, runID string) (*checkpoint.Checkpoint, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if runID == "" {
+		return nil, checkpoint.ErrNotFound
+	}
+	path := filepath.Join(s.root, runID, latestFileName)
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, checkpoint.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	var cp checkpoint.Checkpoint
+	if err := json.Unmarshal(data, &cp); err != nil {
+		return nil, err
+	}
+	if err := checkpoint.Validate(cp); err != nil {
+		return nil, err
+	}
+	return &cp, nil
 }

@@ -8,6 +8,7 @@ ZenForge CLI is the fastest way to feel the runtime.
 zenforge run
 zenforge resume
 zenforge events
+zenforge runs
 zenforge init
 zenforge version
 ```
@@ -70,6 +71,21 @@ Behavior:
 - reads event log;
 - prints compact timeline;
 - optional JSON output later.
+
+## `zenforge runs`
+
+```bash
+zenforge runs
+```
+
+Reads latest checkpoints from `--checkpoint-dir` and prints run ID, phase,
+status, step, and save time. Use `--json` for machine-readable summaries.
+
+Behavior:
+
+- lists local durable runs;
+- sorts newest checkpoint first;
+- skips directories without a valid latest checkpoint.
 
 ## `zenforge init`
 

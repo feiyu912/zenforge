@@ -39,7 +39,13 @@ final answer.
 
 ## 4. Inspect Events
 
-Copy the run ID printed by the CLI, then run:
+List known runs:
+
+```bash
+go run ./cmd/zenforge runs --config zenforge.json
+```
+
+Copy a run ID, then inspect its events:
 
 ```bash
 go run ./cmd/zenforge events --config zenforge.json run_123

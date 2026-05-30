@@ -82,6 +82,56 @@ func TestStoreLoadUsesLatestWhenHistoryHasCorruptLine(t *testing.T) {
 	}
 }
 
+func TestStoreListSummaries(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	store := New(root)
+	first := testCheckpoint("run_1", 1)
+	first.State.Phase = harness.RunPhaseModel
+	first.State.Control.Status = harness.RunStatusModelStreaming
+	first.State.Step = 1
+	first.SavedAt = time.Date(2026, 5, 30, 10, 0, 0, 0, time.UTC)
+	second := testCheckpoint("run_2", 3)
+	second.State.Phase = harness.RunPhaseCompleted
+	second.State.Control.Status = harness.RunStatusCompleted
+	second.State.Step = 4
+	second.SavedAt = time.Date(2026, 5, 30, 11, 0, 0, 0, time.UTC)
+
+	if err := store.Save(ctx, first); err != nil {
+		t.Fatalf("Save first returned error: %v", err)
+	}
+	if err := store.Save(ctx, second); err != nil {
+		t.Fatalf("Save second returned error: %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "empty"), 0o755); err != nil {
+		t.Fatalf("Mkdir returned error: %v", err)
+	}
+
+	got, err := store.List(ctx)
+	if err != nil {
+		t.Fatalf("List returned error: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("summary count = %d, want 2: %#v", len(got), got)
+	}
+	if got[0].RunID != "run_2" || got[0].Seq != 3 || got[0].Phase != "completed" || got[0].Status != "COMPLETED" || got[0].Step != 4 {
+		t.Fatalf("unexpected first summary: %#v", got[0])
+	}
+	if got[1].RunID != "run_1" {
+		t.Fatalf("unexpected ordering: %#v", got)
+	}
+}
+
+func TestStoreListMissingRootReturnsEmpty(t *testing.T) {
+	got, err := New(filepath.Join(t.TempDir(), "missing")).List(context.Background())
+	if err != nil {
+		t.Fatalf("List returned error: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("summary count = %d, want 0", len(got))
+	}
+}
+
 func TestStoreHonorsCanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

@@ -7,6 +7,7 @@ zenforge init
 zenforge run --config zenforge.json "Analyze this repo"
 zenforge resume --config zenforge.json run_123
 zenforge events --config zenforge.json run_123
+zenforge runs --config zenforge.json
 ```
 
 `zenforge init` creates `zenforge.json` and `.zenforge/runs`.
