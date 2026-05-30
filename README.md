@@ -106,6 +106,7 @@ More CLI setup, event inspection, resume, approval modes, and examples are in
 Useful examples:
 
 ```bash
+go run ./examples/sdk-embedded-agent
 OPENAI_API_KEY=... go run ./examples/repo-refactor-agent
 OPENAI_API_KEY=... go run ./examples/code-review-agent
 OPENAI_API_KEY=... go run ./examples/simple-tool-agent
@@ -136,6 +137,8 @@ For the full path from project start to MVP and the first usable product, see
 [docs/product-roadmap.md](./docs/product-roadmap.md).
 
 The design document index is [docs/README.md](./docs/README.md).
+
+The SDK guide is [docs/sdk-guide.md](./docs/sdk-guide.md).
 
 The detailed durable runtime design for S1 is
 [docs/s1-durable-runtime-spec.md](./docs/s1-durable-runtime-spec.md).
