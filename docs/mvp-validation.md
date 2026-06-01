@@ -72,6 +72,7 @@ Markdown document links.
 | provider guide | `docs/provider-guide.md` |
 | adapter guides | `docs/zenmind-adapter-guide.md`, `docs/mcp-adapter-guide.md`, `docs/memory-adapter-guide.md` |
 | ZenMind catalog/session adapter | `adapters/zenmind.TestBuildRunMapsCatalogSessionToConfigAndTask` |
+| ZenMind chat JSONL read model | `adapters/zenmind.TestChatJSONLWriterProjectsMappedEvents` |
 | failure-mode guide | `docs/failure-modes.md` |
 | docs links resolve | `docs.TestMarkdownLinksResolve` |
 

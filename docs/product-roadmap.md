@@ -485,7 +485,7 @@ Recommended path:
    (`adapters/zenmind.BuildRun`).
 4. Map ZenForge events into existing frontend events
    (`adapters/zenmind.MapEvent`).
-5. Keep chat JSONL as UI read model.
+5. Keep chat JSONL as UI read model (`zenmind.NewChatJSONLWriter`).
 6. Gradually replace current internal loop for selected agents.
 
 Do not big-bang replace the platform runtime.

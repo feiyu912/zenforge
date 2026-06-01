@@ -99,3 +99,27 @@ The adapter helper understands the neutral fields:
 Core still does not know about `/api/submit`, WebSocket messages, pending
 awaiting repositories, or frontend form DTOs. Those remain in the host
 platform.
+
+## Chat JSONL Read Model
+
+ZenMind can keep a chat JSONL-style read model by projecting ZenForge events at
+the platform boundary:
+
+```go
+writer := zenmind.NewChatJSONLWriter(".zenmind/chats", zenmind.NewMapper())
+
+for event := range events {
+    if err := writer.Append(ctx, event); err != nil {
+        return err
+    }
+}
+```
+
+Each line stores a `zenmind.chat_trace.v1` record with the mapped event type,
+source ZenForge event type, run id, sequence, timestamp, payload, and write time.
+
+```go
+records, err := zenmind.ReadChatRecords(ctx, ".zenmind/chats", "run_123")
+```
+
+This is a read-model projection. It is not the checkpoint source of truth.
