@@ -481,8 +481,10 @@ Recommended path:
 
 1. Keep current `agent-platform` runtime working.
 2. Add ZenForge behind a feature flag.
-3. Map ZenMind catalog/session into ZenForge `RunConfig`.
-4. Map ZenForge events into existing frontend events.
+3. Map ZenMind catalog/session into ZenForge `RunConfig`
+   (`adapters/zenmind.BuildRun`).
+4. Map ZenForge events into existing frontend events
+   (`adapters/zenmind.MapEvent`).
 5. Keep chat JSONL as UI read model.
 6. Gradually replace current internal loop for selected agents.
 

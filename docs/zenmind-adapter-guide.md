@@ -6,6 +6,48 @@ and server protocols by mapping those events at the platform boundary.
 The `adapters/zenmind` package provides compatibility helpers without importing
 ZenMind platform packages.
 
+## Catalog And Session Mapping
+
+Host platform code can translate catalog/session data into a normalized
+ZenForge config and task:
+
+```go
+run, err := zenmind.BuildRun(ctx, zenmind.CatalogAgent{
+    Name:         "reviewer",
+    Instructions: "Review carefully.",
+    Model:        zenmind.ModelRef{Provider: "openai", Name: "gpt-4.1"},
+    ToolNames:    []string{"workspace_read", "workspace_grep"},
+    MaxSteps:     20,
+    Planning:     "plan_execute",
+}, zenmind.Session{
+    RunID:          "run_123",
+    Input:          "Analyze this repo.",
+    UserID:         "user_1",
+    ConversationID: "chat_1",
+    Memory: []zenmind.MemoryEntry{{
+        ID:   "profile",
+        Text: "The user prefers concise answers.",
+    }},
+}, zenmind.Runtime{
+    Model:       model,
+    Tools:       tools,
+    Events:      events,
+    Checkpoints: checkpoints,
+})
+if err != nil {
+    return err
+}
+
+agent := zenforge.New(run.Config)
+events, err := agent.Stream(ctx, run.Task)
+```
+
+The adapter filters tools by catalog names, maps planning/sub-agent modes, adds
+platform session metadata under `task.Meta["zenmind"]`, and uses
+`adapters/memory` to inject retrieved memory into the normalized task input.
+The host still owns catalog loading, auth, tenancy, model construction, tool
+construction, and storage selection.
+
 ```go
 mapped := zenmind.MapEvent(event)
 ```
