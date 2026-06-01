@@ -1,0 +1,95 @@
+# Failure Modes
+
+This guide documents how ZenForge behaves when a run is interrupted, a backend
+fails, or an adapter cannot complete work.
+
+## Provider Stream Interrupted
+
+ZenForge checkpoints at model-call boundaries, not mid-token. If a provider
+stream fails while tokens are arriving, the run fails from the last checkpointed
+boundary. Resume retries from that boundary instead of replaying partial
+provider chunks.
+
+Design implication:
+
+- model providers should be idempotent enough for a retry from the last
+  checkpointed prompt;
+- UI/read-model adapters should treat streamed deltas as observable history,
+  not authoritative resume state.
+
+## Active Tool Interrupted
+
+If a process crashes while a tool call is active, resume moves the active tool
+back to the pending queue and retries it with checkpointed arguments.
+
+Tool authors should make side effects retry-aware:
+
+- use idempotency keys or fingerprints for external writes;
+- write temporary files before atomic moves;
+- return durable operation IDs when a remote system accepts work;
+- require approval for operations that are expensive or hard to reverse.
+
+## Waiting Approval
+
+When a run is waiting for approval, the checkpoint stores the approval request,
+tool call, operation, risk, and payload. Resume emits `approval.requested` again
+with `resumed: true`, waits on the configured broker, then either continues the
+tool call or records the denial/expiry.
+
+Without a broker, approval-required tools fail closed.
+
+## Shell Commands
+
+ZenForge does not assume a shell command completed if the process crashed while
+the command was running. On resume, the tool call can be retried from the saved
+arguments.
+
+Recommended shell policy:
+
+- keep shell deny-by-default;
+- approve risky commands explicitly;
+- prefer read-only commands for autonomous loops;
+- keep output caps and timeouts small enough for local recovery.
+
+## Sandbox Unavailable
+
+Sandbox adapters must not silently fall back to host execution when sandboxing
+is required. If a required sandbox backend cannot open a session or execute a
+command, ZenForge returns an explicit error.
+
+This protects users from believing a command was isolated when it ran on the
+host.
+
+## Event Log And Checkpoint Divergence
+
+Events are the read model. Checkpoints are the resume source of truth. If event
+append fails, the run should surface the error path rather than pretending the
+observable history is complete. If checkpoint save fails, resume guarantees are
+weakened and the failure should be visible.
+
+For local durability, prefer SQLite or JSONL stores on a filesystem with normal
+fsync semantics. For platform deployments, keep event and checkpoint writes in
+storage systems with clear ordering guarantees.
+
+## Sub-Agent Failures
+
+Sub-agent failures are visible as subtask error events and tool errors. Parent
+runs can continue only if the model or tool result handling has enough context
+to recover. Nested sub-agents are disabled by default.
+
+## Memory And MCP
+
+Memory retrieval and MCP server operations are adapter concerns. ZenForge does
+not infer tenant boundaries, discovery trust, OAuth scope, or retention policy.
+Host platforms must apply those policies before adapting memory or MCP tools
+into the harness.
+
+## Hardening Evidence
+
+Current automated coverage includes:
+
+- resume tests for terminal, active-tool, and waiting-approval states;
+- SQLite event/checkpoint store tests;
+- `TestSQLiteDurableRunSoak` for repeated durable local runs;
+- `BenchmarkAgentRunStaticModel` for a stable benchmark entrypoint;
+- docs link verification through `docs.TestMarkdownLinksResolve`.

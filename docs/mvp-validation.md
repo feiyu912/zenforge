@@ -25,6 +25,8 @@ Markdown document links.
 | Resume works for supported boundaries | `TestAgentResumeTerminalCompletedDoesNotRerunModel`, `TestAgentResumeActiveToolRetriesToolCall`, `TestAgentResumeWaitingApprovalRequestsAgainAndContinues` |
 | Server HTTP/SSE helpers work | `server/harnesshttp` and `server/sse` package tests |
 | OpenTelemetry trace sink works | `trace/otel.TestSinkEmitsSpanWithAttributes` |
+| repeated SQLite durable runs work | `TestSQLiteDurableRunSoak` |
+| benchmark entrypoint exists | `BenchmarkAgentRunStaticModel` |
 
 ## Tools
 
@@ -69,6 +71,7 @@ Markdown document links.
 | limitations section | `docs/limitations.md` |
 | provider guide | `docs/provider-guide.md` |
 | adapter guides | `docs/zenmind-adapter-guide.md`, `docs/mcp-adapter-guide.md`, `docs/memory-adapter-guide.md` |
+| failure-mode guide | `docs/failure-modes.md` |
 | docs links resolve | `docs.TestMarkdownLinksResolve` |
 
 ## Platform Boundary

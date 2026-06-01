@@ -190,6 +190,9 @@ The V0.1 release notes are
 The checkpoint/resume guide is
 [docs/checkpoint-resume-guide.md](./docs/checkpoint-resume-guide.md).
 
+The failure-mode guide is
+[docs/failure-modes.md](./docs/failure-modes.md).
+
 The server/SSE adapter guide is
 [docs/server-sse-guide.md](./docs/server-sse-guide.md).
 

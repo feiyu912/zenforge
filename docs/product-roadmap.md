@@ -469,8 +469,9 @@ Focus:
 - MCP adapter;
 - memory adapter;
 - server/SSE helper package;
-- benchmark and soak tests;
-- failure-mode documentation.
+- benchmark and soak tests (`BenchmarkAgentRunStaticModel`,
+  `TestSQLiteDurableRunSoak`);
+- failure-mode documentation (`docs/failure-modes.md`).
 
 ## First ZenMind Integration
 
