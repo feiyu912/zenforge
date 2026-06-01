@@ -2,6 +2,7 @@ package approval
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 )
@@ -52,6 +53,81 @@ func TestChannelBroker(t *testing.T) {
 	}
 	if decision.Action != DecisionApprove || decision.DecidedAt.IsZero() {
 		t.Fatalf("decision = %#v", decision)
+	}
+}
+
+func TestPendingBrokerWaitsForSubmittedDecision(t *testing.T) {
+	broker := NewPendingBroker(1)
+	result := make(chan Decision, 1)
+	errs := make(chan error, 1)
+	req := testRequest()
+
+	go func() {
+		decision, err := broker.Request(context.Background(), req)
+		if err != nil {
+			errs <- err
+			return
+		}
+		result <- decision
+	}()
+
+	observed := <-broker.Requests()
+	if observed.ID != req.ID || observed.RunID != req.RunID {
+		t.Fatalf("unexpected observed request: %#v", observed)
+	}
+	if pending, ok := broker.Pending(req.ID); !ok || pending.ID != req.ID {
+		t.Fatalf("pending request not found: %#v ok=%v", pending, ok)
+	}
+
+	if err := broker.Submit(context.Background(), Decision{RequestID: req.ID, Action: DecisionApprove}); err != nil {
+		t.Fatalf("Submit returned error: %v", err)
+	}
+	select {
+	case err := <-errs:
+		t.Fatalf("Request returned error: %v", err)
+	case decision := <-result:
+		if decision.Action != DecisionApprove || decision.Scope != ScopeOnce || decision.DecidedAt.IsZero() {
+			t.Fatalf("unexpected decision: %#v", decision)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for decision")
+	}
+	if _, ok := broker.Pending(req.ID); ok {
+		t.Fatalf("request remained pending after submit")
+	}
+}
+
+func TestPendingBrokerListsAndRemovesCanceledRequests(t *testing.T) {
+	broker := NewPendingBroker(0)
+	ctx, cancel := context.WithCancel(context.Background())
+	errs := make(chan error, 1)
+	req := testRequest()
+
+	go func() {
+		_, err := broker.Request(ctx, req)
+		errs <- err
+	}()
+	for {
+		if len(broker.ListPending()) == 1 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+
+	if err := <-errs; !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+	if pending := broker.ListPending(); len(pending) != 0 {
+		t.Fatalf("pending after cancel: %#v", pending)
+	}
+}
+
+func TestPendingBrokerRejectsUnknownDecision(t *testing.T) {
+	broker := NewPendingBroker(0)
+	err := broker.Submit(context.Background(), Decision{RequestID: "missing", Action: DecisionApprove})
+	if !errors.Is(err, ErrRequestNotFound) {
+		t.Fatalf("expected ErrRequestNotFound, got %v", err)
 	}
 }
 

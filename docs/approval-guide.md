@@ -33,7 +33,34 @@ agent := zenforge.New(zenforge.Config{
 })
 ```
 
-Server applications can use a channel or custom broker.
+Server applications can use `approval.PendingBroker` when approval requests are
+resolved by an HTTP, WebSocket, or queue submit route:
+
+```go
+broker := approval.NewPendingBroker(128)
+
+agent := zenforge.New(zenforge.Config{
+    Approval: broker,
+})
+
+go func() {
+    for req := range broker.Requests() {
+        notifyFrontend(req)
+    }
+}()
+
+func submitApproval(ctx context.Context, body []byte) error {
+    decision, err := zenmind.DecisionFromJSON(body)
+    if err != nil {
+        return err
+    }
+    return broker.Submit(ctx, decision)
+}
+```
+
+The broker keeps pending requests addressable by `requestId`, so platform
+routes can inspect `Pending` or `ListPending` and submit the matching decision.
+Requests are removed when the waiting run context is canceled.
 
 ## Decision Scopes
 
@@ -67,4 +94,3 @@ If no broker is configured:
 
 - risky operations should not run automatically;
 - tools should return `approval_required` or fail closed.
-

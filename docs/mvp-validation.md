@@ -61,6 +61,7 @@ Markdown document links.
 | SQLite stores work through CLI | `TestEventsCanReadSQLiteStore`, `TestRunsCanReadSQLiteStore` |
 | model provider config works | `TestOptionsFromConfig` covers `model.provider` |
 | approval prompt works | `approval/cli.TestCLIBrokerReadsDecision`, `TestApprovalBrokerModes` |
+| server-style approval submit works | `approval.TestPendingBrokerWaitsForSubmittedDecision`, `approval.TestPendingBrokerRejectsUnknownDecision` |
 
 ## Docs
 

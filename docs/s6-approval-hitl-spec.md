@@ -141,6 +141,7 @@ Built-in brokers:
 - `AlwaysDeny`;
 - `CLI`;
 - `Channel`;
+- `PendingBroker` for server submit routes;
 - `Timeout`.
 
 ## Channel Broker
@@ -160,6 +161,23 @@ The exact API can be refined, but the concept is:
 - host application receives it;
 - host application submits decision;
 - runtime continues.
+
+For platform servers where submit arrives later by `requestId`,
+`PendingBroker` keeps pending requests in memory and exposes:
+
+```go
+broker := approval.NewPendingBroker(128)
+requests := broker.Requests()
+request, ok := broker.Pending("approval_123")
+pending := broker.ListPending()
+err := broker.Submit(ctx, approval.Decision{
+    RequestID: "approval_123",
+    Action:    approval.DecisionApprove,
+})
+```
+
+This mirrors the platform submit-route shape without importing server or
+frontend DTOs into the core runtime.
 
 ## Tool Middleware Integration
 
@@ -320,4 +338,3 @@ Minimum tests:
 - CLI broker works for local use;
 - no ZenMind submit/chat/server imports;
 - S3 shell/file policies can use approval middleware.
-
