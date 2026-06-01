@@ -48,6 +48,31 @@ platform session metadata under `task.Meta["zenmind"]`, and uses
 The host still owns catalog loading, auth, tenancy, model construction, tool
 construction, and storage selection.
 
+## Feature Flag And Fallback Routing
+
+ZenMind should not replace its current runtime in one jump. Use `Router` to
+decide whether a catalog/session should run through ZenForge or the legacy
+runtime:
+
+```go
+router := zenmind.Router{
+    Default: zenmind.RouteLegacy,
+    Agents: map[string]zenmind.RouteDecision{
+        "reviewer": zenmind.RouteZenForge,
+    },
+}
+
+decision := router.Decide(agent, session)
+if !decision.UseZenForge() {
+    return runLegacy(ctx, session)
+}
+
+run, err := zenmind.BuildRun(ctx, agent, session, runtime)
+```
+
+Routing can be controlled by explicit agent/session maps or by metadata such as
+`{"zenforge": true}`. The default is `legacy`, so rollout is opt-in.
+
 ```go
 mapped := zenmind.MapEvent(event)
 ```

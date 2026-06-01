@@ -480,13 +480,14 @@ After ZenForge MVP, integrate back into `agent-platform` through adapters.
 Recommended path:
 
 1. Keep current `agent-platform` runtime working.
-2. Add ZenForge behind a feature flag.
+2. Add ZenForge behind a feature flag (`adapters/zenmind.Router`).
 3. Map ZenMind catalog/session into ZenForge `RunConfig`
    (`adapters/zenmind.BuildRun`).
 4. Map ZenForge events into existing frontend events
    (`adapters/zenmind.MapEvent`).
 5. Keep chat JSONL as UI read model (`zenmind.NewChatJSONLWriter`).
-6. Gradually replace current internal loop for selected agents.
+6. Gradually replace current internal loop for selected agents while
+   `RouteLegacy` stays available.
 
 Do not big-bang replace the platform runtime.
 
