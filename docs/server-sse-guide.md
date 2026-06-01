@@ -39,6 +39,28 @@ store:
 - event log remains the replay/read model;
 - checkpoint store remains the resume source of truth.
 
+For platform servers that need multiple live observers, wrap the durable event
+store with an `eventlog.FanoutStore`:
+
+```go
+bus := eventlog.NewBus()
+events := eventlog.NewFanoutStore(durableEvents, bus)
+
+live, unsubscribe, err := bus.Subscribe(r.Context(), "run_123", 128)
+if err != nil {
+    http.Error(w, err.Error(), http.StatusBadRequest)
+    return
+}
+defer unsubscribe()
+
+if err := sse.StreamHTTP(r.Context(), w, live, sse.Options{}); err != nil && !errors.Is(err, context.Canceled) {
+    log.Printf("sse stream failed: %v", err)
+}
+```
+
+The bus is live fanout only. Slow subscribers are disconnected and can recover
+from the durable event log using `afterSeq`.
+
 ZenMind or another host platform can map these SSE frames to its own frontend
 events, WebSocket protocol, or persisted chat trace. The harness remains
 responsible only for normalized runtime events.

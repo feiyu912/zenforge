@@ -117,6 +117,9 @@ S1 keeps durable runtime state in two separate streams:
   observable history for users, CLI, trace adapters, and tests.
 
 The `recorder` package coordinates the write order between those streams.
+When a server needs live observers, `eventlog.FanoutStore` can wrap any durable
+`eventlog.Store` and publish appended events to `eventlog.Bus`; replay and
+resume still come from the durable stores.
 
 ## Core Interfaces
 
