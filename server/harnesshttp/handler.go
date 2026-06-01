@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -24,7 +25,32 @@ type Handler struct {
 	Agent  Agent
 	Events zenforge.EventStore
 	SSE    sse.Options
+	Access AccessController
 }
+
+type Operation struct {
+	Name  string
+	RunID string
+}
+
+type AccessDecision struct {
+	Meta map[string]any
+}
+
+type AccessController interface {
+	Authorize(ctx context.Context, r *http.Request, operation Operation) (AccessDecision, error)
+}
+
+type AccessFunc func(ctx context.Context, r *http.Request, operation Operation) (AccessDecision, error)
+
+func (f AccessFunc) Authorize(ctx context.Context, r *http.Request, operation Operation) (AccessDecision, error) {
+	return f(ctx, r, operation)
+}
+
+var (
+	ErrUnauthorized = errors.New("unauthorized")
+	ErrForbidden    = errors.New("forbidden")
+)
 
 // RunRequest is the JSON body accepted by Handler.ServeRun.
 type RunRequest struct {
@@ -63,10 +89,14 @@ func (h *Handler) ServeRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "input_required", "input is required")
 		return
 	}
+	decision, ok := h.authorize(w, r, Operation{Name: "run", RunID: req.RunID})
+	if !ok {
+		return
+	}
 	events, err := h.Agent.Stream(r.Context(), zenforge.Task{
 		RunID: req.RunID,
 		Input: req.Input,
-		Meta:  req.Meta,
+		Meta:  mergeMeta(req.Meta, decision.Meta),
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "run_failed", err.Error())
@@ -90,6 +120,9 @@ func (h *Handler) ServeResume(w http.ResponseWriter, r *http.Request) {
 	runID, ok := resumeRunID(r)
 	if !ok {
 		writeError(w, http.StatusBadRequest, "run_id_required", "runId is required")
+		return
+	}
+	if _, ok := h.authorize(w, r, Operation{Name: "resume", RunID: runID}); !ok {
 		return
 	}
 	events, err := h.Agent.Resume(r.Context(), runID)
@@ -117,6 +150,9 @@ func (h *Handler) ServeEvents(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "run_id_required", "runId is required")
 		return
 	}
+	if _, ok := h.authorize(w, r, Operation{Name: "events", RunID: runID}); !ok {
+		return
+	}
 	afterSeq, err := int64Query(r, "afterSeq")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_after_seq", err.Error())
@@ -135,6 +171,39 @@ func (h *Handler) ServeEvents(w http.ResponseWriter, r *http.Request) {
 	if err := sse.StreamHTTP(r.Context(), w, sliceEvents(events), h.SSE); err != nil && !errors.Is(err, context.Canceled) {
 		writeError(w, http.StatusInternalServerError, "stream_failed", err.Error())
 	}
+}
+
+func (h *Handler) authorize(w http.ResponseWriter, r *http.Request, operation Operation) (AccessDecision, bool) {
+	if h.Access == nil {
+		return AccessDecision{}, true
+	}
+	decision, err := h.Access.Authorize(r.Context(), r, operation)
+	if err == nil {
+		return decision, true
+	}
+	switch {
+	case errors.Is(err, ErrUnauthorized):
+		writeError(w, http.StatusUnauthorized, "unauthorized", err.Error())
+	case errors.Is(err, ErrForbidden):
+		writeError(w, http.StatusForbidden, "forbidden", err.Error())
+	default:
+		writeError(w, http.StatusInternalServerError, "access_failed", err.Error())
+	}
+	return AccessDecision{}, false
+}
+
+func mergeMeta(client, trusted map[string]any) map[string]any {
+	if client == nil && trusted == nil {
+		return nil
+	}
+	out := make(map[string]any, len(client)+len(trusted))
+	for key, value := range client {
+		out[key] = value
+	}
+	for key, value := range trusted {
+		out[key] = value
+	}
+	return out
 }
 
 func resumeRunID(r *http.Request) (string, bool) {
@@ -190,6 +259,9 @@ func sliceEvents(events []zenforge.Event) <-chan zenforge.Event {
 }
 
 func writeError(w http.ResponseWriter, status int, code, message string) {
+	if message == "" {
+		message = fmt.Sprintf("http status %d", status)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]any{

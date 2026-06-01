@@ -24,6 +24,7 @@ Markdown document links.
 | Checkpoints written at boundaries | `TestAgentStreamRunsToolAndContinuesModelLoop`, checkpoint memory/JSONL/SQLite tests |
 | Resume works for supported boundaries | `TestAgentResumeTerminalCompletedDoesNotRerunModel`, `TestAgentResumeActiveToolRetriesToolCall`, `TestAgentResumeWaitingApprovalRequestsAgainAndContinues` |
 | Server HTTP/SSE helpers work | `server/harnesshttp` and `server/sse` package tests |
+| HTTP access hook authorizes and injects trusted metadata | `server/harnesshttp.TestServeRunAuthorizesAndInjectsTrustedMeta`, `server/harnesshttp.TestServeEventsRejectsForbidden` |
 | OpenTelemetry trace sink works | `trace/otel.TestSinkEmitsSpanWithAttributes` |
 | repeated SQLite durable runs work | `TestSQLiteDurableRunSoak` |
 | benchmark entrypoint exists | `BenchmarkAgentRunStaticModel` |

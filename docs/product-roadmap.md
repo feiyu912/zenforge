@@ -504,6 +504,7 @@ ZenForge CLI
 
 ZenForge Adapters
   Plug into ZenMind, Container Hub, OpenTelemetry, and server transports.
+  Keep auth and tenancy at the platform boundary.
 
 ZenForge Runtime
   Long tasks, todos, sub-agents, approvals, checkpoints, traces.

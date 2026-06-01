@@ -3,6 +3,7 @@ package harnesshttp
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -32,6 +33,50 @@ func TestServeRunStreamsEvents(t *testing.T) {
 	body := rec.Body.String()
 	if !strings.Contains(body, "retry: 500\n\n") || !strings.Contains(body, "event: run.done\n") {
 		t.Fatalf("unexpected SSE body: %q", body)
+	}
+}
+
+func TestServeRunAuthorizesAndInjectsTrustedMeta(t *testing.T) {
+	agent := &fakeAgent{}
+	handler := New(agent, sse.Options{})
+	handler.Access = AccessFunc(func(ctx context.Context, r *http.Request, operation Operation) (AccessDecision, error) {
+		if operation.Name != "run" || operation.RunID != "run_http" {
+			return AccessDecision{}, fmt.Errorf("unexpected operation: %#v", operation)
+		}
+		if r.Header.Get("Authorization") != "Bearer ok" {
+			return AccessDecision{}, ErrUnauthorized
+		}
+		return AccessDecision{Meta: map[string]any{"tenantId": "tenant_1", "source": "trusted"}}, nil
+	})
+	req := httptest.NewRequest(http.MethodPost, "/run", strings.NewReader(`{"runId":"run_http","input":"hello","meta":{"source":"client"}}`))
+	req.Header.Set("Authorization", "Bearer ok")
+	rec := httptest.NewRecorder()
+
+	handler.ServeRun(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if agent.streamTask.Meta["tenantId"] != "tenant_1" || agent.streamTask.Meta["source"] != "trusted" {
+		t.Fatalf("trusted meta was not injected with precedence: %#v", agent.streamTask.Meta)
+	}
+}
+
+func TestServeRunRejectsUnauthorized(t *testing.T) {
+	handler := New(&fakeAgent{}, sse.Options{})
+	handler.Access = AccessFunc(func(ctx context.Context, r *http.Request, operation Operation) (AccessDecision, error) {
+		return AccessDecision{}, ErrUnauthorized
+	})
+	req := httptest.NewRequest(http.MethodPost, "/run", strings.NewReader(`{"input":"hello"}`))
+	rec := httptest.NewRecorder()
+
+	handler.ServeRun(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "unauthorized") {
+		t.Fatalf("unexpected body: %s", rec.Body.String())
 	}
 }
 
@@ -90,6 +135,27 @@ func TestServeResumeStreamsGETAndPOST(t *testing.T) {
 	}
 }
 
+func TestServeResumeAuthorizesRunID(t *testing.T) {
+	agent := &fakeAgent{}
+	handler := New(agent, sse.Options{})
+	handler.Access = AccessFunc(func(ctx context.Context, r *http.Request, operation Operation) (AccessDecision, error) {
+		if operation.Name == "resume" && operation.RunID == "run_http" {
+			return AccessDecision{}, nil
+		}
+		return AccessDecision{}, ErrForbidden
+	})
+	rec := httptest.NewRecorder()
+
+	handler.ServeResume(rec, httptest.NewRequest(http.MethodGet, "/resume?runId=run_http", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if agent.resumeRunID != "run_http" {
+		t.Fatalf("resume runID = %q", agent.resumeRunID)
+	}
+}
+
 func TestServeResumeRejectsMissingRunID(t *testing.T) {
 	handler := New(&fakeAgent{}, sse.Options{})
 	req := httptest.NewRequest(http.MethodGet, "/resume", nil)
@@ -131,6 +197,24 @@ func TestServeEventsReplaysStoredEvents(t *testing.T) {
 	}
 	if strings.Contains(body, "event: run.started\n") {
 		t.Fatalf("afterSeq filter was not applied: %q", body)
+	}
+}
+
+func TestServeEventsRejectsForbidden(t *testing.T) {
+	handler := New(&fakeAgent{}, sse.Options{})
+	handler.Events = &fakeEventStore{}
+	handler.Access = AccessFunc(func(ctx context.Context, r *http.Request, operation Operation) (AccessDecision, error) {
+		if operation.Name != "events" || operation.RunID != "run_http" {
+			t.Fatalf("unexpected operation: %#v", operation)
+		}
+		return AccessDecision{}, ErrForbidden
+	})
+	rec := httptest.NewRecorder()
+
+	handler.ServeEvents(rec, httptest.NewRequest(http.MethodGet, "/events?runId=run_http", nil))
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
 	}
 }
 

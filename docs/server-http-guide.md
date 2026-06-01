@@ -23,6 +23,37 @@ mux.HandleFunc("/resume", handler.ServeResume)
 mux.HandleFunc("/events", handler.ServeEvents)
 ```
 
+## Access Control
+
+Host platforms can attach an access controller before exposing run, resume, or
+event replay endpoints:
+
+```go
+handler.Access = harnesshttp.AccessFunc(func(ctx context.Context, r *http.Request, op harnesshttp.Operation) (harnesshttp.AccessDecision, error) {
+    user, tenant, ok := authenticate(r)
+    if !ok {
+        return harnesshttp.AccessDecision{}, harnesshttp.ErrUnauthorized
+    }
+    if !allowed(user, tenant, op) {
+        return harnesshttp.AccessDecision{}, harnesshttp.ErrForbidden
+    }
+    return harnesshttp.AccessDecision{
+        Meta: map[string]any{
+            "userId":   user.ID,
+            "tenantId": tenant.ID,
+        },
+    }, nil
+})
+```
+
+For `ServeRun`, trusted access metadata is merged into `zenforge.Task.Meta` and
+wins over client-supplied metadata on key conflicts. For `ServeResume` and
+`ServeEvents`, the same hook authorizes the target run id.
+
+ZenForge still does not own auth, sessions, tenancy, or policy lookup. The hook
+only gives platform code a stable place to enforce them before calling the
+harness.
+
 Run request:
 
 ```json
@@ -56,7 +87,8 @@ the read model and streams matching events as SSE frames.
 
 Use this package below the platform edge:
 
-- platform auth and session lookup happen before calling the handler;
+- platform auth and session lookup happen in the access hook or before calling
+  the handler;
 - platform catalog, memory, and policy are translated into `zenforge.Config`;
 - ZenForge emits normalized runtime events;
 - the handler streams live or replayed events without inventing
