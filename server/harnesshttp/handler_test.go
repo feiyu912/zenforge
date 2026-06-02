@@ -371,6 +371,74 @@ func TestServeApprovalAuthorizesPendingRun(t *testing.T) {
 	}
 }
 
+func TestServeApprovalsListsPendingRequestsForRun(t *testing.T) {
+	broker := approval.NewPendingBroker(2)
+	handler := New(&fakeAgent{}, sse.Options{})
+	handler.Approvals = broker
+	handler.Access = AccessFunc(func(ctx context.Context, r *http.Request, operation Operation) (AccessDecision, error) {
+		if operation.Name != "approvals" || operation.RunID != "run_http" {
+			return AccessDecision{}, fmt.Errorf("unexpected operation: %#v", operation)
+		}
+		return AccessDecision{}, nil
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	startPendingApproval(t, ctx, broker, "approval_http", "run_http")
+	startPendingApproval(t, ctx, broker, "approval_other", "run_other")
+	rec := httptest.NewRecorder()
+
+	handler.ServeApprovals(rec, httptest.NewRequest(http.MethodGet, "/approvals?runId=run_http", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"id":"approval_http"`) || strings.Contains(body, `"id":"approval_other"`) {
+		t.Fatalf("unexpected approvals body: %s", body)
+	}
+}
+
+func TestServeApprovalsRejectsForbiddenRun(t *testing.T) {
+	broker := approval.NewPendingBroker(1)
+	handler := New(&fakeAgent{}, sse.Options{})
+	handler.Approvals = broker
+	handler.Access = AccessFunc(func(ctx context.Context, r *http.Request, operation Operation) (AccessDecision, error) {
+		if operation.Name != "approvals" || operation.RunID != "run_http" {
+			t.Fatalf("unexpected operation: %#v", operation)
+		}
+		return AccessDecision{}, ErrForbidden
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	startPendingApproval(t, ctx, broker, "approval_http", "run_http")
+	rec := httptest.NewRecorder()
+
+	handler.ServeApprovals(rec, httptest.NewRequest(http.MethodGet, "/approvals?runId=run_http", nil))
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+}
+
+func TestServeApprovalsRequiresBrokerAndRunID(t *testing.T) {
+	handler := New(&fakeAgent{}, sse.Options{})
+	rec := httptest.NewRecorder()
+
+	handler.ServeApprovals(rec, httptest.NewRequest(http.MethodGet, "/approvals?runId=run_http", nil))
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+
+	handler.Approvals = approval.NewPendingBroker(0)
+	rec = httptest.NewRecorder()
+	handler.ServeApprovals(rec, httptest.NewRequest(http.MethodGet, "/approvals", nil))
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
 func TestServeRunReportsAgentError(t *testing.T) {
 	handler := New(&fakeAgent{streamErr: errors.New("boom")}, sse.Options{})
 	req := httptest.NewRequest(http.MethodPost, "/run", strings.NewReader(`{"input":"hello"}`))
@@ -383,6 +451,25 @@ func TestServeRunReportsAgentError(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "run_failed") {
 		t.Fatalf("unexpected error body: %s", rec.Body.String())
+	}
+}
+
+func startPendingApproval(t *testing.T, ctx context.Context, broker *approval.PendingBroker, requestID, runID string) {
+	t.Helper()
+	go func() {
+		_, _ = broker.Request(ctx, approval.Request{
+			ID:        requestID,
+			RunID:     runID,
+			Operation: "shell.command",
+			Title:     "Approve command",
+			Risk:      approval.RiskHigh,
+			Options:   approval.DefaultOptions(),
+		})
+	}()
+	select {
+	case <-broker.Requests():
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for pending approval %s", requestID)
 	}
 }
 

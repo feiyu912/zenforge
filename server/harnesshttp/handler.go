@@ -238,6 +238,36 @@ func (h *Handler) ServeApproval(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// ServeApprovals lists pending approval requests for one run.
+func (h *Handler) ServeApprovals(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "approvals requires GET")
+		return
+	}
+	if h.Approvals == nil {
+		writeError(w, http.StatusInternalServerError, "approval_broker_not_configured", "approval broker is not configured")
+		return
+	}
+	runID := strings.TrimSpace(r.URL.Query().Get("runId"))
+	if runID == "" {
+		writeError(w, http.StatusBadRequest, "run_id_required", "runId is required")
+		return
+	}
+	if _, ok := h.authorize(w, r, Operation{Name: "approvals", RunID: runID}); !ok {
+		return
+	}
+	requests := h.Approvals.ListPending()
+	out := make([]approval.Request, 0, len(requests))
+	for _, req := range requests {
+		if req.RunID == runID {
+			out = append(out, req)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"approvals": out,
+	})
+}
+
 func (h *Handler) authorize(w http.ResponseWriter, r *http.Request, operation Operation) (AccessDecision, bool) {
 	if h.Access == nil {
 		return AccessDecision{}, true

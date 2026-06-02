@@ -59,7 +59,8 @@ func submitApproval(ctx context.Context, body []byte) error {
 ```
 
 When using `server/harnesshttp`, assign the same broker to
-`handler.Approvals` and expose `handler.ServeApproval` from the host route.
+`handler.Approvals` and expose `handler.ServeApprovals` plus
+`handler.ServeApproval` from host routes.
 
 The broker keeps pending requests addressable by `requestId`, so platform
 routes can inspect `Pending` or `ListPending` and submit the matching decision.

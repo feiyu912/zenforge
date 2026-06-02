@@ -10,6 +10,7 @@ agent and exposes:
 - `POST /run` style JSON input to `Agent.Stream`;
 - `GET /resume?runId=...` or `POST /resume` to `Agent.Resume`;
 - `GET /events?runId=...` to replay persisted event log entries;
+- optional `GET /approvals?runId=...` style pending approval query;
 - optional `POST /approval` style approval submit to `approval.PendingBroker`;
 - standard Server-Sent Events responses through `server/sse`.
 
@@ -24,6 +25,7 @@ mux := http.NewServeMux()
 mux.HandleFunc("/run", handler.ServeRun)
 mux.HandleFunc("/resume", handler.ServeResume)
 mux.HandleFunc("/events", handler.ServeEvents)
+mux.HandleFunc("/approvals", handler.ServeApprovals)
 mux.HandleFunc("/approval", handler.ServeApproval)
 ```
 
@@ -55,6 +57,8 @@ wins over client-supplied metadata on key conflicts. For `ServeResume` and
 `ServeEvents`, the same hook authorizes the target run id. For
 `ServeApproval`, the handler resolves the pending approval request first and
 authorizes the associated run id before submitting the decision.
+`ServeApprovals` authorizes the requested run id before returning pending
+approval requests for that run only.
 
 ZenForge still does not own auth, sessions, tenancy, or policy lookup. The hook
 only gives platform code a stable place to enforce them before calling the
@@ -88,6 +92,20 @@ GET /events?runId=run_123&afterSeq=42&limit=100
 
 `afterSeq` and `limit` are optional. Replay uses the configured event store as
 the read model and streams matching events as SSE frames.
+
+Approval query request:
+
+```text
+GET /approvals?runId=run_123
+```
+
+Approval query returns pending requests for one run:
+
+```json
+{
+  "approvals": []
+}
+```
 
 Approval submit request:
 
