@@ -8,8 +8,10 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/feiyu912/zenforge"
+	"github.com/feiyu912/zenforge/approval"
 	"github.com/feiyu912/zenforge/server/sse"
 )
 
@@ -22,10 +24,11 @@ type Agent interface {
 // Handler exposes run, resume, and event replay endpoints for an already
 // configured agent.
 type Handler struct {
-	Agent  Agent
-	Events zenforge.EventStore
-	SSE    sse.Options
-	Access AccessController
+	Agent     Agent
+	Events    zenforge.EventStore
+	Approvals *approval.PendingBroker
+	SSE       sse.Options
+	Access    AccessController
 }
 
 type Operation struct {
@@ -62,6 +65,15 @@ type RunRequest struct {
 // ResumeRequest is the JSON body accepted by Handler.ServeResume for POST.
 type ResumeRequest struct {
 	RunID string `json:"runId"`
+}
+
+// ApprovalRequest is the JSON body accepted by Handler.ServeApproval.
+type ApprovalRequest struct {
+	RequestID string                  `json:"requestId"`
+	Action    approval.DecisionAction `json:"action"`
+	Scope     approval.DecisionScope  `json:"scope,omitempty"`
+	Reason    string                  `json:"reason,omitempty"`
+	Payload   map[string]any          `json:"payload,omitempty"`
 }
 
 // New creates a Handler that streams agent events as Server-Sent Events.
@@ -173,6 +185,59 @@ func (h *Handler) ServeEvents(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// ServeApproval submits a decision to a pending approval request.
+func (h *Handler) ServeApproval(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "approval requires POST")
+		return
+	}
+	if h.Approvals == nil {
+		writeError(w, http.StatusInternalServerError, "approval_broker_not_configured", "approval broker is not configured")
+		return
+	}
+	var req ApprovalRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	decision := approval.Decision{
+		RequestID: strings.TrimSpace(req.RequestID),
+		Action:    req.Action,
+		Scope:     req.Scope,
+		Reason:    req.Reason,
+		Payload:   req.Payload,
+	}
+	if err := decision.Validate(); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_approval", err.Error())
+		return
+	}
+	if decision.Scope == "" {
+		decision.Scope = approval.ScopeOnce
+	}
+	if decision.DecidedAt.IsZero() {
+		decision.DecidedAt = time.Now().UTC()
+	}
+	pending, ok := h.Approvals.Pending(decision.RequestID)
+	if !ok {
+		writeError(w, http.StatusNotFound, "approval_not_found", approval.ErrRequestNotFound.Error())
+		return
+	}
+	if _, ok := h.authorize(w, r, Operation{Name: "approval", RunID: pending.RunID}); !ok {
+		return
+	}
+	if err := h.Approvals.Submit(r.Context(), decision); err != nil {
+		if errors.Is(err, approval.ErrRequestNotFound) {
+			writeError(w, http.StatusNotFound, "approval_not_found", err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "approval_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"decision": decision,
+	})
+}
+
 func (h *Handler) authorize(w http.ResponseWriter, r *http.Request, operation Operation) (AccessDecision, bool) {
 	if h.Access == nil {
 		return AccessDecision{}, true
@@ -270,4 +335,10 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 			"message": message,
 		},
 	})
+}
+
+func writeJSON(w http.ResponseWriter, status int, body any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(body)
 }

@@ -8,8 +8,10 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/feiyu912/zenforge"
+	"github.com/feiyu912/zenforge/approval"
 	"github.com/feiyu912/zenforge/server/sse"
 )
 
@@ -250,6 +252,122 @@ func TestServeEventsRequiresStoreAndRunID(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestServeApprovalSubmitsPendingDecision(t *testing.T) {
+	broker := approval.NewPendingBroker(1)
+	handler := New(&fakeAgent{}, sse.Options{})
+	handler.Approvals = broker
+	handler.Access = AccessFunc(func(ctx context.Context, r *http.Request, operation Operation) (AccessDecision, error) {
+		if operation.Name != "approval" || operation.RunID != "run_http" {
+			return AccessDecision{}, fmt.Errorf("unexpected operation: %#v", operation)
+		}
+		return AccessDecision{}, nil
+	})
+	result := make(chan approval.Decision, 1)
+	errs := make(chan error, 1)
+	waitCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		decision, err := broker.Request(waitCtx, approval.Request{
+			ID:        "approval_http",
+			RunID:     "run_http",
+			Operation: "shell.command",
+			Title:     "Approve command",
+			Risk:      approval.RiskHigh,
+			Options:   approval.DefaultOptions(),
+		})
+		if err != nil {
+			errs <- err
+			return
+		}
+		result <- decision
+	}()
+	<-broker.Requests()
+
+	rec := httptest.NewRecorder()
+	handler.ServeApproval(rec, httptest.NewRequest(http.MethodPost, "/approval", strings.NewReader(`{"requestId":"approval_http","action":"approve"}`)))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	select {
+	case err := <-errs:
+		t.Fatalf("broker returned error: %v", err)
+	case decision := <-result:
+		if decision.RequestID != "approval_http" || decision.Action != approval.DecisionApprove {
+			t.Fatalf("unexpected decision: %#v", decision)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for submitted decision")
+	}
+	if !strings.Contains(rec.Body.String(), `"requestId":"approval_http"`) {
+		t.Fatalf("unexpected response body: %s", rec.Body.String())
+	}
+}
+
+func TestServeApprovalRejectsUnknownRequest(t *testing.T) {
+	handler := New(&fakeAgent{}, sse.Options{})
+	handler.Approvals = approval.NewPendingBroker(0)
+	rec := httptest.NewRecorder()
+
+	handler.ServeApproval(rec, httptest.NewRequest(http.MethodPost, "/approval", strings.NewReader(`{"requestId":"missing","action":"approve"}`)))
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "approval_not_found") {
+		t.Fatalf("unexpected body: %s", rec.Body.String())
+	}
+}
+
+func TestServeApprovalRejectsUnconfiguredBroker(t *testing.T) {
+	handler := New(&fakeAgent{}, sse.Options{})
+	rec := httptest.NewRecorder()
+
+	handler.ServeApproval(rec, httptest.NewRequest(http.MethodPost, "/approval", strings.NewReader(`{"requestId":"approval_http","action":"approve"}`)))
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "approval_broker_not_configured") {
+		t.Fatalf("unexpected body: %s", rec.Body.String())
+	}
+}
+
+func TestServeApprovalAuthorizesPendingRun(t *testing.T) {
+	broker := approval.NewPendingBroker(1)
+	handler := New(&fakeAgent{}, sse.Options{})
+	handler.Approvals = broker
+	handler.Access = AccessFunc(func(ctx context.Context, r *http.Request, operation Operation) (AccessDecision, error) {
+		if operation.RunID != "run_http" {
+			t.Fatalf("operation runID = %q", operation.RunID)
+		}
+		return AccessDecision{}, ErrForbidden
+	})
+	waitCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		_, _ = broker.Request(waitCtx, approval.Request{
+			ID:        "approval_http",
+			RunID:     "run_http",
+			Operation: "shell.command",
+			Title:     "Approve command",
+			Risk:      approval.RiskHigh,
+			Options:   approval.DefaultOptions(),
+		})
+	}()
+	<-broker.Requests()
+	rec := httptest.NewRecorder()
+
+	handler.ServeApproval(rec, httptest.NewRequest(http.MethodPost, "/approval", strings.NewReader(`{"requestId":"approval_http","action":"approve"}`)))
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+	if _, ok := broker.Pending("approval_http"); !ok {
+		t.Fatalf("pending request should remain after forbidden submit")
 	}
 }
 
