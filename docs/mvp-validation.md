@@ -29,6 +29,7 @@ Markdown document links.
 | HTTP pending approval query filters by authorized run | `server/harnesshttp.TestServeApprovalsListsPendingRequestsForRun`, `server/harnesshttp.TestServeApprovalsRejectsForbiddenRun` |
 | live event fanout stays separate from replay storage | `eventlog.TestFanoutStoreAppendsThenPublishesAssignedSeq`, `eventlog.TestFanoutStoreClosesRunOnTerminalEvent` |
 | OpenTelemetry trace sink works | `trace/otel.TestSinkEmitsSpanWithAttributes` |
+| trace platform metadata enrichment works | `trace.TestWithFieldsAddsStaticPlatformMetadata` |
 | repeated SQLite durable runs work | `TestSQLiteDurableRunSoak` |
 | benchmark entrypoint exists | `BenchmarkAgentRunStaticModel` |
 

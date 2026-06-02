@@ -37,6 +37,23 @@ The sink records short spans named like `zenforge.tool.call` and attaches
 attributes such as `zenforge.run_id`, `zenforge.seq`, `zenforge.event.type`,
 and `zenforge.data.*`.
 
+## Platform Metadata
+
+Use `trace.WithFields` when a host platform wants every trace event to carry
+deployment, tenant, session, or resource metadata:
+
+```go
+sink := trace.WithFields(trace.Redact(oteltrace.New(tracer)), map[string]any{
+    "service":        "zenmind-api",
+    "tenantId":       tenant.ID,
+    "sessionId":      session.ID,
+    "resourceTicket": ticket.ID,
+}))
+```
+
+The wrapper copies events before enrichment. Static fields win on key conflicts
+so trusted platform metadata cannot be overridden by event payloads.
+
 ## Redaction
 
 Trace events can contain tool arguments, tool output, approval payloads, and

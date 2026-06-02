@@ -69,6 +69,26 @@ func RedactWith(next Sink, redactor Redactor) Sink {
 	})
 }
 
+// WithFields wraps a sink and adds static fields to every trace event.
+func WithFields(next Sink, fields map[string]any) Sink {
+	if next == nil {
+		next = Discard()
+	}
+	fields = cloneMap(fields)
+	return SinkFunc(func(ctx context.Context, event Event) error {
+		enriched := cloneEvent(event)
+		if len(fields) > 0 {
+			if enriched.Data == nil {
+				enriched.Data = map[string]any{}
+			}
+			for key, value := range fields {
+				enriched.Data[key] = value
+			}
+		}
+		return next.Emit(ctx, enriched)
+	})
+}
+
 // Event returns a redacted copy of event.
 func (r Redactor) Event(event Event) Event {
 	event.Data = r.Map(event.Data)

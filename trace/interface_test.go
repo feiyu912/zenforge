@@ -121,3 +121,32 @@ func TestRedactWithCustomKeysAndReplacement(t *testing.T) {
 		t.Fatalf("unexpected default key redaction with custom keys: %#v", got.Data)
 	}
 }
+
+func TestWithFieldsAddsStaticPlatformMetadata(t *testing.T) {
+	memory := NewMemorySink()
+	fields := map[string]any{
+		"tenantId":  "tenant_1",
+		"sessionId": "session_abc",
+		"service":   "api",
+	}
+	sink := WithFields(memory, fields)
+	event := Event{
+		Type:  "run.started",
+		RunID: "run_123",
+		Data:  map[string]any{"input": "hello", "service": "old"},
+	}
+
+	if err := sink.Emit(context.Background(), event); err != nil {
+		t.Fatalf("Emit returned error: %v", err)
+	}
+	fields["tenantId"] = "mutated"
+	event.Data["input"] = "mutated"
+
+	got := memory.Events()[0]
+	if got.Data["tenantId"] != "tenant_1" || got.Data["sessionId"] != "session_abc" || got.Data["service"] != "api" {
+		t.Fatalf("static fields were not injected with precedence: %#v", got.Data)
+	}
+	if got.Data["input"] != "hello" {
+		t.Fatalf("event data was not preserved: %#v", got.Data)
+	}
+}

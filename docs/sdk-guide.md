@@ -37,7 +37,10 @@ OpenTelemetry exporters, use `trace/otel`:
 
 ```go
 agent := zenforge.New(zenforge.Config{
-    Trace: trace.Redact(oteltrace.New(tracer)),
+    Trace: trace.WithFields(trace.Redact(oteltrace.New(tracer)), map[string]any{
+        "service":  "api",
+        "tenantId": "tenant_1",
+    })),
 })
 ```
 
