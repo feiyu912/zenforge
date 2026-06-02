@@ -170,6 +170,7 @@ broker := approval.NewPendingBroker(128)
 requests := broker.Requests()
 request, ok := broker.Pending("approval_123")
 pending := broker.ListPending()
+runPending := broker.ListPendingForRun("run_123")
 err := broker.Submit(ctx, approval.Decision{
     RequestID: "approval_123",
     Action:    approval.DecisionApprove,
@@ -178,6 +179,8 @@ err := broker.Submit(ctx, approval.Decision{
 
 This mirrors the platform submit-route shape without importing server or
 frontend DTOs into the core runtime.
+`ListPendingForRun` is the preferred server query helper when a platform has
+already authorized the run id and needs only the pending requests for that run.
 
 ## Tool Middleware Integration
 

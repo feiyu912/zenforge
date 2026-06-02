@@ -296,15 +296,8 @@ func (h *Handler) ServeApprovals(w http.ResponseWriter, r *http.Request) {
 	if _, ok := h.authorize(w, r, Operation{Name: "approvals", RunID: runID}); !ok {
 		return
 	}
-	requests := h.Approvals.ListPending()
-	out := make([]approval.Request, 0, len(requests))
-	for _, req := range requests {
-		if req.RunID == runID {
-			out = append(out, req)
-		}
-	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"approvals": out,
+		"approvals": h.Approvals.ListPendingForRun(runID),
 	})
 }
 

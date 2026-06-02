@@ -123,6 +123,53 @@ func TestPendingBrokerListsAndRemovesCanceledRequests(t *testing.T) {
 	}
 }
 
+func TestPendingBrokerListsPendingForRun(t *testing.T) {
+	broker := NewPendingBroker(0)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errs := make(chan error, 3)
+	startPendingRequest := func(req Request) {
+		go func() {
+			_, err := broker.Request(ctx, req)
+			errs <- err
+		}()
+	}
+	reqB := testRequest()
+	reqB.ID = "approval_b"
+	reqA := testRequest()
+	reqA.ID = "approval_a"
+	reqOther := testRequest()
+	reqOther.ID = "approval_other"
+	reqOther.RunID = "run_other"
+	startPendingRequest(reqB)
+	startPendingRequest(reqA)
+	startPendingRequest(reqOther)
+
+	for {
+		if len(broker.ListPending()) == 3 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	pending := broker.ListPendingForRun("run_1")
+	if len(pending) != 2 {
+		t.Fatalf("pending for run_1 = %#v", pending)
+	}
+	if pending[0].ID != "approval_a" || pending[1].ID != "approval_b" {
+		t.Fatalf("pending requests were not sorted by id: %#v", pending)
+	}
+	if other := broker.ListPendingForRun("run_missing"); len(other) != 0 {
+		t.Fatalf("pending for missing run = %#v", other)
+	}
+	cancel()
+	for i := 0; i < 3; i++ {
+		if err := <-errs; !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context.Canceled, got %v", err)
+		}
+	}
+}
+
 func TestPendingBrokerRejectsUnknownDecision(t *testing.T) {
 	broker := NewPendingBroker(0)
 	err := broker.Submit(context.Background(), Decision{RequestID: "missing", Action: DecisionApprove})

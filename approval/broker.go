@@ -236,6 +236,24 @@ func (b *PendingBroker) ListPending() []Request {
 	return out
 }
 
+func (b *PendingBroker) ListPendingForRun(runID string) []Request {
+	if b == nil || runID == "" {
+		return nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make([]Request, 0, len(b.pending))
+	for _, waiting := range b.pending {
+		if waiting.req.RunID == runID {
+			out = append(out, waiting.req)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].ID < out[j].ID
+	})
+	return out
+}
+
 func (b *PendingBroker) remove(requestID string, waiting pendingRequest) {
 	b.mu.Lock()
 	defer b.mu.Unlock()

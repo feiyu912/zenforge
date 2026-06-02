@@ -26,7 +26,8 @@ Markdown document links.
 | Server HTTP/SSE helpers work | `server/harnesshttp` and `server/sse` package tests |
 | HTTP access hook authorizes and injects trusted metadata | `server/harnesshttp.TestServeRunAuthorizesAndInjectsTrustedMeta`, `server/harnesshttp.TestServeEventsRejectsForbidden` |
 | HTTP approval submit authorizes pending run and resolves broker | `server/harnesshttp.TestServeApprovalSubmitsPendingDecision`, `server/harnesshttp.TestServeApprovalAuthorizesPendingRun` |
-| HTTP pending approval query filters by authorized run | `server/harnesshttp.TestServeApprovalsListsPendingRequestsForRun`, `server/harnesshttp.TestServeApprovalsRejectsForbiddenRun` |
+| HTTP pending approval query filters by authorized run | `approval.TestPendingBrokerListsPendingForRun`, `server/harnesshttp.TestServeApprovalsListsPendingRequestsForRun`, `server/harnesshttp.TestServeApprovalsRejectsForbiddenRun` |
+| HTTP live event stream subscribes to authorized run fanout | `server/harnesshttp.TestServeLiveEventsStreamsBusEvents`, `server/harnesshttp.TestServeLiveEventsRejectsForbiddenRun` |
 | live event fanout stays separate from replay storage | `eventlog.TestFanoutStoreAppendsThenPublishesAssignedSeq`, `eventlog.TestFanoutStoreClosesRunOnTerminalEvent` |
 | OpenTelemetry trace sink works | `trace/otel.TestSinkEmitsSpanWithAttributes` |
 | trace platform metadata enrichment works | `trace.TestWithFieldsAddsStaticPlatformMetadata` |
@@ -98,5 +99,11 @@ The expected result is no matches in Go source files.
 
 ## CI Evidence
 
-GitHub Actions `CI` completed successfully for commit `f01b334` in run
-`26687585157`.
+After each pushed phase, verify the latest commit with:
+
+```bash
+gh run list --limit 1 --json headSha,status,conclusion,workflowName,createdAt
+```
+
+The expected result is the latest `CI` run for the pushed commit with
+`status=completed` and `conclusion=success`.
