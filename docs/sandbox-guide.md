@@ -54,6 +54,21 @@ main run:      run-{runID}
 child task:    run-{runID}-{subtaskID}
 ```
 
+## Resume Metadata
+
+Sandbox adapters can persist session metadata in checkpoints using
+`sandbox.StateFromSession` and rebuild a session reference with
+`sandbox.SessionFromState` during resume:
+
+```go
+state := sandbox.StateFromSession(session)
+session = sandbox.SessionFromState(state, runID, subtaskID)
+```
+
+The rebuilt session is only a reference to an existing sandbox session. If the
+backend reports that it no longer exists, the host adapter should open a new
+session before executing more work.
+
 ## Environment Prompt
 
 Sandbox environments may provide prompt context describing:
@@ -76,4 +91,3 @@ The run should return an explicit error such as:
 ```text
 sandbox_unavailable
 ```
-

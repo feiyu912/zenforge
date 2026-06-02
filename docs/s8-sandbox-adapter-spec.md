@@ -247,6 +247,9 @@ Resume behavior:
 - if command was running during crash, do not assume it completed;
 - resume from checkpoint before command execution where possible.
 
+`sandbox.StateFromSession` and `sandbox.SessionFromState` provide the small
+conversion boundary between adapter session handles and checkpoint metadata.
+
 ## Failure Behavior
 
 Common errors:
@@ -292,6 +295,7 @@ Minimum tests:
 - shell tool routes to sandbox backend;
 - sandbox required unavailable returns error;
 - session key includes run/subtask;
+- session state helpers round-trip metadata;
 - environment prompt provider returns prompt section;
 - Container Hub client request shaping with httptest;
 - resume reuses existing session metadata where possible.
@@ -303,4 +307,3 @@ Minimum tests:
 - Container Hub adapter compiles and is tested with fake HTTP server;
 - no Container Hub dependency in core harness;
 - docs explain setup and fallback behavior.
-
