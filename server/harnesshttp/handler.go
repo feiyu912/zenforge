@@ -12,6 +12,7 @@ import (
 
 	"github.com/feiyu912/zenforge"
 	"github.com/feiyu912/zenforge/approval"
+	"github.com/feiyu912/zenforge/eventlog"
 	"github.com/feiyu912/zenforge/server/sse"
 )
 
@@ -24,11 +25,13 @@ type Agent interface {
 // Handler exposes run, resume, and event replay endpoints for an already
 // configured agent.
 type Handler struct {
-	Agent     Agent
-	Events    zenforge.EventStore
-	Approvals *approval.PendingBroker
-	SSE       sse.Options
-	Access    AccessController
+	Agent      Agent
+	Events     zenforge.EventStore
+	Bus        *eventlog.Bus
+	Approvals  *approval.PendingBroker
+	SSE        sse.Options
+	LiveBuffer int
+	Access     AccessController
 }
 
 type Operation struct {
@@ -181,6 +184,43 @@ func (h *Handler) ServeEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := sse.StreamHTTP(r.Context(), w, sliceEvents(events), h.SSE); err != nil && !errors.Is(err, context.Canceled) {
+		writeError(w, http.StatusInternalServerError, "stream_failed", err.Error())
+	}
+}
+
+// ServeLiveEvents streams live events for a run from the configured event bus.
+func (h *Handler) ServeLiveEvents(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "live events requires GET")
+		return
+	}
+	if h.Bus == nil {
+		writeError(w, http.StatusInternalServerError, "event_bus_not_configured", "event bus is not configured")
+		return
+	}
+	runID := strings.TrimSpace(r.URL.Query().Get("runId"))
+	if runID == "" {
+		writeError(w, http.StatusBadRequest, "run_id_required", "runId is required")
+		return
+	}
+	if _, ok := h.authorize(w, r, Operation{Name: "liveEvents", RunID: runID}); !ok {
+		return
+	}
+	buffer := h.LiveBuffer
+	if buffer == 0 {
+		buffer = 128
+	}
+	if buffer < 0 {
+		writeError(w, http.StatusInternalServerError, "invalid_live_buffer", "live event buffer must be non-negative")
+		return
+	}
+	events, unsubscribe, err := h.Bus.Subscribe(r.Context(), runID, buffer)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "live_events_failed", err.Error())
+		return
+	}
+	defer unsubscribe()
+	if err := sse.StreamHTTP(r.Context(), w, events, h.SSE); err != nil && !errors.Is(err, context.Canceled) {
 		writeError(w, http.StatusInternalServerError, "stream_failed", err.Error())
 	}
 }

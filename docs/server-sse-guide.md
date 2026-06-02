@@ -61,6 +61,14 @@ if err := sse.StreamHTTP(r.Context(), w, live, sse.Options{}); err != nil && !er
 The bus is live fanout only. Slow subscribers are disconnected and can recover
 from the durable event log using `afterSeq`.
 
+If the host server uses `server/harnesshttp`, configure `handler.Bus` and mount
+`handler.ServeLiveEvents` for the same live stream behavior:
+
+```go
+handler.Bus = bus
+mux.HandleFunc("/live", handler.ServeLiveEvents)
+```
+
 ZenMind or another host platform can map these SSE frames to its own frontend
 events, WebSocket protocol, or persisted chat trace. The harness remains
 responsible only for normalized runtime events.

@@ -12,6 +12,7 @@ import (
 
 	"github.com/feiyu912/zenforge"
 	"github.com/feiyu912/zenforge/approval"
+	"github.com/feiyu912/zenforge/eventlog"
 	"github.com/feiyu912/zenforge/server/sse"
 )
 
@@ -249,6 +250,94 @@ func TestServeEventsRequiresStoreAndRunID(t *testing.T) {
 	handler.Events = &fakeEventStore{}
 	rec = httptest.NewRecorder()
 	handler.ServeEvents(rec, httptest.NewRequest(http.MethodGet, "/events", nil))
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestServeLiveEventsStreamsBusEvents(t *testing.T) {
+	bus := eventlog.NewBus()
+	handler := New(&fakeAgent{}, sse.Options{RetryMillis: 750})
+	handler.Bus = bus
+	handler.Access = AccessFunc(func(ctx context.Context, r *http.Request, operation Operation) (AccessDecision, error) {
+		if operation.Name != "liveEvents" || operation.RunID != "run_http" {
+			return AccessDecision{}, fmt.Errorf("unexpected operation: %#v", operation)
+		}
+		return AccessDecision{}, nil
+	})
+	req := httptest.NewRequest(http.MethodGet, "/live?runId=run_http", nil)
+	rec := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		handler.ServeLiveEvents(rec, req)
+		close(done)
+	}()
+
+	event := zenforge.NewEvent(zenforge.EventRunDone, "run_http", map[string]any{"output": "done"}).WithSeq(3)
+	publishErrs := make(chan error, 1)
+	go func() {
+		time.Sleep(5 * time.Millisecond)
+		for i := 0; i < 100; i++ {
+			if err := bus.Publish(context.Background(), event); err != nil {
+				publishErrs <- err
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+		bus.CloseRun("run_http")
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for live event stream")
+	}
+	select {
+	case err := <-publishErrs:
+		t.Fatalf("Publish returned error: %v", err)
+	default:
+	}
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "retry: 750\n\n") || !strings.Contains(body, "id: 3\n") || !strings.Contains(body, "event: run.done\n") {
+		t.Fatalf("unexpected SSE body: %q", body)
+	}
+}
+
+func TestServeLiveEventsRejectsForbiddenRun(t *testing.T) {
+	handler := New(&fakeAgent{}, sse.Options{})
+	handler.Bus = eventlog.NewBus()
+	handler.Access = AccessFunc(func(ctx context.Context, r *http.Request, operation Operation) (AccessDecision, error) {
+		if operation.Name != "liveEvents" || operation.RunID != "run_http" {
+			t.Fatalf("unexpected operation: %#v", operation)
+		}
+		return AccessDecision{}, ErrForbidden
+	})
+	rec := httptest.NewRecorder()
+
+	handler.ServeLiveEvents(rec, httptest.NewRequest(http.MethodGet, "/live?runId=run_http", nil))
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+}
+
+func TestServeLiveEventsRequiresBusAndRunID(t *testing.T) {
+	handler := New(&fakeAgent{}, sse.Options{})
+	rec := httptest.NewRecorder()
+
+	handler.ServeLiveEvents(rec, httptest.NewRequest(http.MethodGet, "/live?runId=run_http", nil))
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+
+	handler.Bus = eventlog.NewBus()
+	rec = httptest.NewRecorder()
+	handler.ServeLiveEvents(rec, httptest.NewRequest(http.MethodGet, "/live", nil))
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rec.Code)
