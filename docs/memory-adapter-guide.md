@@ -32,6 +32,30 @@ The augmented task input starts with a `Relevant memory` block, followed by the
 original user request. The selected entries are also copied into `task.Meta`
 under `memory.entries` so platform adapters can audit what was injected.
 
+## Scope By Platform Metadata
+
+Host platforms can wrap a store with `ScopedStore` as a final guard against
+cross-tenant or cross-session memory injection:
+
+```go
+scoped := memory.ScopedStore{
+    Store:    platformMemoryStore,
+    MetaKeys: []string{"tenantId", "sessionId"},
+}
+
+task, entries, err := memory.Augmenter{Store: scoped}.AugmentTask(ctx, zenforge.Task{
+    RunID: "run_123",
+    Input: "Plan the next refactor step.",
+    Meta: map[string]any{
+        "tenantId":  "tenant_1",
+        "sessionId": "session_abc",
+    },
+})
+```
+
+For every configured key, the query metadata and entry metadata must both be
+present and equal. Entries with missing scope metadata are dropped.
+
 ## Store Interface
 
 ```go
@@ -52,6 +76,7 @@ retention policy. Those concerns remain outside ZenForge core.
 The adapter only answers:
 
 - which entries were selected;
+- which metadata scope was enforced;
 - how they are formatted into a normalized task;
 - how the selected entries are exposed in metadata.
 

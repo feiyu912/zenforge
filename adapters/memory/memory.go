@@ -33,6 +33,31 @@ type Augmenter struct {
 	Header     string
 }
 
+type ScopedStore struct {
+	Store    Store
+	MetaKeys []string
+}
+
+func (s ScopedStore) Search(ctx context.Context, query Query) ([]Entry, error) {
+	if s.Store == nil {
+		return nil, nil
+	}
+	entries, err := s.Store.Search(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	if len(s.MetaKeys) == 0 {
+		return cloneEntries(entries), nil
+	}
+	out := make([]Entry, 0, len(entries))
+	for _, entry := range entries {
+		if metaMatches(query.Meta, entry.Meta, s.MetaKeys) {
+			out = append(out, entry)
+		}
+	}
+	return cloneEntries(out), nil
+}
+
 func (a Augmenter) AugmentTask(ctx context.Context, task zenforge.Task) (zenforge.Task, []Entry, error) {
 	if err := ctx.Err(); err != nil {
 		return task, nil, err
@@ -146,4 +171,18 @@ func cloneMap(in map[string]any) map[string]any {
 		out[key] = value
 	}
 	return out
+}
+
+func metaMatches(query, entry map[string]any, keys []string) bool {
+	for _, key := range keys {
+		if strings.TrimSpace(key) == "" {
+			continue
+		}
+		queryValue, queryOK := query[key]
+		entryValue, entryOK := entry[key]
+		if !queryOK || !entryOK || fmt.Sprint(queryValue) != fmt.Sprint(entryValue) {
+			return false
+		}
+	}
+	return true
 }

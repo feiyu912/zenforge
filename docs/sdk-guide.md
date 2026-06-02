@@ -55,12 +55,21 @@ agent := zenforge.New(zenforge.Config{
 })
 ```
 
-Retrieved memory can be normalized into a task before execution:
+Retrieved memory can be normalized into a task before execution. Platform
+metadata can be used as a final scope guard before injection:
 
 ```go
-augmenter := memory.Augmenter{Store: memoryStore, MaxEntries: 5}
+scopedMemory := memory.ScopedStore{
+    Store:    memoryStore,
+    MetaKeys: []string{"tenantId", "sessionId"},
+}
+augmenter := memory.Augmenter{Store: scopedMemory, MaxEntries: 5}
 task, _, err := augmenter.AugmentTask(ctx, zenforge.Task{
     Input: "Summarize the current project direction.",
+    Meta: map[string]any{
+        "tenantId":  "tenant_1",
+        "sessionId": "session_abc",
+    },
 })
 if err != nil {
     return err

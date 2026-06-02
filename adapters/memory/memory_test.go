@@ -64,3 +64,53 @@ func TestAugmentTaskHonorsCanceledContext(t *testing.T) {
 		t.Fatalf("expected context.Canceled, got %v", err)
 	}
 }
+
+func TestScopedStoreFiltersEntriesByQueryMetadata(t *testing.T) {
+	store := ScopedStore{
+		Store: NewStaticStore(
+			Entry{ID: "tenant_1", Text: "team one", Score: 0.8, Meta: map[string]any{"tenantId": "t1", "sessionId": "s1"}},
+			Entry{ID: "tenant_2", Text: "team two", Score: 0.9, Meta: map[string]any{"tenantId": "t2", "sessionId": "s1"}},
+			Entry{ID: "missing", Text: "no tenant", Score: 1.0, Meta: map[string]any{"sessionId": "s1"}},
+		),
+		MetaKeys: []string{"tenantId", "sessionId"},
+	}
+
+	entries, err := store.Search(context.Background(), Query{
+		Text:  "hello",
+		Limit: 10,
+		Meta:  map[string]any{"tenantId": "t1", "sessionId": "s1"},
+	})
+	if err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+	if len(entries) != 1 || entries[0].ID != "tenant_1" {
+		t.Fatalf("unexpected entries: %#v", entries)
+	}
+}
+
+func TestAugmentTaskUsesScopedStoreMetadata(t *testing.T) {
+	augmenter := Augmenter{
+		Store: ScopedStore{
+			Store: NewStaticStore(
+				Entry{ID: "allowed", Text: "use this", Score: 0.5, Meta: map[string]any{"tenantId": "t1"}},
+				Entry{ID: "blocked", Text: "do not use this", Score: 0.9, Meta: map[string]any{"tenantId": "t2"}},
+			),
+			MetaKeys: []string{"tenantId"},
+		},
+		MaxEntries: 5,
+	}
+
+	task, entries, err := augmenter.AugmentTask(context.Background(), zenforge.Task{
+		Input: "What next?",
+		Meta:  map[string]any{"tenantId": "t1"},
+	})
+	if err != nil {
+		t.Fatalf("AugmentTask returned error: %v", err)
+	}
+	if len(entries) != 1 || entries[0].ID != "allowed" {
+		t.Fatalf("unexpected entries: %#v", entries)
+	}
+	if strings.Contains(task.Input, "do not use this") {
+		t.Fatalf("blocked memory was injected: %q", task.Input)
+	}
+}
