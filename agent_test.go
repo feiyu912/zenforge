@@ -12,6 +12,7 @@ import (
 	checkpointmemory "github.com/feiyu912/zenforge/checkpoint/memory"
 	"github.com/feiyu912/zenforge/harness"
 	"github.com/feiyu912/zenforge/model"
+	"github.com/feiyu912/zenforge/sandbox"
 	"github.com/feiyu912/zenforge/subagent"
 	"github.com/feiyu912/zenforge/tool"
 	"github.com/feiyu912/zenforge/trace"
@@ -156,6 +157,65 @@ func TestAgentStreamRunsToolAndContinuesModelLoop(t *testing.T) {
 	}
 	if cp.State.Phase != "completed" {
 		t.Fatalf("checkpoint phase = %s, want completed", cp.State.Phase)
+	}
+}
+
+func TestAgentCarriesSandboxStateBetweenToolCalls(t *testing.T) {
+	checkpoints := checkpointmemory.New()
+	recorder := &sandboxStateTool{}
+	fakeModel := &scriptedModel{turns: []scriptedTurn{
+		{
+			events: []model.Event{{
+				Message: &model.Message{
+					ToolCalls: []model.ToolCallSpec{{
+						ID:        "call_1",
+						Name:      "sandbox_state",
+						Arguments: json.RawMessage(`{}`),
+					}},
+				},
+			}},
+		},
+		{
+			events: []model.Event{{
+				Message: &model.Message{
+					ToolCalls: []model.ToolCallSpec{{
+						ID:        "call_2",
+						Name:      "sandbox_state",
+						Arguments: json.RawMessage(`{}`),
+					}},
+				},
+			}},
+		},
+		{events: []model.Event{{Delta: "done"}}},
+	}}
+	agent := New(Config{
+		Model:       fakeModel,
+		Tools:       []Tool{recorder},
+		Checkpoints: checkpoints,
+	})
+
+	events, err := agent.Stream(context.Background(), Task{RunID: "run_sandbox_state", Input: "use sandbox"})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	for range events {
+	}
+	if len(recorder.calls) != 2 {
+		t.Fatalf("tool calls = %d, want 2", len(recorder.calls))
+	}
+	state, ok := sandbox.StateFromMetadata(recorder.calls[1])
+	if !ok {
+		t.Fatalf("second call missing sandbox state metadata: %#v", recorder.calls[1])
+	}
+	if state.SessionID != "session_run_sandbox_state" || state.EnvironmentID != "go" {
+		t.Fatalf("unexpected sandbox state passed to second call: %#v", state)
+	}
+	cp, err := checkpoints.Load(context.Background(), "run_sandbox_state")
+	if err != nil {
+		t.Fatalf("Load checkpoint returned error: %v", err)
+	}
+	if cp.State.Sandbox.SessionID != "session_run_sandbox_state" || cp.State.Sandbox.EnvironmentID != "go" {
+		t.Fatalf("checkpoint missing sandbox state: %#v", cp.State.Sandbox)
 	}
 }
 
@@ -777,6 +837,31 @@ func (echoTool) Call(ctx context.Context, input json.RawMessage, call tool.Conte
 		return tool.Result{Error: err.Error(), ExitCode: 1}, nil
 	}
 	return tool.Result{Output: args.Text}, nil
+}
+
+type sandboxStateTool struct {
+	calls []map[string]any
+}
+
+func (t *sandboxStateTool) Name() string { return "sandbox_state" }
+
+func (t *sandboxStateTool) Description() string { return "Records sandbox state" }
+
+func (t *sandboxStateTool) Schema() map[string]any { return nil }
+
+func (t *sandboxStateTool) Call(ctx context.Context, input json.RawMessage, call tool.Context) (tool.Result, error) {
+	t.calls = append(t.calls, cloneMap(call.Metadata))
+	return tool.Result{
+		Output: "ok",
+		Metadata: map[string]any{
+			sandbox.MetadataStateKey: sandbox.State{
+				SessionID:     "session_" + call.RunID,
+				EnvironmentID: "go",
+				WorkingDir:    "/workspace",
+				Metadata:      map[string]any{"lease": "lease_1"},
+			},
+		},
+	}, nil
 }
 
 type approvalTool struct{}

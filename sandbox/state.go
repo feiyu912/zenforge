@@ -1,10 +1,43 @@
 package sandbox
 
+const MetadataStateKey = "sandbox.state"
+
 type State struct {
 	SessionID     string         `json:"sessionId"`
 	EnvironmentID string         `json:"environmentId"`
 	WorkingDir    string         `json:"workingDir,omitempty"`
 	Metadata      map[string]any `json:"metadata,omitempty"`
+}
+
+func StateFromMetadata(metadata map[string]any) (State, bool) {
+	if metadata == nil {
+		return State{}, false
+	}
+	value, ok := metadata[MetadataStateKey]
+	if !ok {
+		return State{}, false
+	}
+	switch state := value.(type) {
+	case State:
+		return state, state.SessionID != ""
+	case *State:
+		if state == nil {
+			return State{}, false
+		}
+		return *state, state.SessionID != ""
+	case map[string]any:
+		out := State{
+			SessionID:     stringValue(state["sessionId"]),
+			EnvironmentID: stringValue(state["environmentId"]),
+			WorkingDir:    stringValue(state["workingDir"]),
+		}
+		if meta, ok := state["metadata"].(map[string]any); ok {
+			out.Metadata = cloneMap(meta)
+		}
+		return out, out.SessionID != ""
+	default:
+		return State{}, false
+	}
 }
 
 func StateFromSession(session *Session) State {
@@ -41,5 +74,10 @@ func cloneMap(in map[string]any) map[string]any {
 	for key, value := range in {
 		out[key] = value
 	}
+	return out
+}
+
+func stringValue(value any) string {
+	out, _ := value.(string)
 	return out
 }

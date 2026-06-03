@@ -26,11 +26,12 @@ const (
 )
 
 type Config struct {
-	Policy        policy.ShellPolicy
-	Backend       ShellBackend
-	Sandbox       sandbox.Sandbox
-	EnvironmentID string
-	Mounts        []sandbox.Mount
+	Policy          policy.ShellPolicy
+	Backend         ShellBackend
+	Sandbox         sandbox.Sandbox
+	EnvironmentID   string
+	Mounts          []sandbox.Mount
+	KeepSessionOpen bool
 }
 
 func New(config Config) (tool.Tool, error) {
@@ -217,26 +218,27 @@ func (t shellTool) executeSandbox(ctx context.Context, call tool.Context, comman
 	if t.config.Sandbox == nil {
 		return "", "", 1, ShellBackendSandbox, nil, sandbox.ErrSandboxUnavailable
 	}
-	session, err := t.config.Sandbox.Open(ctx, sandbox.OpenRequest{
-		RunID:         call.RunID,
-		SubtaskID:     stringFromMetadata(call.Metadata, "subtaskId"),
-		EnvironmentID: t.config.EnvironmentID,
-		WorkingDir:    t.config.Policy.WorkingDir,
-		Env:           allowedEnvMap(t.config.Policy),
-		Mounts:        append([]sandbox.Mount(nil), t.config.Mounts...),
-		Metadata: map[string]any{
-			"toolCallId": call.ToolCallID,
-		},
-	})
-	if err != nil {
-		return "", "", 1, ShellBackendSandbox, nil, err
+	subtaskID := stringFromMetadata(call.Metadata, "subtaskId")
+	session, restored := restoredSandboxSession(call.Metadata, call.RunID, subtaskID)
+	if session == nil {
+		var err error
+		session, err = t.config.Sandbox.Open(ctx, sandbox.OpenRequest{
+			RunID:         call.RunID,
+			SubtaskID:     subtaskID,
+			EnvironmentID: t.config.EnvironmentID,
+			WorkingDir:    t.config.Policy.WorkingDir,
+			Env:           allowedEnvMap(t.config.Policy),
+			Mounts:        append([]sandbox.Mount(nil), t.config.Mounts...),
+			Metadata: map[string]any{
+				"toolCallId": call.ToolCallID,
+			},
+		})
+		if err != nil {
+			return "", "", 1, ShellBackendSandbox, nil, err
+		}
 	}
-	state := &sandbox.State{
-		SessionID:     session.ID,
-		EnvironmentID: session.EnvironmentID,
-		WorkingDir:    session.WorkingDir,
-		Metadata:      cloneAnyMap(session.Metadata),
-	}
+	stateValue := sandbox.StateFromSession(session)
+	state := &stateValue
 	result, err := t.config.Sandbox.Execute(ctx, session, sandbox.ExecuteRequest{
 		Command: command,
 		CWD:     cwd,
@@ -246,12 +248,36 @@ func (t shellTool) executeSandbox(ctx context.Context, call tool.Context, comman
 			"toolCallId": call.ToolCallID,
 		},
 	})
-	if closeErr := t.config.Sandbox.Close(ctx, session); closeErr != nil && err == nil {
-		err = closeErr
+	if !t.config.KeepSessionOpen {
+		closeErr := t.config.Sandbox.Close(ctx, session)
+		if closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}
+	if restored && sandbox.Code(err) == sandbox.ErrClosed {
+		return t.executeSandboxWithoutRestore(ctx, call, command, cwd, timeout)
 	}
 	return result.Stdout, result.Stderr, result.ExitCode, ShellBackendSandbox, state, err
 }
 
+func (t shellTool) executeSandboxWithoutRestore(ctx context.Context, call tool.Context, command, cwd string, timeout time.Duration) (string, string, int, ShellBackend, *sandbox.State, error) {
+	metadata := cloneAnyMap(call.Metadata)
+	delete(metadata, sandbox.MetadataStateKey)
+	call.Metadata = metadata
+	return t.executeSandbox(ctx, call, command, cwd, timeout)
+}
+
+func restoredSandboxSession(metadata map[string]any, runID, subtaskID string) (*sandbox.Session, bool) {
+	state, ok := sandbox.StateFromMetadata(metadata)
+	if !ok {
+		return nil, false
+	}
+	session := sandbox.SessionFromState(state, runID, subtaskID)
+	if session == nil {
+		return nil, false
+	}
+	return session, true
+}
 func approvedByMetadata(metadata map[string]any, review policy.CommandReview) bool {
 	if metadata == nil || !approval.IsApprovedAction(metadata[approval.MetadataDecisionAction]) {
 		return false
@@ -270,11 +296,18 @@ func encodeOutput(out output, err error) (tool.Result, error) {
 	if marshalErr != nil {
 		return tool.Result{}, marshalErr
 	}
+	metadata := map[string]any{}
+	if out.Sandbox != nil {
+		metadata[sandbox.MetadataStateKey] = *out.Sandbox
+	}
 	var structured map[string]any
 	if unmarshalErr := json.Unmarshal(data, &structured); unmarshalErr != nil {
-		return tool.Result{Output: string(data), ExitCode: out.ExitCode}, err
+		return tool.Result{Output: string(data), ExitCode: out.ExitCode, Metadata: metadata}, err
 	}
-	return tool.Result{Output: string(data), Structured: structured, ExitCode: out.ExitCode}, err
+	if len(metadata) == 0 {
+		metadata = nil
+	}
+	return tool.Result{Output: string(data), Structured: structured, ExitCode: out.ExitCode, Metadata: metadata}, err
 }
 
 func run(ctx context.Context, cwd string, shellPolicy policy.ShellPolicy, command string) (string, string, int, error) {

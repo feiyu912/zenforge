@@ -53,3 +53,23 @@ func TestSessionFromEmptyStateReturnsNil(t *testing.T) {
 		t.Fatalf("session = %#v, want nil", session)
 	}
 }
+
+func TestStateFromMetadataAcceptsJSONMap(t *testing.T) {
+	state, ok := StateFromMetadata(map[string]any{
+		MetadataStateKey: map[string]any{
+			"sessionId":     "session_1",
+			"environmentId": "go",
+			"workingDir":    "/workspace",
+			"metadata":      map[string]any{"lease": "lease_1"},
+		},
+	})
+	if !ok {
+		t.Fatalf("StateFromMetadata did not find state")
+	}
+	if state.SessionID != "session_1" || state.EnvironmentID != "go" || state.WorkingDir != "/workspace" {
+		t.Fatalf("unexpected state: %#v", state)
+	}
+	if state.Metadata["lease"] != "lease_1" {
+		t.Fatalf("unexpected state metadata: %#v", state.Metadata)
+	}
+}

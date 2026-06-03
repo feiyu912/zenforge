@@ -249,6 +249,9 @@ Resume behavior:
 
 `sandbox.StateFromSession` and `sandbox.SessionFromState` provide the small
 conversion boundary between adapter session handles and checkpoint metadata.
+Sandbox tools pass this state through `sandbox.MetadataStateKey`; the harness
+copies successful tool metadata into `RunState.Sandbox` and injects checkpointed
+sandbox state into later tool calls.
 
 ## Failure Behavior
 

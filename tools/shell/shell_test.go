@@ -166,6 +166,46 @@ func TestShellRoutesCommandToSandboxBackend(t *testing.T) {
 	}
 }
 
+func TestShellReusesSandboxSessionFromMetadata(t *testing.T) {
+	root := t.TempDir()
+	fake := &sandboxfake.Sandbox{Result: sandbox.ExecuteResult{ExitCode: 0, Stdout: "sandbox ok"}}
+	shell := Must(Config{
+		Policy: policy.ShellPolicy{
+			WorkingDir:    root,
+			AllowCommands: []string{"printf ok"},
+			MaxTimeout:    time.Second,
+		},
+		Backend:         ShellBackendSandbox,
+		Sandbox:         fake,
+		EnvironmentID:   "go",
+		KeepSessionOpen: true,
+	})
+	first, err := shell.Call(context.Background(), json.RawMessage(`{"command":"printf ok","description":"first sandbox command"}`), tool.Context{
+		RunID:      "run_1",
+		ToolCallID: "call_1",
+	})
+	if err != nil {
+		t.Fatalf("first Call returned error: %v", err)
+	}
+	second, err := shell.Call(context.Background(), json.RawMessage(`{"command":"printf ok","description":"second sandbox command"}`), tool.Context{
+		RunID:      "run_1",
+		ToolCallID: "call_2",
+		Metadata:   first.Metadata,
+	})
+	if err != nil {
+		t.Fatalf("second Call returned error: %v", err)
+	}
+	if second.Structured["output"] != "sandbox ok" {
+		t.Fatalf("unexpected second result: %#v", second.Structured)
+	}
+	if len(fake.OpenCalls) != 1 || len(fake.ExecuteCalls) != 2 || len(fake.CloseCalls) != 0 {
+		t.Fatalf("expected reused open session, got opens=%d executes=%d closes=%d", len(fake.OpenCalls), len(fake.ExecuteCalls), len(fake.CloseCalls))
+	}
+	if fake.ExecuteCalls[1].Session.ID != fake.ExecuteCalls[0].Session.ID {
+		t.Fatalf("second call did not reuse session: first=%#v second=%#v", fake.ExecuteCalls[0].Session, fake.ExecuteCalls[1].Session)
+	}
+}
+
 func TestShellSandboxUnavailableDoesNotFallback(t *testing.T) {
 	root := t.TempDir()
 	shell := Must(Config{

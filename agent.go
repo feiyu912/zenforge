@@ -12,6 +12,7 @@ import (
 	"github.com/feiyu912/zenforge/harness"
 	"github.com/feiyu912/zenforge/model"
 	"github.com/feiyu912/zenforge/planner"
+	"github.com/feiyu912/zenforge/sandbox"
 	"github.com/feiyu912/zenforge/subagent"
 	"github.com/feiyu912/zenforge/tool"
 	tasktool "github.com/feiyu912/zenforge/tools/task"
@@ -560,6 +561,7 @@ func (a *Agent) runPendingTools(ctx context.Context, emit func(EventType, map[st
 		if result.Error != "" && result.ExitCode == 0 {
 			result.ExitCode = 1
 		}
+		applySandboxResultState(state, result)
 		if req, ok := approval.RequestFromResult(result); ok {
 			state.SetWaitingApproval(approvalRequestState(req, call))
 			checkpointState()
@@ -603,6 +605,7 @@ func (a *Agent) runPendingTools(ctx context.Context, emit func(EventType, map[st
 					if result.Error != "" && result.ExitCode == 0 {
 						result.ExitCode = 1
 					}
+					applySandboxResultState(state, result)
 				} else {
 					result = tool.Result{Error: approval.ErrorRejected, ExitCode: 1, Structured: map[string]any{
 						"approval": req,
@@ -847,7 +850,7 @@ func (a *Agent) invokeTool(ctx context.Context, state harness.RunState, call har
 		RunID:     state.RunID,
 		Name:      call.Name,
 		Arguments: call.Arguments,
-		Metadata:  toolCallMetadata(state.Meta, call.Meta),
+		Metadata:  toolCallMetadata(state, call.Meta),
 	})
 }
 
@@ -1076,8 +1079,19 @@ func intFromMeta(value any) (int, bool) {
 	}
 }
 
-func toolCallMetadata(stateMeta, callMeta map[string]any) map[string]any {
-	out := cloneMap(stateMeta)
+func toolCallMetadata(state harness.RunState, callMeta map[string]any) map[string]any {
+	out := cloneMap(state.Meta)
+	if state.Sandbox.SessionID != "" {
+		if out == nil {
+			out = map[string]any{}
+		}
+		out[sandbox.MetadataStateKey] = sandbox.State{
+			SessionID:     state.Sandbox.SessionID,
+			EnvironmentID: state.Sandbox.EnvironmentID,
+			WorkingDir:    state.Sandbox.WorkingDir,
+			Metadata:      cloneMap(state.Sandbox.Meta),
+		}
+	}
 	if len(callMeta) == 0 {
 		return out
 	}
@@ -1088,6 +1102,22 @@ func toolCallMetadata(stateMeta, callMeta map[string]any) map[string]any {
 		out[key] = value
 	}
 	return out
+}
+
+func applySandboxResultState(state *harness.RunState, result tool.Result) {
+	sandboxState, ok := sandbox.StateFromMetadata(result.Metadata)
+	if !ok {
+		sandboxState, ok = sandbox.StateFromMetadata(result.Meta)
+	}
+	if !ok {
+		return
+	}
+	state.Sandbox = harness.SandboxState{
+		SessionID:     sandboxState.SessionID,
+		EnvironmentID: sandboxState.EnvironmentID,
+		WorkingDir:    sandboxState.WorkingDir,
+		Meta:          cloneMap(sandboxState.Metadata),
+	}
 }
 
 func (a *Agent) modelMessages(state harness.RunState) []model.Message {
