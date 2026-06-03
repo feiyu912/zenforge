@@ -247,6 +247,11 @@ Resume behavior:
 - non-terminal child runs may resume through child runner;
 - after all child terminal, aggregate results.
 
+When the same parent task tool call is started again from a checkpoint,
+subtask state is keyed by parent task id plus subtask id. Re-entering the start
+phase updates the existing non-terminal subtask record instead of appending a
+duplicate, while terminal child records remain stable.
+
 MVP simplification:
 
 - if a child was running during crash, resume child from its latest checkpoint;
@@ -320,4 +325,3 @@ Minimum tests:
 - result aggregation is model-visible;
 - subtask state is durable;
 - no ZenMind server/chat imports.
-

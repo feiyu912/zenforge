@@ -670,6 +670,9 @@ func (a *Agent) invokeSubAgentTool(ctx context.Context, emit func(EventType, map
 	req.RunID = state.RunID
 	req.ParentStep = state.Step
 	req.ToolCallID = call.ID
+	if req.ParentTaskID == "" {
+		req.ParentTaskID = call.ID
+	}
 	if depth, ok := intFromMeta(state.Meta["subagent.depth"]); ok {
 		req.Depth = depth
 	}
@@ -946,16 +949,35 @@ func startSubtasks(state *harness.RunState, req subagent.Request) {
 			task.ID = fmt.Sprintf("subtask_%d", i+1)
 			req.Tasks[i].ID = task.ID
 		}
-		state.Subtasks = append(state.Subtasks, harness.SubtaskState{
+		subtask := harness.SubtaskState{
 			ID:        task.ID,
 			ParentID:  req.ParentTaskID,
 			AgentName: task.NormalizedAgentName(),
 			Input:     task.Input,
 			Status:    harness.SubtaskRunning,
 			Meta:      cloneMap(task.Metadata),
-		})
+		}
+		if idx := findSubtask(state.Subtasks, subtask.ParentID, subtask.ID); idx >= 0 {
+			if state.Subtasks[idx].Status != harness.SubtaskCompleted && state.Subtasks[idx].Status != harness.SubtaskFailed {
+				state.Subtasks[idx].AgentName = subtask.AgentName
+				state.Subtasks[idx].Input = subtask.Input
+				state.Subtasks[idx].Status = subtask.Status
+				state.Subtasks[idx].Meta = subtask.Meta
+			}
+			continue
+		}
+		state.Subtasks = append(state.Subtasks, subtask)
 	}
 	state.Phase = harness.RunPhaseSubtask
+}
+
+func findSubtask(subtasks []harness.SubtaskState, parentID, id string) int {
+	for i, subtask := range subtasks {
+		if subtask.ParentID == parentID && subtask.ID == id {
+			return i
+		}
+	}
+	return -1
 }
 
 func applySubtaskResults(state *harness.RunState, result subagent.Result) {

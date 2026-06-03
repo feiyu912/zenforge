@@ -49,7 +49,8 @@ Markdown document links.
 | MCP tools adapt into ZenForge tools | `adapters/mcp.TestToolsAdaptsMCPTool`, `adapters/mcp.TestJSONRPCClientListsAndCallsTools` |
 | memory entries augment normalized tasks | `adapters/memory.TestAugmentTaskAddsMemoryBlockAndMetadata` |
 | memory scope metadata filters cross-tenant entries | `adapters/memory.TestScopedStoreFiltersEntriesByQueryMetadata`, `adapters/memory.TestAugmentTaskUsesScopedStoreMetadata` |
-| sub-agent task tool delegates work | `subagent` and `tools/task` package tests |
+| sub-agent task tool delegates work | `TestAgentRunsSubAgentTaskTool`, `subagent` and `tools/task` package tests |
+| sub-agent checkpoint state avoids duplicate resumed starts | `TestStartSubtasksDeduplicatesResumedParentToolCall` |
 
 ## Planning
 

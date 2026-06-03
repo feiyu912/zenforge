@@ -553,6 +553,46 @@ func TestAgentRunsSubAgentTaskTool(t *testing.T) {
 	}
 }
 
+func TestStartSubtasksDeduplicatesResumedParentToolCall(t *testing.T) {
+	state := harness.RunState{
+		RunID: "run_subagent_resume",
+		Subtasks: []harness.SubtaskState{
+			{
+				ID:        "subtask_1",
+				ParentID:  "call_task",
+				AgentName: "researcher",
+				Input:     "old input",
+				Status:    harness.SubtaskRunning,
+				Meta:      map[string]any{"attempt": "old"},
+			},
+			{
+				ID:        "subtask_1",
+				ParentID:  "call_other",
+				AgentName: "reviewer",
+				Input:     "separate call",
+				Status:    harness.SubtaskCompleted,
+			},
+		},
+	}
+
+	startSubtasks(&state, subagent.Request{
+		ParentTaskID: "call_task",
+		Tasks: []subagent.TaskSpec{
+			{ID: "subtask_1", Agent: "researcher", Input: "new input", Metadata: map[string]any{"attempt": "resume"}},
+		},
+	})
+
+	if len(state.Subtasks) != 2 {
+		t.Fatalf("expected no duplicate subtask state, got %#v", state.Subtasks)
+	}
+	if state.Subtasks[0].Input != "new input" || state.Subtasks[0].Meta["attempt"] != "resume" || state.Subtasks[0].Status != harness.SubtaskRunning {
+		t.Fatalf("resumed subtask was not updated: %#v", state.Subtasks[0])
+	}
+	if state.Subtasks[1].ParentID != "call_other" || state.Subtasks[1].Status != harness.SubtaskCompleted {
+		t.Fatalf("unrelated parent subtask was changed: %#v", state.Subtasks[1])
+	}
+}
+
 func TestAgentPlanExecutePresetPlansExecutesAndSummarizes(t *testing.T) {
 	fakeModel := &scriptedModel{turns: []scriptedTurn{
 		{
