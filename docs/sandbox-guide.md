@@ -81,6 +81,24 @@ Sandbox environments may provide prompt context describing:
 
 Applications can inject this as a prompt section.
 
+```go
+augmenter := sandboxadapter.Augmenter{
+    Provider:      sbox,
+    EnvironmentID: "toolbox",
+}
+task, prompt, err := augmenter.AugmentTask(ctx, zenforge.Task{
+    Input: "Run the test suite and summarize failures.",
+})
+if err != nil {
+    return err
+}
+_ = prompt
+```
+
+The adapter prepends a `Sandbox environment` section to the normalized task and
+records prompt provenance under `task.Meta["sandbox.prompt"]`. Core prompt
+assembly still does not call Container Hub directly.
+
 ## Fallback Rules
 
 If sandbox is required and unavailable, ZenForge must not silently fall back to

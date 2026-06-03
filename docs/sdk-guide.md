@@ -81,6 +81,20 @@ if err != nil {
 events, err := agent.Stream(ctx, task)
 ```
 
+Sandbox environment prompts can also be normalized before execution, keeping
+Container Hub or another sandbox provider outside the core harness:
+
+```go
+sandboxPrompt := sandboxadapter.Augmenter{
+    Provider:      sandboxPromptProvider,
+    EnvironmentID: "toolbox",
+}
+task, _, err = sandboxPrompt.AugmentTask(ctx, task)
+if err != nil {
+    return err
+}
+```
+
 Use the provider adapter that matches your deployment:
 
 ```go

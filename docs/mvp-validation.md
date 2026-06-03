@@ -32,6 +32,7 @@ Markdown document links.
 | OpenTelemetry trace sink works | `trace/otel.TestSinkEmitsSpanWithAttributes` |
 | trace platform metadata enrichment works | `trace.TestWithFieldsAddsStaticPlatformMetadata` |
 | sandbox session state can be checkpointed for resume | `sandbox.TestStateFromSessionCopiesSandboxMetadata`, `sandbox.TestSessionFromStateRestoresRunScopedSession` |
+| sandbox environment prompt can augment normalized tasks | `adapters/sandbox.TestAugmentTaskInjectsSandboxPromptAndMetadata`, `adapters/sandbox.TestAugmentTaskUsesEnvironmentIDFromMetadata` |
 | repeated SQLite durable runs work | `TestSQLiteDurableRunSoak` |
 | benchmark entrypoint exists | `BenchmarkAgentRunStaticModel` |
 
