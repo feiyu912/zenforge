@@ -861,7 +861,7 @@ func (a *Agent) subAgentOrchestrator() (subagent.Orchestrator, error) {
 	return subagent.NewOrchestrator(subagent.OrchestratorConfig{
 		Registry: registry,
 		Runner:   runner,
-		Options:  subagent.Options{MaxTasks: 8},
+		Options:  subagent.Options{MaxTasks: 8, Parallel: true},
 	}), nil
 }
 

@@ -3,6 +3,7 @@ package subagent
 import (
 	"context"
 	"fmt"
+	"sync"
 )
 
 type Orchestrator interface {
@@ -46,33 +47,86 @@ func (o *DefaultOrchestrator) Invoke(ctx context.Context, req Request) (Result, 
 	if o.runner == nil {
 		return Result{}, fmt.Errorf("subagent runner is not configured")
 	}
+	if req.Options.Parallel && len(req.Tasks) > 1 {
+		return o.invokeParallel(ctx, req)
+	}
+	return o.invokeSequential(ctx, req)
+}
+
+func (o *DefaultOrchestrator) invokeSequential(ctx context.Context, req Request) (Result, error) {
 	results := make([]TaskResult, 0, len(req.Tasks))
 	for i, task := range req.Tasks {
-		if err := ctx.Err(); err != nil {
-			return Result{Tasks: results}, err
-		}
-		task = normalizeTask(task, i)
-		spec, ok := o.registry.Lookup(task.NormalizedAgentName())
-		if !ok {
-			result := failedResult(task, fmt.Sprintf("unknown subagent: %s", task.NormalizedAgentName()))
-			results = append(results, result)
-			if req.Options.FailFast {
-				return Result{Tasks: results}, fmt.Errorf("%s", result.Error)
-			}
-			continue
-		}
-		result, err := o.runner.RunSubAgent(ctx, spec, task, req)
-		result = normalizeResult(result, spec, task)
-		if err != nil && result.Error == "" {
-			result.Status = StatusFailed
-			result.Error = err.Error()
-		}
+		result, err := o.runTask(ctx, req, task, i)
 		results = append(results, result)
-		if err != nil && req.Options.FailFast {
+		if shouldStop(req.Options, result, err) {
+			if err == nil {
+				err = fmt.Errorf("%s", result.Error)
+			}
 			return Result{Tasks: results}, err
 		}
 	}
 	return Result{Tasks: results}, nil
+}
+
+func (o *DefaultOrchestrator) invokeParallel(ctx context.Context, req Request) (Result, error) {
+	runCtx := ctx
+	var cancel context.CancelFunc
+	if req.Options.FailFast {
+		runCtx, cancel = context.WithCancel(ctx)
+		defer cancel()
+	}
+
+	results := make([]TaskResult, len(req.Tasks))
+	errs := make([]error, len(req.Tasks))
+	var wg sync.WaitGroup
+	for i, task := range req.Tasks {
+		wg.Add(1)
+		go func(i int, task TaskSpec) {
+			defer wg.Done()
+			result, err := o.runTask(runCtx, req, task, i)
+			results[i] = result
+			errs[i] = err
+			if shouldStop(req.Options, result, err) && cancel != nil {
+				cancel()
+			}
+		}(i, task)
+	}
+	wg.Wait()
+
+	out := make([]TaskResult, 0, len(results))
+	var firstErr error
+	for i, result := range results {
+		out = append(out, result)
+		if firstErr == nil && shouldStop(req.Options, result, errs[i]) {
+			firstErr = errs[i]
+			if firstErr == nil {
+				firstErr = fmt.Errorf("%s", result.Error)
+			}
+		}
+	}
+	return Result{Tasks: out}, firstErr
+}
+
+func (o *DefaultOrchestrator) runTask(ctx context.Context, req Request, task TaskSpec, index int) (TaskResult, error) {
+	task = normalizeTask(task, index)
+	if err := ctx.Err(); err != nil {
+		return failedResult(task, err.Error()), err
+	}
+	spec, ok := o.registry.Lookup(task.NormalizedAgentName())
+	if !ok {
+		return failedResult(task, fmt.Sprintf("unknown subagent: %s", task.NormalizedAgentName())), nil
+	}
+	result, err := o.runner.RunSubAgent(ctx, spec, task, req)
+	result = normalizeResult(result, spec, task)
+	if err != nil && result.Error == "" {
+		result.Status = StatusFailed
+		result.Error = err.Error()
+	}
+	return result, err
+}
+
+func shouldStop(options Options, result TaskResult, err error) bool {
+	return options.FailFast && (err != nil || result.Status == StatusFailed)
 }
 
 func mergeOptions(base, override Options) Options {
