@@ -593,6 +593,51 @@ func TestStartSubtasksDeduplicatesResumedParentToolCall(t *testing.T) {
 	}
 }
 
+func TestInvokeSubAgentToolSkipsCompletedSubtaskOnResume(t *testing.T) {
+	var ran []string
+	agent := New(Config{
+		SubAgentRegistry: subagent.MustRegistry(subagent.SubAgentSpec{Name: "researcher"}, subagent.SubAgentSpec{Name: "reviewer"}),
+		SubAgentRunner: subagent.RunnerFunc(func(ctx context.Context, spec subagent.SubAgentSpec, task subagent.TaskSpec, req subagent.Request) (subagent.TaskResult, error) {
+			ran = append(ran, task.ID)
+			return subagent.TaskResult{Output: spec.Name + " reran " + task.Input}, nil
+		}),
+	})
+	state := newRunState("run_subagent_resume_skip", "delegate", nil)
+	state.Subtasks = []harness.SubtaskState{
+		{
+			ID:        "subtask_1",
+			ParentID:  "call_task",
+			AgentName: "researcher",
+			Input:     "summarize docs",
+			Status:    harness.SubtaskCompleted,
+			Output:    "researcher completed earlier",
+			RunID:     "run_child_done",
+		},
+	}
+	call := harness.ToolCallState{
+		ID:   "call_task",
+		Name: "task",
+		Arguments: json.RawMessage(`{"tasks":[` +
+			`{"id":"subtask_1","agent":"researcher","input":"summarize docs"},` +
+			`{"id":"subtask_2","agent":"reviewer","input":"find bugs"}` +
+			`]}`),
+	}
+
+	result, err := agent.invokeSubAgentTool(context.Background(), func(EventType, map[string]any) {}, func() {}, &state, call)
+	if err != nil {
+		t.Fatalf("invokeSubAgentTool returned error: %v", err)
+	}
+	if len(ran) != 1 || ran[0] != "subtask_2" {
+		t.Fatalf("expected only unfinished child to run, got %#v", ran)
+	}
+	if !contains(result.Output, "researcher completed earlier") || !contains(result.Output, "reviewer reran find bugs") {
+		t.Fatalf("aggregate result did not include skipped and rerun children: %s", result.Output)
+	}
+	if len(state.Subtasks) != 2 || state.Subtasks[0].RunID != "run_child_done" || state.Subtasks[1].Status != harness.SubtaskCompleted {
+		t.Fatalf("unexpected subtask checkpoint state: %#v", state.Subtasks)
+	}
+}
+
 func TestAgentPlanExecutePresetPlansExecutesAndSummarizes(t *testing.T) {
 	fakeModel := &scriptedModel{turns: []scriptedTurn{
 		{

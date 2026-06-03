@@ -678,15 +678,24 @@ func (a *Agent) invokeSubAgentTool(ctx context.Context, emit func(EventType, map
 	}
 	startSubtasks(state, req)
 	checkpointState()
-	for _, task := range req.Tasks {
+	skipped, runnable := splitSubtasksForRun(*state, req)
+	for _, task := range runnable {
 		emit(EventSubtaskStarted, map[string]any{
 			"subtaskId": task.ID,
 			"agentName": task.NormalizedAgentName(),
 			"name":      task.Name,
 		})
 	}
-	result, invokeErr := orchestrator.Invoke(ctx, req)
-	applySubtaskResults(state, result)
+	result := subagent.Result{Tasks: skipped}
+	var invokeErr error
+	if len(runnable) > 0 {
+		runReq := req
+		runReq.Tasks = runnable
+		runningResult, err := orchestrator.Invoke(ctx, runReq)
+		invokeErr = err
+		result.Tasks = mergeSubtaskResults(req.Tasks, skipped, runningResult.Tasks)
+	}
+	applySubtaskResults(state, req.ParentTaskID, result)
 	checkpointState()
 	for _, task := range result.Tasks {
 		for _, childEvent := range task.Events {
@@ -980,10 +989,68 @@ func findSubtask(subtasks []harness.SubtaskState, parentID, id string) int {
 	return -1
 }
 
-func applySubtaskResults(state *harness.RunState, result subagent.Result) {
+func splitSubtasksForRun(state harness.RunState, req subagent.Request) ([]subagent.TaskResult, []subagent.TaskSpec) {
+	skipped := make([]subagent.TaskResult, 0, len(req.Tasks))
+	runnable := make([]subagent.TaskSpec, 0, len(req.Tasks))
+	for _, task := range req.Tasks {
+		idx := findSubtask(state.Subtasks, req.ParentTaskID, task.ID)
+		if idx < 0 {
+			runnable = append(runnable, task)
+			continue
+		}
+		result, ok := terminalSubtaskResult(state.Subtasks[idx], task)
+		if ok {
+			skipped = append(skipped, result)
+			continue
+		}
+		runnable = append(runnable, task)
+	}
+	return skipped, runnable
+}
+
+func terminalSubtaskResult(state harness.SubtaskState, task subagent.TaskSpec) (subagent.TaskResult, bool) {
+	status := ""
+	switch state.Status {
+	case harness.SubtaskCompleted:
+		status = subagent.StatusCompleted
+	case harness.SubtaskFailed:
+		status = subagent.StatusFailed
+	default:
+		return subagent.TaskResult{}, false
+	}
+	return subagent.TaskResult{
+		ID:        state.ID,
+		AgentName: state.AgentName,
+		Name:      task.Name,
+		Status:    status,
+		Output:    state.Output,
+		Error:     state.Error,
+		RunID:     state.RunID,
+		Metadata:  cloneMap(state.Meta),
+	}, true
+}
+
+func mergeSubtaskResults(tasks []subagent.TaskSpec, skipped, running []subagent.TaskResult) []subagent.TaskResult {
+	byID := make(map[string]subagent.TaskResult, len(skipped)+len(running))
+	for _, result := range skipped {
+		byID[result.ID] = result
+	}
+	for _, result := range running {
+		byID[result.ID] = result
+	}
+	out := make([]subagent.TaskResult, 0, len(tasks))
+	for _, task := range tasks {
+		if result, ok := byID[task.ID]; ok {
+			out = append(out, result)
+		}
+	}
+	return out
+}
+
+func applySubtaskResults(state *harness.RunState, parentID string, result subagent.Result) {
 	for _, task := range result.Tasks {
 		for i := range state.Subtasks {
-			if state.Subtasks[i].ID != task.ID {
+			if state.Subtasks[i].ParentID != parentID || state.Subtasks[i].ID != task.ID {
 				continue
 			}
 			state.Subtasks[i].RunID = task.RunID

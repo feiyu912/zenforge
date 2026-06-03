@@ -255,6 +255,8 @@ When the same parent task tool call is started again from a checkpoint,
 subtask state is keyed by parent task id plus subtask id. Re-entering the start
 phase updates the existing non-terminal subtask record instead of appending a
 duplicate, while terminal child records remain stable.
+Terminal child records are reused in the parent aggregate result so completed
+children are not invoked again during resume.
 
 MVP simplification:
 
