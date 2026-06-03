@@ -183,4 +183,28 @@ func TestShellSandboxUnavailableDoesNotFallback(t *testing.T) {
 	if result.ExitCode == 0 || result.Structured["backend"] != string(ShellBackendSandbox) {
 		t.Fatalf("unexpected result/fallback: %#v", result)
 	}
+	if result.Structured["sandboxError"] != string(sandbox.ErrSandboxUnavailable) {
+		t.Fatalf("expected structured sandbox error, got %#v", result.Structured)
+	}
+}
+
+func TestShellSandboxTimeoutIncludesStructuredErrorCode(t *testing.T) {
+	root := t.TempDir()
+	fake := &sandboxfake.Sandbox{ExecuteError: sandbox.ErrTimeout}
+	shell := Must(Config{
+		Policy: policy.ShellPolicy{
+			WorkingDir:    root,
+			AllowCommands: []string{"printf ok"},
+			MaxTimeout:    time.Second,
+		},
+		Backend: ShellBackendSandbox,
+		Sandbox: fake,
+	})
+	result, err := shell.Call(context.Background(), json.RawMessage(`{"command":"printf ok","description":"sandbox timeout"}`), tool.Context{RunID: "run_1"})
+	if !errors.Is(err, tool.ErrTimeout) {
+		t.Fatalf("expected tool timeout, got result=%#v err=%v", result, err)
+	}
+	if result.Structured["sandboxError"] != string(sandbox.ErrTimeout) || result.Structured["timedOut"] != true {
+		t.Fatalf("expected structured timeout metadata, got %#v", result.Structured)
+	}
 }

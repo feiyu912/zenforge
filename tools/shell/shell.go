@@ -53,15 +53,16 @@ type input struct {
 }
 
 type output struct {
-	Command   string               `json:"command"`
-	CWD       string               `json:"cwd"`
-	Output    string               `json:"output"`
-	Backend   ShellBackend         `json:"backend"`
-	ExitCode  int                  `json:"exitCode"`
-	TimedOut  bool                 `json:"timedOut"`
-	Truncated bool                 `json:"truncated"`
-	Review    policy.CommandReview `json:"review"`
-	Sandbox   *sandbox.State       `json:"sandbox,omitempty"`
+	Command      string               `json:"command"`
+	CWD          string               `json:"cwd"`
+	Output       string               `json:"output"`
+	Backend      ShellBackend         `json:"backend"`
+	ExitCode     int                  `json:"exitCode"`
+	TimedOut     bool                 `json:"timedOut"`
+	Truncated    bool                 `json:"truncated"`
+	Review       policy.CommandReview `json:"review"`
+	Sandbox      *sandbox.State       `json:"sandbox,omitempty"`
+	SandboxError string               `json:"sandboxError,omitempty"`
 }
 
 type shellTool struct {
@@ -177,9 +178,15 @@ func (t shellTool) run(ctx context.Context, in input, call tool.Context) (tool.R
 		Review:    review,
 		Sandbox:   sandboxState,
 	}
+	if code := sandbox.Code(err); code != "" {
+		out.SandboxError = string(code)
+	}
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, sandbox.ErrTimeout) {
 		out.ExitCode = 124
 		out.TimedOut = true
+		if out.SandboxError == "" && errors.Is(err, sandbox.ErrTimeout) {
+			out.SandboxError = string(sandbox.ErrTimeout)
+		}
 		return encodeOutput(out, tool.ErrTimeout)
 	}
 	return encodeOutput(out, err)

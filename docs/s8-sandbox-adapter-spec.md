@@ -262,6 +262,8 @@ Common errors:
 - `sandbox_closed`.
 
 Tool results should include structured metadata for these failures.
+For shell tools this includes `backend: "sandbox"` and `sandboxError` with the
+stable sandbox error code when one is available.
 
 ## Migration From agent-platform
 
