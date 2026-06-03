@@ -50,11 +50,18 @@ The model calls:
       "name": "Read docs",
       "input": "Read README and summarize architecture"
     }
-  ]
+  ],
+  "options": {
+    "parallel": true,
+    "failFast": false,
+    "maxTasks": 3
+  }
 }
 ```
 
 The parent receives an aggregated tool result.
+Task tool options expose bounded runtime controls. Nested sub-agents remain
+blocked by default and are not exposed as a model-facing option.
 
 ## Defaults
 
@@ -77,4 +84,3 @@ Sub-agent work emits:
 
 Sub-agents should receive scoped tools. Do not automatically give every child
 the parent's full tool set.
-

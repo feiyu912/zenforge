@@ -146,6 +146,10 @@ type Options struct {
 }
 ```
 
+The model-facing task tool accepts bounded request options such as `parallel`,
+`failFast`, and `maxTasks`. `AllowNested` remains a host/runtime option and is
+not exposed through the default task tool schema.
+
 ## Result
 
 ```go

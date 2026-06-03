@@ -85,6 +85,26 @@ func (t taskTool) Schema() map[string]any {
 					"additionalProperties": true,
 				},
 			},
+			"options": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"parallel": map[string]any{
+						"type":        "boolean",
+						"description": "Run independent child tasks concurrently.",
+					},
+					"failFast": map[string]any{
+						"type":        "boolean",
+						"description": "Cancel remaining child tasks after the first failure.",
+					},
+					"maxTasks": map[string]any{
+						"type":        "integer",
+						"minimum":     1,
+						"maximum":     t.maxTasks,
+						"description": "Maximum number of child tasks allowed for this request.",
+					},
+				},
+				"additionalProperties": false,
+			},
 		},
 		"required":             []string{"tasks"},
 		"additionalProperties": false,
@@ -108,7 +128,8 @@ func (t taskTool) Call(ctx context.Context, input json.RawMessage, call tool.Con
 
 func Decode(raw json.RawMessage) (subagent.Request, error) {
 	var in struct {
-		Tasks []subagent.TaskSpec `json:"tasks"`
+		Tasks   []subagent.TaskSpec `json:"tasks"`
+		Options taskOptions         `json:"options,omitempty"`
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
@@ -119,11 +140,25 @@ func Decode(raw json.RawMessage) (subagent.Request, error) {
 	if err := decoder.Decode(&in); err != nil {
 		return subagent.Request{}, fmt.Errorf("%w: %v", tool.ErrInvalidArguments, err)
 	}
-	req := subagent.Request{Tasks: in.Tasks}
+	req := subagent.Request{Tasks: in.Tasks, Options: in.Options.toSubAgentOptions()}
 	if err := req.Validate(); err != nil {
 		return subagent.Request{}, fmt.Errorf("%w: %v", tool.ErrInvalidArguments, err)
 	}
 	return req, nil
+}
+
+type taskOptions struct {
+	MaxTasks int  `json:"maxTasks,omitempty"`
+	Parallel bool `json:"parallel,omitempty"`
+	FailFast bool `json:"failFast,omitempty"`
+}
+
+func (o taskOptions) toSubAgentOptions() subagent.Options {
+	return subagent.Options{
+		MaxTasks: o.MaxTasks,
+		Parallel: o.Parallel,
+		FailFast: o.FailFast,
+	}
 }
 
 func IsTaskTool(name string) bool {

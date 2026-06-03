@@ -50,6 +50,7 @@ Markdown document links.
 | memory entries augment normalized tasks | `adapters/memory.TestAugmentTaskAddsMemoryBlockAndMetadata` |
 | memory scope metadata filters cross-tenant entries | `adapters/memory.TestScopedStoreFiltersEntriesByQueryMetadata`, `adapters/memory.TestAugmentTaskUsesScopedStoreMetadata` |
 | sub-agent task tool delegates work | `TestAgentRunsSubAgentTaskTool`, `subagent` and `tools/task` package tests |
+| sub-agent task tool decodes bounded runtime options | `tools/task.TestTaskToolValidatesArgs` |
 | sub-agent parallel execution keeps stable result order | `subagent.TestOrchestratorRunsParallelTasksInStableOrder` |
 | sub-agent parallel fail-fast cancels sibling work | `subagent.TestOrchestratorParallelFailFastCancelsOtherTasks` |
 | sub-agent checkpoint state avoids duplicate resumed starts | `TestStartSubtasksDeduplicatesResumedParentToolCall` |
