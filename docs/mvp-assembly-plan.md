@@ -340,5 +340,6 @@ Before tagging MVP:
 - CLI has useful error messages;
 - no imports from `agent-platform`;
 - no hardcoded ZenMind paths;
-- generated checkpoint/event files have documented schema version;
+- generated checkpoints document checkpoint and run-state schema versions;
+- generated event files follow the documented flattened public event contract;
 - README quickstart works.

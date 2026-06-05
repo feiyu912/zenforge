@@ -164,6 +164,7 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - CLI run/resume are covered against local OpenAI-compatible streaming and durable JSONL checkpoints.
 - Config reference is checked against the generated `zenforge init` defaults.
 - Release notes version coverage is checked against `VERSION`.
+- Durable schema version docs and flattened event contract docs are checked.
 - `sandbox.State` for cross-run session continuity.
 - Trace metadata enrichment.
 - A hardening test suite and a failure-mode guide.

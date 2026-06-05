@@ -30,13 +30,19 @@ payload.
 
 ## Versioning
 
-Every checkpoint includes:
+Every run state includes:
 
 ```go
 Version string `json:"version"`
 ```
 
 Initial version:
+
+```text
+zenforge.run_state.v1
+```
+
+The containing checkpoint record also has its own schema version:
 
 ```text
 zenforge.checkpoint.v1
@@ -70,4 +76,3 @@ Rules:
 
 This design makes checkpoint more verbose than a pure event log, but gives
 ZenForge a real durable execution boundary.
-

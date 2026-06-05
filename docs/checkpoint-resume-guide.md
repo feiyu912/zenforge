@@ -6,6 +6,10 @@ event log:
 - checkpoint store is the resume source of truth;
 - event log is the replay/read model for users, CLIs, and server adapters.
 
+Checkpoint records use schema version `zenforge.checkpoint.v1`. The embedded
+run state uses version `zenforge.run_state.v1`. Event records use the public
+flattened event contract documented in [ADR 0002](./adr/0002-public-event-contract.md).
+
 Configure both for a local durable run:
 
 ```go
