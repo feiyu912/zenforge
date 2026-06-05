@@ -44,6 +44,52 @@ func TestRunRequiresInputBeforeAPIKey(t *testing.T) {
 	}
 }
 
+func TestCLIReportsUsefulArgumentErrors(t *testing.T) {
+	tests := []struct {
+		name       string
+		args       []string
+		wantCode   int
+		wantStderr string
+	}{
+		{
+			name:       "unknown command",
+			args:       []string{"wat"},
+			wantCode:   2,
+			wantStderr: "usage: zenforge",
+		},
+		{
+			name:       "resume missing run id",
+			args:       []string{"resume"},
+			wantCode:   1,
+			wantStderr: "resume requires run id",
+		},
+		{
+			name:       "events missing run id",
+			args:       []string{"events"},
+			wantCode:   1,
+			wantStderr: "events requires run id",
+		},
+		{
+			name:       "runs rejects positional args",
+			args:       []string{"runs", "run_1"},
+			wantCode:   1,
+			wantStderr: "runs does not accept positional arguments",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stderr bytes.Buffer
+			code := Main(context.Background(), tt.args, IO{Stderr: &stderr})
+			if code != tt.wantCode {
+				t.Fatalf("code = %d, want %d; stderr=%q", code, tt.wantCode, stderr.String())
+			}
+			if !strings.Contains(stderr.String(), tt.wantStderr) {
+				t.Fatalf("stderr = %q, want to contain %q", stderr.String(), tt.wantStderr)
+			}
+		})
+	}
+}
+
 func TestRunStreamsOpenAICompatibleEndpoint(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "test")
 	var gotPath string

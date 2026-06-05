@@ -81,6 +81,7 @@ Markdown document links.
 | config file works | `TestOptionsFromConfig`, `TestEventsLoadsCheckpointDirFromConfig`, `TestInitCreatesDefaultConfig` |
 | SQLite stores work through CLI | `TestEventsCanReadSQLiteStore`, `TestRunsCanReadSQLiteStore` |
 | model provider config works | `TestOptionsFromConfig` covers `model.provider` |
+| CLI argument errors are useful | `TestCLIReportsUsefulArgumentErrors` |
 | approval prompt works | `approval/cli.TestCLIBrokerReadsDecision`, `TestApprovalBrokerModes` |
 | server-style approval submit works | `approval.TestPendingBrokerWaitsForSubmittedDecision`, `approval.TestPendingBrokerRejectsUnknownDecision` |
 
