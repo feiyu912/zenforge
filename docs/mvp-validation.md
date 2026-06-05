@@ -21,9 +21,9 @@ Markdown document links.
 | OpenAI-compatible model can stream text | `model/openai.TestClientStreamsTextAndSendsChatRequest` |
 | Anthropic model can stream text and tool calls | `model/anthropic.TestClientStreamsTextAndSendsMessagesRequest`, `model/anthropic.TestClientStreamsToolUse` |
 | Model tool calls invoke tools | `TestAgentStreamRunsToolAndContinuesModelLoop` |
-| Checkpoints written at boundaries | `TestAgentStreamRunsToolAndContinuesModelLoop`, checkpoint memory/JSONL/SQLite tests |
+| Checkpoints written at boundaries | `TestAgentStreamRunsToolAndContinuesModelLoop`, `checkpoint.TestCheckpointJSONRoundTripAndValidate`, memory/JSONL/SQLite `TestStoreSaveLoadDelete` |
 | Resume works for supported boundaries | `TestAgentResumeCompletedDoesNotCallModelAgain`, `TestAgentResumeActiveToolRetriesTool`, `TestAgentResumeActiveToolFromJSONLCheckpoint`, `TestAgentResumeWaitingApprovalUsesBroker` |
-| Server HTTP/SSE helpers work | `server/harnesshttp` and `server/sse` package tests |
+| Server HTTP/SSE helpers work | `server/harnesshttp.TestServeRunStreamsEvents`, `server/harnesshttp.TestServeResumeStreamsGETAndPOST`, `server/sse.TestStreamHTTPHeaders` |
 | HTTP access hook authorizes and injects trusted metadata | `server/harnesshttp.TestServeRunAuthorizesAndInjectsTrustedMeta`, `server/harnesshttp.TestServeEventsRejectsForbidden` |
 | HTTP approval submit authorizes pending run and resolves broker | `server/harnesshttp.TestServeApprovalSubmitsPendingDecision`, `server/harnesshttp.TestServeApprovalAuthorizesPendingRun` |
 | HTTP pending approval query filters by authorized run | `approval.TestPendingBrokerListsPendingForRun`, `server/harnesshttp.TestServeApprovalsListsPendingRequestsForRun`, `server/harnesshttp.TestServeApprovalsRejectsForbiddenRun` |
@@ -54,7 +54,7 @@ Markdown document links.
 | MCP tools adapt into ZenForge tools | `adapters/mcp.TestToolsAdaptsMCPTool`, `adapters/mcp.TestJSONRPCClientListsAndCallsTools` |
 | memory entries augment normalized tasks | `adapters/memory.TestAugmentTaskAddsMemoryBlockAndMetadata` |
 | memory scope metadata filters cross-tenant entries | `adapters/memory.TestScopedStoreFiltersEntriesByQueryMetadata`, `adapters/memory.TestAugmentTaskUsesScopedStoreMetadata` |
-| sub-agent task tool delegates work | `TestAgentRunsSubAgentTaskTool`, `subagent` and `tools/task` package tests |
+| sub-agent task tool delegates work | `TestAgentRunsSubAgentTaskTool`, `subagent.TestOrchestratorRunsTasksInStableOrder`, `tools/task.TestTaskToolSchemaAndAlias` |
 | sub-agent task tool decodes bounded runtime options | `tools/task.TestTaskToolValidatesArgs` |
 | sub-agent parallel execution keeps stable result order | `subagent.TestOrchestratorRunsParallelTasksInStableOrder` |
 | sub-agent parallel fail-fast cancels sibling work | `subagent.TestOrchestratorParallelFailFastCancelsOtherTasks` |
@@ -76,8 +76,8 @@ Markdown document links.
 
 | Requirement | Evidence |
 | --- | --- |
-| `zenforge run` works | `TestRunStreamsOpenAICompatibleEndpoint`, CLI command wiring, README quickstart, full package tests |
-| `zenforge resume` works | `TestResumeLoadsJSONLCheckpoint`, CLI command wiring and config/checkpoint tests |
+| `zenforge run` works | `TestRunStreamsOpenAICompatibleEndpoint`, README quickstart, full package tests |
+| `zenforge resume` works | `TestResumeLoadsJSONLCheckpoint`, config/checkpoint tests |
 | config file works | `TestOptionsFromConfig`, `TestEventsLoadsCheckpointDirFromConfig`, `TestInitCreatesDefaultConfig` |
 | SQLite stores work through CLI | `TestEventsCanReadSQLiteStore`, `TestRunsCanReadSQLiteStore` |
 | model provider config works | `TestOptionsFromConfig` covers `model.provider` |
