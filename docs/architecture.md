@@ -7,7 +7,7 @@ deep API      easy default agent for most users
 harness core  replaceable runtime pieces for advanced users
 ```
 
-## Proposed Package Layout
+## Current Package Layout
 
 ```text
 zenforge/
@@ -18,8 +18,10 @@ zenforge/
 
 eventlog/
   interface.go
+  bus.go
   memory/
   jsonl/
+  sqlite/
 
 harness/
   state.go
@@ -31,57 +33,57 @@ model/
   interface.go
   openai/
   anthropic/
-  ollama/
 
 tool/
   interface.go
   registry.go
-  middleware.go
-  policy.go
-  result.go
+  middleware/
+  jsonschema/
 
 tools/
-  filesystem/
+  workspace/
   shell/
-  http/
   todo/
   task/
 
 workspace/
   interface.go
   local/
-  memory/
-  sandbox/
 
 planner/
   todo.go
-  plan_execute.go
 
 subagent/
   spec.go
   orchestrator.go
 
 approval/
-  policy.go
+  broker.go
   request.go
-  decision.go
+  cli/
 
 checkpoint/
   memory/
   jsonl/
+  sqlite/
+
+sandbox/
+  containerhub/
+  fake/
 
 trace/
   interface.go
-  stdout/
   otel/
-  jsonl/
+
+server/
+  harnesshttp/
+  sse/
 
 adapters/
+  mcp/
+  memory/
+  sandbox/
   zenmind/
-    catalog/
-    chatstore/
-    containerhub/
-    memory/
 ```
 
 ## Runtime Flow
