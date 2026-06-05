@@ -105,7 +105,8 @@ Markdown document links.
 ## Platform Boundary
 
 Core implementation must not import `agent-platform` or ZenMind server/chat
-packages. Validate with:
+packages. Automated evidence: `docs.TestGoSourceKeepsPlatformBoundary`.
+Validate manually with:
 
 ```bash
 rg -n "agent-platform|ZenMind" --glob "*.go" .
