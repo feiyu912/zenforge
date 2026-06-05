@@ -23,13 +23,16 @@ platform.
 11. JSONL event/checkpoint store
 12. Basic resume by `runID`
 13. Sub-agent task tool
-14. CLI: `zenforge run`
-15. Examples
+14. Approval broker and CLI approval modes
+15. MCP tool adapter
+16. Memory augmentation adapter
+17. CLI: `zenforge run`, `resume`, `events`, and `runs`
+18. Examples
 
 ## Defer Until After MVP
 
 - Full memory system extraction
-- MCP client extraction
+- MCP resources, prompts, sampling, discovery, and OAuth
 - Container Hub as a polished public sandbox backend
 - Multi-tenant server APIs
 - WebSocket gateway support
@@ -42,9 +45,9 @@ platform.
 
 ```text
 examples/code-review-agent
-examples/research-agent
 examples/repo-refactor-agent
-examples/customer-support-agent
+examples/sdk-embedded-agent
+examples/simple-tool-agent
 ```
 
 The most important one is `repo-refactor-agent`, because it exercises planning,
@@ -63,5 +66,6 @@ zenforge run "Analyze this repo and produce a refactor plan"
 - The agent can read and grep files inside a configured workspace.
 - The shell tool is permissioned and time-limited.
 - A run produces a checkpoint after every step.
-- A process restart can resume from the latest checkpoint for non-awaiting runs.
+- A process restart can resume from supported checkpoint boundaries, including
+  terminal, active tool, waiting approval, plan/execute, and sub-agent states.
 - The public API does not import `agent-platform/internal/...`.
