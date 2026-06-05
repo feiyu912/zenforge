@@ -166,6 +166,7 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - Config reference is checked against the generated `zenforge init` defaults.
 - Release notes version coverage is checked against `VERSION`.
 - Durable schema version docs and flattened event contract docs are checked.
+- MVP validation evidence is checked against existing test and benchmark names.
 - `sandbox.State` for cross-run session continuity.
 - Trace metadata enrichment.
 - A hardening test suite and a failure-mode guide.
