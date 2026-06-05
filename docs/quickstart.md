@@ -84,10 +84,14 @@ go run ./cmd/zenforge run --approve never "Run useful checks"
 ## Examples
 
 ```bash
+go run ./examples/sdk-embedded-agent
 OPENAI_API_KEY=... go run ./examples/simple-tool-agent
 OPENAI_API_KEY=... go run ./examples/repo-refactor-agent
 OPENAI_API_KEY=... go run ./examples/code-review-agent
 ```
+
+The SDK embedded example uses a local scripted model and runs without an API
+key. The other examples use an OpenAI-compatible provider.
 
 Examples honor:
 

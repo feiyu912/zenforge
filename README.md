@@ -118,7 +118,9 @@ Config is JSON. See [`docs/config-reference.md`](docs/config-reference.md) and [
 
 ## Examples
 
-Each example is a runnable Go program under [`examples/`](examples/).
+Each example is a runnable Go program under [`examples/`](examples/). The SDK
+embedded example runs locally without an API key; provider-backed examples need
+`OPENAI_API_KEY` or an OpenAI-compatible endpoint.
 
 | Example | What it shows |
 | --- | --- |
