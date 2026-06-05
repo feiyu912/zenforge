@@ -76,7 +76,7 @@ Markdown document links.
 
 | Requirement | Evidence |
 | --- | --- |
-| `zenforge run` works | CLI command wiring, README quickstart, full package tests |
+| `zenforge run` works | `TestRunStreamsOpenAICompatibleEndpoint`, CLI command wiring, README quickstart, full package tests |
 | `zenforge resume` works | `TestResumeLoadsJSONLCheckpoint`, CLI command wiring and config/checkpoint tests |
 | config file works | `TestOptionsFromConfig`, `TestEventsLoadsCheckpointDirFromConfig`, `TestInitCreatesDefaultConfig` |
 | SQLite stores work through CLI | `TestEventsCanReadSQLiteStore`, `TestRunsCanReadSQLiteStore` |

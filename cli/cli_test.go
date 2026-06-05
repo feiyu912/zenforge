@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,6 +41,44 @@ func TestRunRequiresInputBeforeAPIKey(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "run input is required") {
 		t.Fatalf("unexpected stderr: %q", stderr.String())
+	}
+}
+
+func TestRunStreamsOpenAICompatibleEndpoint(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test")
+	var gotPath string
+	var gotAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w,
+			"data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"cli\"}}]}\n\n"+
+				"data: {\"choices\":[{\"delta\":{\"content\":\" ok\"},\"finish_reason\":\"stop\"}]}\n\n"+
+				"data: [DONE]\n\n",
+		)
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Main(context.Background(), []string{
+		"run",
+		"--base-url", server.URL,
+		"--checkpoint-dir", t.TempDir(),
+		"--planning", "disabled",
+		"--no-shell",
+		"hello",
+	}, IO{Stdout: &stdout, Stderr: &stderr})
+	if code != 0 {
+		t.Fatalf("code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if gotPath != "/chat/completions" || gotAuth != "Bearer test" {
+		t.Fatalf("unexpected request path/auth: %q %q", gotPath, gotAuth)
+	}
+	output := stdout.String()
+	if !strings.Contains(output, "run ") || !strings.Contains(output, "cli ok") || !strings.Contains(output, "done") {
+		t.Fatalf("unexpected output: %q", output)
 	}
 }
 
