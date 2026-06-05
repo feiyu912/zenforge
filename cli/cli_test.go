@@ -159,6 +159,30 @@ func TestRunsCanReadSQLiteStore(t *testing.T) {
 	}
 }
 
+func TestResumeLoadsJSONLCheckpoint(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test")
+	dir := t.TempDir()
+	store := checkpointjsonl.New(dir)
+	cp := testCLICheckpoint("run_resume", 3)
+	cp.State.Phase = harness.RunPhaseCompleted
+	cp.State.Control.Status = harness.RunStatusCompleted
+	cp.State.Messages = append(cp.State.Messages, harness.MessageState{Role: "assistant", Content: "already done"})
+	if err := store.Save(context.Background(), cp); err != nil {
+		t.Fatalf("Save returned error: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Main(context.Background(), []string{"resume", "--checkpoint-dir", dir, "run_resume"}, IO{Stdout: &stdout, Stderr: &stderr})
+	if code != 0 {
+		t.Fatalf("code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	output := stdout.String()
+	if !strings.Contains(output, "run run_resume resumed") || !strings.Contains(output, "already done") || !strings.Contains(output, "run run_resume done") {
+		t.Fatalf("unexpected output: %q", output)
+	}
+}
+
 func TestRunsJSONOutput(t *testing.T) {
 	dir := t.TempDir()
 	store := checkpointjsonl.New(dir)
