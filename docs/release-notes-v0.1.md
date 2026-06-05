@@ -34,6 +34,7 @@ See [limitations.md](./limitations.md). Important V0.1 limitations:
   OAuth flows remain platform responsibilities.
 - OpenTelemetry exporter setup is owned by host services.
 - CLI config is JSON, not YAML.
+- Nested sub-agents are blocked by default.
 - Container Hub remains optional/beta.
 
 ## Verification

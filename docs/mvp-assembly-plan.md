@@ -325,8 +325,9 @@ Docs:
   retrieved memory and injects it into normalized tasks.
 - MCP support starts with tool adaptation; resources, prompts, sampling,
   discovery, and OAuth remain host/platform responsibilities.
-- Sub-agents are available as a runtime tool, with advanced nested/resume
-  behavior still intentionally limited.
+- Sub-agents are available as a runtime tool and resume at explicit parent and
+  child checkpoint boundaries; nested sub-agents remain intentionally outside
+  the MVP surface.
 - Container Hub remains an optional beta sandbox adapter.
 
 ## Release Candidate Criteria

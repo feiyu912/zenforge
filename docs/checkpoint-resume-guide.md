@@ -59,8 +59,9 @@ in mind. If a process crashes while a tool call was active, ZenForge retries the
 checkpointed tool call; custom tools should use fingerprints, approvals, or
 external guards when retrying could be unsafe.
 
-Sub-agent resume is supported at parent boundaries. Advanced resume inside an
-uncheckpointed child task remains limited.
+Sub-agent resume is supported at parent and child checkpoint boundaries. If a
+child run was in an uncheckpointed provider stream or external process, it
+follows the same retry-from-boundary rules as any other run.
 
 ## Approval Resume
 
