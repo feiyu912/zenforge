@@ -146,12 +146,27 @@ func (c *Client) do(ctx context.Context, method, path string, body any) (*http.R
 	}
 	res, err := c.http.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", sandbox.ErrSandboxUnavailable, err)
 	}
 	if res.StatusCode >= 200 && res.StatusCode < 300 {
 		return res, nil
 	}
 	defer res.Body.Close()
 	data, _ := io.ReadAll(io.LimitReader(res.Body, 4096))
-	return nil, fmt.Errorf("containerhub %s %s failed: status=%d body=%s", method, path, res.StatusCode, strings.TrimSpace(string(data)))
+	return nil, fmt.Errorf("%w: containerhub %s %s failed: status=%d body=%s", containerHubErrorCode(path, res.StatusCode), method, path, res.StatusCode, strings.TrimSpace(string(data)))
+}
+
+func containerHubErrorCode(path string, status int) sandbox.ErrorCode {
+	switch {
+	case strings.Contains(path, "/agent-prompt") && status == http.StatusNotFound:
+		return sandbox.ErrEnvironmentNotFound
+	case path == "/api/sessions/create":
+		return sandbox.ErrSessionOpenFailed
+	case strings.Contains(path, "/execute"):
+		return sandbox.ErrExecuteFailed
+	case strings.Contains(path, "/stop") && status == http.StatusNotFound:
+		return sandbox.ErrClosed
+	default:
+		return sandbox.ErrSandboxUnavailable
+	}
 }

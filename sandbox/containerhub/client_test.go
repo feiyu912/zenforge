@@ -74,6 +74,27 @@ func TestClientPromptTextAndJSON(t *testing.T) {
 	assertRequest(t, transport.requests[2], http.MethodGet, "/api/runtime-info", "", "")
 }
 
+func TestClientMapsHTTPFailuresToSandboxCodes(t *testing.T) {
+	transport := &recordingTransport{responses: []httpResponse{
+		{status: 500, body: "create failed"},
+		{status: 500, body: "execute failed"},
+		{status: 404, body: "missing prompt"},
+	}}
+	client, err := NewClient(Config{BaseURL: "https://hub.example", HTTPClient: &http.Client{Transport: transport}})
+	if err != nil {
+		t.Fatalf("NewClient returned error: %v", err)
+	}
+	if _, err := client.CreateSession(context.Background(), sandbox.OpenRequest{RunID: "run_1"}); sandbox.Code(err) != sandbox.ErrSessionOpenFailed {
+		t.Fatalf("CreateSession error code = %q err=%v", sandbox.Code(err), err)
+	}
+	if _, err := client.ExecuteSession(context.Background(), "session_1", sandbox.ExecuteRequest{Command: "printf ok"}); sandbox.Code(err) != sandbox.ErrExecuteFailed {
+		t.Fatalf("ExecuteSession error code = %q err=%v", sandbox.Code(err), err)
+	}
+	if _, err := client.EnvironmentPrompt(context.Background(), "missing"); sandbox.Code(err) != sandbox.ErrEnvironmentNotFound {
+		t.Fatalf("EnvironmentPrompt error code = %q err=%v", sandbox.Code(err), err)
+	}
+}
+
 func TestAdapterImplementsSandbox(t *testing.T) {
 	transport := &recordingTransport{responses: []httpResponse{
 		{status: 200, body: `{"id":"session_1","environmentId":"go"}`, contentType: "application/json"},

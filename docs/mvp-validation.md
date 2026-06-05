@@ -35,6 +35,7 @@ Markdown document links.
 | sandbox environment prompt can augment normalized tasks | `adapters/sandbox.TestAugmentTaskInjectsSandboxPromptAndMetadata`, `adapters/sandbox.TestAugmentTaskUsesEnvironmentIDFromMetadata` |
 | sandbox shell can reuse run-scoped sessions | `tools/shell.TestShellReusesSandboxSessionFromMetadata` |
 | sandbox shell failures expose structured error codes | `tools/shell.TestShellSandboxUnavailableDoesNotFallback`, `tools/shell.TestShellSandboxTimeoutIncludesStructuredErrorCode` |
+| Container Hub failures map to sandbox error codes | `sandbox/containerhub.TestClientMapsHTTPFailuresToSandboxCodes` |
 | repeated SQLite durable runs work | `TestSQLiteDurableRunSoak` |
 | benchmark entrypoint exists | `BenchmarkAgentRunStaticModel` |
 

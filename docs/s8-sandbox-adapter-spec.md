@@ -267,6 +267,8 @@ Common errors:
 Tool results should include structured metadata for these failures.
 For shell tools this includes `backend: "sandbox"` and `sandboxError` with the
 stable sandbox error code when one is available.
+The Container Hub client maps HTTP and transport failures into these stable
+codes so adapter callers can branch on `sandbox.Code(err)`.
 
 ## Migration From agent-platform
 
