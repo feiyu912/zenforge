@@ -1,6 +1,15 @@
 # API Sketch
 
-This is a draft API. Names can change after the first implementation spike.
+This is a historical draft API from the first implementation spike. Some names
+below intentionally preserve early design direction and no longer match the
+current public API exactly.
+
+For current copy-pasteable examples, use:
+
+- [SDK Guide](./sdk-guide.md)
+- [Tool Authoring](./tool-authoring-guide.md)
+- [Config Reference](./config-reference.md)
+- [Quickstart](./quickstart.md)
 
 ## Create An Agent
 

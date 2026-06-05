@@ -173,6 +173,7 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - The SDK embedded example is run in tests without an API key.
 - MVP scope now reflects the current CLI, adapter, resume, and example surface.
 - Architecture package layout is aligned with the current repository.
+- Historical API sketch is labeled and current guides are prioritized.
 - `sandbox.State` for cross-run session continuity.
 - Trace metadata enrichment.
 - A hardening test suite and a failure-mode guide.
