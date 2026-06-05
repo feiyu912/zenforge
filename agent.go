@@ -3,6 +3,7 @@ package zenforge
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -909,7 +910,7 @@ func (a *Agent) runChildSubAgent(ctx context.Context, spec subagent.SubAgentSpec
 		MaxSteps:     maxSteps,
 		Planning:     PlanningDisabled,
 	})
-	events, err := child.Stream(ctx, Task{RunID: childRunID, Input: task.Input, Meta: childMeta})
+	events, err := childSubAgentEvents(ctx, child, a.config.Checkpoints, childRunID, task.Input, childMeta)
 	if err != nil {
 		return subagent.TaskResult{
 			ID:        task.ID,
@@ -953,6 +954,17 @@ func (a *Agent) runChildSubAgent(ctx context.Context, spec subagent.SubAgentSpec
 		taskResult.Error = runErr.Error()
 	}
 	return taskResult, runErr
+}
+
+func childSubAgentEvents(ctx context.Context, child *Agent, checkpoints checkpoint.Store, childRunID, input string, meta map[string]any) (<-chan Event, error) {
+	if checkpoints != nil {
+		if _, err := checkpoints.Load(ctx, childRunID); err == nil {
+			return child.Resume(ctx, childRunID)
+		} else if !errors.Is(err, checkpoint.ErrNotFound) {
+			return nil, err
+		}
+	}
+	return child.Stream(ctx, Task{RunID: childRunID, Input: input, Meta: meta})
 }
 
 func startSubtasks(state *harness.RunState, req subagent.Request) {

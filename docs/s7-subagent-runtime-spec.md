@@ -263,6 +263,10 @@ MVP simplification:
 - if a child was running during crash, resume child from its latest checkpoint;
 - if child resume is unsupported, mark child failed with clear error.
 
+The default child runner checks for the deterministic child run checkpoint
+before starting a fresh child stream. Existing child checkpoints resume through
+`Agent.Resume`; missing child checkpoints start a new child stream.
+
 ## Nested Invocation
 
 Default:

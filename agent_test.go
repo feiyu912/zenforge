@@ -698,6 +698,65 @@ func TestInvokeSubAgentToolSkipsCompletedSubtaskOnResume(t *testing.T) {
 	}
 }
 
+func TestInvokeSubAgentToolResumesNonTerminalChildCheckpoint(t *testing.T) {
+	checkpoints := checkpointmemory.New()
+	childRunID := "run_subagent_resume_child_sub_subtask_1"
+	childState := newRunState(childRunID, "summarize docs", map[string]any{
+		"parentRunId":    "run_subagent_resume_child",
+		"subtaskId":      "subtask_1",
+		"subagent.depth": 1,
+	})
+	childState.Phase = harness.RunPhaseCompleted
+	childState.Control.Status = harness.RunStatusCompleted
+	childState.Messages = append(childState.Messages, harness.MessageState{Role: "assistant", Content: "child completed from checkpoint"})
+	now := time.Now().UTC()
+	if err := checkpoints.Save(context.Background(), checkpoint.Checkpoint{
+		Version: checkpoint.CheckpointVersion,
+		RunID:   childRunID,
+		Seq:     1,
+		State:   childState,
+		SavedAt: now,
+	}); err != nil {
+		t.Fatalf("Save returned error: %v", err)
+	}
+	fakeModel := &scriptedModel{turns: []scriptedTurn{{events: []model.Event{{Delta: "should not rerun child"}}}}}
+	agent := New(Config{
+		Model:            fakeModel,
+		SubAgentRegistry: subagent.MustRegistry(subagent.SubAgentSpec{Name: "researcher"}),
+		Checkpoints:      checkpoints,
+	})
+	state := newRunState("run_subagent_resume_child", "delegate", nil)
+	state.Subtasks = []harness.SubtaskState{
+		{
+			ID:        "subtask_1",
+			ParentID:  "call_task",
+			AgentName: "researcher",
+			Input:     "summarize docs",
+			Status:    harness.SubtaskRunning,
+			RunID:     childRunID,
+		},
+	}
+	call := harness.ToolCallState{
+		ID:        "call_task",
+		Name:      "task",
+		Arguments: json.RawMessage(`{"tasks":[{"id":"subtask_1","agent":"researcher","input":"summarize docs"}]}`),
+	}
+
+	result, err := agent.invokeSubAgentTool(context.Background(), func(EventType, map[string]any) {}, func() {}, &state, call)
+	if err != nil {
+		t.Fatalf("invokeSubAgentTool returned error: %v", err)
+	}
+	if len(fakeModel.requests) != 0 {
+		t.Fatalf("child model calls = %d, want 0", len(fakeModel.requests))
+	}
+	if !contains(result.Output, "child completed from checkpoint") {
+		t.Fatalf("aggregate result did not include resumed child output: %s", result.Output)
+	}
+	if len(state.Subtasks) != 1 || state.Subtasks[0].Status != harness.SubtaskCompleted || state.Subtasks[0].RunID != childRunID {
+		t.Fatalf("unexpected resumed subtask state: %#v", state.Subtasks)
+	}
+}
+
 func TestAgentPlanExecutePresetPlansExecutesAndSummarizes(t *testing.T) {
 	fakeModel := &scriptedModel{turns: []scriptedTurn{
 		{

@@ -1,218 +1,222 @@
 # ZenForge
 
-ZenForge is a production-first Go agent runtime for long-running, tool-using,
-observable, and recoverable agents.
+> Production-first Go agent runtime for long-running, tool-using, observable, and recoverable agents.
 
-It is not a Go clone of LangChain. The goal is a batteries-included agent
-harness: a default agent that can run real multi-step work, while keeping the
-model, tools, workspace, planner, checkpoint store, trace sink, and policy layer
-replaceable.
+ZenForge is a batteries-included agent harness for Go services. A single `zenforge.Agent` runs real multi-step work, with replaceable adapters for every concern — model, tools, workspace, planner, checkpoint store, event log, trace sink, approval broker, sandbox, and HTTP/SSE edge. Resume is first-class, not bolted on.
 
-## Why This Project Exists
+It is **not** a Go clone of LangChain. The goal is a small, opinionated runtime that you can embed in a backend, a CLI, a desktop app, or a gateway, instead of pulling in a Python agent framework.
 
-The current ZenMind codebase already contains a working internal agent runtime:
-model streaming, tool execution, plan/execute mode, HITL approvals, sub-agent
-delegation, memory, sandbox execution, event streaming, and chat trace storage.
+Current release: `v0.1.0`. The `main` branch carries additional v0.1.x capabilities on top of that tag — see [Project Status](#project-status).
 
-ZenForge extracts the reusable runtime core from that platform so it can become
-a standalone Go library and CLI.
+## Why
 
-Current release candidate: `0.1.0`.
+Most agent frameworks target notebooks. ZenForge targets services:
 
-## Product Positioning
+- **Durable runs** — checkpoints at every boundary, resume after crashes.
+- **Observable execution** — typed event stream + JSONL/SQLite/OTel sinks.
+- **Replaceable parts** — swap models, stores, transports, even the planner, without rewriting the loop.
+- **Small public surface** — five functions, one `Config` struct, one `Task` type. Everything else is an interface.
 
-ZenForge is:
-
-- A Go-native runtime for production agent applications.
-- A long-task harness with planning, tools, checkpoints, and streaming events.
-- A practical backend library for teams that do not want to embed a Python agent
-  runtime inside Go services.
-- A runtime core that can power HTTP servers, CLIs, desktop apps, gateways, and
-  private deployments.
-- Pluggable observability through JSON trace sinks and OpenTelemetry spans.
-
-ZenForge is not:
-
-- A prompt-template zoo.
-- A vector-store marketplace.
-- A chain/pipeline abstraction framework.
-- A full application platform by itself.
-
-## Target Shape
+## Quick Look
 
 ```go
-package main
-
 import (
     "context"
     "os"
-    "time"
 
     "github.com/feiyu912/zenforge"
-    checkpointjsonl "github.com/feiyu912/zenforge/checkpoint/jsonl"
-    eventlogjsonl "github.com/feiyu912/zenforge/eventlog/jsonl"
+    checkpointsqlite "github.com/feiyu912/zenforge/checkpoint/sqlite"
+    eventlogsqlite "github.com/feiyu912/zenforge/eventlog/sqlite"
     "github.com/feiyu912/zenforge/model/openai"
-    "github.com/feiyu912/zenforge/policy"
-    shelltool "github.com/feiyu912/zenforge/tools/shell"
-    workspacetools "github.com/feiyu912/zenforge/tools/workspace"
-    workspacelocal "github.com/feiyu912/zenforge/workspace/local"
+    "github.com/feiyu912/zenforge/tools"
+    "github.com/feiyu912/zenforge/trace"
 )
 
-func main() {
-    ctx := context.Background()
-
-    ws, _ := workspacelocal.New(workspacelocal.Config{Root: "."})
-    workspaceTools, _ := workspacetools.Tools(workspacetools.Config{Workspace: ws})
-    shellTool, _ := shelltool.New(shelltool.Config{Policy: policy.ShellPolicy{
-        WorkingDir:     ".",
-        AllowCommands:  []string{"go test ./...", "grep", "find"},
-        MaxTimeout:     30 * time.Second,
-        MaxOutputBytes: 256_000,
-    }})
-
-    agent := zenforge.New(zenforge.Config{
-        Model: openai.New(openai.Config{
-            APIKey: os.Getenv("OPENAI_API_KEY"),
-            Model: "gpt-4.1",
-        }),
-        Instructions: "You are a senior Go backend engineer.",
-        Tools: append(workspaceTools, shellTool),
-        Events: eventlogjsonl.New(".zenforge/runs"),
-        Checkpoints: checkpointjsonl.New(".zenforge/runs"),
-        Planning: zenforge.PlanningPlanExecute,
+lookup := tools.Must("lookup", "Look up internal facts.",
+    func(ctx context.Context, in struct {
+        Query string `json:"query" jsonschema:"required"`
+    }) (string, error) {
+        return "result for " + in.Query, nil
     })
 
-    events, err := agent.Stream(ctx, zenforge.Task{
-        Input: "Analyze this repository and propose a refactor plan.",
-    })
-    if err != nil {
-        panic(err)
-    }
+agent := zenforge.New(zenforge.Config{
+    Model:        openai.New(openai.Config{APIKey: os.Getenv("OPENAI_API_KEY"), Model: "gpt-4.1"}),
+    Instructions: "Use tools when useful and answer briefly.",
+    Tools:        []zenforge.Tool{lookup},
+    Events:       eventlogsqlite.New(".zenforge/runs.db"),
+    Checkpoints:  checkpointsqlite.New(".zenforge/runs.db"),
+    Trace:        trace.Redact(trace.Stdout()),
+    MaxSteps:     8,
+})
 
-    for event := range events {
-        println(event.String())
-    }
-}
+result, err := agent.Run(ctx, zenforge.Task{Input: "Review this package and summarize the risk."})
+// for ev := range agent.Stream(ctx, task) { ... }
+// agent.Resume(ctx, "run_123")
 ```
 
-## CLI Quick Start
+## Install
+
+```bash
+go get github.com/feiyu912/zenforge@v0.1.0
+```
+
+Go 1.22+. The core is dependency-light: OpenTelemetry SDK and pure-Go SQLite via `modernc.org/sqlite` (no cgo).
+
+## CLI
 
 ```bash
 go run ./cmd/zenforge init
 export OPENAI_API_KEY=...
 go run ./cmd/zenforge run --config zenforge.json "Analyze this repo"
+go run ./cmd/zenforge run --checkpoint-type sqlite --checkpoint-dir .zenforge/runs.db "..."
+go run ./cmd/zenforge resume run_123
+go run ./cmd/zenforge runs
 ```
 
-More CLI setup, event inspection, resume, approval modes, and examples are in
-[docs/quickstart.md](./docs/quickstart.md).
+Config is JSON. See [`docs/config-reference.md`](docs/config-reference.md) and [`docs/cli-design.md`](docs/cli-design.md).
 
-Local runs can use JSONL files or a SQLite database:
+## Highlights
+
+**Runtime**
+- Single `zenforge.Agent` with `Stream`, `Run`, `Resume`.
+- Plan/execute preset with built-in todo manager.
+- Run-scoped pending approval broker (`approval.PendingBroker`).
+- Durable event log and checkpoint stores: memory, JSONL, SQLite.
+- Sub-agent runtime tool with checkpoint-aware child resume; nested sub-agents blocked by default.
+
+**Models**
+- OpenAI-compatible and Anthropic adapters.
+- Streaming text and tool calls.
+
+**Tools**
+- Typed tool helper that infers JSON schema from Go structs.
+- Workspace, shell (deny-by-default), todo, MCP bridge, sub-agent task tool.
+- Memory augmenter that hydrates normalized tasks from a store.
+
+**HTTP / SSE edge** — `server/harnesshttp`
+- `POST /run`, `POST /resume`, `GET /events` (replay with `afterSeq`), `GET /live` (live fanout).
+- `GET /approvals`, `POST /approval` for run-scoped pending approval flows.
+- Access control hook to enforce auth and inject trusted metadata; ZenForge does not own auth, tenancy, or catalog loading.
+
+**Live events**
+- `eventlog.Bus` and `eventlog.FanoutStore` for multiple live subscribers.
+- Replay (`/events`) and live (`/live`) are deliberately separate: replay is the read model, live is fanout.
+
+**Observability**
+- Trace sinks: memory, stdout, JSONL, OpenTelemetry spans.
+- Trace metadata enrichment.
+- Redaction helpers for common secret-bearing keys.
+
+**Platform adapters**
+- `adapters/zenmind` — run config mapping, chat JSONL projection, feature flag router.
+- `adapters/mcp` — MCP tool bridge (resources/prompts/sampling/OAuth stay with the host).
+- `adapters/memory` — scoped memory augmentation into normalized tasks.
+
+**Sandbox**
+- Local, fake, and Container Hub (beta) backends.
+- `sandbox.State` helpers for cross-run session continuity.
+
+## Examples
+
+Each example is a runnable Go program under [`examples/`](examples/).
+
+| Example | What it shows |
+| --- | --- |
+| [`sdk-embedded-agent`](examples/sdk-embedded-agent) | Embed ZenForge in a Go service; runs without an API key. |
+| [`simple-tool-agent`](examples/simple-tool-agent) | Minimal model + tool loop. |
+| [`code-review-agent`](examples/code-review-agent) | Workspace + shell with approval. |
+| [`repo-refactor-agent`](examples/repo-refactor-agent) | Long task with checkpoints and resume. |
+
+## Documentation
+
+Start here:
+- [Quickstart](docs/quickstart.md)
+- [SDK Guide](docs/sdk-guide.md)
+- [Provider Guide](docs/provider-guide.md)
+- [Tool Authoring](docs/tool-authoring-guide.md)
+
+Server and edge:
+- [Server HTTP Guide](docs/server-http-guide.md) · [Server SSE Guide](docs/server-sse-guide.md)
+- [Approval Guide](docs/approval-guide.md) · [Checkpoint & Resume](docs/checkpoint-resume-guide.md)
+
+Adapters and integrations:
+- [ZenMind Adapter](docs/zenmind-adapter-guide.md) · [MCP Adapter](docs/mcp-adapter-guide.md) · [Memory Adapter](docs/memory-adapter-guide.md)
+- [Sandbox Guide](docs/sandbox-guide.md) · [Sub-Agent Guide](docs/subagent-guide.md) · [Planner Guide](docs/planner-guide.md) · [Trace Guide](docs/trace-guide.md)
+
+Design and operation:
+- [Architecture](docs/architecture.md) · [Harness State Machine](docs/harness-state-machine.md) · [Failure Modes](docs/failure-modes.md) · [Security Guide](docs/security-guide.md) · [Limitations](docs/limitations.md)
+- [MVP Validation](docs/mvp-validation.md) · [v0.1 Release Notes](docs/release-notes-v0.1.md) · [Release Checklist](docs/release-checklist.md)
+- [Vision](docs/vision.md) · [Product Roadmap](docs/product-roadmap.md)
+
+Architecture decision records live in [`docs/adr/`](docs/adr/).
+
+## Project Status
+
+`v0.1.0` is the first usable release candidate. The current `main` branch adds the following on top of the v0.1.0 tag without changing the public surface:
+
+- `server/harnesshttp` access control hook for auth and tenancy injection.
+- `eventlog.Bus` and `eventlog.FanoutStore` for live multi-subscriber event fanout.
+- `approval.PendingBroker` for run-scoped pending approvals, exposed via `GET /approvals` and `POST /approval`.
+- `adapters/zenmind`: run configuration mapping, chat JSONL projection, feature flag router.
+- `adapters/memory`: scoped memory augmentation.
+- Sub-agent resume reuses terminal children and continues existing child checkpoints.
+- `sandbox.State` for cross-run session continuity.
+- Trace metadata enrichment.
+- A hardening test suite and a failure-mode guide.
+
+Verification before each release:
 
 ```bash
-go run ./cmd/zenforge run --checkpoint-type sqlite --checkpoint-dir .zenforge/runs.db "Analyze this repo"
+go test ./...
+go test ./examples/...
+grep -R -n -E 'agent-platform|ZenMind' --include='*.go' .   # must return nothing
 ```
 
-Useful examples:
+**Not in MVP** — see [`docs/limitations.md`](docs/limitations.md) for the full list:
 
-```bash
-go run ./examples/sdk-embedded-agent
-OPENAI_API_KEY=... go run ./examples/repo-refactor-agent
-OPENAI_API_KEY=... go run ./examples/code-review-agent
-OPENAI_API_KEY=... go run ./examples/simple-tool-agent
-```
+- Resume does not continue a partially streamed provider response.
+- Cross-run persistent approvals are not included.
+- MCP covers tools only; resources, prompts, sampling, discovery, and OAuth stay with the host platform.
+- OpenTelemetry exporter setup stays in host services.
+- CLI config is JSON only.
+- Container Hub sandbox is optional and beta.
 
 ## Repository Layout
 
 ```text
 zenforge/
-  README.md
-  docs/
-    vision.md
-    current-project-mapping.md
-    architecture.md
-    mvp-scope.md
-    extraction-plan.md
-    api-sketch.md
+  agent.go              # zenforge.Agent + Config + Task + Result
+  task.go               # normalized task model
+  events.go             # public event contract
+  config.go             # high-level Config
+  approval/             # broker + run-scoped pending broker
+  checkpoint/           # memory, jsonl, sqlite stores
+  eventlog/             # bus + fanout + memory, jsonl, sqlite stores
+  model/                # openai, anthropic adapters
+  tools/                # workspace, shell, todo, task
+  subagent/             # sub-agent runtime
+  planner/              # todo manager + plan/execute preset
+  sandbox/              # local, fake, containerhub + State helpers
+  workspace/            # workspace interface + local impl
+  policy/               # shell/workspace policy types
+  trace/                # sinks: memory, stdout, jsonl, otel
+  recorder/             # event recorder helpers
+  eventlog/             # fanout + durable stores
+  server/               # harnesshttp + sse helpers
+  adapters/             # mcp, memory, zenmind
+  harness/              # loop, state machine, resume
+  examples/             # runnable examples
+  cmd/zenforge/         # CLI
+  docs/                 # design, guides, ADRs
 ```
 
-Implementation should begin only after the boundaries in these documents are
-accepted.
+## Contributing
 
-Start with [docs/preparation-plan.md](./docs/preparation-plan.md) before
-porting implementation code. It captures the current extraction strategy after
-reviewing `agent-platform` and `agent-container-hub`.
+Issues and pull requests are welcome. The CI workflow runs `go test ./...`, builds the examples, and fails the build if any Go file references `agent-platform` or ZenMind platform packages — that boundary is the point of the project.
 
-For the full path from project start to MVP and the first usable product, see
-[docs/product-roadmap.md](./docs/product-roadmap.md).
+Before opening a PR, run:
 
-The design document index is [docs/README.md](./docs/README.md).
-
-The SDK guide is [docs/sdk-guide.md](./docs/sdk-guide.md).
-
-The provider guide is [docs/provider-guide.md](./docs/provider-guide.md).
-
-The detailed durable runtime design for S1 is
-[docs/s1-durable-runtime-spec.md](./docs/s1-durable-runtime-spec.md).
-
-The tool runtime design for S2 is
-[docs/s2-tool-runtime-spec.md](./docs/s2-tool-runtime-spec.md).
-
-The safety and workspace design for S3 is
-[docs/s3-safety-workspace-spec.md](./docs/s3-safety-workspace-spec.md).
-
-The minimal harness design for S4 is
-[docs/s4-minimal-harness-spec.md](./docs/s4-minimal-harness-spec.md).
-
-The planner and todo design for S5 is
-[docs/s5-planner-todo-spec.md](./docs/s5-planner-todo-spec.md).
-
-The approval and HITL design for S6 is
-[docs/s6-approval-hitl-spec.md](./docs/s6-approval-hitl-spec.md).
-
-The sub-agent runtime design for S7 is
-[docs/s7-subagent-runtime-spec.md](./docs/s7-subagent-runtime-spec.md).
-
-The sandbox adapter design for S8 is
-[docs/s8-sandbox-adapter-spec.md](./docs/s8-sandbox-adapter-spec.md).
-
-The MVP assembly plan is
-[docs/mvp-assembly-plan.md](./docs/mvp-assembly-plan.md).
-
-The current MVP validation evidence is
-[docs/mvp-validation.md](./docs/mvp-validation.md).
-
-The release checklist is
-[docs/release-checklist.md](./docs/release-checklist.md).
-
-The V0.1 release notes are
-[docs/release-notes-v0.1.md](./docs/release-notes-v0.1.md).
-
-The checkpoint/resume guide is
-[docs/checkpoint-resume-guide.md](./docs/checkpoint-resume-guide.md).
-
-The failure-mode guide is
-[docs/failure-modes.md](./docs/failure-modes.md).
-
-The server/SSE adapter guide is
-[docs/server-sse-guide.md](./docs/server-sse-guide.md).
-
-The server/HTTP adapter guide is
-[docs/server-http-guide.md](./docs/server-http-guide.md).
-
-The ZenMind adapter guide is
-[docs/zenmind-adapter-guide.md](./docs/zenmind-adapter-guide.md).
-
-The MCP adapter guide is
-[docs/mcp-adapter-guide.md](./docs/mcp-adapter-guide.md).
-
-The memory adapter guide is
-[docs/memory-adapter-guide.md](./docs/memory-adapter-guide.md).
-
-The trace guide is
-[docs/trace-guide.md](./docs/trace-guide.md).
-
-The CLI config reference is
-[docs/config-reference.md](./docs/config-reference.md).
-
-The MVP limitations are
-[docs/limitations.md](./docs/limitations.md).
+```bash
+go test ./...
+go test ./examples/...
+```
