@@ -160,6 +160,12 @@ MVP mode:
 - warn/approval for stale writes;
 - strict mode later.
 
+The workspace tools expose the MVP strict path through
+`tools/workspace.SnapshotStore`. `workspace_read` records file metadata after a
+successful read. When `RequireReadBeforeWrite` is enabled, `workspace_write`
+requires a matching snapshot for existing files and fails stale writes if size,
+mtime, or file type changed since the read.
+
 ## Workspace Tools
 
 Tool names:
@@ -370,4 +376,3 @@ Minimum tests:
 - approval request shape is ready for S6;
 - no ZenMind platform imports;
 - S4 harness can include these tools by default.
-

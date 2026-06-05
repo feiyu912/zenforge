@@ -45,6 +45,7 @@ Markdown document links.
 | typed tool helper works | `tools.TestTypedToolCallsStructHandler` |
 | workspace read/list/grep works | `tools/workspace.TestWorkspaceToolsReadListGrepWrite` |
 | workspace write respects roots | `workspace/local` escape tests and workspace tool write tests |
+| workspace write can require fresh read snapshots | `tools/workspace.TestWorkspaceWriteRequiresFreshReadSnapshot` |
 | shell command allowlist works | `tools/shell.TestShellAllowsAllowlistedCommand` |
 | shell allowlist blocks shell control chaining | `policy.TestReviewCommandBlocksShellControlOperatorsBeforeAllowlist`, `tools/shell.TestShellBlocksAllowlistedCommandWithShellControl` |
 | risky shell returns approval request or prompt | `TestShellApprovalRequiredShape`, `TestAgentApprovalBrokerApprovesAndRetriesTool`, CLI approval mode tests |

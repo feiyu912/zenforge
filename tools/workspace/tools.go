@@ -3,6 +3,7 @@ package workspace
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/feiyu912/zenforge/tool"
@@ -11,7 +12,9 @@ import (
 )
 
 type Config struct {
-	Workspace workspacepkg.Workspace
+	Workspace              workspacepkg.Workspace
+	Snapshots              *SnapshotStore
+	RequireReadBeforeWrite bool
 }
 
 func Tools(config Config) ([]tool.Tool, error) {
@@ -59,6 +62,7 @@ func Read(config Config) (tool.Tool, error) {
 			end = len(data)
 		}
 		info, _ := config.Workspace.Stat(ctx, in.Path)
+		config.Snapshots.Record(info)
 		return readOutput{
 			Path:      info.Path,
 			Content:   string(data[offset:end]),
@@ -109,6 +113,23 @@ func Write(config Config) (tool.Tool, error) {
 		if in.Description == "" {
 			return writeOutput{}, fmt.Errorf("%w: description is required", tool.ErrInvalidArguments)
 		}
+		if config.RequireReadBeforeWrite {
+			if config.Snapshots == nil {
+				return writeOutput{}, ErrSnapshotRequired
+			}
+			info, err := config.Workspace.Stat(ctx, in.Path)
+			if errors.Is(err, workspacepkg.ErrPathNotFound) {
+				err = nil
+			}
+			if err != nil {
+				return writeOutput{}, err
+			}
+			if info.Path != "" {
+				if err := config.Snapshots.Check(info); err != nil {
+					return writeOutput{}, err
+				}
+			}
+		}
 		if err := config.Workspace.Write(ctx, in.Path, []byte(in.Content)); err != nil {
 			return writeOutput{}, err
 		}
@@ -116,6 +137,7 @@ func Write(config Config) (tool.Tool, error) {
 		if err != nil {
 			return writeOutput{}, err
 		}
+		config.Snapshots.Record(info)
 		return writeOutput{Path: info.Path, Bytes: len(in.Content), Info: info}, nil
 	})
 }
