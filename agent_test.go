@@ -9,6 +9,7 @@ import (
 
 	"github.com/feiyu912/zenforge/approval"
 	"github.com/feiyu912/zenforge/checkpoint"
+	checkpointjsonl "github.com/feiyu912/zenforge/checkpoint/jsonl"
 	checkpointmemory "github.com/feiyu912/zenforge/checkpoint/memory"
 	"github.com/feiyu912/zenforge/harness"
 	"github.com/feiyu912/zenforge/model"
@@ -306,6 +307,59 @@ func TestAgentResumeActiveToolRetriesTool(t *testing.T) {
 	assertContainsEvent(t, types, EventRunDone)
 	if len(fakeModel.requests) != 1 {
 		t.Fatalf("model calls = %d, want 1", len(fakeModel.requests))
+	}
+}
+
+func TestAgentResumeActiveToolFromJSONLCheckpoint(t *testing.T) {
+	checkpoints := checkpointjsonl.New(t.TempDir())
+	state := newRunState("run_jsonl_active_tool", "use echo", nil)
+	state.Step = 1
+	state.Phase = harness.RunPhaseTool
+	state.Control.Status = harness.RunStatusToolExecuting
+	now := time.Now().UTC()
+	state.Tool.Active = &harness.ToolCallState{
+		ID:        "call_1",
+		Name:      "echo",
+		Arguments: json.RawMessage(`{"text":"jsonl resumed tool"}`),
+		Status:    harness.ToolCallRunning,
+		StartedAt: &now,
+	}
+	if err := checkpoints.Save(context.Background(), checkpoint.Checkpoint{
+		Version: checkpoint.CheckpointVersion,
+		RunID:   "run_jsonl_active_tool",
+		Seq:     1,
+		State:   state,
+		SavedAt: now,
+	}); err != nil {
+		t.Fatalf("Save returned error: %v", err)
+	}
+	fakeModel := &scriptedModel{turns: []scriptedTurn{{events: []model.Event{{Delta: "final after jsonl retry"}}}}}
+	agent := New(Config{
+		Model:       fakeModel,
+		Tools:       []Tool{echoTool{}},
+		Checkpoints: checkpoints,
+	})
+
+	events, err := agent.Resume(context.Background(), "run_jsonl_active_tool")
+	if err != nil {
+		t.Fatalf("Resume returned error: %v", err)
+	}
+	var types []EventType
+	for event := range events {
+		types = append(types, event.Type)
+	}
+	assertContainsEvent(t, types, EventRunResumed)
+	assertContainsEvent(t, types, EventToolResult)
+	assertContainsEvent(t, types, EventRunDone)
+	if len(fakeModel.requests) != 1 {
+		t.Fatalf("model calls = %d, want 1", len(fakeModel.requests))
+	}
+	latest, err := checkpoints.Load(context.Background(), "run_jsonl_active_tool")
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if latest.State.Phase != harness.RunPhaseCompleted || latest.State.Control.Status != harness.RunStatusCompleted {
+		t.Fatalf("latest state = %s/%s, want completed", latest.State.Phase, latest.State.Control.Status)
 	}
 }
 

@@ -22,7 +22,7 @@ Markdown document links.
 | Anthropic model can stream text and tool calls | `model/anthropic.TestClientStreamsTextAndSendsMessagesRequest`, `model/anthropic.TestClientStreamsToolUse` |
 | Model tool calls invoke tools | `TestAgentStreamRunsToolAndContinuesModelLoop` |
 | Checkpoints written at boundaries | `TestAgentStreamRunsToolAndContinuesModelLoop`, checkpoint memory/JSONL/SQLite tests |
-| Resume works for supported boundaries | `TestAgentResumeTerminalCompletedDoesNotRerunModel`, `TestAgentResumeActiveToolRetriesToolCall`, `TestAgentResumeWaitingApprovalRequestsAgainAndContinues` |
+| Resume works for supported boundaries | `TestAgentResumeCompletedDoesNotCallModelAgain`, `TestAgentResumeActiveToolRetriesTool`, `TestAgentResumeActiveToolFromJSONLCheckpoint`, `TestAgentResumeWaitingApprovalUsesBroker` |
 | Server HTTP/SSE helpers work | `server/harnesshttp` and `server/sse` package tests |
 | HTTP access hook authorizes and injects trusted metadata | `server/harnesshttp.TestServeRunAuthorizesAndInjectsTrustedMeta`, `server/harnesshttp.TestServeEventsRejectsForbidden` |
 | HTTP approval submit authorizes pending run and resolves broker | `server/harnesshttp.TestServeApprovalSubmitsPendingDecision`, `server/harnesshttp.TestServeApprovalAuthorizesPendingRun` |

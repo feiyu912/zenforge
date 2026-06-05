@@ -160,6 +160,7 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - `adapters/zenmind`: run configuration mapping, chat JSONL projection, feature flag router.
 - `adapters/memory`: scoped memory augmentation.
 - Sub-agent resume reuses terminal children and continues existing child checkpoints.
+- Active tool resume is covered through durable JSONL checkpoints.
 - CLI run/resume are covered against local OpenAI-compatible streaming and durable JSONL checkpoints.
 - `sandbox.State` for cross-run session continuity.
 - Trace metadata enrichment.

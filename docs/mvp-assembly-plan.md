@@ -259,8 +259,8 @@ Integration tests:
 - fake model + fake tools;
 - fake model + local workspace tools;
 - fake model + todo planner;
-- CLI with fake model provider;
-- JSONL resume from pending tool.
+- CLI with local OpenAI-compatible streaming endpoint;
+- JSONL resume from active tool checkpoint.
 
 Manual smoke:
 
