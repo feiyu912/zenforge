@@ -872,6 +872,52 @@ func TestAgentPlanExecuteResumeContinuesActiveTodoFromCheckpoint(t *testing.T) {
 	}
 }
 
+func TestAgentPlanExecuteResumeSummarizesTerminalTodos(t *testing.T) {
+	checkpoints := checkpointmemory.New()
+	runID := "run_plan_execute_resume_summary"
+	state := newRunState(runID, "do the work", planExecuteMeta(nil, "do the work", planExecuteStageExecute))
+	state.Todos = []harness.TodoState{
+		{ID: "todo_1", Content: "First", Status: harness.TodoDone},
+		{ID: "todo_2", Content: "Second", Status: harness.TodoDone},
+	}
+	now := time.Now().UTC()
+	if err := checkpoints.Save(context.Background(), checkpoint.Checkpoint{
+		Version: checkpoint.CheckpointVersion,
+		RunID:   runID,
+		Seq:     1,
+		State:   state,
+		SavedAt: now,
+	}); err != nil {
+		t.Fatalf("Save returned error: %v", err)
+	}
+	fakeModel := &scriptedModel{turns: []scriptedTurn{{events: []model.Event{{Delta: "summary done"}}}}}
+	agent := New(Config{
+		Model:       fakeModel,
+		Planning:    PlanningPlanExecute,
+		Checkpoints: checkpoints,
+	})
+
+	events, err := agent.Resume(context.Background(), runID)
+	if err != nil {
+		t.Fatalf("Resume returned error: %v", err)
+	}
+	var output string
+	for event := range events {
+		if event.Type == EventRunDone {
+			output = stringValue(event.Payload["output"])
+		}
+	}
+	if output != "summary done" {
+		t.Fatalf("unexpected resumed summary output: %q", output)
+	}
+	if len(fakeModel.requests) != 1 || fakeModel.requests[0].ToolChoice != model.ToolChoiceNone {
+		t.Fatalf("expected summary-only model call, got %#v", fakeModel.requests)
+	}
+	if !contains(fakeModel.requests[0].Messages[0].Content, "First") || !contains(fakeModel.requests[0].Messages[0].Content, "Second") {
+		t.Fatalf("summary prompt missing terminal todos: %#v", fakeModel.requests[0].Messages)
+	}
+}
+
 func assertContainsEvent(t *testing.T, events []EventType, want EventType) {
 	t.Helper()
 	for _, event := range events {
