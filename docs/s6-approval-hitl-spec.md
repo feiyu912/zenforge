@@ -185,6 +185,9 @@ already authorized the run id and needs only the pending requests for that run.
 ## Tool Middleware Integration
 
 Approval middleware receives an approval plan from policy layers.
+`approval.Plan` is the broker-free DTO for this boundary: policy and tool
+layers can mark a request as required and pass the normalized
+`approval.Request` upward without depending on broker internals.
 
 Flow:
 

@@ -85,6 +85,23 @@ func TestShellApprovalRequiredShape(t *testing.T) {
 	}
 }
 
+func TestShellApprovalPlanFromReview(t *testing.T) {
+	review := policy.ReviewCommand(policy.ShellPolicy{RequireApproval: true}, "git status")
+	plan := shellApprovalPlan(tool.Context{RunID: "run_1", ToolCallID: "call_1"}, input{
+		Command:     "git status",
+		Description: "inspect repo",
+	}, "/workspace", review)
+	if err := plan.Validate(); err != nil {
+		t.Fatalf("plan Validate returned error: %v", err)
+	}
+	if !plan.Required || plan.Request.ToolName != "shell" || plan.Request.Operation != "shell.command" {
+		t.Fatalf("unexpected approval plan: %#v", plan)
+	}
+	if plan.Request.Payload["fingerprint"] != review.Fingerprint || plan.Request.Payload["ruleKey"] != review.RuleKey {
+		t.Fatalf("approval plan missing review payload: %#v", plan.Request.Payload)
+	}
+}
+
 func TestShellRunsWithApprovalMetadata(t *testing.T) {
 	root := t.TempDir()
 	command := "printf ok"

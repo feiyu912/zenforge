@@ -51,3 +51,25 @@ func TestRequiredResultRoundTrip(t *testing.T) {
 		t.Fatalf("request id = %q, want %q", got.ID, req.ID)
 	}
 }
+
+func TestRequiredPlanValidatesRequest(t *testing.T) {
+	req := Request{
+		ID:        "approval_1",
+		RunID:     "run_1",
+		Operation: "shell.command",
+		Title:     "Approve command",
+		Risk:      RiskHigh,
+		Options:   DefaultOptions(),
+		CreatedAt: time.Now().UTC(),
+	}
+	plan := RequiredPlan(req)
+	if !plan.Required {
+		t.Fatalf("plan should be required")
+	}
+	if err := plan.Validate(); err != nil {
+		t.Fatalf("Validate returned error: %v", err)
+	}
+	if err := (Plan{}).Validate(); err != nil {
+		t.Fatalf("optional plan Validate returned error: %v", err)
+	}
+}

@@ -128,26 +128,8 @@ func (t shellTool) run(ctx context.Context, in input, call tool.Context) (tool.R
 			review.Decision = policy.ReviewAllow
 			review.Reason = "command approved by broker"
 		} else {
-			req := approval.Request{
-				ID:          approval.NewRequestID(call.RunID, call.ToolCallID, "shell_command"),
-				RunID:       call.RunID,
-				ToolCallID:  call.ToolCallID,
-				ToolName:    "shell",
-				Operation:   "shell.command",
-				Title:       "Approve shell command",
-				Description: in.Description,
-				Risk:        approval.RiskHigh,
-				Options:     approval.DefaultOptions(),
-				Payload: map[string]any{
-					"command":     in.Command,
-					"cwd":         cwd,
-					"fingerprint": review.Fingerprint,
-					"ruleKey":     review.RuleKey,
-					"review":      review,
-				},
-				CreatedAt: time.Now().UTC(),
-			}
-			return approval.RequiredResult(req), approval.ErrRequired
+			plan := shellApprovalPlan(call, in, cwd, review)
+			return approval.RequiredResult(plan.Request), approval.ErrRequired
 		}
 	}
 
@@ -191,6 +173,28 @@ func (t shellTool) run(ctx context.Context, in input, call tool.Context) (tool.R
 		return encodeOutput(out, tool.ErrTimeout)
 	}
 	return encodeOutput(out, err)
+}
+
+func shellApprovalPlan(call tool.Context, in input, cwd string, review policy.CommandReview) approval.Plan {
+	return approval.RequiredPlan(approval.Request{
+		ID:          approval.NewRequestID(call.RunID, call.ToolCallID, "shell_command"),
+		RunID:       call.RunID,
+		ToolCallID:  call.ToolCallID,
+		ToolName:    "shell",
+		Operation:   "shell.command",
+		Title:       "Approve shell command",
+		Description: in.Description,
+		Risk:        approval.RiskHigh,
+		Options:     approval.DefaultOptions(),
+		Payload: map[string]any{
+			"command":     in.Command,
+			"cwd":         cwd,
+			"fingerprint": review.Fingerprint,
+			"ruleKey":     review.RuleKey,
+			"review":      review,
+		},
+		CreatedAt: time.Now().UTC(),
+	})
 }
 
 func (t shellTool) execute(ctx context.Context, call tool.Context, command, cwd string, timeout time.Duration) (string, string, int, ShellBackend, *sandbox.State, error) {
