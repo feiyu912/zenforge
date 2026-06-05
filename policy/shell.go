@@ -41,6 +41,9 @@ func ReviewCommand(policy ShellPolicy, command string) CommandReview {
 	if normalized == "" {
 		return CommandReview{Decision: ReviewBlock, Reason: "empty command", RuleKey: "empty", Fingerprint: fingerprint, Risk: "invalid"}
 	}
+	if hasShellControl(normalized) {
+		return CommandReview{Decision: ReviewBlock, Reason: "shell control operators are not allowed", RuleKey: "shell_control", Fingerprint: fingerprint, Risk: "high"}
+	}
 	for _, deny := range policy.DenyCommands {
 		if commandMatches(normalized, deny) {
 			return CommandReview{Decision: ReviewBlock, Reason: "command denied by policy", RuleKey: "deny:" + deny, Fingerprint: fingerprint, Risk: "blocked"}
@@ -107,6 +110,16 @@ func normalizeCommand(command string) string {
 func commandMatches(command, rule string) bool {
 	normalizedRule := normalizeCommand(rule)
 	return command == normalizedRule || strings.HasPrefix(command, normalizedRule+" ")
+}
+
+func hasShellControl(command string) bool {
+	control := []string{"&&", "||", ";", "|", "\n", "`", "$(", ">", "<"}
+	for _, op := range control {
+		if strings.Contains(command, op) {
+			return true
+		}
+	}
+	return false
 }
 
 func fingerprint(value string) string {

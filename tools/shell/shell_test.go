@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -47,6 +48,21 @@ func TestShellBlocksDeniedAndNotAllowlistedCommands(t *testing.T) {
 	result, err = shell.Call(context.Background(), json.RawMessage(`{"command":"git status","description":"not allowed"}`), tool.Context{})
 	if err == nil || result.ExitCode == 0 {
 		t.Fatalf("expected not allowlisted command error, got result=%#v err=%v", result, err)
+	}
+}
+
+func TestShellBlocksAllowlistedCommandWithShellControl(t *testing.T) {
+	root := t.TempDir()
+	shell := Must(Config{Policy: policy.ShellPolicy{
+		WorkingDir:    root,
+		AllowCommands: []string{"printf ok"},
+	}})
+	result, err := shell.Call(context.Background(), json.RawMessage(`{"command":"printf ok && printf bad","description":"chained command"}`), tool.Context{})
+	if err == nil || result.ExitCode == 0 {
+		t.Fatalf("expected shell control command error, got result=%#v err=%v", result, err)
+	}
+	if !strings.Contains(err.Error(), "shell control operators") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

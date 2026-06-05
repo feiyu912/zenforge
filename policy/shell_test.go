@@ -22,6 +22,26 @@ func TestReviewCommandAllowDenyAndApproval(t *testing.T) {
 	}
 }
 
+func TestReviewCommandBlocksShellControlOperatorsBeforeAllowlist(t *testing.T) {
+	policy := ShellPolicy{
+		AllowCommands:   []string{"go test ./..."},
+		RequireApproval: true,
+	}
+	cases := []string{
+		"go test ./... && rm -rf tmp",
+		"go test ./...; rm -rf tmp",
+		"go test ./... | cat",
+		"go test ./... > out.txt",
+		"go test ./... $(printf bad)",
+	}
+	for _, command := range cases {
+		review := ReviewCommand(policy, command)
+		if review.Decision != ReviewBlock || review.RuleKey != "shell_control" {
+			t.Fatalf("ReviewCommand(%q) = %#v, want shell_control block", command, review)
+		}
+	}
+}
+
 func TestResolveWorkingDirBlocksEscape(t *testing.T) {
 	root := t.TempDir()
 	if _, err := ResolveWorkingDir(root, ".."); !errors.Is(err, ErrPathEscape) {

@@ -48,6 +48,8 @@ Shell tool must:
 - filter env vars;
 - review command risk;
 - require approval for unknown or risky commands.
+- block shell control operators such as `&&`, `;`, pipes, and redirects before
+  allowlist matching.
 
 Recommended configuration:
 
@@ -107,4 +109,3 @@ responsible for:
 - managing credentials;
 - reviewing custom tools;
 - sandboxing untrusted workloads.
-
