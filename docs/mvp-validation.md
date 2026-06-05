@@ -64,6 +64,7 @@ Markdown document links.
 | --- | --- |
 | todo tools work | `tools/todo.TestTodoToolsWorkThroughInvoker` |
 | plan/execute preset works with fake model | `TestAgentPlanExecutePresetPlansExecutesAndSummarizes` |
+| plan/execute resume continues active todo checkpoint | `TestAgentPlanExecuteResumeContinuesActiveTodoFromCheckpoint` |
 | todo updates stream | `TestAgentPlanningAddsTodoToolsAndCheckpointsTodos` |
 
 ## CLI

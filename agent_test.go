@@ -12,6 +12,7 @@ import (
 	checkpointmemory "github.com/feiyu912/zenforge/checkpoint/memory"
 	"github.com/feiyu912/zenforge/harness"
 	"github.com/feiyu912/zenforge/model"
+	"github.com/feiyu912/zenforge/planner"
 	"github.com/feiyu912/zenforge/sandbox"
 	"github.com/feiyu912/zenforge/subagent"
 	"github.com/feiyu912/zenforge/tool"
@@ -805,6 +806,69 @@ func TestAgentPlanExecutePresetPlansExecutesAndSummarizes(t *testing.T) {
 	}
 	if fakeModel.requests[4].ToolChoice != model.ToolChoiceNone {
 		t.Fatalf("summary request tool choice = %q, want none", fakeModel.requests[4].ToolChoice)
+	}
+}
+
+func TestAgentPlanExecuteResumeContinuesActiveTodoFromCheckpoint(t *testing.T) {
+	checkpoints := checkpointmemory.New()
+	runID := "run_plan_execute_resume"
+	state := newRunState(runID, taskPrompt([]planner.Todo{
+		{ID: "todo_1", Content: "First", Status: planner.TodoDone},
+		{ID: "todo_2", Content: "Second", Status: planner.TodoInProgress},
+	}, planner.Todo{ID: "todo_2", Content: "Second", Status: planner.TodoInProgress}), planExecuteMeta(nil, "do the work", planExecuteStageExecute))
+	state.Todos = []harness.TodoState{
+		{ID: "todo_1", Content: "First", Status: harness.TodoDone},
+		{ID: "todo_2", Content: "Second", Status: harness.TodoInProgress},
+	}
+	now := time.Now().UTC()
+	if err := checkpoints.Save(context.Background(), checkpoint.Checkpoint{
+		Version: checkpoint.CheckpointVersion,
+		RunID:   runID,
+		Seq:     1,
+		State:   state,
+		SavedAt: now,
+	}); err != nil {
+		t.Fatalf("Save returned error: %v", err)
+	}
+	fakeModel := &scriptedModel{turns: []scriptedTurn{
+		{
+			events: []model.Event{{
+				Message: &model.Message{
+					ToolCalls: []model.ToolCallSpec{{
+						ID:        "done_call",
+						Name:      "todo_update",
+						Arguments: json.RawMessage(`{"id":"todo_2","status":"done","notes":"finished"}`),
+					}},
+				},
+			}},
+		},
+		{events: []model.Event{{Delta: "todo 2 done"}}},
+		{events: []model.Event{{Delta: "summary done"}}},
+	}}
+	agent := New(Config{
+		Model:       fakeModel,
+		Planning:    PlanningPlanExecute,
+		Checkpoints: checkpoints,
+	})
+
+	events, err := agent.Resume(context.Background(), runID)
+	if err != nil {
+		t.Fatalf("Resume returned error: %v", err)
+	}
+	var output string
+	for event := range events {
+		if event.Type == EventRunDone {
+			output = stringValue(event.Payload["output"])
+		}
+	}
+	if output != "summary done" {
+		t.Fatalf("unexpected resumed summary output: %q", output)
+	}
+	if len(fakeModel.requests) != 3 {
+		t.Fatalf("model calls = %d, want execute/tool follow-up/summary", len(fakeModel.requests))
+	}
+	if !contains(fakeModel.requests[0].Messages[0].Content, "Second") {
+		t.Fatalf("resume did not continue active todo prompt: %#v", fakeModel.requests[0].Messages)
 	}
 }
 

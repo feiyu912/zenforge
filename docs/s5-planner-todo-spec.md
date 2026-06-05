@@ -258,6 +258,11 @@ Resume behavior:
 - if all todos terminal, resume summary;
 - if summary complete, return terminal result.
 
+Plan/execute checkpoints carry the original input, preset, and stage in run
+metadata. On resume, the orchestrator restores checkpointed todos into the todo
+manager, resumes the active execute stage when present, skips terminal todos,
+and summarizes once all todos are terminal.
+
 ## Migration From agent-platform
 
 Source inspiration:
@@ -307,4 +312,3 @@ Minimum tests:
 - todo state is durable;
 - current ZenMind `PLAN_EXECUTE` behavior has a clear migration path;
 - no platform imports.
-

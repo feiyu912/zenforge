@@ -69,7 +69,7 @@ func (a *Agent) Stream(ctx context.Context, task Task) (<-chan Event, error) {
 		events := make(chan Event, 64)
 		go func() {
 			defer close(events)
-			a.runPlanExecute(ctx, events, runID, task)
+			a.runPlanExecute(ctx, events, runID, task, nil)
 		}()
 		return events, nil
 	}
@@ -95,6 +95,13 @@ func (a *Agent) Resume(ctx context.Context, runID string) (<-chan Event, error) 
 	events := make(chan Event, 32)
 	go func() {
 		defer close(events)
+		if a.config.Planning == PlanningPlanExecute && isPlanExecuteState(checkpoint.State) {
+			a.runPlanExecute(ctx, events, runID, Task{
+				Input: planExecuteOriginalInput(checkpoint.State),
+				Meta:  planExecuteUserMeta(checkpoint.State.Meta),
+			}, &checkpoint.State)
+			return
+		}
 		a.runLoop(ctx, events, checkpoint.State, true)
 	}()
 	return events, nil
@@ -159,7 +166,16 @@ func (a *Agent) streamNoop(ctx context.Context, runID, input string) <-chan Even
 	return events
 }
 
-func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID string, task Task) {
+const (
+	planExecutePresetMetaKey = "planning.preset"
+	planExecuteInputMetaKey  = "planning.input"
+	planExecuteStageMetaKey  = "planning.stage"
+	planExecutePresetValue   = "plan_execute"
+	planExecuteStagePlan     = "plan"
+	planExecuteStageExecute  = "execute"
+)
+
+func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID string, task Task, resumeState *harness.RunState) {
 	emit := func(eventType EventType, data map[string]any) {
 		a.emit(ctx, out, eventType, runID, data)
 	}
@@ -170,15 +186,26 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 		fail(fmt.Errorf("todo manager is not configured"))
 		return
 	}
-	emit(EventRunStarted, map[string]any{"input": task.Input, "preset": string(PlanningPlanExecute)})
+	if resumeState != nil {
+		emit(EventRunResumed, map[string]any{"input": task.Input, "preset": string(PlanningPlanExecute)})
+	} else {
+		emit(EventRunStarted, map[string]any{"input": task.Input, "preset": string(PlanningPlanExecute)})
+	}
 
-	planInput := task.Input + "\n\n" + planner.PlanPrompt
-	planState := newRunState(runID, planInput, task.Meta)
-	a.runLoop(ctx, out, planState, false)
-	todos, err := a.todos.List(ctx, runID)
+	todos, err := planExecuteTodos(ctx, a.todos, runID, resumeState)
 	if err != nil {
 		fail(err)
 		return
+	}
+	if len(todos) == 0 {
+		planInput := task.Input + "\n\n" + planner.PlanPrompt
+		planState := newRunState(runID, planInput, planExecuteMeta(task.Meta, task.Input, planExecuteStagePlan))
+		a.runLoop(ctx, out, planState, resumeState != nil && planExecuteStage(resumeState.Meta) == planExecuteStagePlan)
+		todos, err = a.todos.List(ctx, runID)
+		if err != nil {
+			fail(err)
+			return
+		}
 	}
 	if len(todos) == 0 {
 		fail(fmt.Errorf("plan_not_created"))
@@ -204,7 +231,11 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 		}
 		emit(EventTodoUpdated, map[string]any{"todos": todos})
 
-		executeState := newRunState(runID, taskPrompt(todos, current), task.Meta)
+		executeState := newRunState(runID, taskPrompt(todos, current), planExecuteMeta(task.Meta, task.Input, planExecuteStageExecute))
+		if resumeState != nil && planExecuteStage(resumeState.Meta) == planExecuteStageExecute {
+			executeState = *resumeState
+			resumeState = nil
+		}
 		a.runLoop(ctx, out, executeState, true)
 		todos, err = a.todos.List(ctx, runID)
 		if err != nil {
@@ -232,7 +263,7 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 		}
 	}
 
-	summaryState := newRunState(runID, summaryPrompt(task.Input, todos), task.Meta)
+	summaryState := newRunState(runID, summaryPrompt(task.Input, todos), planExecuteMeta(task.Meta, task.Input, "summary"))
 	summaryState.Phase = harness.RunPhaseFinalizing
 	assistant, _, err := a.callModel(ctx, emit, summaryState, model.ToolChoiceNone)
 	if err != nil {
@@ -240,6 +271,59 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 		return
 	}
 	emit(EventRunDone, map[string]any{"output": assistant.Content, "todos": todos})
+}
+
+func planExecuteTodos(ctx context.Context, manager planner.Manager, runID string, resumeState *harness.RunState) ([]planner.Todo, error) {
+	if resumeState != nil && len(resumeState.Todos) > 0 {
+		return manager.Replace(ctx, runID, plannerTodosFromState(resumeState.Todos))
+	}
+	return manager.List(ctx, runID)
+}
+
+func planExecuteMeta(meta map[string]any, input, stage string) map[string]any {
+	out := cloneMap(meta)
+	if out == nil {
+		out = map[string]any{}
+	}
+	out[planExecutePresetMetaKey] = planExecutePresetValue
+	out[planExecuteInputMetaKey] = input
+	out[planExecuteStageMetaKey] = stage
+	return out
+}
+
+func isPlanExecuteState(state harness.RunState) bool {
+	return stringValue(state.Meta[planExecutePresetMetaKey]) == planExecutePresetValue
+}
+
+func planExecuteOriginalInput(state harness.RunState) string {
+	if input := stringValue(state.Meta[planExecuteInputMetaKey]); input != "" {
+		return input
+	}
+	return state.Input
+}
+
+func planExecuteStage(meta map[string]any) string {
+	return stringValue(meta[planExecuteStageMetaKey])
+}
+
+func planExecuteUserMeta(meta map[string]any) map[string]any {
+	out := cloneMap(meta)
+	delete(out, planExecutePresetMetaKey)
+	delete(out, planExecuteInputMetaKey)
+	delete(out, planExecuteStageMetaKey)
+	return out
+}
+
+func plannerTodosFromState(todos []harness.TodoState) []planner.Todo {
+	out := make([]planner.Todo, 0, len(todos))
+	for _, todo := range todos {
+		out = append(out, planner.Todo{
+			ID:      todo.ID,
+			Content: todo.Content,
+			Status:  planner.TodoStatus(todo.Status),
+		})
+	}
+	return out
 }
 
 func newRunState(runID, input string, meta map[string]any) harness.RunState {
