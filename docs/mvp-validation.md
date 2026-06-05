@@ -101,6 +101,7 @@ Markdown document links.
 | ZenMind feature flag routing | `adapters/zenmind.TestRouterRoutesBySessionThenAgent`, `adapters/zenmind.TestRouterRoutesByMetadataFlag` |
 | failure-mode guide | `docs/failure-modes.md` |
 | docs links resolve | `docs.TestMarkdownLinksResolve` |
+| SDK embedded example runs without API key | `examples.TestSDKEmbeddedAgentRunsWithoutAPIKey` |
 
 ## Platform Boundary
 

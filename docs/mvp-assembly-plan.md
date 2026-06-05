@@ -335,7 +335,8 @@ Docs:
 Before tagging MVP:
 
 - all tests pass;
-- examples run from clean checkout;
+- examples compile from clean checkout;
+- SDK embedded example runs without an API key;
 - Markdown doc links resolve through `docs.TestMarkdownLinksResolve`;
 - CLI has useful error messages;
 - no imports from `agent-platform`;
