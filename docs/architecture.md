@@ -129,8 +129,8 @@ resume still come from the durable stores.
 
 ```go
 type Model interface {
-    Generate(ctx context.Context, req ModelRequest) (*ModelResponse, error)
-    Stream(ctx context.Context, req ModelRequest) (<-chan ModelEvent, error)
+    Generate(ctx context.Context, req model.Request) (*model.Response, error)
+    Stream(ctx context.Context, req model.Request) (<-chan model.Event, error)
 }
 ```
 
@@ -145,8 +145,8 @@ before the harness invokes tools.
 type Tool interface {
     Name() string
     Description() string
-    Schema() JSONSchema
-    Call(ctx context.Context, input json.RawMessage, call ToolCallContext) (ToolResult, error)
+    Schema() map[string]any
+    Call(ctx context.Context, input json.RawMessage, call tool.Context) (tool.Result, error)
 }
 ```
 
@@ -158,6 +158,7 @@ type Workspace interface {
     Write(ctx context.Context, path string, data []byte) error
     List(ctx context.Context, path string) ([]FileInfo, error)
     Grep(ctx context.Context, query GrepQuery) ([]Match, error)
+    Stat(ctx context.Context, path string) (FileInfo, error)
 }
 ```
 

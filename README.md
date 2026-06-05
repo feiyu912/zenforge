@@ -39,12 +39,24 @@ lookup := tools.Must("lookup", "Look up internal facts.",
         return "result for " + in.Query, nil
     })
 
+ctx := context.Background()
+events, err := eventlogsqlite.Open(ctx, ".zenforge/runs.db")
+if err != nil {
+    return err
+}
+defer events.Close()
+checkpoints, err := checkpointsqlite.Open(ctx, ".zenforge/runs.db")
+if err != nil {
+    return err
+}
+defer checkpoints.Close()
+
 agent := zenforge.New(zenforge.Config{
     Model:        openai.New(openai.Config{APIKey: os.Getenv("OPENAI_API_KEY"), Model: "gpt-4.1"}),
     Instructions: "Use tools when useful and answer briefly.",
     Tools:        []zenforge.Tool{lookup},
-    Events:       eventlogsqlite.New(".zenforge/runs.db"),
-    Checkpoints:  checkpointsqlite.New(".zenforge/runs.db"),
+    Events:       events,
+    Checkpoints:  checkpoints,
     Trace:        trace.Redact(trace.Stdout()),
     MaxSteps:     8,
 })
@@ -174,6 +186,7 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - MVP scope now reflects the current CLI, adapter, resume, and example surface.
 - Architecture package layout is aligned with the current repository.
 - Historical API sketch is labeled and current guides are prioritized.
+- README Quick Look and architecture snippets use current store/interface names.
 - `sandbox.State` for cross-run session continuity.
 - Trace metadata enrichment.
 - A hardening test suite and a failure-mode guide.
