@@ -19,11 +19,10 @@ zenforge runs --config zenforge.json
   "model": {
     "provider": "openai",
     "name": "gpt-4.1",
-    "apiKeyEnv": "OPENAI_API_KEY",
-    "baseUrl": ""
+    "apiKeyEnv": "OPENAI_API_KEY"
   },
   "agent": {
-    "instructions": "You are a senior Go backend engineer.",
+    "instructions": "You are a senior Go backend engineer. Be concise, careful, and use tools when helpful.",
     "maxSteps": 20,
     "planning": "plan_execute"
   },
@@ -35,7 +34,12 @@ zenforge runs --config zenforge.json
   "shell": {
     "enabled": true,
     "workingDir": ".",
-    "allow": ["go test ./...", "go vet ./...", "grep", "find"],
+    "allow": [
+      "go test ./...",
+      "go vet ./...",
+      "grep",
+      "find"
+    ],
     "timeout": "30s",
     "maxOutputBytes": 256000
   },

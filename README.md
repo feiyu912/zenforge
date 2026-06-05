@@ -162,6 +162,7 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - Sub-agent resume reuses terminal children and continues existing child checkpoints.
 - Active tool resume is covered through durable JSONL checkpoints.
 - CLI run/resume are covered against local OpenAI-compatible streaming and durable JSONL checkpoints.
+- Config reference is checked against the generated `zenforge init` defaults.
 - `sandbox.State` for cross-run session continuity.
 - Trace metadata enrichment.
 - A hardening test suite and a failure-mode guide.

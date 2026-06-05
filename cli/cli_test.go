@@ -363,6 +363,20 @@ func TestInitCreatesDefaultConfig(t *testing.T) {
 	}
 }
 
+func TestConfigReferenceIncludesDefaultConfig(t *testing.T) {
+	data, err := json.MarshalIndent(defaultConfigFile(), "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent returned error: %v", err)
+	}
+	docs, err := os.ReadFile(filepath.Join("..", "docs", "config-reference.md"))
+	if err != nil {
+		t.Fatalf("ReadFile returned error: %v", err)
+	}
+	if !strings.Contains(string(docs), string(data)) {
+		t.Fatalf("config reference does not include current default config")
+	}
+}
+
 func TestApprovalBrokerModes(t *testing.T) {
 	always, err := approvalBroker(options{approve: "always"}, IO{})
 	if err != nil || always == nil {
