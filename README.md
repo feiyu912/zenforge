@@ -181,6 +181,7 @@ grep -R -n -E 'agent-platform|ZenMind' --include='*.go' .   # must return nothin
 - MCP covers tools only; resources, prompts, sampling, discovery, and OAuth stay with the host platform.
 - OpenTelemetry exporter setup stays in host services.
 - CLI config is JSON only.
+- Nested sub-agents are blocked by default.
 - Container Hub sandbox is optional and beta.
 
 ## Repository Layout

@@ -88,7 +88,10 @@ into the harness.
 
 Current automated coverage includes:
 
-- resume tests for terminal, active-tool, and waiting-approval states;
+- resume tests for terminal, active-tool, JSONL active-tool, and
+  waiting-approval states;
+- sub-agent resume tests for terminal and non-terminal child checkpoints;
+- CLI smoke tests for local OpenAI-compatible streaming and JSONL resume;
 - SQLite event/checkpoint store tests;
 - `TestSQLiteDurableRunSoak` for repeated durable local runs;
 - `BenchmarkAgentRunStaticModel` for a stable benchmark entrypoint;

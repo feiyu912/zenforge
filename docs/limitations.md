@@ -25,9 +25,9 @@ what is experimental, and what remains adapter territory.
 ## Planning And Sub-Agents
 
 - Plan/execute is a preset, not a general project-management system.
-- Sub-agents are available as a runtime tool, but advanced resume of partially
-  completed child runs is still limited.
-- Nested sub-agents are blocked by default.
+- Sub-agents resume from explicit parent and child checkpoint boundaries; they
+  do not resume an in-flight provider stream inside a child run.
+- Nested sub-agents are blocked by default and remain outside the MVP surface.
 
 ## Deferred Systems
 
