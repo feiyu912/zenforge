@@ -189,6 +189,7 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - The SDK embedded example is run in tests without an API key.
 - MVP scope now reflects the current CLI, adapter, resume, and example surface.
 - Product roadmap MVP scope now reflects the current MCP, memory, sub-agent, and CLI inspection surface.
+- Product roadmap resume scope now matches supported checkpoint-boundary resume.
 - Architecture package layout is aligned with the current repository.
 - Historical API sketch is labeled and current guides are prioritized.
 - README Quick Look and architecture snippets use current store/interface names.

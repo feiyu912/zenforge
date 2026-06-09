@@ -400,7 +400,7 @@ MVP includes:
 - todo/planner;
 - event stream;
 - JSONL trace/checkpoint;
-- resume for non-awaiting runs;
+- resume from supported checkpoint boundaries;
 - sub-agent task tool;
 - MCP tool adapter;
 - memory augmentation adapter;
