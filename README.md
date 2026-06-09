@@ -200,6 +200,7 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - CLI config rejects invalid shell timeout durations instead of silently falling back.
 - Config reference and MVP validation document invalid shell timeout handling.
 - HTTP resume distinguishes invalid POST JSON from a missing run id.
+- MVP validation maps HTTP resume invalid JSON handling to a concrete test.
 - `sandbox.State` for cross-run session continuity.
 - Trace metadata enrichment.
 - A hardening test suite and a failure-mode guide.
