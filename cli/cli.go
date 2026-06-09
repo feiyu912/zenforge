@@ -320,7 +320,9 @@ func optionsFromArgs(args []string) (options, error) {
 		return opts, err
 	}
 	opts.configPath = configPath
-	applyConfig(&opts, config)
+	if err := applyConfig(&opts, config); err != nil {
+		return opts, err
+	}
 	return opts, nil
 }
 

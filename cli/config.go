@@ -102,7 +102,7 @@ func loadConfigFile(path string) (configFile, error) {
 	return config, nil
 }
 
-func applyConfig(opts *options, config configFile) {
+func applyConfig(opts *options, config configFile) error {
 	if config.Model.Provider != "" {
 		opts.provider = config.Model.Provider
 	}
@@ -143,9 +143,11 @@ func applyConfig(opts *options, config configFile) {
 		opts.shellAllow = multiFlag(append([]string(nil), config.Shell.Allow...))
 	}
 	if config.Shell.Timeout != "" {
-		if timeout, err := time.ParseDuration(config.Shell.Timeout); err == nil {
-			opts.shellTimeout = timeout
+		timeout, err := time.ParseDuration(config.Shell.Timeout)
+		if err != nil {
+			return fmt.Errorf("parse shell.timeout: %w", err)
 		}
+		opts.shellTimeout = timeout
 	}
 	if config.Shell.MaxOutputBytes > 0 {
 		opts.shellMaxOutputBytes = config.Shell.MaxOutputBytes
@@ -159,6 +161,7 @@ func applyConfig(opts *options, config configFile) {
 	if config.Checkpoint.Path != "" {
 		opts.checkpointDir = config.Checkpoint.Path
 	}
+	return nil
 }
 
 func configPathFromArgs(args []string) string {

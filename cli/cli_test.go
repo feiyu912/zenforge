@@ -480,6 +480,23 @@ func TestOptionsFromConfig(t *testing.T) {
 	}
 }
 
+func TestOptionsFromConfigRejectsInvalidShellTimeout(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "zenforge.json")
+	config := configFile{Shell: shellConfig{Timeout: "not-a-duration"}}
+	data, err := json.Marshal(config)
+	if err != nil {
+		t.Fatalf("Marshal returned error: %v", err)
+	}
+	if err := os.WriteFile(configPath, data, 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	_, err = optionsFromArgs([]string{"--config", configPath})
+	if err == nil || !strings.Contains(err.Error(), "parse shell.timeout") {
+		t.Fatalf("expected parse shell.timeout error, got %v", err)
+	}
+}
+
 func boolPtr(value bool) *bool {
 	return &value
 }
