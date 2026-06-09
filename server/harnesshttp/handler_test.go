@@ -426,6 +426,32 @@ func TestServeApprovalRejectsUnknownRequest(t *testing.T) {
 	}
 }
 
+func TestServeApprovalRejectsInvalidJSONAndDecision(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+		want string
+	}{
+		{name: "invalid_json", body: `{`, want: "invalid_json"},
+		{name: "invalid_approval", body: `{"action":"approve"}`, want: "invalid_approval"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			handler := New(&fakeAgent{}, sse.Options{})
+			handler.Approvals = approval.NewPendingBroker(0)
+			rec := httptest.NewRecorder()
+
+			handler.ServeApproval(rec, httptest.NewRequest(http.MethodPost, "/approval", strings.NewReader(tc.body)))
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400", rec.Code)
+			}
+			if !strings.Contains(rec.Body.String(), tc.want) {
+				t.Fatalf("unexpected body: %s", rec.Body.String())
+			}
+		})
+	}
+}
+
 func TestServeApprovalRejectsUnconfiguredBroker(t *testing.T) {
 	handler := New(&fakeAgent{}, sse.Options{})
 	rec := httptest.NewRecorder()
