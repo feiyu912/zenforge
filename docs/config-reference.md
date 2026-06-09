@@ -67,7 +67,8 @@ For SQLite local storage:
 ## Fields
 
 - `model.name`: OpenAI-compatible model name.
-- `model.provider`: `openai` or `anthropic`.
+- `model.provider`: `openai` or `anthropic`. Invalid values make config
+  loading fail before API key lookup or runtime setup.
 - `model.apiKeyEnv`: environment variable containing the API key.
 - `model.baseUrl`: optional provider API base URL.
 - `agent.instructions`: system instructions for the harness.
@@ -85,7 +86,8 @@ For SQLite local storage:
 - `shell.maxOutputBytes`: output cap for shell command output.
 - `approval.mode`: `prompt`, `always`, or `never`. Invalid values make config
   loading fail before the runtime is built.
-- `checkpoint.type`: `jsonl` or `sqlite`.
+- `checkpoint.type`: `jsonl` or `sqlite`. Invalid values make config loading
+  fail before opening stores.
 - `checkpoint.path`: JSONL event/checkpoint directory, or SQLite database file.
 
 Flags override values loaded from the config file.
