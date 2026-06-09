@@ -210,6 +210,7 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - HTTP approval submit bad JSON and invalid decisions are covered.
 - MVP validation maps HTTP approval bad request handling to a concrete test.
 - HTTP event replay rejects invalid `afterSeq` and `limit` query values.
+- MVP validation maps HTTP event replay query validation to a concrete test.
 - HTTP resume distinguishes invalid POST JSON from a missing run id.
 - MVP validation maps HTTP resume invalid JSON handling to a concrete test.
 - `sandbox.State` for cross-run session continuity.
