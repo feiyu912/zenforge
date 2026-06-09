@@ -81,6 +81,7 @@ Markdown document links.
 | `zenforge resume` works | `TestResumeLoadsJSONLCheckpoint`, config/checkpoint tests |
 | config file works | `TestOptionsFromConfig`, `TestEventsLoadsCheckpointDirFromConfig`, `TestInitCreatesDefaultConfig` |
 | invalid shell timeout config fails clearly | `TestOptionsFromConfigRejectsInvalidShellTimeout` |
+| invalid planning config fails clearly | `TestOptionsFromConfigRejectsInvalidPlanningMode` |
 | workspace byte limits from config are enforced by CLI runtime | `TestRunWorkspaceReadHonorsConfigLimit` |
 | SQLite stores work through CLI | `TestEventsCanReadSQLiteStore`, `TestRunsCanReadSQLiteStore` |
 | model provider config works | `TestOptionsFromConfig` covers `model.provider` |

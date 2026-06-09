@@ -72,7 +72,8 @@ For SQLite local storage:
 - `model.baseUrl`: optional provider API base URL.
 - `agent.instructions`: system instructions for the harness.
 - `agent.maxSteps`: maximum model/tool loop steps.
-- `agent.planning`: `disabled`, `enabled`, `plan_execute`, or boolean.
+- `agent.planning`: `disabled`, `enabled`, `plan_execute`, or boolean. Invalid
+  values make config loading fail instead of disabling planning silently.
 - `workspace.root`: local workspace root.
 - CLI workspace writes require a fresh `workspace_read` snapshot before
   overwriting an existing file.
