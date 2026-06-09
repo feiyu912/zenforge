@@ -209,6 +209,7 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - Config reference and MVP validation document negative CLI limit handling.
 - HTTP approval submit bad JSON and invalid decisions are covered.
 - MVP validation maps HTTP approval bad request handling to a concrete test.
+- HTTP event replay rejects invalid `afterSeq` and `limit` query values.
 - HTTP resume distinguishes invalid POST JSON from a missing run id.
 - MVP validation maps HTTP resume invalid JSON handling to a concrete test.
 - `sandbox.State` for cross-run session continuity.

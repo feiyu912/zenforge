@@ -237,18 +237,31 @@ func TestServeEventsRejectsForbidden(t *testing.T) {
 }
 
 func TestServeEventsRejectsInvalidQuery(t *testing.T) {
-	handler := New(&fakeAgent{}, sse.Options{})
-	handler.Events = &fakeEventStore{}
-	req := httptest.NewRequest(http.MethodGet, "/events?runId=run_http&afterSeq=-1", nil)
-	rec := httptest.NewRecorder()
+	for _, tc := range []struct {
+		name string
+		url  string
+		want string
+	}{
+		{name: "negative_after_seq", url: "/events?runId=run_http&afterSeq=-1", want: "invalid_after_seq"},
+		{name: "invalid_after_seq", url: "/events?runId=run_http&afterSeq=soon", want: "invalid_after_seq"},
+		{name: "negative_limit", url: "/events?runId=run_http&limit=-1", want: "invalid_limit"},
+		{name: "invalid_limit", url: "/events?runId=run_http&limit=many", want: "invalid_limit"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			handler := New(&fakeAgent{}, sse.Options{})
+			handler.Events = &fakeEventStore{}
+			req := httptest.NewRequest(http.MethodGet, tc.url, nil)
+			rec := httptest.NewRecorder()
 
-	handler.ServeEvents(rec, req)
+			handler.ServeEvents(rec, req)
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", rec.Code)
-	}
-	if !strings.Contains(rec.Body.String(), "invalid_after_seq") {
-		t.Fatalf("unexpected error body: %s", rec.Body.String())
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400", rec.Code)
+			}
+			if !strings.Contains(rec.Body.String(), tc.want) {
+				t.Fatalf("unexpected error body: %s", rec.Body.String())
+			}
+		})
 	}
 }
 
