@@ -3,6 +3,10 @@
 Focused code-review workflow. It can read and grep the workspace, and can run
 allowlisted commands like `go test ./...`.
 
+Unknown shell commands are routed through the CLI approval broker before they
+run. File writes are constrained by a one-byte write limit and read-before-write
+snapshots, so the example is effectively read-only for normal code review use.
+
 ```bash
 OPENAI_API_KEY=... go run ./examples/code-review-agent
 ```
@@ -16,4 +20,5 @@ OPENAI_MODEL=gpt-4.1
 OPENAI_BASE_URL=https://api.openai.com/v1
 ```
 
-The example is read-only by default for file writes.
+Approval prompts are printed to stderr and read from stdin. Choose the numbered
+option shown by the prompt to approve or reject the requested command.
