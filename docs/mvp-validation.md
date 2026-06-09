@@ -79,6 +79,7 @@ Markdown document links.
 | `zenforge run` works | `TestRunStreamsOpenAICompatibleEndpoint`, README quickstart, full package tests |
 | `zenforge resume` works | `TestResumeLoadsJSONLCheckpoint`, config/checkpoint tests |
 | config file works | `TestOptionsFromConfig`, `TestEventsLoadsCheckpointDirFromConfig`, `TestInitCreatesDefaultConfig` |
+| workspace byte limits from config are enforced by CLI runtime | `TestRunWorkspaceReadHonorsConfigLimit` |
 | SQLite stores work through CLI | `TestEventsCanReadSQLiteStore`, `TestRunsCanReadSQLiteStore` |
 | model provider config works | `TestOptionsFromConfig` covers `model.provider` |
 | CLI argument errors are useful | `TestCLIReportsUsefulArgumentErrors` |

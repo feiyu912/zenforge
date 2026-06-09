@@ -196,6 +196,7 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - CLI workspace writes require a fresh read snapshot by default.
 - Quickstart and config reference document the CLI workspace write snapshot default.
 - CLI workspace read/write byte limits from config are applied at runtime.
+- MVP validation maps CLI workspace byte-limit enforcement to a concrete test.
 - `sandbox.State` for cross-run session continuity.
 - Trace metadata enrichment.
 - A hardening test suite and a failure-mode guide.
