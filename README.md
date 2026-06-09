@@ -206,6 +206,7 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - CLI config rejects invalid model providers and checkpoint store types before runtime setup.
 - Config reference and MVP validation document invalid provider/checkpoint handling.
 - HTTP approval submit bad JSON and invalid decisions are covered.
+- MVP validation maps HTTP approval bad request handling to a concrete test.
 - HTTP resume distinguishes invalid POST JSON from a missing run id.
 - MVP validation maps HTTP resume invalid JSON handling to a concrete test.
 - `sandbox.State` for cross-run session continuity.
