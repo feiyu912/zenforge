@@ -183,6 +183,7 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - CLI todo rendering is covered for typed plan/execute payloads.
 - The code review example wires workspace snapshots and CLI approval for risky shell commands.
 - The code review example README documents its approval prompt and effective read-only workspace posture.
+- The code review example safety wiring is checked in the examples test suite.
 - MVP validation evidence is checked against existing test and benchmark names.
 - Go source platform-boundary terms are checked in the docs test suite.
 - The SDK embedded example is run in tests without an API key.

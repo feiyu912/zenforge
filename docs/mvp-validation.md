@@ -84,6 +84,7 @@ Markdown document links.
 | CLI argument errors are useful | `TestCLIReportsUsefulArgumentErrors` |
 | approval prompt works | `approval/cli.TestCLIBrokerReadsDecision`, `TestApprovalBrokerModes` |
 | server-style approval submit works | `approval.TestPendingBrokerWaitsForSubmittedDecision`, `approval.TestPendingBrokerRejectsUnknownDecision` |
+| code-review example wires safety controls | `examples.TestCodeReviewExampleWiresSafetyControls` |
 
 ## Docs
 
