@@ -72,18 +72,22 @@ For SQLite local storage:
 - `model.apiKeyEnv`: environment variable containing the API key.
 - `model.baseUrl`: optional provider API base URL.
 - `agent.instructions`: system instructions for the harness.
-- `agent.maxSteps`: maximum model/tool loop steps.
+- `agent.maxSteps`: maximum model/tool loop steps. Negative values make config
+  loading fail.
 - `agent.planning`: `disabled`, `enabled`, `plan_execute`, or boolean. Invalid
   values make config loading fail instead of disabling planning silently.
 - `workspace.root`: local workspace root.
 - CLI workspace writes require a fresh `workspace_read` snapshot before
   overwriting an existing file.
+- `workspace.maxReadBytes` and `workspace.maxWriteBytes`: local workspace byte
+  limits. Negative values make config loading fail.
 - `shell.enabled`: enables the local shell tool.
 - `shell.workingDir`: working directory for shell commands.
 - `shell.allow`: allowlisted shell command prefixes.
 - `shell.timeout`: Go duration string, for example `30s`. Invalid durations
   make config loading fail instead of falling back silently.
-- `shell.maxOutputBytes`: output cap for shell command output.
+- `shell.maxOutputBytes`: output cap for shell command output. Negative values
+  make config loading fail.
 - `approval.mode`: `prompt`, `always`, or `never`. Invalid values make config
   loading fail before the runtime is built.
 - `checkpoint.type`: `jsonl` or `sqlite`. Invalid values make config loading
