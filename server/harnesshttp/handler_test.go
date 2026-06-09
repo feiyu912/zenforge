@@ -353,6 +353,22 @@ func TestServeLiveEventsRejectsForbiddenRun(t *testing.T) {
 	}
 }
 
+func TestServeLiveEventsRejectsInvalidBuffer(t *testing.T) {
+	handler := New(&fakeAgent{}, sse.Options{})
+	handler.Bus = eventlog.NewBus()
+	handler.LiveBuffer = -1
+	rec := httptest.NewRecorder()
+
+	handler.ServeLiveEvents(rec, httptest.NewRequest(http.MethodGet, "/live?runId=run_http", nil))
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "invalid_live_buffer") {
+		t.Fatalf("unexpected body: %s", rec.Body.String())
+	}
+}
+
 func TestServeLiveEventsRequiresBusAndRunID(t *testing.T) {
 	handler := New(&fakeAgent{}, sse.Options{})
 	rec := httptest.NewRecorder()
