@@ -254,6 +254,8 @@ func initConfig(args []string, ioStreams IO) error {
 type options struct {
 	configPath          string
 	workspace           string
+	workspaceMaxRead    int64
+	workspaceMaxWrite   int64
 	instructions        string
 	provider            string
 	model               string
@@ -273,6 +275,8 @@ type options struct {
 func defaultOptions() options {
 	return options{
 		workspace:           ".",
+		workspaceMaxRead:    1_000_000,
+		workspaceMaxWrite:   1_000_000,
 		instructions:        "You are a senior Go backend engineer. Be concise, careful, and use tools when helpful.",
 		provider:            "openai",
 		model:               "gpt-4.1",
@@ -323,8 +327,8 @@ func optionsFromArgs(args []string) (options, error) {
 func buildAgent(ctx context.Context, opts options, ioStreams IO) (*zenforge.Agent, error) {
 	ws, err := workspacelocal.New(workspacelocal.Config{
 		Root:            opts.workspace,
-		MaxReadBytes:    1_000_000,
-		MaxWriteBytes:   1_000_000,
+		MaxReadBytes:    opts.workspaceMaxRead,
+		MaxWriteBytes:   opts.workspaceMaxWrite,
 		CreateParentDir: true,
 	})
 	if err != nil {

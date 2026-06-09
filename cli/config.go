@@ -127,6 +127,12 @@ func applyConfig(opts *options, config configFile) {
 	if config.Workspace.Root != "" {
 		opts.workspace = config.Workspace.Root
 	}
+	if config.Workspace.MaxReadBytes > 0 {
+		opts.workspaceMaxRead = config.Workspace.MaxReadBytes
+	}
+	if config.Workspace.MaxWriteBytes > 0 {
+		opts.workspaceMaxWrite = config.Workspace.MaxWriteBytes
+	}
 	if config.Shell.WorkingDir != "" {
 		opts.workspace = config.Shell.WorkingDir
 	}
