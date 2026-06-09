@@ -174,6 +174,21 @@ func TestServeResumeRejectsMissingRunID(t *testing.T) {
 	}
 }
 
+func TestServeResumeRejectsInvalidPostJSON(t *testing.T) {
+	handler := New(&fakeAgent{}, sse.Options{})
+	req := httptest.NewRequest(http.MethodPost, "/resume", strings.NewReader(`{`))
+	rec := httptest.NewRecorder()
+
+	handler.ServeResume(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "invalid_json") {
+		t.Fatalf("unexpected error body: %s", rec.Body.String())
+	}
+}
+
 func TestServeEventsReplaysStoredEvents(t *testing.T) {
 	store := &fakeEventStore{
 		events: []zenforge.Event{

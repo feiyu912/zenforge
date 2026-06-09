@@ -132,8 +132,12 @@ func (h *Handler) ServeResume(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "agent_not_configured", "agent is not configured")
 		return
 	}
-	runID, ok := resumeRunID(r)
-	if !ok {
+	runID, err := resumeRunID(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	if runID == "" {
 		writeError(w, http.StatusBadRequest, "run_id_required", "runId is required")
 		return
 	}
@@ -334,17 +338,17 @@ func mergeMeta(client, trusted map[string]any) map[string]any {
 	return out
 }
 
-func resumeRunID(r *http.Request) (string, bool) {
+func resumeRunID(r *http.Request) (string, error) {
 	if r.Method == http.MethodGet {
 		runID := strings.TrimSpace(r.URL.Query().Get("runId"))
-		return runID, runID != ""
+		return runID, nil
 	}
 	var req ResumeRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		return "", false
+		return "", err
 	}
 	runID := strings.TrimSpace(req.RunID)
-	return runID, runID != ""
+	return runID, nil
 }
 
 func int64Query(r *http.Request, key string) (int64, error) {
