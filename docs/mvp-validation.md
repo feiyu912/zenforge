@@ -31,6 +31,7 @@ Markdown document links.
 | HTTP approval submit rejects bad request bodies | `server/harnesshttp.TestServeApprovalRejectsInvalidJSONAndDecision` |
 | HTTP pending approval query filters by authorized run | `approval.TestPendingBrokerListsPendingForRun`, `server/harnesshttp.TestServeApprovalsListsPendingRequestsForRun`, `server/harnesshttp.TestServeApprovalsRejectsForbiddenRun` |
 | HTTP live event stream subscribes to authorized run fanout | `server/harnesshttp.TestServeLiveEventsStreamsBusEvents`, `server/harnesshttp.TestServeLiveEventsRejectsForbiddenRun` |
+| HTTP live event stream rejects invalid buffer configuration | `server/harnesshttp.TestServeLiveEventsRejectsInvalidBuffer` |
 | live event fanout stays separate from replay storage | `eventlog.TestFanoutStoreAppendsThenPublishesAssignedSeq`, `eventlog.TestFanoutStoreClosesRunOnTerminalEvent` |
 | OpenTelemetry trace sink works | `trace/otel.TestSinkEmitsSpanWithAttributes` |
 | trace platform metadata enrichment works | `trace.TestWithFieldsAddsStaticPlatformMetadata` |

@@ -212,6 +212,7 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - HTTP event replay rejects invalid `afterSeq` and `limit` query values.
 - MVP validation maps HTTP event replay query validation to a concrete test.
 - HTTP live event streaming rejects invalid negative buffer configuration.
+- MVP validation maps HTTP live buffer validation to a concrete test.
 - HTTP resume distinguishes invalid POST JSON from a missing run id.
 - MVP validation maps HTTP resume invalid JSON handling to a concrete test.
 - `sandbox.State` for cross-run session continuity.
