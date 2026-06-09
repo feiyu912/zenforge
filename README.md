@@ -187,6 +187,7 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - Architecture package layout is aligned with the current repository.
 - Historical API sketch is labeled and current guides are prioritized.
 - README Quick Look and architecture snippets use current store/interface names.
+- User-facing guides no longer present themselves as drafts and use current tool, shell, and sandbox APIs.
 - `sandbox.State` for cross-run session continuity.
 - Trace metadata enrichment.
 - A hardening test suite and a failure-mode guide.

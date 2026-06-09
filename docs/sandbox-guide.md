@@ -1,6 +1,7 @@
 # Sandbox Guide
 
-This is a draft user-facing guide for sandbox execution.
+This guide covers sandbox-backed shell execution and sandbox prompt
+augmentation for ZenForge host applications.
 
 ## Why Use A Sandbox
 
@@ -32,16 +33,30 @@ Sandbox shell:
 ## Configuration Sketch
 
 ```go
-sbox := containerhub.New(containerhub.Config{
+sbox, err := containerhub.New(containerhub.Config{
     BaseURL: "http://127.0.0.1:11960",
     AuthToken: os.Getenv("CONTAINER_HUB_TOKEN"),
     DefaultEnvID: "toolbox",
 })
+if err != nil {
+    return err
+}
 
-shell := shell.New(shell.Config{
-    Backend: shell.BackendSandbox,
-    Sandbox: sbox,
+shellTool, err := shell.New(shell.Config{
+    Policy: policy.ShellPolicy{
+        WorkingDir:      "./repo",
+        AllowCommands:   []string{"go test ./...", "go vet ./..."},
+        RequireApproval: true,
+        MaxTimeout:      30 * time.Second,
+        MaxOutputBytes:  256_000,
+    },
+    Backend:       shell.ShellBackendSandbox,
+    Sandbox:       sbox,
+    EnvironmentID: "toolbox",
 })
+if err != nil {
+    return err
+}
 ```
 
 ## Session Scope

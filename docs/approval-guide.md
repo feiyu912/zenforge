@@ -1,6 +1,7 @@
 # Approval Guide
 
-This is a draft user-facing guide for approvals.
+This guide covers ZenForge approval brokers, decision scopes, events, and host
+integration points.
 
 ## Why Approval Exists
 

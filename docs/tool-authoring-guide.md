@@ -1,6 +1,7 @@
 # Tool Authoring Guide
 
-This is a draft user-facing guide for writing ZenForge tools.
+This guide covers the current ZenForge tool APIs for typed tools, manual
+tools, built-in workspace tools, shell execution, and todo tools.
 
 ## Simple Typed Tool
 
@@ -145,7 +146,7 @@ agent := zenforge.New(zenforge.Config{
 })
 ```
 
-The first S3 workspace tools are:
+The built-in workspace tools are:
 
 - `workspace_read`
 - `workspace_list`

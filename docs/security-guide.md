@@ -1,6 +1,7 @@
 # Security Guide
 
-This is a draft security guide for ZenForge users and contributors.
+This guide describes the current security posture for ZenForge users and
+contributors.
 
 ## Default Posture
 
@@ -10,7 +11,7 @@ Default rules:
 
 - shell execution is deny-by-default;
 - workspace access is root-bounded;
-- writes require explicit write roots;
+- writes are bounded by the configured workspace root;
 - risky operations can require approval;
 - tool output is capped;
 - secrets should be redacted from events and traces.
@@ -23,18 +24,22 @@ Local workspace tools must:
 - block `..` traversal;
 - block symlink escape;
 - block device files;
-- enforce read/write roots;
+- enforce the configured workspace root;
 - cap read and write sizes;
 - record read snapshots before writes where enabled.
 
 Recommended configuration:
 
 ```go
-workspace := local.New(local.Config{
-    Root: "./repo",
-    MaxReadBytes:  1_000_000,
-    MaxWriteBytes: 1_000_000,
+workspace, err := local.New(local.Config{
+    Root:            "./repo",
+    MaxReadBytes:    1_000_000,
+    MaxWriteBytes:   1_000_000,
+    CreateParentDir: true,
 })
+if err != nil {
+    return err
+}
 ```
 
 ## Shell Safety
@@ -47,24 +52,30 @@ Shell tool must:
 - cap output;
 - filter env vars;
 - review command risk;
-- require approval for unknown or risky commands.
+- require approval for unknown or risky commands;
 - block shell control operators such as `&&`, `;`, pipes, and redirects before
   allowlist matching.
 
 Recommended configuration:
 
 ```go
-shell := shell.New(shell.Config{
-    WorkingDir: "./repo",
-    AllowCommands: []string{
-        "go test ./...",
-        "go vet ./...",
-        "grep",
-        "find",
+shellTool, err := shell.New(shell.Config{
+    Policy: policy.ShellPolicy{
+        WorkingDir: "./repo",
+        AllowCommands: []string{
+            "go test ./...",
+            "go vet ./...",
+            "grep",
+            "find",
+        },
+        RequireApproval: true,
+        MaxTimeout:      30 * time.Second,
+        MaxOutputBytes:  256_000,
     },
-    Timeout: 30 * time.Second,
-    MaxOutputBytes: 256_000,
 })
+if err != nil {
+    return err
+}
 ```
 
 ## Approval

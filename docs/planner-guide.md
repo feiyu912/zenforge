@@ -1,6 +1,7 @@
 # Planner Guide
 
-This is a draft user-facing guide for ZenForge planning.
+This guide covers ZenForge planning modes, todo lifecycle, and the
+plan/execute preset.
 
 ## When To Enable Planning
 
@@ -88,4 +89,3 @@ Later versions should allow:
 - custom status names;
 - custom stage prompts;
 - planner-only mode.
-

@@ -1,6 +1,7 @@
 # Sub-Agent Guide
 
-This is a draft user-facing guide for sub-agents.
+This guide covers ZenForge sub-agent configuration, task dispatch, defaults,
+events, and safety boundaries.
 
 ## Why Use Sub-Agents
 
