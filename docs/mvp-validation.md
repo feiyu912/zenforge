@@ -82,6 +82,7 @@ Markdown document links.
 | config file works | `TestOptionsFromConfig`, `TestEventsLoadsCheckpointDirFromConfig`, `TestInitCreatesDefaultConfig` |
 | invalid shell timeout config fails clearly | `TestOptionsFromConfigRejectsInvalidShellTimeout` |
 | invalid planning config fails clearly | `TestOptionsFromConfigRejectsInvalidPlanningMode` |
+| invalid approval config fails clearly | `TestOptionsFromConfigRejectsInvalidApprovalMode` |
 | workspace byte limits from config are enforced by CLI runtime | `TestRunWorkspaceReadHonorsConfigLimit` |
 | SQLite stores work through CLI | `TestEventsCanReadSQLiteStore`, `TestRunsCanReadSQLiteStore` |
 | model provider config works | `TestOptionsFromConfig` covers `model.provider` |

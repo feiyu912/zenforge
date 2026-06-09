@@ -202,6 +202,7 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - CLI config rejects invalid agent planning modes instead of disabling planning silently.
 - Config reference and MVP validation document invalid planning mode handling.
 - CLI config rejects invalid approval modes before building the runtime.
+- Config reference and MVP validation document invalid approval mode handling.
 - HTTP resume distinguishes invalid POST JSON from a missing run id.
 - MVP validation maps HTTP resume invalid JSON handling to a concrete test.
 - `sandbox.State` for cross-run session continuity.

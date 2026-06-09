@@ -83,7 +83,8 @@ For SQLite local storage:
 - `shell.timeout`: Go duration string, for example `30s`. Invalid durations
   make config loading fail instead of falling back silently.
 - `shell.maxOutputBytes`: output cap for shell command output.
-- `approval.mode`: `prompt`, `always`, or `never`.
+- `approval.mode`: `prompt`, `always`, or `never`. Invalid values make config
+  loading fail before the runtime is built.
 - `checkpoint.type`: `jsonl` or `sqlite`.
 - `checkpoint.path`: JSONL event/checkpoint directory, or SQLite database file.
 
