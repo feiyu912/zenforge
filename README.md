@@ -193,6 +193,7 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - README Quick Look and architecture snippets use current store/interface names.
 - User-facing guides no longer present themselves as drafts and use current tool, shell, and sandbox APIs.
 - Approval guide examples use neutral core decisions, with platform payload mapping kept at adapter edges.
+- CLI workspace writes require a fresh read snapshot by default.
 - `sandbox.State` for cross-run session continuity.
 - Trace metadata enrichment.
 - A hardening test suite and a failure-mode guide.

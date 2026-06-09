@@ -330,7 +330,11 @@ func buildAgent(ctx context.Context, opts options, ioStreams IO) (*zenforge.Agen
 	if err != nil {
 		return nil, err
 	}
-	workspaceTools, err := workspacetools.Tools(workspacetools.Config{Workspace: ws})
+	workspaceTools, err := workspacetools.Tools(workspacetools.Config{
+		Workspace:              ws,
+		Snapshots:              workspacetools.NewSnapshotStore(),
+		RequireReadBeforeWrite: true,
+	})
 	if err != nil {
 		return nil, err
 	}

@@ -129,6 +129,56 @@ func TestRunStreamsOpenAICompatibleEndpoint(t *testing.T) {
 	}
 }
 
+func TestRunWorkspaceWriteRequiresReadSnapshot(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test")
+	workspaceDir := t.TempDir()
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "text/event-stream")
+		switch requests {
+		case 1:
+			_, _ = fmt.Fprint(w,
+				"data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_write\",\"type\":\"function\",\"function\":{\"name\":\"workspace_write\",\"arguments\":\"{\\\"path\\\":\\\"new.txt\\\",\\\"content\\\":\\\"hello\\\",\\\"description\\\":\\\"test write\\\"}\"}}]}}]}\n\n"+
+					"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n"+
+					"data: [DONE]\n\n",
+			)
+		default:
+			_, _ = fmt.Fprint(w,
+				"data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"write blocked\"}}]}\n\n"+
+					"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"+
+					"data: [DONE]\n\n",
+			)
+		}
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Main(context.Background(), []string{
+		"run",
+		"--base-url", server.URL,
+		"--checkpoint-dir", t.TempDir(),
+		"--planning", "disabled",
+		"--no-shell",
+		"--workspace", workspaceDir,
+		"write without reading first",
+	}, IO{Stdout: &stdout, Stderr: &stderr})
+	if code != 0 {
+		t.Fatalf("code = %d, want 0; stderr=%q stdout=%q", code, stderr.String(), stdout.String())
+	}
+	if requests != 2 {
+		t.Fatalf("requests = %d, want 2", requests)
+	}
+	if _, err := os.Stat(filepath.Join(workspaceDir, "new.txt")); !os.IsNotExist(err) {
+		t.Fatalf("workspace_write should not create file before read snapshot; stat err=%v", err)
+	}
+	output := stdout.String()
+	if !strings.Contains(output, "tool workspace_write") || !strings.Contains(output, "write blocked") {
+		t.Fatalf("unexpected output: %q", output)
+	}
+}
+
 func TestEventsPrintsTimeline(t *testing.T) {
 	dir := t.TempDir()
 	store := eventlogjsonl.New(dir)
