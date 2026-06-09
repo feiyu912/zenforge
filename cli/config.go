@@ -122,6 +122,9 @@ func applyConfig(opts *options, config configFile) error {
 	if config.Agent.Instructions != "" {
 		opts.instructions = config.Agent.Instructions
 	}
+	if config.Agent.MaxSteps < 0 {
+		return fmt.Errorf("agent.maxSteps must be non-negative")
+	}
 	if config.Agent.MaxSteps > 0 {
 		opts.maxSteps = config.Agent.MaxSteps
 	}
@@ -133,8 +136,14 @@ func applyConfig(opts *options, config configFile) error {
 	if config.Workspace.Root != "" {
 		opts.workspace = config.Workspace.Root
 	}
+	if config.Workspace.MaxReadBytes < 0 {
+		return fmt.Errorf("workspace.maxReadBytes must be non-negative")
+	}
 	if config.Workspace.MaxReadBytes > 0 {
 		opts.workspaceMaxRead = config.Workspace.MaxReadBytes
+	}
+	if config.Workspace.MaxWriteBytes < 0 {
+		return fmt.Errorf("workspace.maxWriteBytes must be non-negative")
 	}
 	if config.Workspace.MaxWriteBytes > 0 {
 		opts.workspaceMaxWrite = config.Workspace.MaxWriteBytes
@@ -154,6 +163,9 @@ func applyConfig(opts *options, config configFile) error {
 			return fmt.Errorf("parse shell.timeout: %w", err)
 		}
 		opts.shellTimeout = timeout
+	}
+	if config.Shell.MaxOutputBytes < 0 {
+		return fmt.Errorf("shell.maxOutputBytes must be non-negative")
 	}
 	if config.Shell.MaxOutputBytes > 0 {
 		opts.shellMaxOutputBytes = config.Shell.MaxOutputBytes

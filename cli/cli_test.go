@@ -561,6 +561,31 @@ func TestOptionsFromConfigRejectsInvalidProviderAndCheckpoint(t *testing.T) {
 	}
 }
 
+func TestOptionsFromConfigRejectsNegativeLimits(t *testing.T) {
+	for name, config := range map[string]configFile{
+		"agent.maxSteps":          {Agent: agentConfig{MaxSteps: -1}},
+		"workspace.maxReadBytes":  {Workspace: workspaceConfig{MaxReadBytes: -1}},
+		"workspace.maxWriteBytes": {Workspace: workspaceConfig{MaxWriteBytes: -1}},
+		"shell.maxOutputBytes":    {Shell: shellConfig{MaxOutputBytes: -1}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			configPath := filepath.Join(dir, "zenforge.json")
+			data, err := json.Marshal(config)
+			if err != nil {
+				t.Fatalf("Marshal returned error: %v", err)
+			}
+			if err := os.WriteFile(configPath, data, 0o644); err != nil {
+				t.Fatalf("WriteFile returned error: %v", err)
+			}
+			_, err = optionsFromArgs([]string{"--config", configPath})
+			if err == nil || !strings.Contains(err.Error(), name) {
+				t.Fatalf("expected %s error, got %v", name, err)
+			}
+		})
+	}
+}
+
 func boolPtr(value bool) *bool {
 	return &value
 }

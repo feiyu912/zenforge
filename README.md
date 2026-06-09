@@ -205,6 +205,7 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - Config reference and MVP validation document invalid approval mode handling.
 - CLI config rejects invalid model providers and checkpoint store types before runtime setup.
 - Config reference and MVP validation document invalid provider/checkpoint handling.
+- CLI config rejects negative agent, workspace, and shell limit values.
 - HTTP approval submit bad JSON and invalid decisions are covered.
 - MVP validation maps HTTP approval bad request handling to a concrete test.
 - HTTP resume distinguishes invalid POST JSON from a missing run id.
