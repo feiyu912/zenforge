@@ -154,6 +154,11 @@ func applyConfig(opts *options, config configFile) error {
 		opts.shellMaxOutputBytes = config.Shell.MaxOutputBytes
 	}
 	if config.Approval.Mode != "" {
+		switch config.Approval.Mode {
+		case "prompt", "always", "never":
+		default:
+			return fmt.Errorf("unknown approval.mode: %s", config.Approval.Mode)
+		}
 		opts.approve = config.Approval.Mode
 	}
 	if config.Checkpoint.Type != "" {
