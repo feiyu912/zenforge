@@ -401,13 +401,17 @@ MVP includes:
 - event stream;
 - JSONL trace/checkpoint;
 - resume for non-awaiting runs;
+- sub-agent task tool;
+- MCP tool adapter;
+- memory augmentation adapter;
 - CLI approval for shell/file risk;
+- CLI `events` and `runs` inspection commands;
 - one code-review/refactor example.
 
 MVP excludes:
 
 - full ZenMind memory system;
-- MCP;
+- MCP resources, prompts, sampling, discovery, and OAuth;
 - desktop bridge;
 - mobile gateway;
 - multi-tenant server APIs;
