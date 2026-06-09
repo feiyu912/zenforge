@@ -103,6 +103,11 @@ func loadConfigFile(path string) (configFile, error) {
 
 func applyConfig(opts *options, config configFile) error {
 	if config.Model.Provider != "" {
+		switch config.Model.Provider {
+		case "openai", "anthropic":
+		default:
+			return fmt.Errorf("unknown model.provider: %s", config.Model.Provider)
+		}
 		opts.provider = config.Model.Provider
 	}
 	if config.Model.Name != "" {
@@ -162,6 +167,11 @@ func applyConfig(opts *options, config configFile) error {
 		opts.approve = config.Approval.Mode
 	}
 	if config.Checkpoint.Type != "" {
+		switch config.Checkpoint.Type {
+		case "jsonl", "sqlite":
+		default:
+			return fmt.Errorf("unknown checkpoint.type: %s", config.Checkpoint.Type)
+		}
 		opts.checkpointType = config.Checkpoint.Type
 	}
 	if config.Checkpoint.Path != "" {
