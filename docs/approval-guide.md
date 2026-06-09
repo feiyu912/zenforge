@@ -11,8 +11,8 @@ actions, ask a human or policy service, and continue only if allowed.
 Typical approval cases:
 
 - shell command outside allowlist;
-- file write outside write root;
-- stale write after file changed;
+- workspace write without a fresh read snapshot;
+- stale write after a file changed;
 - network call to sensitive host;
 - destructive operation.
 
@@ -51,13 +51,17 @@ go func() {
 }()
 
 func submitApproval(ctx context.Context, body []byte) error {
-    decision, err := zenmind.DecisionFromJSON(body)
-    if err != nil {
+    var decision approval.Decision
+    if err := json.Unmarshal(body, &decision); err != nil {
         return err
     }
     return broker.Submit(ctx, decision)
 }
 ```
+
+Platform-specific submit payloads can be translated at the edge before calling
+`Submit`; for example, `adapters/zenmind` provides compatibility helpers for
+ZenMind routes.
 
 When using `server/harnesshttp`, assign the same broker to
 `handler.Approvals` and expose `handler.ServeApprovals` plus
