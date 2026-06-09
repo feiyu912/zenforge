@@ -110,6 +110,36 @@ func TestServeRunRequiresPost(t *testing.T) {
 	}
 }
 
+func TestHandlersRejectUnsupportedMethods(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		method string
+		path   string
+		serve  func(*Handler, http.ResponseWriter, *http.Request)
+	}{
+		{name: "run", method: http.MethodGet, path: "/run", serve: (*Handler).ServeRun},
+		{name: "resume", method: http.MethodDelete, path: "/resume", serve: (*Handler).ServeResume},
+		{name: "events", method: http.MethodPost, path: "/events", serve: (*Handler).ServeEvents},
+		{name: "live", method: http.MethodPost, path: "/live", serve: (*Handler).ServeLiveEvents},
+		{name: "approval", method: http.MethodGet, path: "/approval", serve: (*Handler).ServeApproval},
+		{name: "approvals", method: http.MethodPost, path: "/approvals", serve: (*Handler).ServeApprovals},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			handler := New(nil, sse.Options{})
+			rec := httptest.NewRecorder()
+
+			tc.serve(handler, rec, httptest.NewRequest(tc.method, tc.path, nil))
+
+			if rec.Code != http.StatusMethodNotAllowed {
+				t.Fatalf("status = %d, want 405", rec.Code)
+			}
+			if !strings.Contains(rec.Body.String(), "method_not_allowed") {
+				t.Fatalf("unexpected body: %s", rec.Body.String())
+			}
+		})
+	}
+}
+
 func TestServeResumeStreamsGETAndPOST(t *testing.T) {
 	for _, tc := range []struct {
 		name string
