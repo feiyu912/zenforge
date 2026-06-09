@@ -74,6 +74,8 @@ For SQLite local storage:
 - `agent.maxSteps`: maximum model/tool loop steps.
 - `agent.planning`: `disabled`, `enabled`, `plan_execute`, or boolean.
 - `workspace.root`: local workspace root.
+- CLI workspace writes require a fresh `workspace_read` snapshot before
+  overwriting an existing file.
 - `shell.enabled`: enables the local shell tool.
 - `shell.workingDir`: working directory for shell commands.
 - `shell.allow`: allowlisted shell command prefixes.

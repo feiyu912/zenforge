@@ -194,6 +194,7 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - User-facing guides no longer present themselves as drafts and use current tool, shell, and sandbox APIs.
 - Approval guide examples use neutral core decisions, with platform payload mapping kept at adapter edges.
 - CLI workspace writes require a fresh read snapshot by default.
+- Quickstart and config reference document the CLI workspace write snapshot default.
 - `sandbox.State` for cross-run session continuity.
 - Trace metadata enrichment.
 - A hardening test suite and a failure-mode guide.

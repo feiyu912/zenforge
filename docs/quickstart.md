@@ -41,6 +41,10 @@ go run ./cmd/zenforge run --config zenforge.json "Analyze this repo"
 The CLI streams model text, tool calls, todo updates, approval requests, and the
 final answer.
 
+Workspace writes are conservative by default. The CLI records file metadata when
+`workspace_read` succeeds, and `workspace_write` requires a fresh read snapshot
+before overwriting an existing file.
+
 ## 4. Inspect Events
 
 List known runs:
