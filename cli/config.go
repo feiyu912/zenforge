@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -121,7 +120,9 @@ func applyConfig(opts *options, config configFile) error {
 	if config.Agent.MaxSteps > 0 {
 		opts.maxSteps = config.Agent.MaxSteps
 	}
-	if planning, ok := planningString(config.Agent.Planning); ok {
+	if planning, ok, err := planningString(config.Agent.Planning); err != nil {
+		return err
+	} else if ok {
 		opts.planning = planning
 	}
 	if config.Workspace.Root != "" {
@@ -179,20 +180,25 @@ func configPathFromArgs(args []string) string {
 	return ""
 }
 
-func planningString(value any) (string, bool) {
+func planningString(value any) (string, bool, error) {
 	switch v := value.(type) {
 	case nil:
-		return "", false
+		return "", false, nil
 	case string:
-		return v, v != ""
+		switch v {
+		case "":
+			return "", false, nil
+		case "disabled", "enabled", "plan_execute", "plan-execute", "true":
+			return v, true, nil
+		default:
+			return "", false, fmt.Errorf("unknown agent.planning mode: %s", v)
+		}
 	case bool:
 		if v {
-			return "plan_execute", true
+			return "plan_execute", true, nil
 		}
-		return "disabled", true
-	case float64:
-		return strconv.Itoa(int(v)), true
+		return "disabled", true, nil
 	default:
-		return "", false
+		return "", false, fmt.Errorf("agent.planning must be a string or boolean")
 	}
 }

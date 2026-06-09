@@ -497,6 +497,30 @@ func TestOptionsFromConfigRejectsInvalidShellTimeout(t *testing.T) {
 	}
 }
 
+func TestOptionsFromConfigRejectsInvalidPlanningMode(t *testing.T) {
+	for name, planning := range map[string]any{
+		"unknown": "sometimes",
+		"number":  1,
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			configPath := filepath.Join(dir, "zenforge.json")
+			config := configFile{Agent: agentConfig{Planning: planning}}
+			data, err := json.Marshal(config)
+			if err != nil {
+				t.Fatalf("Marshal returned error: %v", err)
+			}
+			if err := os.WriteFile(configPath, data, 0o644); err != nil {
+				t.Fatalf("WriteFile returned error: %v", err)
+			}
+			_, err = optionsFromArgs([]string{"--config", configPath})
+			if err == nil || !strings.Contains(err.Error(), "agent.planning") {
+				t.Fatalf("expected agent.planning error, got %v", err)
+			}
+		})
+	}
+}
+
 func boolPtr(value bool) *bool {
 	return &value
 }
