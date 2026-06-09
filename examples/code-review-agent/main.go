@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/feiyu912/zenforge"
+	approvalcli "github.com/feiyu912/zenforge/approval/cli"
 	checkpointjsonl "github.com/feiyu912/zenforge/checkpoint/jsonl"
 	eventlogjsonl "github.com/feiyu912/zenforge/eventlog/jsonl"
 	"github.com/feiyu912/zenforge/model/openai"
@@ -27,13 +28,18 @@ func main() {
 		MaxWriteBytes: 1,
 	})
 	must(err)
-	workspaceTools, err := workspacetools.Tools(workspacetools.Config{Workspace: ws})
+	workspaceTools, err := workspacetools.Tools(workspacetools.Config{
+		Workspace:              ws,
+		Snapshots:              workspacetools.NewSnapshotStore(),
+		RequireReadBeforeWrite: true,
+	})
 	must(err)
 	shellTool, err := shelltool.New(shelltool.Config{Policy: policy.ShellPolicy{
-		WorkingDir:     root,
-		AllowCommands:  []string{"go test ./...", "grep", "find"},
-		MaxTimeout:     30 * time.Second,
-		MaxOutputBytes: 256_000,
+		WorkingDir:      root,
+		AllowCommands:   []string{"go test ./...", "grep", "find"},
+		RequireApproval: true,
+		MaxTimeout:      30 * time.Second,
+		MaxOutputBytes:  256_000,
 	}})
 	must(err)
 
@@ -45,6 +51,7 @@ func main() {
 		}),
 		Instructions: "Review code like a senior engineer. Lead with concrete findings, then mention test gaps. Do not modify files.",
 		Tools:        append(workspaceTools, shellTool),
+		Approval:     approvalcli.New(os.Stdin, os.Stderr),
 		Events:       eventlogjsonl.New(runDir),
 		Checkpoints:  checkpointjsonl.New(runDir),
 		MaxSteps:     12,

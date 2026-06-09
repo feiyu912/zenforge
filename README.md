@@ -181,6 +181,7 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - Release notes version coverage is checked against `VERSION`.
 - Durable schema version docs and flattened event contract docs are checked.
 - CLI todo rendering is covered for typed plan/execute payloads.
+- The code review example wires workspace snapshots and CLI approval for risky shell commands.
 - MVP validation evidence is checked against existing test and benchmark names.
 - Go source platform-boundary terms are checked in the docs test suite.
 - The SDK embedded example is run in tests without an API key.
