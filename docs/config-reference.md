@@ -79,7 +79,8 @@ For SQLite local storage:
 - `shell.enabled`: enables the local shell tool.
 - `shell.workingDir`: working directory for shell commands.
 - `shell.allow`: allowlisted shell command prefixes.
-- `shell.timeout`: Go duration string, for example `30s`.
+- `shell.timeout`: Go duration string, for example `30s`. Invalid durations
+  make config loading fail instead of falling back silently.
 - `shell.maxOutputBytes`: output cap for shell command output.
 - `approval.mode`: `prompt`, `always`, or `never`.
 - `checkpoint.type`: `jsonl` or `sqlite`.

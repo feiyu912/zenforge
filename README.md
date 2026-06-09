@@ -198,6 +198,7 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - CLI workspace read/write byte limits from config are applied at runtime.
 - MVP validation maps CLI workspace byte-limit enforcement to a concrete test.
 - CLI config rejects invalid shell timeout durations instead of silently falling back.
+- Config reference and MVP validation document invalid shell timeout handling.
 - `sandbox.State` for cross-run session continuity.
 - Trace metadata enrichment.
 - A hardening test suite and a failure-mode guide.
