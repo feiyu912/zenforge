@@ -180,6 +180,7 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - Config reference is checked against the generated `zenforge init` defaults.
 - Release notes version coverage is checked against `VERSION`.
 - Durable schema version docs and flattened event contract docs are checked.
+- CLI todo rendering is covered for typed plan/execute payloads.
 - MVP validation evidence is checked against existing test and benchmark names.
 - Go source platform-boundary terms are checked in the docs test suite.
 - The SDK embedded example is run in tests without an API key.

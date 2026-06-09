@@ -539,7 +539,7 @@ func renderEvent(out io.Writer, event zenforge.Event) {
 }
 
 func renderTodos(out io.Writer, value any) {
-	items, ok := value.([]any)
+	items, ok := todoItems(value)
 	if !ok {
 		data, err := json.Marshal(value)
 		if err == nil && string(data) != "null" {
@@ -549,9 +549,32 @@ func renderTodos(out io.Writer, value any) {
 	}
 	_, _ = fmt.Fprintln(out, "\ntodos")
 	for _, item := range items {
-		fields, _ := item.(map[string]any)
+		fields := item
 		_, _ = fmt.Fprintf(out, "  [%s] %s\n", stringValue(fields["status"]), stringValue(fields["content"]))
 	}
+}
+
+func todoItems(value any) ([]map[string]any, bool) {
+	if items, ok := value.([]any); ok {
+		out := make([]map[string]any, 0, len(items))
+		for _, item := range items {
+			fields, ok := mapValue(item)
+			if !ok {
+				return nil, false
+			}
+			out = append(out, fields)
+		}
+		return out, true
+	}
+	data, err := json.Marshal(value)
+	if err != nil || string(data) == "null" {
+		return nil, false
+	}
+	var out []map[string]any
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, false
+	}
+	return out, true
 }
 
 func jsonValue(value any) string {

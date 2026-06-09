@@ -20,6 +20,7 @@ import (
 	eventlogjsonl "github.com/feiyu912/zenforge/eventlog/jsonl"
 	eventlogsqlite "github.com/feiyu912/zenforge/eventlog/sqlite"
 	"github.com/feiyu912/zenforge/harness"
+	"github.com/feiyu912/zenforge/planner"
 )
 
 func TestMainVersion(t *testing.T) {
@@ -454,6 +455,22 @@ func TestRenderApprovalRequested(t *testing.T) {
 	output := stdout.String()
 	if !strings.Contains(output, "approval required: shell.command (high)") || !strings.Contains(output, "Approve shell command") {
 		t.Fatalf("unexpected output: %q", output)
+	}
+}
+
+func TestRenderTodosHandlesTypedPayload(t *testing.T) {
+	var stdout bytes.Buffer
+	renderEvent(&stdout, zenforge.NewEvent(zenforge.EventTodoUpdated, "run_1", map[string]any{
+		"todos": []planner.Todo{
+			{Content: "Inspect project structure", Status: planner.TodoDone},
+			{Content: "Review tool runtime", Status: planner.TodoInProgress},
+		},
+	}))
+	output := stdout.String()
+	if !strings.Contains(output, "[done] Inspect project structure") ||
+		!strings.Contains(output, "[in_progress] Review tool runtime") ||
+		strings.Contains(output, `"content"`) {
+		t.Fatalf("unexpected todo output: %q", output)
 	}
 }
 
