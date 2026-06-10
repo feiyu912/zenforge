@@ -1053,6 +1053,7 @@ func TestInvokeSubAgentToolResumesNonTerminalChildCheckpoint(t *testing.T) {
 }
 
 func TestAgentPlanExecutePresetPlansExecutesAndSummarizes(t *testing.T) {
+	eventStore := &testEventStore{}
 	fakeModel := &scriptedModel{turns: []scriptedTurn{
 		{
 			events: []model.Event{{
@@ -1083,14 +1084,36 @@ func TestAgentPlanExecutePresetPlansExecutesAndSummarizes(t *testing.T) {
 	agent := New(Config{
 		Model:    fakeModel,
 		Planning: PlanningPlanExecute,
+		Events:   eventStore,
 	})
 
-	result, err := agent.Run(context.Background(), Task{RunID: "run_plan_execute", Input: "do the work"})
+	events, err := agent.Stream(context.Background(), Task{RunID: "run_plan_execute", Input: "do the work"})
 	if err != nil {
-		t.Fatalf("Run returned error: %v", err)
+		t.Fatalf("Stream returned error: %v", err)
 	}
-	if result.Output != "summary done" {
-		t.Fatalf("unexpected summary output: %q", result.Output)
+	var output string
+	var types []EventType
+	for event := range events {
+		types = append(types, event.Type)
+		if event.Type == EventRunDone {
+			output = stringValue(event.Payload["output"])
+		}
+	}
+	if output != "summary done" {
+		t.Fatalf("unexpected summary output: %q", output)
+	}
+	if countEvent(types, EventRunStarted) != 1 || countEvent(types, EventRunDone) != 1 {
+		t.Fatalf("plan/execute lifecycle events = %v", types)
+	}
+	if countEvent(types, EventRunResumed) != 0 || countEvent(types, EventRunError) != 0 || countEvent(types, EventRunCancelled) != 0 {
+		t.Fatalf("internal stage lifecycle leaked: %v", types)
+	}
+	var persistedTypes []EventType
+	for _, event := range eventStore.events {
+		persistedTypes = append(persistedTypes, event.Type)
+	}
+	if countEvent(persistedTypes, EventRunStarted) != 1 || countEvent(persistedTypes, EventRunDone) != 1 {
+		t.Fatalf("persisted plan/execute lifecycle events = %v", persistedTypes)
 	}
 	if len(fakeModel.requests) != 5 {
 		t.Fatalf("model calls = %d, want 5", len(fakeModel.requests))
@@ -1100,6 +1123,31 @@ func TestAgentPlanExecutePresetPlansExecutesAndSummarizes(t *testing.T) {
 	}
 	if fakeModel.requests[4].ToolChoice != model.ToolChoiceNone {
 		t.Fatalf("summary request tool choice = %q, want none", fakeModel.requests[4].ToolChoice)
+	}
+}
+
+func TestAgentPlanExecuteStopsAfterInternalStageFailure(t *testing.T) {
+	fakeModel := &scriptedModel{turns: []scriptedTurn{{
+		events: []model.Event{{Error: errors.New("planning failed")}},
+	}}}
+	agent := New(Config{
+		Model:    fakeModel,
+		Planning: PlanningPlanExecute,
+	})
+
+	events, err := agent.Stream(context.Background(), Task{RunID: "run_plan_failure", Input: "do the work"})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	var types []EventType
+	for event := range events {
+		types = append(types, event.Type)
+	}
+	if countEvent(types, EventRunStarted) != 1 || countEvent(types, EventRunError) != 1 {
+		t.Fatalf("unexpected lifecycle events: %v", types)
+	}
+	if countEvent(types, EventRunDone) != 0 || len(fakeModel.requests) != 1 {
+		t.Fatalf("plan continued after failure: events=%v requests=%#v", types, fakeModel.requests)
 	}
 }
 
@@ -1369,6 +1417,16 @@ func assertContainsEvent(t *testing.T, events []EventType, want EventType) {
 		}
 	}
 	t.Fatalf("events %v did not contain %s", events, want)
+}
+
+func countEvent(events []EventType, want EventType) int {
+	count := 0
+	for _, event := range events {
+		if event == want {
+			count++
+		}
+	}
+	return count
 }
 
 func hasTool(tools []model.ToolSpec, name string) bool {

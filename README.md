@@ -198,6 +198,7 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - Failure-mode, resume, and MVP docs cover final-turn provider contract errors.
 - Plan/execute checkpoints continue sequence numbers across stages and persist the terminal summary.
 - Resume and MVP docs map durable plan/execute summaries to a SQLite end-to-end test.
+- Plan/execute internal stages no longer leak terminal run lifecycle events or continue after stage failure.
 - Architecture package layout is aligned with the current repository.
 - Historical API sketch is labeled and current guides are prioritized.
 - README Quick Look and architecture snippets use current store/interface names.

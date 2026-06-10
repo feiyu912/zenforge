@@ -208,7 +208,11 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 	if len(todos) == 0 {
 		planInput := task.Input + "\n\n" + planner.PlanPrompt
 		planState := newRunState(runID, planInput, planExecuteMeta(task.Meta, task.Input, planExecuteStagePlan))
-		a.runLoop(ctx, out, planState, resumeState != nil && planExecuteStage(resumeState.Meta) == planExecuteStagePlan)
+		terminal := a.runInternalLoop(ctx, out, planState, resumeState != nil && planExecuteStage(resumeState.Meta) == planExecuteStagePlan)
+		if terminal.Type == EventRunError || terminal.Type == EventRunCancelled {
+			emit(terminal.Type, terminal.Data)
+			return
+		}
 		todos, err = a.todos.List(ctx, runID)
 		if err != nil {
 			fail(err)
@@ -244,7 +248,11 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 			executeState = *resumeState
 			resumeState = nil
 		}
-		a.runLoop(ctx, out, executeState, true)
+		terminal := a.runInternalLoop(ctx, out, executeState, true)
+		if terminal.Type == EventRunError || terminal.Type == EventRunCancelled {
+			emit(terminal.Type, terminal.Data)
+			return
+		}
 		todos, err = a.todos.List(ctx, runID)
 		if err != nil {
 			fail(err)
@@ -397,9 +405,31 @@ func newRunState(runID, input string, meta map[string]any) harness.RunState {
 	}
 }
 
+type loopTerminal struct {
+	Type EventType
+	Data map[string]any
+}
+
 func (a *Agent) runLoop(ctx context.Context, out chan<- Event, state harness.RunState, resumed bool) {
+	a.runLoopMode(ctx, out, state, resumed, false)
+}
+
+func (a *Agent) runInternalLoop(ctx context.Context, out chan<- Event, state harness.RunState, resumed bool) loopTerminal {
+	return a.runLoopMode(ctx, out, state, resumed, true)
+}
+
+func (a *Agent) runLoopMode(ctx context.Context, out chan<- Event, state harness.RunState, resumed, internal bool) (terminal loopTerminal) {
 	runID := state.RunID
 	emit := func(eventType EventType, data map[string]any) {
+		if internal {
+			switch eventType {
+			case EventRunStarted, EventRunResumed:
+				return
+			case EventRunDone, EventRunError, EventRunCancelled:
+				terminal = loopTerminal{Type: eventType, Data: cloneMap(data)}
+				return
+			}
+		}
 		a.emit(ctx, out, eventType, runID, data)
 	}
 	checkpointSeq, _ := a.latestCheckpointSeq(ctx, runID)
@@ -549,6 +579,7 @@ func (a *Agent) runLoop(ctx context.Context, out chan<- Event, state harness.Run
 	state.Control.Status = harness.RunStatusCompleted
 	checkpointState()
 	emit(EventRunDone, map[string]any{"output": assistant.Content})
+	return terminal
 }
 
 func (a *Agent) latestCheckpointSeq(ctx context.Context, runID string) (int64, error) {
