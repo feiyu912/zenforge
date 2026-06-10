@@ -409,7 +409,7 @@ func (a *Agent) runLoop(ctx context.Context, out chan<- Event, state harness.Run
 	if maxSteps <= 0 {
 		maxSteps = 8
 	}
-	for state.Step < maxSteps {
+	for {
 		if err := ctx.Err(); err != nil {
 			state.Phase = harness.RunPhaseCancelled
 			state.Control.Status = harness.RunStatusCancelled
@@ -423,6 +423,9 @@ func (a *Agent) runLoop(ctx context.Context, out chan<- Event, state harness.Run
 				return
 			}
 			continue
+		}
+		if state.Step >= maxSteps {
+			break
 		}
 
 		state.Step++

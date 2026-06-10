@@ -162,6 +162,59 @@ func TestAgentStreamRunsToolAndContinuesModelLoop(t *testing.T) {
 	}
 }
 
+func TestAgentMaxStepsRunsPendingToolBeforeFinalNoToolTurn(t *testing.T) {
+	checkpoints := checkpointmemory.New()
+	fakeModel := &scriptedModel{turns: []scriptedTurn{
+		{
+			events: []model.Event{{
+				Message: &model.Message{
+					ToolCalls: []model.ToolCallSpec{{
+						ID:        "call_limit",
+						Name:      "echo",
+						Arguments: json.RawMessage(`{"text":"last tool result"}`),
+					}},
+				},
+			}},
+		},
+		{events: []model.Event{{Delta: "final after limit"}}},
+	}}
+	agent := New(Config{
+		Model:       fakeModel,
+		Tools:       []Tool{echoTool{}},
+		Checkpoints: checkpoints,
+		MaxSteps:    1,
+	})
+
+	result, err := agent.Run(context.Background(), Task{RunID: "run_max_steps", Input: "use the last tool"})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if result.Output != "final after limit" {
+		t.Fatalf("output = %q, want final after limit", result.Output)
+	}
+	if len(fakeModel.requests) != 2 {
+		t.Fatalf("model calls = %d, want 2", len(fakeModel.requests))
+	}
+	finalRequest := fakeModel.requests[1]
+	if finalRequest.ToolChoice != model.ToolChoiceNone {
+		t.Fatalf("final tool choice = %q, want none", finalRequest.ToolChoice)
+	}
+	if got := finalRequest.Messages[len(finalRequest.Messages)-2]; got.Role != "tool" || got.Content != "last tool result" {
+		t.Fatalf("final request missing last tool result: %#v", finalRequest.Messages)
+	}
+	if got := finalRequest.Messages[len(finalRequest.Messages)-1]; got.Role != "user" || !strings.Contains(got.Content, "tool-use limit") {
+		t.Fatalf("final request missing limit instruction: %#v", finalRequest.Messages)
+	}
+
+	cp, err := checkpoints.Load(context.Background(), "run_max_steps")
+	if err != nil {
+		t.Fatalf("Load checkpoint returned error: %v", err)
+	}
+	if cp.State.Phase != harness.RunPhaseCompleted || cp.State.Step != 1 || len(cp.State.Tool.Pending) != 0 {
+		t.Fatalf("unexpected final checkpoint: %#v", cp.State)
+	}
+}
+
 func TestAgentCarriesSandboxStateBetweenToolCalls(t *testing.T) {
 	checkpoints := checkpointmemory.New()
 	recorder := &sandboxStateTool{}
