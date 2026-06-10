@@ -194,6 +194,7 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - MVP validation maps max-step final no-tool behavior to a concrete end-to-end test.
 - Cancellation before model or tool execution persists a cancelled terminal checkpoint and event.
 - Failure-mode docs and MVP validation describe durable cancellation semantics.
+- Final no-tool turns fail clearly if a provider still returns tool calls.
 - Architecture package layout is aligned with the current repository.
 - Historical API sketch is labeled and current guides are prioritized.
 - README Quick Look and architecture snippets use current store/interface names.

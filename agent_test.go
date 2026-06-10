@@ -225,6 +225,78 @@ func TestAgentMaxStepsRunsPendingToolBeforeFinalNoToolTurn(t *testing.T) {
 	}
 }
 
+func TestAgentMaxStepsRejectsToolCallsFromFinalNoToolTurn(t *testing.T) {
+	checkpoints := checkpointmemory.New()
+	fakeModel := &scriptedModel{turns: []scriptedTurn{
+		{
+			events: []model.Event{{
+				Message: &model.Message{ToolCalls: []model.ToolCallSpec{{
+					ID:        "call_limit",
+					Name:      "echo",
+					Arguments: json.RawMessage(`{"text":"last tool result"}`),
+				}}},
+			}},
+		},
+		{
+			events: []model.Event{{
+				Message: &model.Message{ToolCalls: []model.ToolCallSpec{{
+					ID:        "call_forbidden",
+					Name:      "echo",
+					Arguments: json.RawMessage(`{"text":"should not run"}`),
+				}}},
+			}},
+		},
+	}}
+	agent := New(Config{
+		Model:       fakeModel,
+		Tools:       []Tool{echoTool{}},
+		Checkpoints: checkpoints,
+		MaxSteps:    1,
+	})
+
+	result, err := agent.Run(context.Background(), Task{RunID: "run_final_tool_call", Input: "finish without more tools"})
+	if err == nil || !strings.Contains(err.Error(), "final no-tool model turn") {
+		t.Fatalf("expected final no-tool error, got result=%#v err=%v", result, err)
+	}
+	if len(fakeModel.requests) != 2 || fakeModel.requests[1].ToolChoice != model.ToolChoiceNone {
+		t.Fatalf("unexpected model requests: %#v", fakeModel.requests)
+	}
+	cp, err := checkpoints.Load(context.Background(), "run_final_tool_call")
+	if err != nil {
+		t.Fatalf("Load checkpoint returned error: %v", err)
+	}
+	if cp.State.Phase != harness.RunPhaseFailed || cp.State.Control.Status != harness.RunStatusFailed {
+		t.Fatalf("unexpected final checkpoint: %#v", cp.State)
+	}
+	if got := cp.State.Meta["error"]; !strings.Contains(stringValue(got), "final no-tool model turn") {
+		t.Fatalf("checkpoint error = %#v", got)
+	}
+	for _, message := range cp.State.Messages {
+		for _, call := range message.ToolCalls {
+			if call.ID == "call_forbidden" {
+				t.Fatalf("forbidden final tool call was persisted as executable state: %#v", cp.State.Messages)
+			}
+		}
+	}
+
+	resumed, err := agent.Resume(context.Background(), "run_final_tool_call")
+	if err != nil {
+		t.Fatalf("Resume returned error: %v", err)
+	}
+	var resumedError string
+	for event := range resumed {
+		if event.Type == EventRunError {
+			resumedError = stringValue(event.Payload["error"])
+		}
+	}
+	if !strings.Contains(resumedError, "final no-tool model turn") {
+		t.Fatalf("resumed error = %q", resumedError)
+	}
+	if len(fakeModel.requests) != 2 {
+		t.Fatalf("resume called model again: %#v", fakeModel.requests)
+	}
+}
+
 func TestAgentCancellationBeforeModelPersistsCancelledTerminalState(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -1026,6 +1098,52 @@ func TestAgentPlanExecutePresetPlansExecutesAndSummarizes(t *testing.T) {
 	}
 	if fakeModel.requests[4].ToolChoice != model.ToolChoiceNone {
 		t.Fatalf("summary request tool choice = %q, want none", fakeModel.requests[4].ToolChoice)
+	}
+}
+
+func TestAgentPlanExecuteRejectsToolCallsFromSummaryTurn(t *testing.T) {
+	fakeModel := &scriptedModel{turns: []scriptedTurn{
+		{
+			events: []model.Event{{
+				Message: &model.Message{ToolCalls: []model.ToolCallSpec{{
+					ID:        "plan_call",
+					Name:      "todo_write",
+					Arguments: json.RawMessage(`{"todos":[{"id":"task_1","content":"Inspect repo"}]}`),
+				}}},
+			}},
+		},
+		{events: []model.Event{{Delta: "plan created"}}},
+		{
+			events: []model.Event{{
+				Message: &model.Message{ToolCalls: []model.ToolCallSpec{{
+					ID:        "done_call",
+					Name:      "todo_update",
+					Arguments: json.RawMessage(`{"id":"task_1","status":"done","notes":"finished"}`),
+				}}},
+			}},
+		},
+		{events: []model.Event{{Delta: "task done"}}},
+		{
+			events: []model.Event{{
+				Message: &model.Message{ToolCalls: []model.ToolCallSpec{{
+					ID:        "summary_tool",
+					Name:      "todo_list",
+					Arguments: json.RawMessage(`{}`),
+				}}},
+			}},
+		},
+	}}
+	agent := New(Config{
+		Model:    fakeModel,
+		Planning: PlanningPlanExecute,
+	})
+
+	result, err := agent.Run(context.Background(), Task{RunID: "run_plan_summary_tool", Input: "do the work"})
+	if err == nil || !strings.Contains(err.Error(), "final no-tool model turn") {
+		t.Fatalf("expected summary no-tool error, got result=%#v err=%v", result, err)
+	}
+	if len(fakeModel.requests) != 5 || fakeModel.requests[4].ToolChoice != model.ToolChoiceNone {
+		t.Fatalf("unexpected model requests: %#v", fakeModel.requests)
 	}
 }
 

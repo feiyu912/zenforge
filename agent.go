@@ -274,6 +274,10 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 		fail(err)
 		return
 	}
+	if err := validateNoToolAnswer(assistant); err != nil {
+		fail(err)
+		return
+	}
 	emit(EventRunDone, map[string]any{"output": assistant.Content, "todos": todos})
 }
 
@@ -376,6 +380,10 @@ func (a *Agent) runLoop(ctx context.Context, out chan<- Event, state harness.Run
 		})
 	}
 	cancelRun := func(err error) {
+		if state.Meta == nil {
+			state.Meta = map[string]any{}
+		}
+		state.Meta["error"] = err.Error()
 		state.Phase = harness.RunPhaseCancelled
 		state.Control.Status = harness.RunStatusCancelled
 		checkpointState()
@@ -386,6 +394,10 @@ func (a *Agent) runLoop(ctx context.Context, out chan<- Event, state harness.Run
 			cancelRun(err)
 			return
 		}
+		if state.Meta == nil {
+			state.Meta = map[string]any{}
+		}
+		state.Meta["error"] = err.Error()
 		state.Phase = harness.RunPhaseFailed
 		state.Control.Status = harness.RunStatusFailed
 		checkpointState()
@@ -481,12 +493,23 @@ func (a *Agent) runLoop(ctx context.Context, out chan<- Event, state harness.Run
 		fail(err)
 		return
 	}
+	if err := validateNoToolAnswer(assistant); err != nil {
+		fail(err)
+		return
+	}
 	state.Messages = append(state.Messages, assistant)
 	applyUsage(&state, usage)
 	state.Phase = harness.RunPhaseCompleted
 	state.Control.Status = harness.RunStatusCompleted
 	checkpointState()
 	emit(EventRunDone, map[string]any{"output": assistant.Content})
+}
+
+func validateNoToolAnswer(message harness.MessageState) error {
+	if len(message.ToolCalls) > 0 {
+		return fmt.Errorf("final no-tool model turn returned %d tool call(s)", len(message.ToolCalls))
+	}
+	return nil
 }
 
 func (a *Agent) resumeTerminal(emit func(EventType, map[string]any), state harness.RunState) bool {
