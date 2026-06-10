@@ -3,6 +3,7 @@ package zenforge
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -78,15 +79,24 @@ type testEventStore struct {
 }
 
 func (s *testEventStore) Append(ctx context.Context, event Event) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	s.events = append(s.events, event)
 	return nil
 }
 
 func (s *testEventStore) Read(ctx context.Context, runID string, afterSeq int64, limit int) ([]Event, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return nil, nil
 }
 
 func (s *testEventStore) LatestSeq(ctx context.Context, runID string) (int64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
 	if len(s.events) == 0 {
 		return 0, nil
 	}
@@ -212,6 +222,109 @@ func TestAgentMaxStepsRunsPendingToolBeforeFinalNoToolTurn(t *testing.T) {
 	}
 	if cp.State.Phase != harness.RunPhaseCompleted || cp.State.Step != 1 || len(cp.State.Tool.Pending) != 0 {
 		t.Fatalf("unexpected final checkpoint: %#v", cp.State)
+	}
+}
+
+func TestAgentCancellationBeforeModelPersistsCancelledTerminalState(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	checkpoints := checkpointmemory.New()
+	events := &testEventStore{}
+	fakeModel := &scriptedModel{}
+	agent := New(Config{
+		Model:       fakeModel,
+		Events:      events,
+		Checkpoints: checkpoints,
+	})
+
+	stream, err := agent.Stream(ctx, Task{RunID: "run_cancel_model", Input: "stop before model"})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	var types []EventType
+	for event := range stream {
+		types = append(types, event.Type)
+	}
+
+	if len(fakeModel.requests) != 0 {
+		t.Fatalf("model calls = %d, want 0", len(fakeModel.requests))
+	}
+	assertContainsEvent(t, types, EventRunCancelled)
+	if len(events.events) == 0 || events.events[len(events.events)-1].Type != EventRunCancelled {
+		t.Fatalf("cancelled event was not persisted: %#v", events.events)
+	}
+	cp, err := checkpoints.Load(context.Background(), "run_cancel_model")
+	if err != nil {
+		t.Fatalf("Load checkpoint returned error: %v", err)
+	}
+	if cp.State.Phase != harness.RunPhaseCancelled || cp.State.Control.Status != harness.RunStatusCancelled {
+		t.Fatalf("unexpected cancelled checkpoint: %#v", cp.State)
+	}
+}
+
+func TestAgentModelCancellationIsNotReportedAsFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	checkpoints := checkpointmemory.New()
+	events := &testEventStore{}
+	agent := New(Config{
+		Model:       cancelOnStreamModel{cancel: cancel},
+		Events:      events,
+		Checkpoints: checkpoints,
+	})
+
+	stream, err := agent.Stream(ctx, Task{RunID: "run_cancel_stream", Input: "cancel the stream"})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	var types []EventType
+	for event := range stream {
+		types = append(types, event.Type)
+	}
+
+	assertContainsEvent(t, types, EventRunCancelled)
+	for _, eventType := range types {
+		if eventType == EventRunError {
+			t.Fatalf("cancellation emitted run.error: %v", types)
+		}
+	}
+	cp, err := checkpoints.Load(context.Background(), "run_cancel_stream")
+	if err != nil {
+		t.Fatalf("Load checkpoint returned error: %v", err)
+	}
+	if cp.State.Phase != harness.RunPhaseCancelled || cp.State.Control.Status != harness.RunStatusCancelled {
+		t.Fatalf("unexpected cancelled checkpoint: %#v", cp.State)
+	}
+}
+
+func TestAgentCancellationBeforeToolPreservesPendingCall(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	checkpoints := checkpointmemory.New()
+	tool := &recordingTool{}
+	agent := New(Config{
+		Model:       cancelAfterToolCallModel{cancel: cancel},
+		Tools:       []Tool{tool},
+		Checkpoints: checkpoints,
+	})
+
+	stream, err := agent.Stream(ctx, Task{RunID: "run_cancel_tool", Input: "stop before tool"})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	var types []EventType
+	for event := range stream {
+		types = append(types, event.Type)
+	}
+
+	if tool.calls != 0 {
+		t.Fatalf("tool calls = %d, want 0", tool.calls)
+	}
+	assertContainsEvent(t, types, EventRunCancelled)
+	cp, err := checkpoints.Load(context.Background(), "run_cancel_tool")
+	if err != nil {
+		t.Fatalf("Load checkpoint returned error: %v", err)
+	}
+	if cp.State.Phase != harness.RunPhaseCancelled || len(cp.State.Tool.Pending) != 1 || cp.State.Tool.Pending[0].ID != "call_cancel" {
+		t.Fatalf("unexpected cancelled checkpoint: %#v", cp.State)
 	}
 }
 
@@ -1095,6 +1208,54 @@ func (m *scriptedModel) Stream(ctx context.Context, req model.Request) (<-chan m
 		}
 	}()
 	return out, nil
+}
+
+type cancelAfterToolCallModel struct {
+	cancel context.CancelFunc
+}
+
+type cancelOnStreamModel struct {
+	cancel context.CancelFunc
+}
+
+func (m cancelOnStreamModel) Generate(ctx context.Context, req model.Request) (*model.Response, error) {
+	return nil, errors.New("Generate is not used")
+}
+
+func (m cancelOnStreamModel) Stream(ctx context.Context, req model.Request) (<-chan model.Event, error) {
+	m.cancel()
+	return nil, context.Canceled
+}
+
+func (m cancelAfterToolCallModel) Generate(ctx context.Context, req model.Request) (*model.Response, error) {
+	return nil, errors.New("Generate is not used")
+}
+
+func (m cancelAfterToolCallModel) Stream(ctx context.Context, req model.Request) (<-chan model.Event, error) {
+	out := make(chan model.Event, 1)
+	out <- model.Event{Message: &model.Message{ToolCalls: []model.ToolCallSpec{{
+		ID:        "call_cancel",
+		Name:      "record",
+		Arguments: json.RawMessage(`{}`),
+	}}}}
+	close(out)
+	m.cancel()
+	return out, nil
+}
+
+type recordingTool struct {
+	calls int
+}
+
+func (t *recordingTool) Name() string { return "record" }
+
+func (t *recordingTool) Description() string { return "Record calls" }
+
+func (t *recordingTool) Schema() map[string]any { return nil }
+
+func (t *recordingTool) Call(ctx context.Context, input json.RawMessage, call tool.Context) (tool.Result, error) {
+	t.calls++
+	return tool.Result{Output: "called"}, nil
 }
 
 type echoTool struct{}

@@ -118,16 +118,20 @@ func stringValue(value any) string {
 
 func (a *Agent) emit(ctx context.Context, out chan<- Event, eventType EventType, runID string, data map[string]any) {
 	event := NewEvent(eventType, runID, data)
+	persistCtx := ctx
+	if ctx.Err() != nil {
+		persistCtx = context.WithoutCancel(ctx)
+	}
 	if a.config.Events != nil {
 		if event.Seq == 0 {
-			if latest, err := a.config.Events.LatestSeq(ctx, event.RunID()); err == nil {
+			if latest, err := a.config.Events.LatestSeq(persistCtx, event.RunID()); err == nil {
 				event = event.WithSeq(NextEventSeq(latest))
 			}
 		}
-		_ = a.config.Events.Append(ctx, event)
+		_ = a.config.Events.Append(persistCtx, event)
 	}
 	if a.config.Trace != nil {
-		_ = a.config.Trace.Emit(ctx, traceEvent(event))
+		_ = a.config.Trace.Emit(persistCtx, traceEvent(event))
 	}
 	select {
 	case out <- event:
@@ -353,9 +357,13 @@ func (a *Agent) runLoop(ctx context.Context, out chan<- Event, state harness.Run
 		if a.config.Checkpoints == nil {
 			return
 		}
+		saveCtx := ctx
+		if ctx.Err() != nil {
+			saveCtx = context.WithoutCancel(ctx)
+		}
 		checkpointSeq++
 		state.UpdatedAt = time.Now().UTC()
-		_ = a.config.Checkpoints.Save(ctx, checkpoint.Checkpoint{
+		_ = a.config.Checkpoints.Save(saveCtx, checkpoint.Checkpoint{
 			Version: checkpoint.CheckpointVersion,
 			RunID:   runID,
 			Seq:     checkpointSeq,
@@ -367,7 +375,17 @@ func (a *Agent) runLoop(ctx context.Context, out chan<- Event, state harness.Run
 			"phase":         string(state.Phase),
 		})
 	}
+	cancelRun := func(err error) {
+		state.Phase = harness.RunPhaseCancelled
+		state.Control.Status = harness.RunStatusCancelled
+		checkpointState()
+		emit(EventRunCancelled, map[string]any{"error": err.Error()})
+	}
 	fail := func(err error) {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			cancelRun(err)
+			return
+		}
 		state.Phase = harness.RunPhaseFailed
 		state.Control.Status = harness.RunStatusFailed
 		checkpointState()
@@ -375,10 +393,7 @@ func (a *Agent) runLoop(ctx context.Context, out chan<- Event, state harness.Run
 	}
 
 	if err := ctx.Err(); err != nil {
-		state.Phase = harness.RunPhaseCancelled
-		state.Control.Status = harness.RunStatusCancelled
-		checkpointState()
-		emit(EventRunCancelled, map[string]any{"error": err.Error()})
+		cancelRun(err)
 		return
 	}
 	if resumed {
@@ -411,10 +426,7 @@ func (a *Agent) runLoop(ctx context.Context, out chan<- Event, state harness.Run
 	}
 	for {
 		if err := ctx.Err(); err != nil {
-			state.Phase = harness.RunPhaseCancelled
-			state.Control.Status = harness.RunStatusCancelled
-			checkpointState()
-			emit(EventRunCancelled, map[string]any{"error": err.Error()})
+			cancelRun(err)
 			return
 		}
 		if len(state.Tool.Pending) > 0 {
