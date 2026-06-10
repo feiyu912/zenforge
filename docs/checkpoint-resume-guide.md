@@ -51,7 +51,9 @@ ZenForge resumes only from explicit runtime boundaries:
 - completed, failed, or cancelled terminal states.
 
 Terminal states do not rerun model or tool work. They emit `run.resumed` and
-then the matching terminal event.
+then the matching terminal event. Failed and cancelled checkpoints retain their
+terminal reason so resume can report the original error instead of a generic
+fallback.
 
 ## Limited Boundaries
 

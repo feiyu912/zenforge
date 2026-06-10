@@ -29,6 +29,16 @@ Design implication:
 - UI/read-model adapters should treat streamed deltas as observable history,
   not authoritative resume state.
 
+## Final Answer Requests Tools
+
+Max-step finalization and plan/execute summaries set `ToolChoiceNone`. If a
+provider still returns tool calls, ZenForge treats the response as a runtime
+failure instead of executing the calls or emitting an empty successful result.
+
+For regular runs, the failed checkpoint records the provider contract error.
+Resuming that terminal run emits the same `run.error` without calling the model
+or tools again.
+
 ## Active Tool Interrupted
 
 If a process crashes while a tool call is active, resume moves the active tool

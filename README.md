@@ -195,6 +195,7 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - Cancellation before model or tool execution persists a cancelled terminal checkpoint and event.
 - Failure-mode docs and MVP validation describe durable cancellation semantics.
 - Final no-tool turns fail clearly if a provider still returns tool calls.
+- Failure-mode, resume, and MVP docs cover final-turn provider contract errors.
 - Architecture package layout is aligned with the current repository.
 - Historical API sketch is labeled and current guides are prioritized.
 - README Quick Look and architecture snippets use current store/interface names.
