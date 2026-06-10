@@ -239,6 +239,10 @@ S5 emits:
 - `task.cancelled`;
 - normal S4 model/tool/checkpoint events.
 
+Internal stages do not emit or persist top-level run lifecycle events. The
+plan/execute orchestrator emits exactly one start/resume event and one terminal
+run event, and stops immediately when a stage fails or is cancelled.
+
 ## Checkpoint Behavior
 
 Checkpoint after:

@@ -76,6 +76,7 @@ Markdown document links.
 | --- | --- |
 | todo tools work | `tools/todo.TestTodoToolsWorkThroughInvoker` |
 | plan/execute preset works with fake model | `TestAgentPlanExecutePresetPlansExecutesAndSummarizes` |
+| plan/execute exposes one top-level lifecycle and stops on stage failure | `TestAgentPlanExecutePresetPlansExecutesAndSummarizes`, `TestAgentPlanExecuteStopsAfterInternalStageFailure` |
 | plan/execute resume continues active todo checkpoint | `TestAgentPlanExecuteResumeContinuesActiveTodoFromCheckpoint` |
 | plan/execute resume summarizes terminal todos | `TestAgentPlanExecuteResumeSummarizesTerminalTodos` |
 | todo updates stream | `TestAgentPlanningAddsTodoToolsAndCheckpointsTodos` |

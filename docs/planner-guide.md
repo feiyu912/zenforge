@@ -60,6 +60,11 @@ The plan/execute preset has three stages:
 The plan stage creates todos. The execute stage works through them. The summary
 stage reports the final outcome.
 
+Internal plan and execute stages reuse the model/tool loop without emitting
+top-level `run.started`, `run.resumed`, `run.done`, `run.error`, or
+`run.cancelled` events. Consumers see one run lifecycle: the preset starts once
+and ends once after the final summary, or at the first stage failure.
+
 ## CLI Display
 
 CLI should render todos compactly:
