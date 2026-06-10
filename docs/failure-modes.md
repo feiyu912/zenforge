@@ -3,6 +3,18 @@
 This guide documents how ZenForge behaves when a run is interrupted, a backend
 fails, or an adapter cannot complete work.
 
+## Run Cancelled
+
+Context cancellation and deadline expiry are terminal cancellation outcomes,
+not runtime failures. ZenForge records a `cancelled` checkpoint and emits
+`run.cancelled`, including when the context is already cancelled before a model
+or pending tool call starts.
+
+Terminal event, trace, and checkpoint writes detach from the cancellation signal
+while retaining context values so durable stores can record the outcome. A tool
+call that was still pending remains in the cancelled checkpoint; a tool that
+was already active follows the active-tool resume boundary below.
+
 ## Provider Stream Interrupted
 
 ZenForge checkpoints at model-call boundaries, not mid-token. If a provider
