@@ -55,6 +55,11 @@ then the matching terminal event. Failed and cancelled checkpoints retain their
 terminal reason so resume can report the original error instead of a generic
 fallback.
 
+Plan/execute uses one checkpoint sequence across plan, execute, and summary
+stages. The final summary is stored as a completed terminal checkpoint with the
+summary output and terminal todos. Resuming that checkpoint returns the stored
+summary without another model call.
+
 ## Limited Boundaries
 
 ZenForge does not resume a provider stream mid-token. It retries from the last
