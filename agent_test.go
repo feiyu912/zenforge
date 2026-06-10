@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/feiyu912/zenforge/checkpoint"
 	checkpointjsonl "github.com/feiyu912/zenforge/checkpoint/jsonl"
 	checkpointmemory "github.com/feiyu912/zenforge/checkpoint/memory"
+	checkpointsqlite "github.com/feiyu912/zenforge/checkpoint/sqlite"
 	"github.com/feiyu912/zenforge/harness"
 	"github.com/feiyu912/zenforge/model"
 	"github.com/feiyu912/zenforge/planner"
@@ -1101,7 +1103,82 @@ func TestAgentPlanExecutePresetPlansExecutesAndSummarizes(t *testing.T) {
 	}
 }
 
+func TestAgentPlanExecutePersistsTerminalSummaryInSQLite(t *testing.T) {
+	store, err := checkpointsqlite.Open(context.Background(), filepath.Join(t.TempDir(), "runs.db"))
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer store.Close()
+	fakeModel := &scriptedModel{turns: []scriptedTurn{
+		{
+			events: []model.Event{{
+				Message: &model.Message{ToolCalls: []model.ToolCallSpec{{
+					ID:        "plan_call",
+					Name:      "todo_write",
+					Arguments: json.RawMessage(`{"todos":[{"id":"task_1","content":"Inspect repo"}]}`),
+				}}},
+			}},
+		},
+		{events: []model.Event{{Delta: "plan created"}}},
+		{
+			events: []model.Event{{
+				Message: &model.Message{ToolCalls: []model.ToolCallSpec{{
+					ID:        "done_call",
+					Name:      "todo_update",
+					Arguments: json.RawMessage(`{"id":"task_1","status":"done","notes":"finished"}`),
+				}}},
+			}},
+		},
+		{events: []model.Event{{Delta: "task done"}}},
+		{events: []model.Event{{Delta: "durable summary"}}},
+	}}
+	agent := New(Config{
+		Model:       fakeModel,
+		Planning:    PlanningPlanExecute,
+		Checkpoints: store,
+	})
+
+	result, err := agent.Run(context.Background(), Task{RunID: "run_plan_sqlite", Input: "do the work"})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if result.Output != "durable summary" {
+		t.Fatalf("output = %q", result.Output)
+	}
+	cp, err := store.Load(context.Background(), "run_plan_sqlite")
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cp.Seq <= 1 || cp.State.Phase != harness.RunPhaseCompleted || cp.State.Control.Status != harness.RunStatusCompleted {
+		t.Fatalf("unexpected summary checkpoint: %#v", cp)
+	}
+	if planExecuteStage(cp.State.Meta) != planExecuteStageSummary || lastAssistantContent(cp.State) != "durable summary" {
+		t.Fatalf("summary checkpoint missing terminal output: %#v", cp.State)
+	}
+	if len(cp.State.Todos) != 1 || cp.State.Todos[0].Status != harness.TodoDone {
+		t.Fatalf("summary checkpoint missing todos: %#v", cp.State.Todos)
+	}
+
+	resumed, err := agent.Resume(context.Background(), "run_plan_sqlite")
+	if err != nil {
+		t.Fatalf("Resume returned error: %v", err)
+	}
+	var resumedOutput string
+	for event := range resumed {
+		if event.Type == EventRunDone {
+			resumedOutput = stringValue(event.Payload["output"])
+		}
+	}
+	if resumedOutput != "durable summary" {
+		t.Fatalf("resumed output = %q", resumedOutput)
+	}
+	if len(fakeModel.requests) != 5 {
+		t.Fatalf("terminal resume called model again: %#v", fakeModel.requests)
+	}
+}
+
 func TestAgentPlanExecuteRejectsToolCallsFromSummaryTurn(t *testing.T) {
+	checkpoints := checkpointmemory.New()
 	fakeModel := &scriptedModel{turns: []scriptedTurn{
 		{
 			events: []model.Event{{
@@ -1134,8 +1211,9 @@ func TestAgentPlanExecuteRejectsToolCallsFromSummaryTurn(t *testing.T) {
 		},
 	}}
 	agent := New(Config{
-		Model:    fakeModel,
-		Planning: PlanningPlanExecute,
+		Model:       fakeModel,
+		Planning:    PlanningPlanExecute,
+		Checkpoints: checkpoints,
 	})
 
 	result, err := agent.Run(context.Background(), Task{RunID: "run_plan_summary_tool", Input: "do the work"})
@@ -1144,6 +1222,33 @@ func TestAgentPlanExecuteRejectsToolCallsFromSummaryTurn(t *testing.T) {
 	}
 	if len(fakeModel.requests) != 5 || fakeModel.requests[4].ToolChoice != model.ToolChoiceNone {
 		t.Fatalf("unexpected model requests: %#v", fakeModel.requests)
+	}
+	cp, err := checkpoints.Load(context.Background(), "run_plan_summary_tool")
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cp.State.Phase != harness.RunPhaseFailed || planExecuteStage(cp.State.Meta) != planExecuteStageSummary {
+		t.Fatalf("unexpected failed summary checkpoint: %#v", cp.State)
+	}
+	if !strings.Contains(stringValue(cp.State.Meta["error"]), "final no-tool model turn") {
+		t.Fatalf("checkpoint error = %#v", cp.State.Meta["error"])
+	}
+
+	resumed, err := agent.Resume(context.Background(), "run_plan_summary_tool")
+	if err != nil {
+		t.Fatalf("Resume returned error: %v", err)
+	}
+	var resumedError string
+	for event := range resumed {
+		if event.Type == EventRunError {
+			resumedError = stringValue(event.Payload["error"])
+		}
+	}
+	if !strings.Contains(resumedError, "final no-tool model turn") {
+		t.Fatalf("resumed error = %q", resumedError)
+	}
+	if len(fakeModel.requests) != 5 {
+		t.Fatalf("terminal resume called model again: %#v", fakeModel.requests)
 	}
 }
 

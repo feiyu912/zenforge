@@ -177,6 +177,7 @@ const (
 	planExecutePresetValue   = "plan_execute"
 	planExecuteStagePlan     = "plan"
 	planExecuteStageExecute  = "execute"
+	planExecuteStageSummary  = "summary"
 )
 
 func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID string, task Task, resumeState *harness.RunState) {
@@ -192,6 +193,9 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 	}
 	if resumeState != nil {
 		emit(EventRunResumed, map[string]any{"input": task.Input, "preset": string(PlanningPlanExecute)})
+		if planExecuteStage(resumeState.Meta) == planExecuteStageSummary && a.resumeTerminal(emit, *resumeState) {
+			return
+		}
 	} else {
 		emit(EventRunStarted, map[string]any{"input": task.Input, "preset": string(PlanningPlanExecute)})
 	}
@@ -267,14 +271,56 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 		}
 	}
 
-	summaryState := newRunState(runID, summaryPrompt(task.Input, todos), planExecuteMeta(task.Meta, task.Input, "summary"))
+	summaryState := newRunState(runID, summaryPrompt(task.Input, todos), planExecuteMeta(task.Meta, task.Input, planExecuteStageSummary))
+	summaryState.Todos, _ = plannerTodos(todos)
 	summaryState.Phase = harness.RunPhaseFinalizing
-	assistant, _, err := a.callModel(ctx, emit, summaryState, model.ToolChoiceNone)
-	if err != nil {
+	summaryState.Control.Status = harness.RunStatusModelStreaming
+	saveSummaryState := func() error {
+		seq, err := a.saveCheckpointAfterLatest(ctx, summaryState)
+		if err != nil {
+			return err
+		}
+		emit(EventCheckpointCreated, map[string]any{
+			"checkpointSeq": seq,
+			"phase":         string(summaryState.Phase),
+		})
+		return nil
+	}
+	failSummary := func(err error) {
+		if summaryState.Meta == nil {
+			summaryState.Meta = map[string]any{}
+		}
+		summaryState.Meta["error"] = err.Error()
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			summaryState.Phase = harness.RunPhaseCancelled
+			summaryState.Control.Status = harness.RunStatusCancelled
+			_ = saveSummaryState()
+			emit(EventRunCancelled, map[string]any{"error": err.Error()})
+			return
+		}
+		summaryState.Phase = harness.RunPhaseFailed
+		summaryState.Control.Status = harness.RunStatusFailed
+		_ = saveSummaryState()
+		emit(EventRunError, map[string]any{"error": err.Error()})
+	}
+	if err := saveSummaryState(); err != nil {
 		fail(err)
 		return
 	}
+	assistant, usage, err := a.callModel(ctx, emit, summaryState, model.ToolChoiceNone)
+	if err != nil {
+		failSummary(err)
+		return
+	}
 	if err := validateNoToolAnswer(assistant); err != nil {
+		failSummary(err)
+		return
+	}
+	summaryState.Messages = append(summaryState.Messages, assistant)
+	applyUsage(&summaryState, usage)
+	summaryState.Phase = harness.RunPhaseCompleted
+	summaryState.Control.Status = harness.RunStatusCompleted
+	if err := saveSummaryState(); err != nil {
 		fail(err)
 		return
 	}
@@ -356,7 +402,7 @@ func (a *Agent) runLoop(ctx context.Context, out chan<- Event, state harness.Run
 	emit := func(eventType EventType, data map[string]any) {
 		a.emit(ctx, out, eventType, runID, data)
 	}
-	checkpointSeq := int64(0)
+	checkpointSeq, _ := a.latestCheckpointSeq(ctx, runID)
 	checkpointState := func() {
 		if a.config.Checkpoints == nil {
 			return
@@ -503,6 +549,51 @@ func (a *Agent) runLoop(ctx context.Context, out chan<- Event, state harness.Run
 	state.Control.Status = harness.RunStatusCompleted
 	checkpointState()
 	emit(EventRunDone, map[string]any{"output": assistant.Content})
+}
+
+func (a *Agent) latestCheckpointSeq(ctx context.Context, runID string) (int64, error) {
+	if a.config.Checkpoints == nil {
+		return 0, nil
+	}
+	loadCtx := ctx
+	if ctx.Err() != nil {
+		loadCtx = context.WithoutCancel(ctx)
+	}
+	cp, err := a.config.Checkpoints.Load(loadCtx, runID)
+	if errors.Is(err, checkpoint.ErrNotFound) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return cp.Seq, nil
+}
+
+func (a *Agent) saveCheckpointAfterLatest(ctx context.Context, state harness.RunState) (int64, error) {
+	if a.config.Checkpoints == nil {
+		return 0, nil
+	}
+	saveCtx := ctx
+	if ctx.Err() != nil {
+		saveCtx = context.WithoutCancel(ctx)
+	}
+	latest, err := a.latestCheckpointSeq(saveCtx, state.RunID)
+	if err != nil {
+		return 0, err
+	}
+	seq := latest + 1
+	now := time.Now().UTC()
+	state.UpdatedAt = now
+	if err := a.config.Checkpoints.Save(saveCtx, checkpoint.Checkpoint{
+		Version: checkpoint.CheckpointVersion,
+		RunID:   state.RunID,
+		Seq:     seq,
+		State:   state,
+		SavedAt: now,
+	}); err != nil {
+		return 0, err
+	}
+	return seq, nil
 }
 
 func validateNoToolAnswer(message harness.MessageState) error {
