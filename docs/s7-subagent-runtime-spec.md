@@ -150,6 +150,11 @@ The model-facing task tool accepts bounded request options such as `parallel`,
 `failFast`, and `maxTasks`. `AllowNested` remains a host/runtime option and is
 not exposed through the default task tool schema.
 
+`Config.SubAgentOptions.MaxTasks` is the authoritative host ceiling. The task
+tool schema, pre-checkpoint runtime validation, and default orchestrator all use
+that value. A request-level `maxTasks` may lower the ceiling for one call but
+cannot increase it.
+
 ## Result
 
 ```go

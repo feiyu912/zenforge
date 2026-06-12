@@ -131,7 +131,10 @@ func shouldStop(options Options, result TaskResult, err error) bool {
 
 func mergeOptions(base, override Options) Options {
 	out := base
-	if override.MaxTasks != 0 {
+	if out.MaxTasks <= 0 {
+		out.MaxTasks = 8
+	}
+	if override.MaxTasks > 0 && override.MaxTasks < out.MaxTasks {
 		out.MaxTasks = override.MaxTasks
 	}
 	if override.AllowNested {

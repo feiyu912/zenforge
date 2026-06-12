@@ -66,7 +66,9 @@ Markdown document links.
 | memory entries augment normalized tasks | `adapters/memory.TestAugmentTaskAddsMemoryBlockAndMetadata` |
 | memory scope metadata filters cross-tenant entries | `adapters/memory.TestScopedStoreFiltersEntriesByQueryMetadata`, `adapters/memory.TestAugmentTaskUsesScopedStoreMetadata` |
 | sub-agent task tool delegates work | `TestAgentRunsSubAgentTaskTool`, `subagent.TestOrchestratorRunsTasksInStableOrder`, `tools/task.TestTaskToolSchemaAndAlias` |
+| sub-agent tools are advertised without planner configuration | `TestAgentRunsSubAgentTaskTool` |
 | sub-agent task tool decodes bounded runtime options | `tools/task.TestTaskToolValidatesArgs` |
+| host sub-agent task limits cannot be widened by requests | `TestAgentSubAgentRequestCannotRaiseHostTaskLimit`, `TestAgentSubAgentHostLimitControlsAdvertisedSchema`, `subagent.TestOrchestratorRequestMaxTasksCanOnlyTightenHostLimit`, `subagent.TestOrchestratorUsesDefaultHostTaskLimit` |
 | sub-agent parallel execution keeps stable result order | `subagent.TestOrchestratorRunsParallelTasksInStableOrder` |
 | sub-agent parallel fail-fast cancels sibling work | `subagent.TestOrchestratorParallelFailFastCancelsOtherTasks` |
 | sub-agent checkpoint state avoids duplicate resumed starts | `TestStartSubtasksDeduplicatesResumedParentToolCall` |

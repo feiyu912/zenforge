@@ -1156,6 +1156,10 @@ func (a *Agent) invokeSubAgentTool(ctx context.Context, emit eventEmitter, check
 	if depth, ok := intFromMeta(state.Meta["subagent.depth"]); ok {
 		req.Depth = depth
 	}
+	req.Options = mergeSubAgentRequestOptions(a.subAgentOptions(), req.Options)
+	if err := req.Validate(); err != nil {
+		return tool.Result{Error: err.Error(), ExitCode: 1}, err
+	}
 	startSubtasks(state, req)
 	if err := checkpointState(); err != nil {
 		return tool.Result{Error: err.Error(), ExitCode: 1}, err
@@ -1360,8 +1364,28 @@ func (a *Agent) subAgentOrchestrator() (subagent.Orchestrator, error) {
 	return subagent.NewOrchestrator(subagent.OrchestratorConfig{
 		Registry: registry,
 		Runner:   runner,
-		Options:  subagent.Options{MaxTasks: 8, Parallel: true},
+		Options:  a.subAgentOptions(),
 	}), nil
+}
+
+func (a *Agent) subAgentOptions() subagent.Options {
+	options := a.config.SubAgentOptions
+	if options == (subagent.Options{}) {
+		options.Parallel = true
+	}
+	if options.MaxTasks <= 0 {
+		options.MaxTasks = 8
+	}
+	return options
+}
+
+func mergeSubAgentRequestOptions(host, request subagent.Options) subagent.Options {
+	if request.MaxTasks <= 0 || request.MaxTasks > host.MaxTasks {
+		request.MaxTasks = host.MaxTasks
+	}
+	request.AllowNested = host.AllowNested
+	request.InheritContext = host.InheritContext
+	return request
 }
 
 func (a *Agent) runChildSubAgent(ctx context.Context, spec subagent.SubAgentSpec, task subagent.TaskSpec, req subagent.Request) (subagent.TaskResult, error) {
@@ -1664,33 +1688,36 @@ func (a *Agent) toolSpecs() []model.ToolSpec {
 
 func (a *Agent) configuredTools() ([]tool.Tool, error) {
 	configuredTools := append([]tool.Tool(nil), a.config.Tools...)
-	if a.todos == nil {
-		return configuredTools, nil
-	}
-	todoTools, err := todotools.Tools(todotools.Config{Manager: a.todos})
-	if err != nil {
-		return nil, err
-	}
 	existing := make(map[string]struct{}, len(configuredTools))
 	for _, current := range configuredTools {
 		existing[strings.ToLower(current.Name())] = struct{}{}
 	}
-	for _, current := range todoTools {
-		if _, ok := existing[strings.ToLower(current.Name())]; ok {
-			continue
+	if a.todos != nil {
+		todoTools, err := todotools.Tools(todotools.Config{Manager: a.todos})
+		if err != nil {
+			return nil, err
 		}
-		configuredTools = append(configuredTools, current)
+		for _, current := range todoTools {
+			name := strings.ToLower(current.Name())
+			if _, ok := existing[name]; ok {
+				continue
+			}
+			configuredTools = append(configuredTools, current)
+			existing[name] = struct{}{}
+		}
 	}
 	if a.config.SubAgents == SubAgentsEnabled || a.config.SubAgentOrchestrator != nil || a.config.SubAgentRegistry != nil || len(a.config.SubAgentSpecs) > 0 {
-		taskTools, err := tasktool.Tools(tasktool.Config{})
+		taskTools, err := tasktool.Tools(tasktool.Config{MaxTasks: a.subAgentOptions().MaxTasks})
 		if err != nil {
 			return nil, err
 		}
 		for _, current := range taskTools {
-			if _, ok := existing[strings.ToLower(current.Name())]; ok {
+			name := strings.ToLower(current.Name())
+			if _, ok := existing[name]; ok {
 				continue
 			}
 			configuredTools = append(configuredTools, current)
+			existing[name] = struct{}{}
 		}
 	}
 	return configuredTools, nil

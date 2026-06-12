@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -1197,6 +1198,9 @@ func TestAgentRunsSubAgentTaskTool(t *testing.T) {
 	assertContainsEvent(t, types, EventSubtaskEvent)
 	assertContainsEvent(t, types, EventSubtaskDone)
 	assertContainsEvent(t, types, EventToolResult)
+	if !hasTool(fakeModel.requests[0].Tools, "task") || !hasTool(fakeModel.requests[0].Tools, "agent_invoke") {
+		t.Fatalf("sub-agent tools were not advertised without planning: %#v", fakeModel.requests[0].Tools)
+	}
 
 	cp, err := checkpoints.Load(context.Background(), "run_subagent")
 	if err != nil {
@@ -1212,6 +1216,89 @@ func TestAgentRunsSubAgentTaskTool(t *testing.T) {
 	}
 	if !contains(toolMessage.Content, "researcher handled summarize docs") || !contains(toolMessage.Content, "reviewer handled find bugs") {
 		t.Fatalf("unexpected aggregate content: %q", toolMessage.Content)
+	}
+}
+
+func TestAgentSubAgentRequestCannotRaiseHostTaskLimit(t *testing.T) {
+	runnerCalls := 0
+	agent := New(Config{
+		Model: &scriptedModel{},
+		SubAgentRegistry: subagent.MustRegistry(subagent.SubAgentSpec{
+			Name: "worker",
+		}),
+		SubAgentRunner: subagent.RunnerFunc(func(context.Context, subagent.SubAgentSpec, subagent.TaskSpec, subagent.Request) (subagent.TaskResult, error) {
+			runnerCalls++
+			return subagent.TaskResult{Output: "must not run"}, nil
+		}),
+	})
+	state := newRunState("run_subagent_limit", "delegate", nil)
+	tasks := make([]map[string]any, 9)
+	for i := range tasks {
+		tasks[i] = map[string]any{
+			"id":    fmt.Sprintf("subtask_%d", i+1),
+			"agent": "worker",
+			"input": fmt.Sprintf("task %d", i+1),
+		}
+	}
+	arguments, err := json.Marshal(map[string]any{
+		"tasks":   tasks,
+		"options": map[string]any{"maxTasks": 100},
+	})
+	if err != nil {
+		t.Fatalf("Marshal returned error: %v", err)
+	}
+	call := harness.ToolCallState{ID: "call_task", Name: "task", Arguments: arguments}
+
+	result, err := agent.invokeSubAgentTool(
+		context.Background(),
+		func(EventType, map[string]any) error { return nil },
+		func() error { return nil },
+		&state,
+		call,
+	)
+	if err == nil || !strings.Contains(err.Error(), "too many subtasks: 9 > 8") {
+		t.Fatalf("unexpected subagent limit result: result=%#v err=%v", result, err)
+	}
+	if runnerCalls != 0 {
+		t.Fatalf("runner calls = %d, want 0", runnerCalls)
+	}
+	if len(state.Subtasks) != 0 {
+		t.Fatalf("invalid request created child state: %#v", state.Subtasks)
+	}
+}
+
+func TestAgentSubAgentHostLimitControlsAdvertisedSchema(t *testing.T) {
+	fakeModel := &scriptedModel{turns: []scriptedTurn{{events: []model.Event{{Delta: "done"}}}}}
+	agent := New(Config{
+		Model:            fakeModel,
+		SubAgents:        SubAgentsEnabled,
+		SubAgentRegistry: subagent.MustRegistry(subagent.SubAgentSpec{Name: "worker"}),
+		SubAgentOptions:  subagent.Options{MaxTasks: 3},
+	})
+
+	if _, err := agent.Run(context.Background(), Task{RunID: "run_subagent_schema_limit", Input: "delegate"}); err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	var taskSpec *model.ToolSpec
+	for i := range fakeModel.requests[0].Tools {
+		if fakeModel.requests[0].Tools[i].Name == "task" {
+			taskSpec = &fakeModel.requests[0].Tools[i]
+			break
+		}
+	}
+	if taskSpec == nil {
+		t.Fatalf("task tool was not advertised: %#v", fakeModel.requests[0].Tools)
+	}
+	properties := taskSpec.Schema["properties"].(map[string]any)
+	tasksSchema := properties["tasks"].(map[string]any)
+	if tasksSchema["maxItems"] != 3 {
+		t.Fatalf("task maxItems = %#v, want 3", tasksSchema["maxItems"])
+	}
+	optionsSchema := properties["options"].(map[string]any)
+	optionProperties := optionsSchema["properties"].(map[string]any)
+	maxTasksSchema := optionProperties["maxTasks"].(map[string]any)
+	if maxTasksSchema["maximum"] != 3 {
+		t.Fatalf("maxTasks maximum = %#v, want 3", maxTasksSchema["maximum"])
 	}
 }
 

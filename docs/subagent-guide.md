@@ -22,7 +22,7 @@ main agent.
 agent := zenforge.New(zenforge.Config{
     Model: model,
     Tools: baseTools,
-    SubAgents: []zenforge.SubAgentSpec{
+    SubAgentSpecs: []zenforge.SubAgentSpec{
         {
             Name: "researcher",
             Description: "Reads documents and summarizes evidence.",
@@ -36,8 +36,17 @@ agent := zenforge.New(zenforge.Config{
             Tools: []zenforge.Tool{workspaceRead, grep, shell},
         },
     },
+    SubAgentOptions: zenforge.SubAgentOptions{
+        MaxTasks: 3,
+        Parallel: true,
+        FailFast: false,
+    },
 })
 ```
+
+Sub-agent tools do not require planner or todo configuration. Configuring
+`SubAgentSpecs`, a registry, an orchestrator, or `SubAgentsEnabled` advertises
+both `task` and its compatibility alias `agent_invoke`.
 
 ## Task Tool
 
@@ -63,10 +72,13 @@ The model calls:
 The parent receives an aggregated tool result.
 Task tool options expose bounded runtime controls. Nested sub-agents remain
 blocked by default and are not exposed as a model-facing option.
+Request `maxTasks` can only tighten the host-owned `SubAgentOptions.MaxTasks`;
+it cannot raise the configured limit. ZenForge validates that limit before
+creating or checkpointing child state.
 
 ## Defaults
 
-- max tasks: 5;
+- max tasks: 8;
 - run children in parallel;
 - block nested sub-agent calls;
 - aggregate all results;

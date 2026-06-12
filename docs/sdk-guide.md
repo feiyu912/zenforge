@@ -18,6 +18,24 @@ agent := zenforge.New(zenforge.Config{
 })
 ```
 
+Sub-agents can be enabled without planning:
+
+```go
+agent := zenforge.New(zenforge.Config{
+    Model: model,
+    SubAgentSpecs: []zenforge.SubAgentSpec{
+        {Name: "reviewer", Instructions: "Find concrete risks."},
+    },
+    SubAgentOptions: zenforge.SubAgentOptions{
+        MaxTasks: 4,
+        Parallel: true,
+    },
+})
+```
+
+The host maximum controls both the model-facing task schema and runtime
+validation. Model-provided `maxTasks` may only make an individual call stricter.
+
 `Events` and `Checkpoints` are separate on purpose:
 
 - events are the observable run history;

@@ -95,6 +95,8 @@ Config is JSON. See [`docs/config-reference.md`](docs/config-reference.md) and [
 - Run-scoped pending approval broker (`approval.PendingBroker`).
 - Durable event log and checkpoint stores: memory, JSONL, SQLite.
 - Sub-agent runtime tool with checkpoint-aware child resume; nested sub-agents blocked by default.
+- Host-owned sub-agent limits drive the advertised task schema and cannot be widened by model requests.
+- Sub-agent tools are available independently of planner/todo configuration.
 
 **Models**
 - OpenAI-compatible and Anthropic adapters.
@@ -176,6 +178,7 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - Sub-agent resume reuses terminal children and continues existing child checkpoints.
 - Child checkpoint backend failures stop before model execution, while missing checkpoints alone start fresh child runs.
 - Cancelled child runs propagate as failed subtask results instead of false completion.
+- Pure sub-agent agents advertise `task` and `agent_invoke` without requiring planning, and validate host limits before child state is checkpointed.
 - Active tool resume is covered through durable JSONL checkpoints.
 - CLI run/resume are covered against local OpenAI-compatible streaming and durable JSONL checkpoints.
 - CLI argument error output is covered for common command mistakes.

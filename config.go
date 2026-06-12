@@ -49,6 +49,7 @@ type Config struct {
 	SubAgentRegistry     subagent.Registry
 	SubAgentOrchestrator subagent.Orchestrator
 	SubAgentRunner       subagent.Runner
+	SubAgentOptions      subagent.Options
 	Workspace            workspace.Workspace
 	Events               EventStore
 	Checkpoints          checkpoint.Store
@@ -66,3 +67,6 @@ type Model = model.Model
 
 // SubAgentSpec is re-exported for configuring delegated child agents.
 type SubAgentSpec = subagent.SubAgentSpec
+
+// SubAgentOptions controls host-owned task limits and child orchestration.
+type SubAgentOptions = subagent.Options

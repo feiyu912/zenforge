@@ -182,3 +182,60 @@ func TestOrchestratorUnknownAndNested(t *testing.T) {
 		t.Fatalf("expected nested guard error")
 	}
 }
+
+func TestOrchestratorRequestMaxTasksCanOnlyTightenHostLimit(t *testing.T) {
+	calls := 0
+	orchestrator := NewOrchestrator(OrchestratorConfig{
+		Registry: MustRegistry(SubAgentSpec{Name: "worker"}),
+		Runner: RunnerFunc(func(context.Context, SubAgentSpec, TaskSpec, Request) (TaskResult, error) {
+			calls++
+			return TaskResult{Output: "ok"}, nil
+		}),
+		Options: Options{MaxTasks: 2},
+	})
+	tasks := []TaskSpec{
+		{Agent: "worker", Input: "one"},
+		{Agent: "worker", Input: "two"},
+		{Agent: "worker", Input: "three"},
+	}
+
+	if _, err := orchestrator.Invoke(context.Background(), Request{
+		Tasks:   tasks,
+		Options: Options{MaxTasks: 100},
+	}); err == nil || err.Error() != "too many subtasks: 3 > 2" {
+		t.Fatalf("host max was widened: %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("runner calls = %d, want 0", calls)
+	}
+
+	if _, err := orchestrator.Invoke(context.Background(), Request{
+		Tasks:   tasks[:2],
+		Options: Options{MaxTasks: 1},
+	}); err == nil || err.Error() != "too many subtasks: 2 > 1" {
+		t.Fatalf("request max did not tighten host max: %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("runner calls = %d, want 0", calls)
+	}
+}
+
+func TestOrchestratorUsesDefaultHostTaskLimit(t *testing.T) {
+	orchestrator := NewOrchestrator(OrchestratorConfig{
+		Registry: MustRegistry(SubAgentSpec{Name: "worker"}),
+		Runner: RunnerFunc(func(context.Context, SubAgentSpec, TaskSpec, Request) (TaskResult, error) {
+			return TaskResult{Output: "must not run"}, nil
+		}),
+	})
+	tasks := make([]TaskSpec, 9)
+	for i := range tasks {
+		tasks[i] = TaskSpec{Agent: "worker", Input: fmt.Sprintf("task %d", i+1)}
+	}
+
+	if _, err := orchestrator.Invoke(context.Background(), Request{
+		Tasks:   tasks,
+		Options: Options{MaxTasks: 100},
+	}); err == nil || err.Error() != "too many subtasks: 9 > 8" {
+		t.Fatalf("default host max was widened: %v", err)
+	}
+}
