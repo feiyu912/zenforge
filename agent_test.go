@@ -1127,12 +1127,14 @@ func TestAgentPlanExecutePresetPlansExecutesAndSummarizes(t *testing.T) {
 }
 
 func TestAgentPlanExecuteStopsAfterInternalStageFailure(t *testing.T) {
+	checkpoints := checkpointmemory.New()
 	fakeModel := &scriptedModel{turns: []scriptedTurn{{
 		events: []model.Event{{Error: errors.New("planning failed")}},
 	}}}
 	agent := New(Config{
-		Model:    fakeModel,
-		Planning: PlanningPlanExecute,
+		Model:       fakeModel,
+		Planning:    PlanningPlanExecute,
+		Checkpoints: checkpoints,
 	})
 
 	events, err := agent.Stream(context.Background(), Task{RunID: "run_plan_failure", Input: "do the work"})
@@ -1148,6 +1150,64 @@ func TestAgentPlanExecuteStopsAfterInternalStageFailure(t *testing.T) {
 	}
 	if countEvent(types, EventRunDone) != 0 || len(fakeModel.requests) != 1 {
 		t.Fatalf("plan continued after failure: events=%v requests=%#v", types, fakeModel.requests)
+	}
+	cp, err := checkpoints.Load(context.Background(), "run_plan_failure")
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cp.State.Phase != harness.RunPhaseFailed || !planExecuteTerminal(cp.State) {
+		t.Fatalf("unexpected terminal checkpoint: %#v", cp.State)
+	}
+
+	resumed, err := agent.Resume(context.Background(), "run_plan_failure")
+	if err != nil {
+		t.Fatalf("Resume returned error: %v", err)
+	}
+	for range resumed {
+	}
+	if len(fakeModel.requests) != 1 {
+		t.Fatalf("terminal resume retried planning: %#v", fakeModel.requests)
+	}
+}
+
+func TestAgentPlanExecutePersistsPlanNotCreatedFailure(t *testing.T) {
+	checkpoints := checkpointmemory.New()
+	fakeModel := &scriptedModel{turns: []scriptedTurn{{
+		events: []model.Event{{Delta: "I cannot create a plan"}},
+	}}}
+	agent := New(Config{
+		Model:       fakeModel,
+		Planning:    PlanningPlanExecute,
+		Checkpoints: checkpoints,
+	})
+
+	result, err := agent.Run(context.Background(), Task{RunID: "run_plan_empty", Input: "do the work"})
+	if err == nil || !strings.Contains(err.Error(), "plan_not_created") {
+		t.Fatalf("expected plan_not_created, got result=%#v err=%v", result, err)
+	}
+	cp, err := checkpoints.Load(context.Background(), "run_plan_empty")
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cp.State.Phase != harness.RunPhaseFailed || !planExecuteTerminal(cp.State) || stringValue(cp.State.Meta["error"]) != "plan_not_created" {
+		t.Fatalf("unexpected terminal checkpoint: %#v", cp.State)
+	}
+
+	resumed, err := agent.Resume(context.Background(), "run_plan_empty")
+	if err != nil {
+		t.Fatalf("Resume returned error: %v", err)
+	}
+	var resumedError string
+	for event := range resumed {
+		if event.Type == EventRunError {
+			resumedError = stringValue(event.Payload["error"])
+		}
+	}
+	if resumedError != "plan_not_created" {
+		t.Fatalf("resumed error = %q", resumedError)
+	}
+	if len(fakeModel.requests) != 1 {
+		t.Fatalf("terminal resume retried planning: %#v", fakeModel.requests)
 	}
 }
 

@@ -174,6 +174,7 @@ const (
 	planExecutePresetMetaKey = "planning.preset"
 	planExecuteInputMetaKey  = "planning.input"
 	planExecuteStageMetaKey  = "planning.stage"
+	planExecuteTerminalKey   = "planning.terminal"
 	planExecutePresetValue   = "plan_execute"
 	planExecuteStagePlan     = "plan"
 	planExecuteStageExecute  = "execute"
@@ -184,16 +185,52 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 	emit := func(eventType EventType, data map[string]any) {
 		a.emit(ctx, out, eventType, runID, data)
 	}
-	fail := func(err error) {
-		emit(EventRunError, map[string]any{"error": err.Error()})
+	finish := func(stage string, todos []planner.Todo, eventType EventType, err error) {
+		state := newRunState(runID, task.Input, planExecuteMeta(task.Meta, task.Input, stage))
+		loadCtx := ctx
+		if ctx.Err() != nil {
+			loadCtx = context.WithoutCancel(ctx)
+		}
+		if a.config.Checkpoints != nil {
+			if cp, loadErr := a.config.Checkpoints.Load(loadCtx, runID); loadErr == nil && isPlanExecuteState(cp.State) {
+				state = cp.State
+			}
+		}
+		if state.Meta == nil {
+			state.Meta = map[string]any{}
+		}
+		state.Meta[planExecutePresetMetaKey] = planExecutePresetValue
+		state.Meta[planExecuteInputMetaKey] = task.Input
+		state.Meta[planExecuteStageMetaKey] = stage
+		state.Meta[planExecuteTerminalKey] = true
+		state.Meta["error"] = err.Error()
+		state.Todos, _ = plannerTodos(todos)
+		switch eventType {
+		case EventRunCancelled:
+			state.Phase = harness.RunPhaseCancelled
+			state.Control.Status = harness.RunStatusCancelled
+		default:
+			state.Phase = harness.RunPhaseFailed
+			state.Control.Status = harness.RunStatusFailed
+		}
+		if seq, saveErr := a.saveCheckpointAfterLatest(ctx, state); saveErr == nil && seq > 0 {
+			emit(EventCheckpointCreated, map[string]any{
+				"checkpointSeq": seq,
+				"phase":         string(state.Phase),
+			})
+		}
+		emit(eventType, map[string]any{"error": err.Error()})
+	}
+	fail := func(stage string, todos []planner.Todo, err error) {
+		finish(stage, todos, EventRunError, err)
 	}
 	if a.todos == nil {
-		fail(fmt.Errorf("todo manager is not configured"))
+		fail(planExecuteStagePlan, nil, fmt.Errorf("todo manager is not configured"))
 		return
 	}
 	if resumeState != nil {
 		emit(EventRunResumed, map[string]any{"input": task.Input, "preset": string(PlanningPlanExecute)})
-		if planExecuteStage(resumeState.Meta) == planExecuteStageSummary && a.resumeTerminal(emit, *resumeState) {
+		if planExecuteTerminal(*resumeState) && a.resumeTerminal(emit, *resumeState) {
 			return
 		}
 	} else {
@@ -202,7 +239,7 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 
 	todos, err := planExecuteTodos(ctx, a.todos, runID, resumeState)
 	if err != nil {
-		fail(err)
+		fail(planExecuteStagePlan, nil, err)
 		return
 	}
 	if len(todos) == 0 {
@@ -210,17 +247,17 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 		planState := newRunState(runID, planInput, planExecuteMeta(task.Meta, task.Input, planExecuteStagePlan))
 		terminal := a.runInternalLoop(ctx, out, planState, resumeState != nil && planExecuteStage(resumeState.Meta) == planExecuteStagePlan)
 		if terminal.Type == EventRunError || terminal.Type == EventRunCancelled {
-			emit(terminal.Type, terminal.Data)
+			finish(planExecuteStagePlan, todos, terminal.Type, errors.New(stringValue(terminal.Data["error"])))
 			return
 		}
 		todos, err = a.todos.List(ctx, runID)
 		if err != nil {
-			fail(err)
+			fail(planExecuteStagePlan, todos, err)
 			return
 		}
 	}
 	if len(todos) == 0 {
-		fail(fmt.Errorf("plan_not_created"))
+		fail(planExecuteStagePlan, todos, fmt.Errorf("plan_not_created"))
 		return
 	}
 
@@ -231,14 +268,14 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 		}
 		if err := ctx.Err(); err != nil {
 			emit(EventTaskCancelled, map[string]any{"todoId": current.ID, "error": err.Error()})
-			emit(EventRunCancelled, map[string]any{"error": err.Error()})
+			finish(planExecuteStageExecute, todos, EventRunCancelled, err)
 			return
 		}
 		emit(EventTaskStarted, map[string]any{"todoId": current.ID, "content": current.Content})
 		inProgress := planner.TodoInProgress
 		todos, err = a.todos.Update(ctx, runID, current.ID, planner.Patch{Status: &inProgress})
 		if err != nil {
-			fail(err)
+			fail(planExecuteStageExecute, todos, err)
 			return
 		}
 		emit(EventTodoUpdated, map[string]any{"todos": todos})
@@ -250,17 +287,17 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 		}
 		terminal := a.runInternalLoop(ctx, out, executeState, true)
 		if terminal.Type == EventRunError || terminal.Type == EventRunCancelled {
-			emit(terminal.Type, terminal.Data)
+			finish(planExecuteStageExecute, todos, terminal.Type, errors.New(stringValue(terminal.Data["error"])))
 			return
 		}
 		todos, err = a.todos.List(ctx, runID)
 		if err != nil {
-			fail(err)
+			fail(planExecuteStageExecute, todos, err)
 			return
 		}
 		updated, ok := findTodo(todos, current.ID)
 		if !ok {
-			fail(fmt.Errorf("todo %q disappeared", current.ID))
+			fail(planExecuteStageExecute, todos, fmt.Errorf("todo %q disappeared", current.ID))
 			return
 		}
 		if !planner.TerminalStatus(updated.Status) {
@@ -269,12 +306,12 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 			todos, _ = a.todos.Update(ctx, runID, current.ID, planner.Patch{Status: &failed, Notes: &notes})
 			emit(EventTodoUpdated, map[string]any{"todos": todos})
 			emit(EventTaskError, map[string]any{"todoId": current.ID, "error": notes})
-			fail(fmt.Errorf(notes))
+			fail(planExecuteStageExecute, todos, fmt.Errorf(notes))
 			return
 		}
 		emit(EventTaskDone, map[string]any{"todoId": current.ID, "status": string(updated.Status)})
 		if updated.Status == planner.TodoFailed {
-			fail(fmt.Errorf("todo %q failed", current.ID))
+			fail(planExecuteStageExecute, todos, fmt.Errorf("todo %q failed", current.ID))
 			return
 		}
 	}
@@ -299,6 +336,7 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 			summaryState.Meta = map[string]any{}
 		}
 		summaryState.Meta["error"] = err.Error()
+		summaryState.Meta[planExecuteTerminalKey] = true
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			summaryState.Phase = harness.RunPhaseCancelled
 			summaryState.Control.Status = harness.RunStatusCancelled
@@ -312,7 +350,7 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 		emit(EventRunError, map[string]any{"error": err.Error()})
 	}
 	if err := saveSummaryState(); err != nil {
-		fail(err)
+		fail(planExecuteStageSummary, todos, err)
 		return
 	}
 	assistant, usage, err := a.callModel(ctx, emit, summaryState, model.ToolChoiceNone)
@@ -326,10 +364,11 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 	}
 	summaryState.Messages = append(summaryState.Messages, assistant)
 	applyUsage(&summaryState, usage)
+	summaryState.Meta[planExecuteTerminalKey] = true
 	summaryState.Phase = harness.RunPhaseCompleted
 	summaryState.Control.Status = harness.RunStatusCompleted
 	if err := saveSummaryState(); err != nil {
-		fail(err)
+		fail(planExecuteStageSummary, todos, err)
 		return
 	}
 	emit(EventRunDone, map[string]any{"output": assistant.Content, "todos": todos})
@@ -368,11 +407,20 @@ func planExecuteStage(meta map[string]any) string {
 	return stringValue(meta[planExecuteStageMetaKey])
 }
 
+func planExecuteTerminal(state harness.RunState) bool {
+	if terminal, ok := state.Meta[planExecuteTerminalKey].(bool); ok && terminal {
+		return true
+	}
+	return planExecuteStage(state.Meta) == planExecuteStageSummary &&
+		(state.Phase == harness.RunPhaseCompleted || state.Phase == harness.RunPhaseFailed || state.Phase == harness.RunPhaseCancelled)
+}
+
 func planExecuteUserMeta(meta map[string]any) map[string]any {
 	out := cloneMap(meta)
 	delete(out, planExecutePresetMetaKey)
 	delete(out, planExecuteInputMetaKey)
 	delete(out, planExecuteStageMetaKey)
+	delete(out, planExecuteTerminalKey)
 	return out
 }
 

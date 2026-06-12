@@ -200,6 +200,7 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - Resume and MVP docs map durable plan/execute summaries to a SQLite end-to-end test.
 - Plan/execute internal stages no longer leak terminal run lifecycle events or continue after stage failure.
 - Planner spec, guide, and MVP validation document the single top-level run lifecycle.
+- Plan/execute orchestration failures persist terminal checkpoints and resume without retrying completed work.
 - Architecture package layout is aligned with the current repository.
 - Historical API sketch is labeled and current guides are prioritized.
 - README Quick Look and architecture snippets use current store/interface names.
