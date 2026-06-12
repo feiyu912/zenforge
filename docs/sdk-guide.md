@@ -28,6 +28,7 @@ agent := zenforge.New(zenforge.Config{
     },
     SubAgentOptions: zenforge.SubAgentOptions{
         MaxTasks: 4,
+        MaxDepth: 1,
         Parallel: true,
     },
 })
@@ -35,6 +36,8 @@ agent := zenforge.New(zenforge.Config{
 
 The host maximum controls both the model-facing task schema and runtime
 validation. Model-provided `maxTasks` may only make an individual call stricter.
+Nested delegation stays disabled unless the host sets `AllowNested: true` and a
+finite `MaxDepth` greater than one.
 
 `Events` and `Checkpoints` are separate on purpose:
 

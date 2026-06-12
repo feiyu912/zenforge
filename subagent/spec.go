@@ -36,6 +36,7 @@ type TaskSpec struct {
 
 type Options struct {
 	MaxTasks       int  `json:"maxTasks,omitempty"`
+	MaxDepth       int  `json:"maxDepth,omitempty"`
 	AllowNested    bool `json:"allowNested,omitempty"`
 	Parallel       bool `json:"parallel,omitempty"`
 	FailFast       bool `json:"failFast,omitempty"`
@@ -112,6 +113,13 @@ func (r Request) Validate() error {
 	}
 	if r.Depth > 0 && !r.Options.AllowNested {
 		return fmt.Errorf("nested_subagent_not_allowed")
+	}
+	maxDepth := r.Options.MaxDepth
+	if maxDepth <= 0 {
+		maxDepth = 1
+	}
+	if r.Depth >= maxDepth {
+		return fmt.Errorf("subagent_max_depth_exceeded: %d >= %d", r.Depth, maxDepth)
 	}
 	for _, task := range r.Tasks {
 		if err := task.Validate(); err != nil {

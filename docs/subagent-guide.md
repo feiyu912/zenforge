@@ -38,6 +38,7 @@ agent := zenforge.New(zenforge.Config{
     },
     SubAgentOptions: zenforge.SubAgentOptions{
         MaxTasks: 3,
+        MaxDepth: 1,
         Parallel: true,
         FailFast: false,
     },
@@ -79,6 +80,7 @@ creating or checkpointing child state.
 ## Defaults
 
 - max tasks: 8;
+- max depth: 1;
 - run children in parallel;
 - block nested sub-agent calls;
 - aggregate all results;
@@ -106,3 +108,20 @@ side effects during a storage outage.
 A child `run.cancelled` outcome is returned to the parent as a failed subtask
 with the cancellation error. It is never normalized into a completed result
 with empty output.
+
+## Controlled Nesting
+
+Nested delegation is disabled by default. Hosts can opt in with a finite depth:
+
+```go
+SubAgentOptions: zenforge.SubAgentOptions{
+    MaxTasks:    4,
+    MaxDepth:    2,
+    AllowNested: true,
+}
+```
+
+`MaxDepth: 2` allows a first-generation child to delegate once. A child at the
+limit does not inherit sub-agent tools. Calls returned by a provider despite
+that restriction fail with `subagent_max_depth_exceeded` or
+`nested_subagent_not_allowed` before child state is created.

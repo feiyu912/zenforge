@@ -1497,6 +1497,89 @@ func TestRunChildSubAgentTreatsCancellationAsFailure(t *testing.T) {
 	}
 }
 
+func TestRunChildSubAgentSupportsHostBoundedNestedDelegation(t *testing.T) {
+	delegatorModel := &scriptedModel{turns: []scriptedTurn{
+		{
+			events: []model.Event{{
+				Message: &model.Message{ToolCalls: []model.ToolCallSpec{{
+					ID:        "nested_task",
+					Name:      "task",
+					Arguments: json.RawMessage(`{"tasks":[{"id":"leaf_1","agent":"leaf","input":"inspect nested work"}]}`),
+				}}},
+			}},
+		},
+		{events: []model.Event{{Delta: "delegator final"}}},
+	}}
+	leafModel := &scriptedModel{turns: []scriptedTurn{{events: []model.Event{{Delta: "leaf result"}}}}}
+	delegator := subagent.SubAgentSpec{Name: "delegator", Model: delegatorModel}
+	leaf := subagent.SubAgentSpec{Name: "leaf", Model: leafModel}
+	agent := New(Config{
+		Model:            delegatorModel,
+		SubAgentRegistry: subagent.MustRegistry(delegator, leaf),
+		SubAgentOptions: subagent.Options{
+			MaxTasks:    2,
+			MaxDepth:    2,
+			AllowNested: true,
+		},
+		Checkpoints: checkpointmemory.New(),
+	})
+
+	result, err := agent.runChildSubAgent(
+		context.Background(),
+		delegator,
+		subagent.TaskSpec{ID: "delegator_1", AgentName: "delegator", Input: "delegate once"},
+		subagent.Request{
+			RunID:   "run_nested_parent",
+			Options: agent.subAgentOptions(),
+		},
+	)
+	if err != nil {
+		t.Fatalf("runChildSubAgent returned error: %v", err)
+	}
+	if result.Status != subagent.StatusCompleted || result.Output != "delegator final" {
+		t.Fatalf("unexpected nested result: %#v", result)
+	}
+	if len(leafModel.requests) != 1 {
+		t.Fatalf("leaf model calls = %d, want 1", len(leafModel.requests))
+	}
+	if !hasTool(delegatorModel.requests[0].Tools, "task") {
+		t.Fatalf("nested task tool was not advertised: %#v", delegatorModel.requests[0].Tools)
+	}
+	foundLeafDone := false
+	for _, event := range result.Events {
+		if event.Type == string(EventSubtaskDone) {
+			foundLeafDone = true
+		}
+	}
+	if !foundLeafDone {
+		t.Fatalf("nested child completion was not visible: %#v", result.Events)
+	}
+}
+
+func TestNestedSubAgentCallIsRejectedByDefaultBeforeStateChange(t *testing.T) {
+	agent := New(Config{Model: &scriptedModel{}})
+	state := newRunState("run_nested_blocked", "nested", map[string]any{"subagent.depth": 1})
+	call := harness.ToolCallState{
+		ID:        "nested_task",
+		Name:      "task",
+		Arguments: json.RawMessage(`{"tasks":[{"id":"leaf_1","agent":"leaf","input":"inspect"}]}`),
+	}
+
+	result, err := agent.invokeSubAgentTool(
+		context.Background(),
+		func(EventType, map[string]any) error { return nil },
+		func() error { return nil },
+		&state,
+		call,
+	)
+	if err == nil || err.Error() != "nested_subagent_not_allowed" {
+		t.Fatalf("unexpected nested guard result: result=%#v err=%v", result, err)
+	}
+	if len(state.Subtasks) != 0 {
+		t.Fatalf("blocked nested call changed child state: %#v", state.Subtasks)
+	}
+}
+
 func TestAgentPlanExecutePresetPlansExecutesAndSummarizes(t *testing.T) {
 	eventStore := &testEventStore{}
 	fakeModel := &scriptedModel{turns: []scriptedTurn{

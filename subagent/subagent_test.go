@@ -239,3 +239,43 @@ func TestOrchestratorUsesDefaultHostTaskLimit(t *testing.T) {
 		t.Fatalf("default host max was widened: %v", err)
 	}
 }
+
+func TestRequestEnforcesNestedDepthLimit(t *testing.T) {
+	task := TaskSpec{Agent: "worker", Input: "nested"}
+	if err := (Request{
+		Depth:   1,
+		Tasks:   []TaskSpec{task},
+		Options: Options{AllowNested: true, MaxDepth: 2},
+	}).Validate(); err != nil {
+		t.Fatalf("depth 1 should be allowed with max depth 2: %v", err)
+	}
+	if err := (Request{
+		Depth:   2,
+		Tasks:   []TaskSpec{task},
+		Options: Options{AllowNested: true, MaxDepth: 2},
+	}).Validate(); err == nil || err.Error() != "subagent_max_depth_exceeded: 2 >= 2" {
+		t.Fatalf("unexpected max depth result: %v", err)
+	}
+	if err := (Request{
+		Depth:   1,
+		Tasks:   []TaskSpec{task},
+		Options: Options{MaxDepth: 2},
+	}).Validate(); err == nil || err.Error() != "nested_subagent_not_allowed" {
+		t.Fatalf("unexpected default nested result: %v", err)
+	}
+
+	orchestrator := NewOrchestrator(OrchestratorConfig{
+		Registry: MustRegistry(SubAgentSpec{Name: "worker"}),
+		Runner: RunnerFunc(func(context.Context, SubAgentSpec, TaskSpec, Request) (TaskResult, error) {
+			return TaskResult{Output: "must not run"}, nil
+		}),
+		Options: Options{AllowNested: true, MaxDepth: 2},
+	})
+	if _, err := orchestrator.Invoke(context.Background(), Request{
+		Depth:   2,
+		Tasks:   []TaskSpec{task},
+		Options: Options{AllowNested: true, MaxDepth: 100},
+	}); err == nil || err.Error() != "subagent_max_depth_exceeded: 2 >= 2" {
+		t.Fatalf("request widened host max depth: %v", err)
+	}
+}

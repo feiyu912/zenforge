@@ -137,6 +137,12 @@ func mergeOptions(base, override Options) Options {
 	if override.MaxTasks > 0 && override.MaxTasks < out.MaxTasks {
 		out.MaxTasks = override.MaxTasks
 	}
+	if out.MaxDepth <= 0 {
+		out.MaxDepth = 1
+	}
+	if override.MaxDepth > 0 && override.MaxDepth < out.MaxDepth {
+		out.MaxDepth = override.MaxDepth
+	}
 	if override.AllowNested {
 		out.AllowNested = true
 	}

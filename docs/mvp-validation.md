@@ -69,6 +69,8 @@ Markdown document links.
 | sub-agent tools are advertised without planner configuration | `TestAgentRunsSubAgentTaskTool` |
 | sub-agent task tool decodes bounded runtime options | `tools/task.TestTaskToolValidatesArgs` |
 | host sub-agent task limits cannot be widened by requests | `TestAgentSubAgentRequestCannotRaiseHostTaskLimit`, `TestAgentSubAgentHostLimitControlsAdvertisedSchema`, `subagent.TestOrchestratorRequestMaxTasksCanOnlyTightenHostLimit`, `subagent.TestOrchestratorUsesDefaultHostTaskLimit` |
+| nested sub-agents are blocked by default before state changes | `TestNestedSubAgentCallIsRejectedByDefaultBeforeStateChange`, `subagent.TestRequestEnforcesNestedDepthLimit` |
+| explicit nested delegation is bounded by host maximum depth | `TestRunChildSubAgentSupportsHostBoundedNestedDelegation`, `subagent.TestRequestEnforcesNestedDepthLimit` |
 | sub-agent parallel execution keeps stable result order | `subagent.TestOrchestratorRunsParallelTasksInStableOrder` |
 | sub-agent parallel fail-fast cancels sibling work | `subagent.TestOrchestratorParallelFailFastCancelsOtherTasks` |
 | sub-agent checkpoint state avoids duplicate resumed starts | `TestStartSubtasksDeduplicatesResumedParentToolCall` |

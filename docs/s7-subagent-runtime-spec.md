@@ -139,6 +139,7 @@ type TaskSpec struct {
 
 type Options struct {
     MaxTasks       int
+    MaxDepth       int
     AllowNested    bool
     Parallel       bool
     FailFast       bool
@@ -289,7 +290,11 @@ If a child tries to call `task`, the tool returns:
 nested_subagent_not_allowed
 ```
 
-Post-MVP can support controlled nesting with max depth.
+Controlled nesting is host-only and requires both `AllowNested = true` and a
+finite `MaxDepth`. The default maximum depth is one, so children do not receive
+the task tool. Below an explicitly larger limit, children inherit the host
+registry/runner and may delegate again. Requests cannot override either flag or
+raise the depth ceiling.
 
 ## Failure Behavior
 

@@ -11,14 +11,17 @@ The current platform blocks nested sub-agent invocation.
 
 ZenForge disables nested sub-agent calls by default.
 
-Post-MVP may add controlled nesting with:
+Controlled nesting is available only through explicit host configuration with:
 
 - max depth;
-- max total child runs;
-- budget caps;
+- per-call max tasks;
 - explicit opt-in.
+
+The default is `AllowNested = false` and `MaxDepth = 1`. Child agents inherit
+sub-agent orchestration only while below an explicitly configured depth.
+Model-facing task options cannot enable nesting or raise the host depth limit.
 
 ## Consequences
 
-This keeps MVP deterministic and easier to reason about.
-
+This keeps the default deterministic while allowing bounded orchestration for
+hosts that deliberately opt in.

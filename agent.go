@@ -1139,10 +1139,6 @@ func (a *Agent) invokeToolOrRuntime(ctx context.Context, emit eventEmitter, chec
 }
 
 func (a *Agent) invokeSubAgentTool(ctx context.Context, emit eventEmitter, checkpointState func() error, state *harness.RunState, call harness.ToolCallState) (tool.Result, error) {
-	orchestrator, err := a.subAgentOrchestrator()
-	if err != nil {
-		return tool.Result{Error: err.Error(), ExitCode: 1}, err
-	}
 	req, err := tasktool.Decode(call.Arguments)
 	if err != nil {
 		return tool.Result{Error: err.Error(), ExitCode: 1}, err
@@ -1158,6 +1154,10 @@ func (a *Agent) invokeSubAgentTool(ctx context.Context, emit eventEmitter, check
 	}
 	req.Options = mergeSubAgentRequestOptions(a.subAgentOptions(), req.Options)
 	if err := req.Validate(); err != nil {
+		return tool.Result{Error: err.Error(), ExitCode: 1}, err
+	}
+	orchestrator, err := a.subAgentOrchestrator()
+	if err != nil {
 		return tool.Result{Error: err.Error(), ExitCode: 1}, err
 	}
 	startSubtasks(state, req)
@@ -1376,6 +1376,9 @@ func (a *Agent) subAgentOptions() subagent.Options {
 	if options.MaxTasks <= 0 {
 		options.MaxTasks = 8
 	}
+	if options.MaxDepth <= 0 {
+		options.MaxDepth = 1
+	}
 	return options
 }
 
@@ -1383,6 +1386,7 @@ func mergeSubAgentRequestOptions(host, request subagent.Options) subagent.Option
 	if request.MaxTasks <= 0 || request.MaxTasks > host.MaxTasks {
 		request.MaxTasks = host.MaxTasks
 	}
+	request.MaxDepth = host.MaxDepth
 	request.AllowNested = host.AllowNested
 	request.InheritContext = host.InheritContext
 	return request
@@ -1409,7 +1413,7 @@ func (a *Agent) runChildSubAgent(ctx context.Context, spec subagent.SubAgentSpec
 	childMeta["parentRunId"] = req.RunID
 	childMeta["subtaskId"] = task.ID
 	childMeta["subagent.depth"] = req.Depth + 1
-	child := New(Config{
+	childConfig := Config{
 		Model:        childModel,
 		Instructions: childInstructions,
 		Tools:        spec.Tools,
@@ -1419,7 +1423,16 @@ func (a *Agent) runChildSubAgent(ctx context.Context, spec subagent.SubAgentSpec
 		Trace:        a.config.Trace,
 		MaxSteps:     maxSteps,
 		Planning:     PlanningDisabled,
-	})
+	}
+	if req.Options.AllowNested && req.Depth+1 < req.Options.MaxDepth {
+		childConfig.SubAgents = SubAgentsEnabled
+		childConfig.SubAgentSpecs = a.config.SubAgentSpecs
+		childConfig.SubAgentRegistry = a.config.SubAgentRegistry
+		childConfig.SubAgentOrchestrator = a.config.SubAgentOrchestrator
+		childConfig.SubAgentRunner = a.config.SubAgentRunner
+		childConfig.SubAgentOptions = a.subAgentOptions()
+	}
+	child := New(childConfig)
 	events, err := childSubAgentEvents(ctx, child, a.config.Checkpoints, childRunID, task.Input, childMeta)
 	if err != nil {
 		return subagent.TaskResult{
