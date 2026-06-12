@@ -83,6 +83,9 @@ external guards when retrying could be unsafe.
 Sub-agent resume is supported at parent and child checkpoint boundaries. If a
 child run was in an uncheckpointed provider stream or external process, it
 follows the same retry-from-boundary rules as any other run.
+Only a missing child checkpoint starts a fresh child stream. A checkpoint
+backend read failure is surfaced before model execution so the parent cannot
+silently duplicate child work.
 
 ## Approval Resume
 

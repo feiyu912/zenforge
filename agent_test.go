@@ -195,6 +195,22 @@ func (s *rejectingCheckpointStore) Delete(ctx context.Context, runID string) err
 	return s.store.Delete(ctx, runID)
 }
 
+type loadErrorCheckpointStore struct {
+	err error
+}
+
+func (s loadErrorCheckpointStore) Save(context.Context, checkpoint.Checkpoint) error {
+	return nil
+}
+
+func (s loadErrorCheckpointStore) Load(context.Context, string) (*checkpoint.Checkpoint, error) {
+	return nil, s.err
+}
+
+func (s loadErrorCheckpointStore) Delete(context.Context, string) error {
+	return nil
+}
+
 type rejectingTodoManager struct {
 	manager planner.Manager
 	reject  func(planner.Patch) bool
@@ -1340,6 +1356,57 @@ func TestInvokeSubAgentToolResumesNonTerminalChildCheckpoint(t *testing.T) {
 	}
 	if len(state.Subtasks) != 1 || state.Subtasks[0].Status != harness.SubtaskCompleted || state.Subtasks[0].RunID != childRunID {
 		t.Fatalf("unexpected resumed subtask state: %#v", state.Subtasks)
+	}
+}
+
+func TestChildSubAgentCheckpointLoadFailureDoesNotStartModel(t *testing.T) {
+	fakeModel := &scriptedModel{turns: []scriptedTurn{{events: []model.Event{{Delta: "must not run"}}}}}
+	child := New(Config{Model: fakeModel})
+	store := loadErrorCheckpointStore{err: errors.New("checkpoint backend unavailable")}
+
+	events, err := childSubAgentEvents(
+		context.Background(),
+		child,
+		store,
+		"run_parent_sub_subtask_1",
+		"summarize docs",
+		map[string]any{"parentRunId": "run_parent"},
+	)
+	if err == nil || !strings.Contains(err.Error(), `load child checkpoint "run_parent_sub_subtask_1": checkpoint backend unavailable`) {
+		t.Fatalf("unexpected checkpoint load result: events=%v err=%v", events, err)
+	}
+	if len(fakeModel.requests) != 0 {
+		t.Fatalf("child model calls = %d, want 0", len(fakeModel.requests))
+	}
+}
+
+func TestRunChildSubAgentTreatsCancellationAsFailure(t *testing.T) {
+	fakeModel := &scriptedModel{turns: []scriptedTurn{{events: []model.Event{{Error: context.Canceled}}}}}
+	agent := New(Config{
+		Model:       fakeModel,
+		Checkpoints: checkpointmemory.New(),
+	})
+
+	result, err := agent.runChildSubAgent(
+		context.Background(),
+		subagent.SubAgentSpec{Name: "researcher"},
+		subagent.TaskSpec{ID: "subtask_1", AgentName: "researcher", Input: "summarize docs"},
+		subagent.Request{RunID: "run_parent"},
+	)
+	if err == nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("runChildSubAgent error = %v, want context canceled", err)
+	}
+	if result.Status != subagent.StatusFailed || result.Error != context.Canceled.Error() {
+		t.Fatalf("cancelled child result = %#v", result)
+	}
+	foundCancelled := false
+	for _, event := range result.Events {
+		if event.Type == string(EventRunCancelled) {
+			foundCancelled = true
+		}
+	}
+	if !foundCancelled {
+		t.Fatalf("cancelled child event missing: %#v", result.Events)
 	}
 }
 

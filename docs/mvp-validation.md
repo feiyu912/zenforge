@@ -72,6 +72,8 @@ Markdown document links.
 | sub-agent checkpoint state avoids duplicate resumed starts | `TestStartSubtasksDeduplicatesResumedParentToolCall` |
 | sub-agent resume reuses terminal child results | `TestInvokeSubAgentToolSkipsCompletedSubtaskOnResume` |
 | sub-agent resume continues non-terminal child checkpoint | `TestInvokeSubAgentToolResumesNonTerminalChildCheckpoint` |
+| child checkpoint backend failures do not start duplicate model work | `TestChildSubAgentCheckpointLoadFailureDoesNotStartModel` |
+| child cancellation cannot become false completion | `TestRunChildSubAgentTreatsCancellationAsFailure` |
 
 ## Planning
 

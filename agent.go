@@ -1424,6 +1424,17 @@ func (a *Agent) runChildSubAgent(ctx context.Context, spec subagent.SubAgentSpec
 		if event.Type == EventRunError {
 			runErr = fmt.Errorf("%s", stringValue(event.Payload["error"]))
 		}
+		if event.Type == EventRunCancelled {
+			message := stringValue(event.Payload["error"])
+			switch message {
+			case context.Canceled.Error():
+				runErr = context.Canceled
+			case context.DeadlineExceeded.Error():
+				runErr = context.DeadlineExceeded
+			default:
+				runErr = fmt.Errorf("%s", message)
+			}
+		}
 	}
 	taskResult := subagent.TaskResult{
 		ID:        task.ID,
@@ -1447,7 +1458,7 @@ func childSubAgentEvents(ctx context.Context, child *Agent, checkpoints checkpoi
 		if _, err := checkpoints.Load(ctx, childRunID); err == nil {
 			return child.Resume(ctx, childRunID)
 		} else if !errors.Is(err, checkpoint.ErrNotFound) {
-			return nil, err
+			return nil, fmt.Errorf("load child checkpoint %q: %w", childRunID, err)
 		}
 	}
 	return child.Stream(ctx, Task{RunID: childRunID, Input: input, Meta: meta})

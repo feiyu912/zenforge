@@ -265,7 +265,10 @@ MVP simplification:
 
 The default child runner checks for the deterministic child run checkpoint
 before starting a fresh child stream. Existing child checkpoints resume through
-`Agent.Resume`; missing child checkpoints start a new child stream.
+`Agent.Resume`; missing child checkpoints start a new child stream. Other
+checkpoint lookup errors fail before model execution. A child
+`run.cancelled` outcome is propagated as a failed task result rather than
+normalized into successful completion.
 
 ## Nested Invocation
 

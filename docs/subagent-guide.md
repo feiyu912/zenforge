@@ -85,3 +85,12 @@ Sub-agent work emits:
 
 Sub-agents should receive scoped tools. Do not automatically give every child
 the parent's full tool set.
+
+The default child runner resumes a deterministic child checkpoint when one
+exists and starts a fresh child only for `checkpoint.ErrNotFound`. Other
+checkpoint load failures stop before the child model runs, preventing duplicate
+side effects during a storage outage.
+
+A child `run.cancelled` outcome is returned to the parent as a failed subtask
+with the cancellation error. It is never normalized into a completed result
+with empty output.

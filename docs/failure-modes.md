@@ -116,6 +116,10 @@ Sub-agent failures are visible as subtask error events and tool errors. Parent
 runs can continue only if the model or tool result handling has enough context
 to recover. Nested sub-agents are disabled by default.
 
+Child checkpoint lookup failures stop before child model execution; only
+`checkpoint.ErrNotFound` permits a fresh child run. Child cancellation is
+reported as a failed subtask result rather than successful empty output.
+
 ## Memory And MCP
 
 Memory retrieval and MCP server operations are adapter concerns. ZenForge does
