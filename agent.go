@@ -227,8 +227,15 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 			loadCtx = context.WithoutCancel(ctx)
 		}
 		if a.config.Checkpoints != nil {
-			if cp, loadErr := a.config.Checkpoints.Load(loadCtx, runID); loadErr == nil && isPlanExecuteState(cp.State) {
+			cp, loadErr := a.config.Checkpoints.Load(loadCtx, runID)
+			if loadErr != nil && !errors.Is(loadErr, checkpoint.ErrNotFound) {
+				return emit(EventRunError, map[string]any{
+					"error": fmt.Sprintf("load latest checkpoint: %v", loadErr),
+				})
+			}
+			if loadErr == nil && isPlanExecuteState(cp.State) {
 				state = cp.State
+				state.Meta = cloneMap(cp.State.Meta)
 			}
 		}
 		if state.Meta == nil {
@@ -248,7 +255,13 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 			state.Phase = harness.RunPhaseFailed
 			state.Control.Status = harness.RunStatusFailed
 		}
-		if seq, saveErr := a.saveCheckpointAfterLatest(ctx, state); saveErr == nil && seq > 0 {
+		seq, saveErr := a.saveCheckpointAfterLatest(ctx, state)
+		if saveErr != nil {
+			return emit(EventRunError, map[string]any{
+				"error": fmt.Sprintf("save checkpoint: %v", saveErr),
+			})
+		}
+		if seq > 0 {
 			if emitErr := emit(EventCheckpointCreated, map[string]any{
 				"checkpointSeq": seq,
 				"phase":         string(state.Phase),
@@ -359,7 +372,11 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 		if !planner.TerminalStatus(updated.Status) {
 			failed := planner.TodoFailed
 			notes := "task ended without terminal todo_update"
-			todos, _ = a.todos.Update(ctx, runID, current.ID, planner.Patch{Status: &failed, Notes: &notes})
+			todos, err = a.todos.Update(ctx, runID, current.ID, planner.Patch{Status: &failed, Notes: &notes})
+			if err != nil {
+				fail(planExecuteStageExecute, todos, fmt.Errorf("mark todo %q failed: %w", current.ID, err))
+				return
+			}
 			if err := emit(EventTodoUpdated, map[string]any{"todos": todos}); err != nil {
 				return
 			}
@@ -407,13 +424,23 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			summaryState.Phase = harness.RunPhaseCancelled
 			summaryState.Control.Status = harness.RunStatusCancelled
-			_ = saveSummaryState()
+			if saveErr := saveSummaryState(); saveErr != nil {
+				if !isEventPersistenceError(saveErr) {
+					_ = emit(EventRunError, map[string]any{"error": fmt.Sprintf("save checkpoint: %v", saveErr)})
+				}
+				return
+			}
 			_ = emit(EventRunCancelled, map[string]any{"error": err.Error()})
 			return
 		}
 		summaryState.Phase = harness.RunPhaseFailed
 		summaryState.Control.Status = harness.RunStatusFailed
-		_ = saveSummaryState()
+		if saveErr := saveSummaryState(); saveErr != nil {
+			if !isEventPersistenceError(saveErr) {
+				_ = emit(EventRunError, map[string]any{"error": fmt.Sprintf("save checkpoint: %v", saveErr)})
+			}
+			return
+		}
 		_ = emit(EventRunError, map[string]any{"error": err.Error()})
 	}
 	if err := saveSummaryState(); err != nil {

@@ -175,6 +175,46 @@ func (s *failingCheckpointStore) Delete(ctx context.Context, runID string) error
 	return checkpoint.ErrNotFound
 }
 
+type rejectingCheckpointStore struct {
+	store  checkpoint.Store
+	reject func(checkpoint.Checkpoint) bool
+}
+
+func (s *rejectingCheckpointStore) Save(ctx context.Context, cp checkpoint.Checkpoint) error {
+	if s.reject != nil && s.reject(cp) {
+		return errors.New("checkpoint backend unavailable")
+	}
+	return s.store.Save(ctx, cp)
+}
+
+func (s *rejectingCheckpointStore) Load(ctx context.Context, runID string) (*checkpoint.Checkpoint, error) {
+	return s.store.Load(ctx, runID)
+}
+
+func (s *rejectingCheckpointStore) Delete(ctx context.Context, runID string) error {
+	return s.store.Delete(ctx, runID)
+}
+
+type rejectingTodoManager struct {
+	manager planner.Manager
+	reject  func(planner.Patch) bool
+}
+
+func (m *rejectingTodoManager) List(ctx context.Context, runID string) ([]planner.Todo, error) {
+	return m.manager.List(ctx, runID)
+}
+
+func (m *rejectingTodoManager) Replace(ctx context.Context, runID string, todos []planner.Todo) ([]planner.Todo, error) {
+	return m.manager.Replace(ctx, runID, todos)
+}
+
+func (m *rejectingTodoManager) Update(ctx context.Context, runID string, id string, patch planner.Patch) ([]planner.Todo, error) {
+	if m.reject != nil && m.reject(patch) {
+		return nil, errors.New("planner backend unavailable")
+	}
+	return m.manager.Update(ctx, runID, id, patch)
+}
+
 func TestAgentStopsBeforeModelWhenInitialEventAppendFails(t *testing.T) {
 	eventsStore := &failingEventStore{failAppendAt: 1}
 	fakeModel := &scriptedModel{turns: []scriptedTurn{{events: []model.Event{{Delta: "must not run"}}}}}
@@ -1459,6 +1499,163 @@ func TestAgentPlanExecutePersistsPlanNotCreatedFailure(t *testing.T) {
 	}
 	if len(fakeModel.requests) != 1 {
 		t.Fatalf("terminal resume retried planning: %#v", fakeModel.requests)
+	}
+}
+
+func TestAgentPlanExecuteFailsClosedWhenTerminalCheckpointSaveFails(t *testing.T) {
+	checkpoints := &failingCheckpointStore{failAt: 4}
+	fakeModel := &scriptedModel{turns: []scriptedTurn{{
+		events: []model.Event{{Delta: "I cannot create a plan"}},
+	}}}
+	agent := New(Config{
+		Model:       fakeModel,
+		Planning:    PlanningPlanExecute,
+		Checkpoints: checkpoints,
+	})
+
+	events, err := agent.Stream(context.Background(), Task{RunID: "run_plan_terminal_save_failure", Input: "do the work"})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	var types []EventType
+	var runError string
+	for event := range events {
+		types = append(types, event.Type)
+		if event.Type == EventRunError {
+			runError = stringValue(event.Payload["error"])
+		}
+	}
+
+	if checkpoints.saves != 4 {
+		t.Fatalf("checkpoint saves = %d, want 4", checkpoints.saves)
+	}
+	if countEvent(types, EventRunError) != 1 || !strings.Contains(runError, "save checkpoint") {
+		t.Fatalf("unexpected terminal save failure: events=%v error=%q", types, runError)
+	}
+	if countEvent(types, EventRunDone) != 0 {
+		t.Fatalf("run completed after terminal checkpoint failure: %v", types)
+	}
+	cp, err := checkpoints.Load(context.Background(), "run_plan_terminal_save_failure")
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if planExecuteTerminal(cp.State) {
+		t.Fatalf("failed terminal checkpoint appeared durable: %#v", cp.State)
+	}
+}
+
+func TestAgentPlanExecuteDoesNotReportSummaryFailureWhenItsCheckpointFails(t *testing.T) {
+	checkpoints := &rejectingCheckpointStore{
+		store: checkpointmemory.New(),
+		reject: func(cp checkpoint.Checkpoint) bool {
+			return planExecuteStage(cp.State.Meta) == planExecuteStageSummary &&
+				planExecuteTerminal(cp.State) &&
+				cp.State.Phase == harness.RunPhaseFailed
+		},
+	}
+	fakeModel := &scriptedModel{turns: []scriptedTurn{
+		{
+			events: []model.Event{{
+				Message: &model.Message{ToolCalls: []model.ToolCallSpec{{
+					ID:        "plan_call",
+					Name:      "todo_write",
+					Arguments: json.RawMessage(`{"todos":[{"id":"task_1","content":"Inspect repo"}]}`),
+				}}},
+			}},
+		},
+		{events: []model.Event{{Delta: "plan created"}}},
+		{
+			events: []model.Event{{
+				Message: &model.Message{ToolCalls: []model.ToolCallSpec{{
+					ID:        "done_call",
+					Name:      "todo_update",
+					Arguments: json.RawMessage(`{"id":"task_1","status":"done","notes":"finished"}`),
+				}}},
+			}},
+		},
+		{events: []model.Event{{Delta: "task done"}}},
+		{events: []model.Event{{Error: errors.New("summary provider failed")}}},
+	}}
+	agent := New(Config{
+		Model:       fakeModel,
+		Planning:    PlanningPlanExecute,
+		Checkpoints: checkpoints,
+	})
+
+	events, err := agent.Stream(context.Background(), Task{RunID: "run_summary_failure_save_failure", Input: "do the work"})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	var runError string
+	for event := range events {
+		if event.Type == EventRunError {
+			runError = stringValue(event.Payload["error"])
+		}
+	}
+	if !strings.Contains(runError, "save checkpoint") || strings.Contains(runError, "summary provider failed") {
+		t.Fatalf("run error = %q, want checkpoint failure only", runError)
+	}
+	cp, err := checkpoints.Load(context.Background(), "run_summary_failure_save_failure")
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cp.State.Phase != harness.RunPhaseFinalizing || planExecuteTerminal(cp.State) {
+		t.Fatalf("failed summary terminal state appeared durable: %#v", cp.State)
+	}
+}
+
+func TestAgentPlanExecuteSurfacesFailureToMarkNonTerminalTodo(t *testing.T) {
+	todos := &rejectingTodoManager{
+		manager: planner.NewMemoryManager(planner.MemoryConfig{}),
+		reject: func(patch planner.Patch) bool {
+			return patch.Status != nil && *patch.Status == planner.TodoFailed
+		},
+	}
+	checkpoints := checkpointmemory.New()
+	fakeModel := &scriptedModel{turns: []scriptedTurn{
+		{
+			events: []model.Event{{
+				Message: &model.Message{ToolCalls: []model.ToolCallSpec{{
+					ID:        "plan_call",
+					Name:      "todo_write",
+					Arguments: json.RawMessage(`{"todos":[{"id":"task_1","content":"Inspect repo"}]}`),
+				}}},
+			}},
+		},
+		{events: []model.Event{{Delta: "plan created"}}},
+		{events: []model.Event{{Delta: "work ended without todo update"}}},
+	}}
+	agent := New(Config{
+		Model:       fakeModel,
+		Planning:    PlanningPlanExecute,
+		Todos:       todos,
+		Checkpoints: checkpoints,
+	})
+
+	events, err := agent.Stream(context.Background(), Task{RunID: "run_todo_failure_update", Input: "do the work"})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	var types []EventType
+	var runError string
+	for event := range events {
+		types = append(types, event.Type)
+		if event.Type == EventRunError {
+			runError = stringValue(event.Payload["error"])
+		}
+	}
+	if !strings.Contains(runError, `mark todo "task_1" failed: planner backend unavailable`) {
+		t.Fatalf("run error = %q", runError)
+	}
+	if countEvent(types, EventTaskError) != 0 {
+		t.Fatalf("task error claimed an update that failed: %v", types)
+	}
+	cp, err := checkpoints.Load(context.Background(), "run_todo_failure_update")
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cp.State.Phase != harness.RunPhaseFailed || stringValue(cp.State.Meta["error"]) != runError {
+		t.Fatalf("planner update failure was not checkpointed: %#v", cp.State)
 	}
 }
 

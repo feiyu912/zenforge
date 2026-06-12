@@ -90,6 +90,15 @@ plan/execute checkpoints before `run.error` or `run.cancelled` is emitted.
 Terminal resume returns that stored outcome without planning, executing tools,
 or summarizing again.
 
+Terminal orchestration writes fail closed. If the failure or cancellation
+checkpoint cannot be saved, the live stream reports the checkpoint error and
+does not claim that the original terminal outcome was persisted. The last
+successful plan/execute checkpoint remains unchanged.
+
+Planner manager writes are checked before corresponding todo/task events are
+emitted. A failed status update becomes the durable run error; ZenForge does
+not publish the transition as if the planner accepted it.
+
 ## Customization
 
 Later versions should allow:

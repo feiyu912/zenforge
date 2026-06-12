@@ -81,6 +81,8 @@ Markdown document links.
 | plan/execute preset works with fake model | `TestAgentPlanExecutePresetPlansExecutesAndSummarizes` |
 | plan/execute exposes one top-level lifecycle and stops on stage failure | `TestAgentPlanExecutePresetPlansExecutesAndSummarizes`, `TestAgentPlanExecuteStopsAfterInternalStageFailure` |
 | plan/execute orchestration failures persist terminal checkpoints | `TestAgentPlanExecuteStopsAfterInternalStageFailure`, `TestAgentPlanExecutePersistsPlanNotCreatedFailure` |
+| plan/execute terminal checkpoint failures preserve the previous resume boundary | `TestAgentPlanExecuteFailsClosedWhenTerminalCheckpointSaveFails`, `TestAgentPlanExecuteDoesNotReportSummaryFailureWhenItsCheckpointFails` |
+| plan/execute surfaces planner status write failures without false task events | `TestAgentPlanExecuteSurfacesFailureToMarkNonTerminalTodo` |
 | plan/execute resume continues active todo checkpoint | `TestAgentPlanExecuteResumeContinuesActiveTodoFromCheckpoint` |
 | plan/execute resume summarizes terminal todos | `TestAgentPlanExecuteResumeSummarizesTerminalTodos` |
 | todo updates stream | `TestAgentPlanningAddsTodoToolsAndCheckpointsTodos` |

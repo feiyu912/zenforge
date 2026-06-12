@@ -65,6 +65,11 @@ stages. The final summary is stored as a completed terminal checkpoint with the
 summary output and terminal todos. Resuming that checkpoint returns the stored
 summary without another model call.
 
+Failure and cancellation checkpoints use the same fail-closed rule. When a
+plan/execute terminal write fails, the previous checkpoint remains the resume
+source; ZenForge reports the storage error rather than an unpersisted terminal
+outcome.
+
 ## Limited Boundaries
 
 ZenForge does not resume a provider stream mid-token. It retries from the last

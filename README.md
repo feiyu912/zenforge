@@ -202,6 +202,9 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - Planner spec, guide, and MVP validation document the single top-level run lifecycle.
 - Plan/execute orchestration failures persist terminal checkpoints and resume without retrying completed work.
 - Planner and failure-mode docs map durable orchestration failures to concrete resume tests.
+- Plan/execute failure and cancellation paths fail closed when their terminal checkpoint cannot be saved.
+- Failed plan/execute saves cannot mutate the last durable checkpoint through shared state metadata.
+- Planner update failures are surfaced and checkpointed instead of emitting a false todo/task transition.
 - Core checkpoint writes fail closed before model/tool progress or successful terminal events.
 - Resume, failure-mode, and MVP docs map checkpoint fail-closed behavior to concrete tests.
 - Event-log sequence and append failures stop execution and surface a live `run.error` instead of publishing unrecorded progress.

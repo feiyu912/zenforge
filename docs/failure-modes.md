@@ -42,6 +42,9 @@ calling the model or tools again.
 Plan/execute orchestration failures outside the model/tool loop, including an
 empty plan or invalid todo transition, also become durable terminal
 checkpoints. Resume reports the stored failure instead of restarting planning.
+If that terminal checkpoint cannot be saved, ZenForge reports the checkpoint
+error instead of claiming that the original failure or cancellation is durable.
+The previous checkpoint remains unchanged and is still the resume boundary.
 
 ## Active Tool Interrupted
 
