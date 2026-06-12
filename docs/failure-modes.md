@@ -90,8 +90,10 @@ host.
 
 Events are the read model. Checkpoints are the resume source of truth. If event
 append fails, the run should surface the error path rather than pretending the
-observable history is complete. If checkpoint save fails, resume guarantees are
-weakened and the failure should be visible.
+observable history is complete. Checkpoint writes fail closed: ZenForge stops
+before the next model/tool boundary or successful terminal event, emits
+`run.error`, and does not emit `checkpoint.created` for the failed write. The
+last successfully stored checkpoint remains the resume source of truth.
 
 For local durability, prefer SQLite or JSONL stores on a filesystem with normal
 fsync semantics. For platform deployments, keep event and checkpoint writes in

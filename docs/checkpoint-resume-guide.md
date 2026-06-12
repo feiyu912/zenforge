@@ -10,6 +10,11 @@ Checkpoint records use schema version `zenforge.checkpoint.v1`. The embedded
 run state uses version `zenforge.run_state.v1`. Event records use the public
 flattened event contract documented in [ADR 0002](./adr/0002-public-event-contract.md).
 
+Every model, tool, approval, sub-agent, and terminal boundary checks the
+checkpoint write result before advancing. A failed write stops the run and
+leaves the last successful checkpoint intact, so resume never relies on state
+that was only held in memory.
+
 Configure both for a local durable run:
 
 ```go
