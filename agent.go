@@ -480,28 +480,36 @@ func (a *Agent) runLoopMode(ctx context.Context, out chan<- Event, state harness
 		}
 		a.emit(ctx, out, eventType, runID, data)
 	}
-	checkpointSeq, _ := a.latestCheckpointSeq(ctx, runID)
-	checkpointState := func() {
+	checkpointSeq, err := a.latestCheckpointSeq(ctx, runID)
+	if err != nil {
+		emit(EventRunError, map[string]any{"error": fmt.Sprintf("load latest checkpoint: %v", err)})
+		return terminal
+	}
+	checkpointState := func() error {
 		if a.config.Checkpoints == nil {
-			return
+			return nil
 		}
 		saveCtx := ctx
 		if ctx.Err() != nil {
 			saveCtx = context.WithoutCancel(ctx)
 		}
-		checkpointSeq++
+		nextSeq := checkpointSeq + 1
 		state.UpdatedAt = time.Now().UTC()
-		_ = a.config.Checkpoints.Save(saveCtx, checkpoint.Checkpoint{
+		if err := a.config.Checkpoints.Save(saveCtx, checkpoint.Checkpoint{
 			Version: checkpoint.CheckpointVersion,
 			RunID:   runID,
-			Seq:     checkpointSeq,
+			Seq:     nextSeq,
 			State:   state,
 			SavedAt: time.Now().UTC(),
-		})
+		}); err != nil {
+			return fmt.Errorf("save checkpoint: %w", err)
+		}
+		checkpointSeq = nextSeq
 		emit(EventCheckpointCreated, map[string]any{
 			"checkpointSeq": checkpointSeq,
 			"phase":         string(state.Phase),
 		})
+		return nil
 	}
 	cancelRun := func(err error) {
 		if state.Meta == nil {
@@ -510,7 +518,10 @@ func (a *Agent) runLoopMode(ctx context.Context, out chan<- Event, state harness
 		state.Meta["error"] = err.Error()
 		state.Phase = harness.RunPhaseCancelled
 		state.Control.Status = harness.RunStatusCancelled
-		checkpointState()
+		if saveErr := checkpointState(); saveErr != nil {
+			emit(EventRunError, map[string]any{"error": saveErr.Error()})
+			return
+		}
 		emit(EventRunCancelled, map[string]any{"error": err.Error()})
 	}
 	fail := func(err error) {
@@ -524,7 +535,10 @@ func (a *Agent) runLoopMode(ctx context.Context, out chan<- Event, state harness
 		state.Meta["error"] = err.Error()
 		state.Phase = harness.RunPhaseFailed
 		state.Control.Status = harness.RunStatusFailed
-		checkpointState()
+		if saveErr := checkpointState(); saveErr != nil {
+			emit(EventRunError, map[string]any{"error": saveErr.Error()})
+			return
+		}
 		emit(EventRunError, map[string]any{"error": err.Error()})
 	}
 
@@ -550,7 +564,10 @@ func (a *Agent) runLoopMode(ctx context.Context, out chan<- Event, state harness
 			state.Tool.Pending = append([]harness.ToolCallState{call}, state.Tool.Pending...)
 			state.Tool.Active = nil
 			state.Control.Status = harness.RunStatusRunning
-			checkpointState()
+			if err := checkpointState(); err != nil {
+				fail(err)
+				return terminal
+			}
 		}
 	} else {
 		emit(EventRunStarted, map[string]any{"input": state.Input})
@@ -580,7 +597,10 @@ func (a *Agent) runLoopMode(ctx context.Context, out chan<- Event, state harness
 		state.Phase = harness.RunPhaseModel
 		state.Control.Status = harness.RunStatusModelStreaming
 		emit(EventStepStarted, map[string]any{"step": state.Step})
-		checkpointState()
+		if err := checkpointState(); err != nil {
+			fail(err)
+			return terminal
+		}
 		emit(EventModelStarted, map[string]any{"step": state.Step})
 
 		assistant, usage, err := a.callModel(ctx, emit, state, model.ToolChoiceAuto)
@@ -593,15 +613,21 @@ func (a *Agent) runLoopMode(ctx context.Context, out chan<- Event, state harness
 		state.Phase = harness.RunPhaseModel
 		state.Control.Status = harness.RunStatusRunning
 		state.Tool.Pending = toolCallsToState(assistant.ToolCalls)
-		checkpointState()
+		if err := checkpointState(); err != nil {
+			fail(err)
+			return terminal
+		}
 		emit(EventModelDone, map[string]any{"step": state.Step, "toolCallCount": len(assistant.ToolCalls)})
 
 		if len(state.Tool.Pending) == 0 {
 			state.Phase = harness.RunPhaseCompleted
 			state.Control.Status = harness.RunStatusCompleted
-			checkpointState()
+			if err := checkpointState(); err != nil {
+				fail(err)
+				return terminal
+			}
 			emit(EventRunDone, map[string]any{"output": assistant.Content})
-			return
+			return terminal
 		}
 	}
 
@@ -611,7 +637,10 @@ func (a *Agent) runLoopMode(ctx context.Context, out chan<- Event, state harness
 		Role:    "user",
 		Content: "You have reached the tool-use limit. Provide the best final answer using the available context.",
 	})
-	checkpointState()
+	if err := checkpointState(); err != nil {
+		fail(err)
+		return terminal
+	}
 	assistant, usage, err := a.callModel(ctx, emit, state, model.ToolChoiceNone)
 	if err != nil {
 		fail(err)
@@ -625,7 +654,10 @@ func (a *Agent) runLoopMode(ctx context.Context, out chan<- Event, state harness
 	applyUsage(&state, usage)
 	state.Phase = harness.RunPhaseCompleted
 	state.Control.Status = harness.RunStatusCompleted
-	checkpointState()
+	if err := checkpointState(); err != nil {
+		fail(err)
+		return terminal
+	}
 	emit(EventRunDone, map[string]any{"output": assistant.Content})
 	return terminal
 }
@@ -698,7 +730,7 @@ func (a *Agent) resumeTerminal(emit func(EventType, map[string]any), state harne
 	}
 }
 
-func (a *Agent) resumeWaitingApproval(ctx context.Context, emit func(EventType, map[string]any), checkpointState func(), state *harness.RunState) error {
+func (a *Agent) resumeWaitingApproval(ctx context.Context, emit func(EventType, map[string]any), checkpointState func() error, state *harness.RunState) error {
 	if state.Approval.Waiting == nil {
 		return nil
 	}
@@ -724,7 +756,9 @@ func (a *Agent) resumeWaitingApproval(ctx context.Context, emit func(EventType, 
 		return err
 	}
 	state.ResolveApproval(approvalDecisionState(decision))
-	checkpointState()
+	if err := checkpointState(); err != nil {
+		return err
+	}
 	resolvedType := EventApprovalResolved
 	if decision.Action == approval.DecisionReject && decision.Reason == approval.ErrorExpired {
 		resolvedType = EventApprovalExpired
@@ -748,7 +782,9 @@ func (a *Agent) resumeWaitingApproval(ctx context.Context, emit func(EventType, 
 		state.Tool.Pending = append([]harness.ToolCallState{call}, state.Tool.Pending...)
 		state.Tool.Active = nil
 		state.Control.Status = harness.RunStatusRunning
-		checkpointState()
+		if err := checkpointState(); err != nil {
+			return err
+		}
 		return nil
 	}
 	result := tool.Result{Error: approval.ErrorRejected, ExitCode: 1, Structured: map[string]any{
@@ -770,7 +806,9 @@ func (a *Agent) resumeWaitingApproval(ctx context.Context, emit func(EventType, 
 		Name:       call.Name,
 	})
 	state.Control.Status = harness.RunStatusRunning
-	checkpointState()
+	if err := checkpointState(); err != nil {
+		return err
+	}
 	emit(EventToolError, map[string]any{
 		"toolCallId": call.ID,
 		"toolName":   call.Name,
@@ -827,7 +865,7 @@ func (a *Agent) callModel(ctx context.Context, emit func(EventType, map[string]a
 	}, usage, nil
 }
 
-func (a *Agent) runPendingTools(ctx context.Context, emit func(EventType, map[string]any), checkpointState func(), state *harness.RunState) error {
+func (a *Agent) runPendingTools(ctx context.Context, emit func(EventType, map[string]any), checkpointState func() error, state *harness.RunState) error {
 	for len(state.Tool.Pending) > 0 {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -840,7 +878,9 @@ func (a *Agent) runPendingTools(ctx context.Context, emit func(EventType, map[st
 		state.Tool.Active = &call
 		state.Phase = harness.RunPhaseTool
 		state.Control.Status = harness.RunStatusToolExecuting
-		checkpointState()
+		if err := checkpointState(); err != nil {
+			return err
+		}
 		emit(EventToolCall, map[string]any{
 			"toolCallId": call.ID,
 			"toolName":   call.Name,
@@ -857,7 +897,9 @@ func (a *Agent) runPendingTools(ctx context.Context, emit func(EventType, map[st
 		applySandboxResultState(state, result)
 		if req, ok := approval.RequestFromResult(result); ok {
 			state.SetWaitingApproval(approvalRequestState(req, call))
-			checkpointState()
+			if err := checkpointState(); err != nil {
+				return err
+			}
 			emit(EventApprovalRequested, map[string]any{
 				"requestId":  req.ID,
 				"toolCallId": call.ID,
@@ -872,7 +914,9 @@ func (a *Agent) runPendingTools(ctx context.Context, emit func(EventType, map[st
 					return approvalErr
 				}
 				state.ResolveApproval(approvalDecisionState(decision))
-				checkpointState()
+				if err := checkpointState(); err != nil {
+					return err
+				}
 				resolvedType := EventApprovalResolved
 				if decision.Action == approval.DecisionReject && decision.Reason == approval.ErrorExpired {
 					resolvedType = EventApprovalExpired
@@ -935,7 +979,9 @@ func (a *Agent) runPendingTools(ctx context.Context, emit func(EventType, map[st
 			Name:       call.Name,
 		})
 		state.Control.Status = harness.RunStatusRunning
-		checkpointState()
+		if err := checkpointState(); err != nil {
+			return err
+		}
 		emit(eventType, map[string]any{
 			"toolCallId": call.ID,
 			"toolName":   call.Name,
@@ -947,14 +993,14 @@ func (a *Agent) runPendingTools(ctx context.Context, emit func(EventType, map[st
 	return nil
 }
 
-func (a *Agent) invokeToolOrRuntime(ctx context.Context, emit func(EventType, map[string]any), checkpointState func(), state *harness.RunState, call harness.ToolCallState) (tool.Result, error) {
+func (a *Agent) invokeToolOrRuntime(ctx context.Context, emit func(EventType, map[string]any), checkpointState func() error, state *harness.RunState, call harness.ToolCallState) (tool.Result, error) {
 	if tasktool.IsTaskTool(call.Name) {
 		return a.invokeSubAgentTool(ctx, emit, checkpointState, state, call)
 	}
 	return a.invokeTool(ctx, *state, call)
 }
 
-func (a *Agent) invokeSubAgentTool(ctx context.Context, emit func(EventType, map[string]any), checkpointState func(), state *harness.RunState, call harness.ToolCallState) (tool.Result, error) {
+func (a *Agent) invokeSubAgentTool(ctx context.Context, emit func(EventType, map[string]any), checkpointState func() error, state *harness.RunState, call harness.ToolCallState) (tool.Result, error) {
 	orchestrator, err := a.subAgentOrchestrator()
 	if err != nil {
 		return tool.Result{Error: err.Error(), ExitCode: 1}, err
@@ -973,7 +1019,9 @@ func (a *Agent) invokeSubAgentTool(ctx context.Context, emit func(EventType, map
 		req.Depth = depth
 	}
 	startSubtasks(state, req)
-	checkpointState()
+	if err := checkpointState(); err != nil {
+		return tool.Result{Error: err.Error(), ExitCode: 1}, err
+	}
 	skipped, runnable := splitSubtasksForRun(*state, req)
 	for _, task := range runnable {
 		emit(EventSubtaskStarted, map[string]any{
@@ -992,7 +1040,9 @@ func (a *Agent) invokeSubAgentTool(ctx context.Context, emit func(EventType, map
 		result.Tasks = mergeSubtaskResults(req.Tasks, skipped, runningResult.Tasks)
 	}
 	applySubtaskResults(state, req.ParentTaskID, result)
-	checkpointState()
+	if err := checkpointState(); err != nil {
+		return tool.Result{Error: err.Error(), ExitCode: 1}, err
+	}
 	for _, task := range result.Tasks {
 		for _, childEvent := range task.Events {
 			emit(EventSubtaskEvent, map[string]any{

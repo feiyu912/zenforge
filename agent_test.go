@@ -105,6 +105,40 @@ func (s *testEventStore) LatestSeq(ctx context.Context, runID string) (int64, er
 	return s.events[len(s.events)-1].Seq, nil
 }
 
+type failingCheckpointStore struct {
+	failAt int
+	saves  int
+	latest *checkpoint.Checkpoint
+}
+
+func (s *failingCheckpointStore) Save(ctx context.Context, cp checkpoint.Checkpoint) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.saves++
+	if s.saves >= s.failAt {
+		return errors.New("checkpoint backend unavailable")
+	}
+	cloned := cp
+	s.latest = &cloned
+	return nil
+}
+
+func (s *failingCheckpointStore) Load(ctx context.Context, runID string) (*checkpoint.Checkpoint, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if s.latest == nil || s.latest.RunID != runID {
+		return nil, checkpoint.ErrNotFound
+	}
+	cloned := *s.latest
+	return &cloned, nil
+}
+
+func (s *failingCheckpointStore) Delete(ctx context.Context, runID string) error {
+	return checkpoint.ErrNotFound
+}
+
 func TestAgentRunReturnsModelText(t *testing.T) {
 	agent := New(Config{
 		Model: &scriptedModel{turns: []scriptedTurn{
@@ -119,6 +153,73 @@ func TestAgentRunReturnsModelText(t *testing.T) {
 	}
 	if result.Output != "hello world" {
 		t.Fatalf("unexpected output: got %q", result.Output)
+	}
+}
+
+func TestAgentStopsBeforeModelWhenCheckpointSaveFails(t *testing.T) {
+	checkpoints := &failingCheckpointStore{failAt: 1}
+	fakeModel := &scriptedModel{turns: []scriptedTurn{{events: []model.Event{{Delta: "should not run"}}}}}
+	agent := New(Config{
+		Model:       fakeModel,
+		Checkpoints: checkpoints,
+	})
+
+	events, err := agent.Stream(context.Background(), Task{RunID: "run_checkpoint_before_model", Input: "do work"})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	var types []EventType
+	var runError string
+	for event := range events {
+		types = append(types, event.Type)
+		if event.Type == EventRunError {
+			runError = stringValue(event.Payload["error"])
+		}
+	}
+
+	if len(fakeModel.requests) != 0 {
+		t.Fatalf("model calls = %d, want 0", len(fakeModel.requests))
+	}
+	if !strings.Contains(runError, "save checkpoint") {
+		t.Fatalf("run error = %q", runError)
+	}
+	if countEvent(types, EventCheckpointCreated) != 0 || countEvent(types, EventRunDone) != 0 {
+		t.Fatalf("false durable events emitted: %v", types)
+	}
+}
+
+func TestAgentDoesNotCompleteWhenPostModelCheckpointFails(t *testing.T) {
+	checkpoints := &failingCheckpointStore{failAt: 2}
+	fakeModel := &scriptedModel{turns: []scriptedTurn{{events: []model.Event{{Delta: "model output"}}}}}
+	agent := New(Config{
+		Model:       fakeModel,
+		Checkpoints: checkpoints,
+	})
+
+	events, err := agent.Stream(context.Background(), Task{RunID: "run_checkpoint_after_model", Input: "do work"})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	var types []EventType
+	for event := range events {
+		types = append(types, event.Type)
+	}
+
+	if len(fakeModel.requests) != 1 {
+		t.Fatalf("model calls = %d, want 1", len(fakeModel.requests))
+	}
+	if countEvent(types, EventCheckpointCreated) != 1 || countEvent(types, EventModelDone) != 0 || countEvent(types, EventRunDone) != 0 {
+		t.Fatalf("unexpected events after checkpoint failure: %v", types)
+	}
+	if countEvent(types, EventRunError) != 1 {
+		t.Fatalf("run error count = %d, events=%v", countEvent(types, EventRunError), types)
+	}
+	cp, err := checkpoints.Load(context.Background(), "run_checkpoint_after_model")
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cp.State.Phase != harness.RunPhaseModel || cp.State.Control.Status != harness.RunStatusModelStreaming || len(cp.State.Messages) != 1 {
+		t.Fatalf("last durable checkpoint is not the pre-model boundary: %#v", cp.State)
 	}
 }
 
@@ -978,7 +1079,7 @@ func TestInvokeSubAgentToolSkipsCompletedSubtaskOnResume(t *testing.T) {
 			`]}`),
 	}
 
-	result, err := agent.invokeSubAgentTool(context.Background(), func(EventType, map[string]any) {}, func() {}, &state, call)
+	result, err := agent.invokeSubAgentTool(context.Background(), func(EventType, map[string]any) {}, func() error { return nil }, &state, call)
 	if err != nil {
 		t.Fatalf("invokeSubAgentTool returned error: %v", err)
 	}
@@ -1037,7 +1138,7 @@ func TestInvokeSubAgentToolResumesNonTerminalChildCheckpoint(t *testing.T) {
 		Arguments: json.RawMessage(`{"tasks":[{"id":"subtask_1","agent":"researcher","input":"summarize docs"}]}`),
 	}
 
-	result, err := agent.invokeSubAgentTool(context.Background(), func(EventType, map[string]any) {}, func() {}, &state, call)
+	result, err := agent.invokeSubAgentTool(context.Background(), func(EventType, map[string]any) {}, func() error { return nil }, &state, call)
 	if err != nil {
 		t.Fatalf("invokeSubAgentTool returned error: %v", err)
 	}
