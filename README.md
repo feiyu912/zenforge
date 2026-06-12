@@ -201,6 +201,7 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - Plan/execute internal stages no longer leak terminal run lifecycle events or continue after stage failure.
 - Planner spec, guide, and MVP validation document the single top-level run lifecycle.
 - Plan/execute orchestration failures persist terminal checkpoints and resume without retrying completed work.
+- Planner and failure-mode docs map durable orchestration failures to concrete resume tests.
 - Architecture package layout is aligned with the current repository.
 - Historical API sketch is labeled and current guides are prioritized.
 - README Quick Look and architecture snippets use current store/interface names.

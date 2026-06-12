@@ -39,6 +39,10 @@ For regular and plan/execute runs, the failed checkpoint records the provider
 contract error. Resuming that terminal run emits the same `run.error` without
 calling the model or tools again.
 
+Plan/execute orchestration failures outside the model/tool loop, including an
+empty plan or invalid todo transition, also become durable terminal
+checkpoints. Resume reports the stored failure instead of restarting planning.
+
 ## Active Tool Interrupted
 
 If a process crashes while a tool call is active, resume moves the active tool

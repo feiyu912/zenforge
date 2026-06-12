@@ -85,6 +85,11 @@ Default behavior:
 - summary runs only after successful terminal todo flow unless configured
   otherwise.
 
+Planning, todo orchestration, and stage failures are persisted as terminal
+plan/execute checkpoints before `run.error` or `run.cancelled` is emitted.
+Terminal resume returns that stored outcome without planning, executing tools,
+or summarizing again.
+
 ## Customization
 
 Later versions should allow:

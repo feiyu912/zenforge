@@ -267,6 +267,12 @@ metadata. On resume, the orchestrator restores checkpointed todos into the todo
 manager, resumes the active execute stage when present, skips terminal todos,
 and summarizes once all todos are terminal.
 
+Overall success, failure, and cancellation checkpoints set
+`planning.terminal=true`. This distinguishes a completed internal stage from a
+completed run. Orchestration failures such as `plan_not_created`, invalid todo
+state, or todo manager errors save the terminal reason and do not retry work on
+resume.
+
 ## Migration From agent-platform
 
 Source inspiration:
