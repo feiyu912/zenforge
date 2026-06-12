@@ -116,7 +116,26 @@ func stringValue(value any) string {
 	return text
 }
 
-func (a *Agent) emit(ctx context.Context, out chan<- Event, eventType EventType, runID string, data map[string]any) {
+type eventEmitter func(EventType, map[string]any) error
+
+type eventPersistenceError struct {
+	err error
+}
+
+func (e *eventPersistenceError) Error() string {
+	return e.err.Error()
+}
+
+func (e *eventPersistenceError) Unwrap() error {
+	return e.err
+}
+
+func isEventPersistenceError(err error) bool {
+	var persistenceErr *eventPersistenceError
+	return errors.As(err, &persistenceErr)
+}
+
+func (a *Agent) emit(ctx context.Context, out chan<- Event, eventType EventType, runID string, data map[string]any) error {
 	event := NewEvent(eventType, runID, data)
 	persistCtx := ctx
 	if ctx.Err() != nil {
@@ -124,15 +143,29 @@ func (a *Agent) emit(ctx context.Context, out chan<- Event, eventType EventType,
 	}
 	if a.config.Events != nil {
 		if event.Seq == 0 {
-			if latest, err := a.config.Events.LatestSeq(persistCtx, event.RunID()); err == nil {
-				event = event.WithSeq(NextEventSeq(latest))
+			latest, err := a.config.Events.LatestSeq(persistCtx, event.RunID())
+			if err != nil {
+				return a.reportEventPersistenceError(ctx, out, runID, fmt.Errorf("load latest event sequence: %w", err))
 			}
+			event = event.WithSeq(NextEventSeq(latest))
 		}
-		_ = a.config.Events.Append(persistCtx, event)
+		if err := a.config.Events.Append(persistCtx, event); err != nil {
+			return a.reportEventPersistenceError(ctx, out, runID, fmt.Errorf("append event %s: %w", eventType, err))
+		}
 	}
 	if a.config.Trace != nil {
 		_ = a.config.Trace.Emit(persistCtx, traceEvent(event))
 	}
+	sendEvent(ctx, out, event)
+	return nil
+}
+
+func (a *Agent) reportEventPersistenceError(ctx context.Context, out chan<- Event, runID string, err error) error {
+	sendEvent(ctx, out, NewEvent(EventRunError, runID, map[string]any{"error": err.Error()}))
+	return &eventPersistenceError{err: err}
+}
+
+func sendEvent(ctx context.Context, out chan<- Event, event Event) {
 	select {
 	case out <- event:
 		return
@@ -160,12 +193,14 @@ func (a *Agent) streamNoop(ctx context.Context, runID, input string) <-chan Even
 		defer close(events)
 		select {
 		case <-ctx.Done():
-			a.emit(ctx, events, EventRunError, runID, map[string]any{"error": ctx.Err().Error()})
+			_ = a.emit(ctx, events, EventRunError, runID, map[string]any{"error": ctx.Err().Error()})
 			return
 		default:
 		}
-		a.emit(ctx, events, EventRunStarted, runID, map[string]any{"input": input})
-		a.emit(ctx, events, EventRunDone, runID, map[string]any{"output": ""})
+		if err := a.emit(ctx, events, EventRunStarted, runID, map[string]any{"input": input}); err != nil {
+			return
+		}
+		_ = a.emit(ctx, events, EventRunDone, runID, map[string]any{"output": ""})
 	}()
 	return events
 }
@@ -182,10 +217,10 @@ const (
 )
 
 func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID string, task Task, resumeState *harness.RunState) {
-	emit := func(eventType EventType, data map[string]any) {
-		a.emit(ctx, out, eventType, runID, data)
-	}
-	finish := func(stage string, todos []planner.Todo, eventType EventType, err error) {
+	emit := eventEmitter(func(eventType EventType, data map[string]any) error {
+		return a.emit(ctx, out, eventType, runID, data)
+	})
+	finish := func(stage string, todos []planner.Todo, eventType EventType, err error) error {
 		state := newRunState(runID, task.Input, planExecuteMeta(task.Meta, task.Input, stage))
 		loadCtx := ctx
 		if ctx.Err() != nil {
@@ -214,27 +249,36 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 			state.Control.Status = harness.RunStatusFailed
 		}
 		if seq, saveErr := a.saveCheckpointAfterLatest(ctx, state); saveErr == nil && seq > 0 {
-			emit(EventCheckpointCreated, map[string]any{
+			if emitErr := emit(EventCheckpointCreated, map[string]any{
 				"checkpointSeq": seq,
 				"phase":         string(state.Phase),
-			})
+			}); emitErr != nil {
+				return emitErr
+			}
 		}
-		emit(eventType, map[string]any{"error": err.Error()})
+		return emit(eventType, map[string]any{"error": err.Error()})
 	}
 	fail := func(stage string, todos []planner.Todo, err error) {
-		finish(stage, todos, EventRunError, err)
+		if isEventPersistenceError(err) {
+			return
+		}
+		_ = finish(stage, todos, EventRunError, err)
 	}
 	if a.todos == nil {
 		fail(planExecuteStagePlan, nil, fmt.Errorf("todo manager is not configured"))
 		return
 	}
 	if resumeState != nil {
-		emit(EventRunResumed, map[string]any{"input": task.Input, "preset": string(PlanningPlanExecute)})
+		if err := emit(EventRunResumed, map[string]any{"input": task.Input, "preset": string(PlanningPlanExecute)}); err != nil {
+			return
+		}
 		if planExecuteTerminal(*resumeState) && a.resumeTerminal(emit, *resumeState) {
 			return
 		}
 	} else {
-		emit(EventRunStarted, map[string]any{"input": task.Input, "preset": string(PlanningPlanExecute)})
+		if err := emit(EventRunStarted, map[string]any{"input": task.Input, "preset": string(PlanningPlanExecute)}); err != nil {
+			return
+		}
 	}
 
 	todos, err := planExecuteTodos(ctx, a.todos, runID, resumeState)
@@ -247,7 +291,10 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 		planState := newRunState(runID, planInput, planExecuteMeta(task.Meta, task.Input, planExecuteStagePlan))
 		terminal := a.runInternalLoop(ctx, out, planState, resumeState != nil && planExecuteStage(resumeState.Meta) == planExecuteStagePlan)
 		if terminal.Type == EventRunError || terminal.Type == EventRunCancelled {
-			finish(planExecuteStagePlan, todos, terminal.Type, errors.New(stringValue(terminal.Data["error"])))
+			if terminal.Err != nil {
+				return
+			}
+			_ = finish(planExecuteStagePlan, todos, terminal.Type, errors.New(stringValue(terminal.Data["error"])))
 			return
 		}
 		todos, err = a.todos.List(ctx, runID)
@@ -267,18 +314,24 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 			break
 		}
 		if err := ctx.Err(); err != nil {
-			emit(EventTaskCancelled, map[string]any{"todoId": current.ID, "error": err.Error()})
-			finish(planExecuteStageExecute, todos, EventRunCancelled, err)
+			if emitErr := emit(EventTaskCancelled, map[string]any{"todoId": current.ID, "error": err.Error()}); emitErr != nil {
+				return
+			}
+			_ = finish(planExecuteStageExecute, todos, EventRunCancelled, err)
 			return
 		}
-		emit(EventTaskStarted, map[string]any{"todoId": current.ID, "content": current.Content})
+		if err := emit(EventTaskStarted, map[string]any{"todoId": current.ID, "content": current.Content}); err != nil {
+			return
+		}
 		inProgress := planner.TodoInProgress
 		todos, err = a.todos.Update(ctx, runID, current.ID, planner.Patch{Status: &inProgress})
 		if err != nil {
 			fail(planExecuteStageExecute, todos, err)
 			return
 		}
-		emit(EventTodoUpdated, map[string]any{"todos": todos})
+		if err := emit(EventTodoUpdated, map[string]any{"todos": todos}); err != nil {
+			return
+		}
 
 		executeState := newRunState(runID, taskPrompt(todos, current), planExecuteMeta(task.Meta, task.Input, planExecuteStageExecute))
 		if resumeState != nil && planExecuteStage(resumeState.Meta) == planExecuteStageExecute {
@@ -287,7 +340,10 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 		}
 		terminal := a.runInternalLoop(ctx, out, executeState, true)
 		if terminal.Type == EventRunError || terminal.Type == EventRunCancelled {
-			finish(planExecuteStageExecute, todos, terminal.Type, errors.New(stringValue(terminal.Data["error"])))
+			if terminal.Err != nil {
+				return
+			}
+			_ = finish(planExecuteStageExecute, todos, terminal.Type, errors.New(stringValue(terminal.Data["error"])))
 			return
 		}
 		todos, err = a.todos.List(ctx, runID)
@@ -304,12 +360,18 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 			failed := planner.TodoFailed
 			notes := "task ended without terminal todo_update"
 			todos, _ = a.todos.Update(ctx, runID, current.ID, planner.Patch{Status: &failed, Notes: &notes})
-			emit(EventTodoUpdated, map[string]any{"todos": todos})
-			emit(EventTaskError, map[string]any{"todoId": current.ID, "error": notes})
+			if err := emit(EventTodoUpdated, map[string]any{"todos": todos}); err != nil {
+				return
+			}
+			if err := emit(EventTaskError, map[string]any{"todoId": current.ID, "error": notes}); err != nil {
+				return
+			}
 			fail(planExecuteStageExecute, todos, fmt.Errorf(notes))
 			return
 		}
-		emit(EventTaskDone, map[string]any{"todoId": current.ID, "status": string(updated.Status)})
+		if err := emit(EventTaskDone, map[string]any{"todoId": current.ID, "status": string(updated.Status)}); err != nil {
+			return
+		}
 		if updated.Status == planner.TodoFailed {
 			fail(planExecuteStageExecute, todos, fmt.Errorf("todo %q failed", current.ID))
 			return
@@ -325,13 +387,18 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 		if err != nil {
 			return err
 		}
-		emit(EventCheckpointCreated, map[string]any{
+		if err := emit(EventCheckpointCreated, map[string]any{
 			"checkpointSeq": seq,
 			"phase":         string(summaryState.Phase),
-		})
+		}); err != nil {
+			return err
+		}
 		return nil
 	}
 	failSummary := func(err error) {
+		if isEventPersistenceError(err) {
+			return
+		}
 		if summaryState.Meta == nil {
 			summaryState.Meta = map[string]any{}
 		}
@@ -341,13 +408,13 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 			summaryState.Phase = harness.RunPhaseCancelled
 			summaryState.Control.Status = harness.RunStatusCancelled
 			_ = saveSummaryState()
-			emit(EventRunCancelled, map[string]any{"error": err.Error()})
+			_ = emit(EventRunCancelled, map[string]any{"error": err.Error()})
 			return
 		}
 		summaryState.Phase = harness.RunPhaseFailed
 		summaryState.Control.Status = harness.RunStatusFailed
 		_ = saveSummaryState()
-		emit(EventRunError, map[string]any{"error": err.Error()})
+		_ = emit(EventRunError, map[string]any{"error": err.Error()})
 	}
 	if err := saveSummaryState(); err != nil {
 		fail(planExecuteStageSummary, todos, err)
@@ -371,7 +438,7 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 		fail(planExecuteStageSummary, todos, err)
 		return
 	}
-	emit(EventRunDone, map[string]any{"output": assistant.Content, "todos": todos})
+	_ = emit(EventRunDone, map[string]any{"output": assistant.Content, "todos": todos})
 }
 
 func planExecuteTodos(ctx context.Context, manager planner.Manager, runID string, resumeState *harness.RunState) ([]planner.Todo, error) {
@@ -456,6 +523,7 @@ func newRunState(runID, input string, meta map[string]any) harness.RunState {
 type loopTerminal struct {
 	Type EventType
 	Data map[string]any
+	Err  error
 }
 
 func (a *Agent) runLoop(ctx context.Context, out chan<- Event, state harness.RunState, resumed bool) {
@@ -468,21 +536,25 @@ func (a *Agent) runInternalLoop(ctx context.Context, out chan<- Event, state har
 
 func (a *Agent) runLoopMode(ctx context.Context, out chan<- Event, state harness.RunState, resumed, internal bool) (terminal loopTerminal) {
 	runID := state.RunID
-	emit := func(eventType EventType, data map[string]any) {
+	emit := eventEmitter(func(eventType EventType, data map[string]any) error {
 		if internal {
 			switch eventType {
 			case EventRunStarted, EventRunResumed:
-				return
+				return nil
 			case EventRunDone, EventRunError, EventRunCancelled:
 				terminal = loopTerminal{Type: eventType, Data: cloneMap(data)}
-				return
+				return nil
 			}
 		}
-		a.emit(ctx, out, eventType, runID, data)
-	}
+		err := a.emit(ctx, out, eventType, runID, data)
+		if err != nil && internal {
+			terminal = loopTerminal{Type: EventRunError, Data: map[string]any{"error": err.Error()}, Err: err}
+		}
+		return err
+	})
 	checkpointSeq, err := a.latestCheckpointSeq(ctx, runID)
 	if err != nil {
-		emit(EventRunError, map[string]any{"error": fmt.Sprintf("load latest checkpoint: %v", err)})
+		_ = emit(EventRunError, map[string]any{"error": fmt.Sprintf("load latest checkpoint: %v", err)})
 		return terminal
 	}
 	checkpointState := func() error {
@@ -505,10 +577,12 @@ func (a *Agent) runLoopMode(ctx context.Context, out chan<- Event, state harness
 			return fmt.Errorf("save checkpoint: %w", err)
 		}
 		checkpointSeq = nextSeq
-		emit(EventCheckpointCreated, map[string]any{
+		if err := emit(EventCheckpointCreated, map[string]any{
 			"checkpointSeq": checkpointSeq,
 			"phase":         string(state.Phase),
-		})
+		}); err != nil {
+			return err
+		}
 		return nil
 	}
 	cancelRun := func(err error) {
@@ -519,12 +593,18 @@ func (a *Agent) runLoopMode(ctx context.Context, out chan<- Event, state harness
 		state.Phase = harness.RunPhaseCancelled
 		state.Control.Status = harness.RunStatusCancelled
 		if saveErr := checkpointState(); saveErr != nil {
-			emit(EventRunError, map[string]any{"error": saveErr.Error()})
+			if isEventPersistenceError(saveErr) {
+				return
+			}
+			_ = emit(EventRunError, map[string]any{"error": saveErr.Error()})
 			return
 		}
-		emit(EventRunCancelled, map[string]any{"error": err.Error()})
+		_ = emit(EventRunCancelled, map[string]any{"error": err.Error()})
 	}
 	fail := func(err error) {
+		if isEventPersistenceError(err) {
+			return
+		}
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			cancelRun(err)
 			return
@@ -536,10 +616,13 @@ func (a *Agent) runLoopMode(ctx context.Context, out chan<- Event, state harness
 		state.Phase = harness.RunPhaseFailed
 		state.Control.Status = harness.RunStatusFailed
 		if saveErr := checkpointState(); saveErr != nil {
-			emit(EventRunError, map[string]any{"error": saveErr.Error()})
+			if isEventPersistenceError(saveErr) {
+				return
+			}
+			_ = emit(EventRunError, map[string]any{"error": saveErr.Error()})
 			return
 		}
-		emit(EventRunError, map[string]any{"error": err.Error()})
+		_ = emit(EventRunError, map[string]any{"error": err.Error()})
 	}
 
 	if err := ctx.Err(); err != nil {
@@ -547,7 +630,9 @@ func (a *Agent) runLoopMode(ctx context.Context, out chan<- Event, state harness
 		return
 	}
 	if resumed {
-		emit(EventRunResumed, map[string]any{"input": state.Input})
+		if err := emit(EventRunResumed, map[string]any{"input": state.Input}); err != nil {
+			return terminal
+		}
 		if a.resumeTerminal(emit, state) {
 			return
 		}
@@ -570,7 +655,9 @@ func (a *Agent) runLoopMode(ctx context.Context, out chan<- Event, state harness
 			}
 		}
 	} else {
-		emit(EventRunStarted, map[string]any{"input": state.Input})
+		if err := emit(EventRunStarted, map[string]any{"input": state.Input}); err != nil {
+			return terminal
+		}
 	}
 
 	maxSteps := a.config.MaxSteps
@@ -596,12 +683,16 @@ func (a *Agent) runLoopMode(ctx context.Context, out chan<- Event, state harness
 		state.Step++
 		state.Phase = harness.RunPhaseModel
 		state.Control.Status = harness.RunStatusModelStreaming
-		emit(EventStepStarted, map[string]any{"step": state.Step})
+		if err := emit(EventStepStarted, map[string]any{"step": state.Step}); err != nil {
+			return terminal
+		}
 		if err := checkpointState(); err != nil {
 			fail(err)
 			return terminal
 		}
-		emit(EventModelStarted, map[string]any{"step": state.Step})
+		if err := emit(EventModelStarted, map[string]any{"step": state.Step}); err != nil {
+			return terminal
+		}
 
 		assistant, usage, err := a.callModel(ctx, emit, state, model.ToolChoiceAuto)
 		if err != nil {
@@ -617,7 +708,9 @@ func (a *Agent) runLoopMode(ctx context.Context, out chan<- Event, state harness
 			fail(err)
 			return terminal
 		}
-		emit(EventModelDone, map[string]any{"step": state.Step, "toolCallCount": len(assistant.ToolCalls)})
+		if err := emit(EventModelDone, map[string]any{"step": state.Step, "toolCallCount": len(assistant.ToolCalls)}); err != nil {
+			return terminal
+		}
 
 		if len(state.Tool.Pending) == 0 {
 			state.Phase = harness.RunPhaseCompleted
@@ -626,7 +719,7 @@ func (a *Agent) runLoopMode(ctx context.Context, out chan<- Event, state harness
 				fail(err)
 				return terminal
 			}
-			emit(EventRunDone, map[string]any{"output": assistant.Content})
+			_ = emit(EventRunDone, map[string]any{"output": assistant.Content})
 			return terminal
 		}
 	}
@@ -658,7 +751,7 @@ func (a *Agent) runLoopMode(ctx context.Context, out chan<- Event, state harness
 		fail(err)
 		return terminal
 	}
-	emit(EventRunDone, map[string]any{"output": assistant.Content})
+	_ = emit(EventRunDone, map[string]any{"output": assistant.Content})
 	return terminal
 }
 
@@ -714,23 +807,23 @@ func validateNoToolAnswer(message harness.MessageState) error {
 	return nil
 }
 
-func (a *Agent) resumeTerminal(emit func(EventType, map[string]any), state harness.RunState) bool {
+func (a *Agent) resumeTerminal(emit eventEmitter, state harness.RunState) bool {
 	switch state.Phase {
 	case harness.RunPhaseCompleted:
-		emit(EventRunDone, map[string]any{"output": lastAssistantContent(state)})
+		_ = emit(EventRunDone, map[string]any{"output": lastAssistantContent(state)})
 		return true
 	case harness.RunPhaseFailed:
-		emit(EventRunError, map[string]any{"error": terminalError(state, "run failed before resume")})
+		_ = emit(EventRunError, map[string]any{"error": terminalError(state, "run failed before resume")})
 		return true
 	case harness.RunPhaseCancelled:
-		emit(EventRunCancelled, map[string]any{"error": terminalError(state, "run cancelled before resume")})
+		_ = emit(EventRunCancelled, map[string]any{"error": terminalError(state, "run cancelled before resume")})
 		return true
 	default:
 		return false
 	}
 }
 
-func (a *Agent) resumeWaitingApproval(ctx context.Context, emit func(EventType, map[string]any), checkpointState func() error, state *harness.RunState) error {
+func (a *Agent) resumeWaitingApproval(ctx context.Context, emit eventEmitter, checkpointState func() error, state *harness.RunState) error {
 	if state.Approval.Waiting == nil {
 		return nil
 	}
@@ -742,7 +835,7 @@ func (a *Agent) resumeWaitingApproval(ctx context.Context, emit func(EventType, 
 	}
 	call := *state.Tool.Active
 	req := approvalRequestFromState(*state.Approval.Waiting, state.RunID, call)
-	emit(EventApprovalRequested, map[string]any{
+	if err := emit(EventApprovalRequested, map[string]any{
 		"requestId":  req.ID,
 		"toolCallId": call.ID,
 		"toolName":   call.Name,
@@ -750,7 +843,9 @@ func (a *Agent) resumeWaitingApproval(ctx context.Context, emit func(EventType, 
 		"risk":       string(req.Risk),
 		"request":    req,
 		"resumed":    true,
-	})
+	}); err != nil {
+		return err
+	}
 	decision, err := a.config.Approval.Request(ctx, req)
 	if err != nil {
 		return err
@@ -763,7 +858,7 @@ func (a *Agent) resumeWaitingApproval(ctx context.Context, emit func(EventType, 
 	if decision.Action == approval.DecisionReject && decision.Reason == approval.ErrorExpired {
 		resolvedType = EventApprovalExpired
 	}
-	emit(resolvedType, map[string]any{
+	if err := emit(resolvedType, map[string]any{
 		"requestId":  decision.RequestID,
 		"toolCallId": call.ID,
 		"toolName":   call.Name,
@@ -771,7 +866,9 @@ func (a *Agent) resumeWaitingApproval(ctx context.Context, emit func(EventType, 
 		"scope":      string(decision.Scope),
 		"reason":     decision.Reason,
 		"resumed":    true,
-	})
+	}); err != nil {
+		return err
+	}
 	if decision.Action == approval.DecisionAbort {
 		return fmt.Errorf("approval aborted: %s", decision.Reason)
 	}
@@ -809,17 +906,19 @@ func (a *Agent) resumeWaitingApproval(ctx context.Context, emit func(EventType, 
 	if err := checkpointState(); err != nil {
 		return err
 	}
-	emit(EventToolError, map[string]any{
+	if err := emit(EventToolError, map[string]any{
 		"toolCallId": call.ID,
 		"toolName":   call.Name,
 		"error":      result.Error,
 		"exitCode":   result.ExitCode,
 		"resumed":    true,
-	})
+	}); err != nil {
+		return err
+	}
 	return nil
 }
 
-func (a *Agent) callModel(ctx context.Context, emit func(EventType, map[string]any), state harness.RunState, choice model.ToolChoice) (harness.MessageState, model.Usage, error) {
+func (a *Agent) callModel(ctx context.Context, emit eventEmitter, state harness.RunState, choice model.ToolChoice) (harness.MessageState, model.Usage, error) {
 	stream, err := a.config.Model.Stream(ctx, model.Request{
 		Messages:   a.modelMessages(state),
 		Tools:      a.toolSpecs(),
@@ -839,7 +938,9 @@ func (a *Agent) callModel(ctx context.Context, emit func(EventType, map[string]a
 		}
 		if event.Delta != "" {
 			content.WriteString(event.Delta)
-			emit(EventModelDelta, map[string]any{"textDelta": event.Delta, "step": state.Step})
+			if err := emit(EventModelDelta, map[string]any{"textDelta": event.Delta, "step": state.Step}); err != nil {
+				return harness.MessageState{}, model.Usage{}, err
+			}
 		}
 		if event.Message != nil {
 			message = event.Message
@@ -865,7 +966,7 @@ func (a *Agent) callModel(ctx context.Context, emit func(EventType, map[string]a
 	}, usage, nil
 }
 
-func (a *Agent) runPendingTools(ctx context.Context, emit func(EventType, map[string]any), checkpointState func() error, state *harness.RunState) error {
+func (a *Agent) runPendingTools(ctx context.Context, emit eventEmitter, checkpointState func() error, state *harness.RunState) error {
 	for len(state.Tool.Pending) > 0 {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -881,11 +982,13 @@ func (a *Agent) runPendingTools(ctx context.Context, emit func(EventType, map[st
 		if err := checkpointState(); err != nil {
 			return err
 		}
-		emit(EventToolCall, map[string]any{
+		if err := emit(EventToolCall, map[string]any{
 			"toolCallId": call.ID,
 			"toolName":   call.Name,
 			"arguments":  rawJSONValue(call.Arguments),
-		})
+		}); err != nil {
+			return err
+		}
 
 		result, err := a.invokeToolOrRuntime(ctx, emit, checkpointState, state, call)
 		if err != nil && result.Error == "" {
@@ -900,14 +1003,16 @@ func (a *Agent) runPendingTools(ctx context.Context, emit func(EventType, map[st
 			if err := checkpointState(); err != nil {
 				return err
 			}
-			emit(EventApprovalRequested, map[string]any{
+			if err := emit(EventApprovalRequested, map[string]any{
 				"requestId":  req.ID,
 				"toolCallId": call.ID,
 				"toolName":   call.Name,
 				"operation":  req.Operation,
 				"risk":       string(req.Risk),
 				"request":    req,
-			})
+			}); err != nil {
+				return err
+			}
 			if a.config.Approval != nil {
 				decision, approvalErr := a.config.Approval.Request(ctx, req)
 				if approvalErr != nil {
@@ -921,14 +1026,16 @@ func (a *Agent) runPendingTools(ctx context.Context, emit func(EventType, map[st
 				if decision.Action == approval.DecisionReject && decision.Reason == approval.ErrorExpired {
 					resolvedType = EventApprovalExpired
 				}
-				emit(resolvedType, map[string]any{
+				if err := emit(resolvedType, map[string]any{
 					"requestId":  decision.RequestID,
 					"toolCallId": call.ID,
 					"toolName":   call.Name,
 					"action":     string(decision.Action),
 					"scope":      string(decision.Scope),
 					"reason":     decision.Reason,
-				})
+				}); err != nil {
+					return err
+				}
 				if decision.Action == approval.DecisionAbort {
 					return fmt.Errorf("approval aborted: %s", decision.Reason)
 				}
@@ -968,9 +1075,11 @@ func (a *Agent) runPendingTools(ctx context.Context, emit func(EventType, map[st
 		}
 		if todos, ok := plannerTodos(result.Structured["todos"]); ok {
 			state.Todos = todos
-			emit(EventTodoUpdated, map[string]any{
+			if err := emit(EventTodoUpdated, map[string]any{
 				"todos": result.Structured["todos"],
-			})
+			}); err != nil {
+				return err
+			}
 		}
 		state.Messages = append(state.Messages, harness.MessageState{
 			Role:       "tool",
@@ -982,25 +1091,27 @@ func (a *Agent) runPendingTools(ctx context.Context, emit func(EventType, map[st
 		if err := checkpointState(); err != nil {
 			return err
 		}
-		emit(eventType, map[string]any{
+		if err := emit(eventType, map[string]any{
 			"toolCallId": call.ID,
 			"toolName":   call.Name,
 			"output":     result.Output,
 			"error":      result.Error,
 			"exitCode":   result.ExitCode,
-		})
+		}); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
-func (a *Agent) invokeToolOrRuntime(ctx context.Context, emit func(EventType, map[string]any), checkpointState func() error, state *harness.RunState, call harness.ToolCallState) (tool.Result, error) {
+func (a *Agent) invokeToolOrRuntime(ctx context.Context, emit eventEmitter, checkpointState func() error, state *harness.RunState, call harness.ToolCallState) (tool.Result, error) {
 	if tasktool.IsTaskTool(call.Name) {
 		return a.invokeSubAgentTool(ctx, emit, checkpointState, state, call)
 	}
 	return a.invokeTool(ctx, *state, call)
 }
 
-func (a *Agent) invokeSubAgentTool(ctx context.Context, emit func(EventType, map[string]any), checkpointState func() error, state *harness.RunState, call harness.ToolCallState) (tool.Result, error) {
+func (a *Agent) invokeSubAgentTool(ctx context.Context, emit eventEmitter, checkpointState func() error, state *harness.RunState, call harness.ToolCallState) (tool.Result, error) {
 	orchestrator, err := a.subAgentOrchestrator()
 	if err != nil {
 		return tool.Result{Error: err.Error(), ExitCode: 1}, err
@@ -1024,11 +1135,13 @@ func (a *Agent) invokeSubAgentTool(ctx context.Context, emit func(EventType, map
 	}
 	skipped, runnable := splitSubtasksForRun(*state, req)
 	for _, task := range runnable {
-		emit(EventSubtaskStarted, map[string]any{
+		if err := emit(EventSubtaskStarted, map[string]any{
 			"subtaskId": task.ID,
 			"agentName": task.NormalizedAgentName(),
 			"name":      task.Name,
-		})
+		}); err != nil {
+			return tool.Result{Error: err.Error(), ExitCode: 1}, err
+		}
 	}
 	result := subagent.Result{Tasks: skipped}
 	var invokeErr error
@@ -1045,26 +1158,30 @@ func (a *Agent) invokeSubAgentTool(ctx context.Context, emit func(EventType, map
 	}
 	for _, task := range result.Tasks {
 		for _, childEvent := range task.Events {
-			emit(EventSubtaskEvent, map[string]any{
+			if err := emit(EventSubtaskEvent, map[string]any{
 				"subtaskId":      task.ID,
 				"agentName":      task.AgentName,
 				"childRunId":     task.RunID,
 				"childEventType": childEvent.Type,
 				"childEvent":     childEvent,
-			})
+			}); err != nil {
+				return tool.Result{Error: err.Error(), ExitCode: 1}, err
+			}
 		}
 		eventType := EventSubtaskDone
 		if task.Status == subagent.StatusFailed {
 			eventType = EventSubtaskError
 		}
-		emit(eventType, map[string]any{
+		if err := emit(eventType, map[string]any{
 			"subtaskId": task.ID,
 			"agentName": task.AgentName,
 			"status":    task.Status,
 			"output":    task.Output,
 			"error":     task.Error,
 			"runId":     task.RunID,
-		})
+		}); err != nil {
+			return tool.Result{Error: err.Error(), ExitCode: 1}, err
+		}
 	}
 	output, structured, err := result.ToolResultJSON()
 	if err != nil {

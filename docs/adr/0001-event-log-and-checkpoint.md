@@ -115,6 +115,11 @@ append run.done/run.error
 freeze live event bus
 ```
 
+If event sequence lookup or append fails, the harness stops advancing and
+reports an in-memory `run.error` to the current caller. It must not publish the
+unpersisted event as observable progress. Trace sinks are a separate
+best-effort projection and do not participate in this durability contract.
+
 ## Consequences
 
 Benefits:
@@ -147,4 +152,3 @@ Do not directly treat:
 - `events.jsonl`;
 
 as the checkpoint layer.
-

@@ -23,6 +23,8 @@ Markdown document links.
 | cancellation persists a cancelled terminal state before model/tool execution | `TestAgentCancellationBeforeModelPersistsCancelledTerminalState`, `TestAgentCancellationBeforeToolPreservesPendingCall`, `TestAgentModelCancellationIsNotReportedAsFailure` |
 | plan/execute persists a terminal summary with monotonic SQLite checkpoints | `TestAgentPlanExecutePersistsTerminalSummaryInSQLite` |
 | checkpoint write failures stop before unsafe progress or false completion | `TestAgentStopsBeforeModelWhenCheckpointSaveFails`, `TestAgentDoesNotCompleteWhenPostModelCheckpointFails` |
+| event-log failures stop execution before unrecorded progress | `TestAgentStopsBeforeModelWhenInitialEventAppendFails`, `TestAgentStopsWhenModelDeltaEventAppendFails`, `TestAgentDoesNotRetryEventStoreWhenCheckpointEventAppendFails` |
+| trace sink failures remain best-effort | `TestAgentTreatsTraceSinkFailureAsBestEffort` |
 | OpenAI-compatible model can stream text | `model/openai.TestClientStreamsTextAndSendsChatRequest` |
 | Anthropic model can stream text and tool calls | `model/anthropic.TestClientStreamsTextAndSendsMessagesRequest`, `model/anthropic.TestClientStreamsToolUse` |
 | Model tool calls invoke tools | `TestAgentStreamRunsToolAndContinuesModelLoop` |

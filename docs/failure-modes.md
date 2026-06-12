@@ -89,11 +89,19 @@ host.
 ## Event Log And Checkpoint Divergence
 
 Events are the read model. Checkpoints are the resume source of truth. If event
-append fails, the run should surface the error path rather than pretending the
-observable history is complete. Checkpoint writes fail closed: ZenForge stops
-before the next model/tool boundary or successful terminal event, emits
-`run.error`, and does not emit `checkpoint.created` for the failed write. The
-last successfully stored checkpoint remains the resume source of truth.
+sequence lookup or append fails, ZenForge stops before further model, tool,
+approval, or sub-agent progress. The caller receives an in-memory `run.error`;
+the event that failed to persist is not published as successful observable
+history.
+
+Checkpoint writes also fail closed: ZenForge stops before the next model/tool
+boundary or successful terminal event, emits `run.error`, and does not emit
+`checkpoint.created` for the failed write. The last successfully stored
+checkpoint remains the resume source of truth.
+
+Trace sinks are a best-effort observability projection. Exporter failures do
+not change execution or event-log durability; platforms should monitor and
+retry trace delivery in their sink adapter when that guarantee is required.
 
 For local durability, prefer SQLite or JSONL stores on a filesystem with normal
 fsync semantics. For platform deployments, keep event and checkpoint writes in

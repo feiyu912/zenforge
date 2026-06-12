@@ -2,7 +2,9 @@
 
 ZenForge can emit runtime events to a trace sink through `zenforge.Config`.
 Trace sinks are for observability and adapter integration. They are not the
-checkpoint source of truth.
+checkpoint source of truth or the durable event read model. Sink errors are
+best-effort and do not fail an otherwise valid run; platforms that require
+guaranteed export should add buffering, retry, and alerting in the adapter.
 
 ```go
 agent := zenforge.New(zenforge.Config{

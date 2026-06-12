@@ -13,7 +13,7 @@ Current release: `v0.1.0`. The `main` branch carries additional v0.1.x capabilit
 Most agent frameworks target notebooks. ZenForge targets services:
 
 - **Durable runs** — checkpoints at every boundary, resume after crashes.
-- **Observable execution** — typed event stream + JSONL/SQLite/OTel sinks.
+- **Observable execution** — typed event stream + JSONL/SQLite/OTel sinks, with fail-closed event-log writes.
 - **Replaceable parts** — swap models, stores, transports, even the planner, without rewriting the loop.
 - **Small public surface** — five functions, one `Config` struct, one `Task` type. Everything else is an interface.
 
@@ -204,6 +204,8 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - Planner and failure-mode docs map durable orchestration failures to concrete resume tests.
 - Core checkpoint writes fail closed before model/tool progress or successful terminal events.
 - Resume, failure-mode, and MVP docs map checkpoint fail-closed behavior to concrete tests.
+- Event-log sequence and append failures stop execution and surface a live `run.error` instead of publishing unrecorded progress.
+- Trace exporters remain best-effort platform observability and cannot change the harness result.
 - Architecture package layout is aligned with the current repository.
 - Historical API sketch is labeled and current guides are prioritized.
 - README Quick Look and architecture snippets use current store/interface names.

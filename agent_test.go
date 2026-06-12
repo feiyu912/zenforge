@@ -105,6 +105,42 @@ func (s *testEventStore) LatestSeq(ctx context.Context, runID string) (int64, er
 	return s.events[len(s.events)-1].Seq, nil
 }
 
+type failingEventStore struct {
+	events       []Event
+	appendCalls  int
+	failAppendAt int
+	latestErr    error
+}
+
+func (s *failingEventStore) Append(ctx context.Context, event Event) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.appendCalls++
+	if s.failAppendAt > 0 && s.appendCalls >= s.failAppendAt {
+		return errors.New("event backend unavailable")
+	}
+	s.events = append(s.events, event)
+	return nil
+}
+
+func (s *failingEventStore) Read(ctx context.Context, runID string, afterSeq int64, limit int) ([]Event, error) {
+	return nil, ctx.Err()
+}
+
+func (s *failingEventStore) LatestSeq(ctx context.Context, runID string) (int64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if s.latestErr != nil {
+		return 0, s.latestErr
+	}
+	if len(s.events) == 0 {
+		return 0, nil
+	}
+	return s.events[len(s.events)-1].Seq, nil
+}
+
 type failingCheckpointStore struct {
 	failAt int
 	saves  int
@@ -137,6 +173,120 @@ func (s *failingCheckpointStore) Load(ctx context.Context, runID string) (*check
 
 func (s *failingCheckpointStore) Delete(ctx context.Context, runID string) error {
 	return checkpoint.ErrNotFound
+}
+
+func TestAgentStopsBeforeModelWhenInitialEventAppendFails(t *testing.T) {
+	eventsStore := &failingEventStore{failAppendAt: 1}
+	fakeModel := &scriptedModel{turns: []scriptedTurn{{events: []model.Event{{Delta: "must not run"}}}}}
+	agent := New(Config{
+		Model:  fakeModel,
+		Events: eventsStore,
+	})
+
+	events, err := agent.Stream(context.Background(), Task{RunID: "run_event_start_failure", Input: "do work"})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	var got []Event
+	for event := range events {
+		got = append(got, event)
+	}
+
+	if len(fakeModel.requests) != 0 {
+		t.Fatalf("model calls = %d, want 0", len(fakeModel.requests))
+	}
+	if len(eventsStore.events) != 0 {
+		t.Fatalf("persisted events = %#v, want none", eventsStore.events)
+	}
+	if len(got) != 1 || got[0].Type != EventRunError || !strings.Contains(stringValue(got[0].Payload["error"]), "append event run.started") {
+		t.Fatalf("unexpected live events: %#v", got)
+	}
+}
+
+func TestAgentStopsWhenModelDeltaEventAppendFails(t *testing.T) {
+	eventsStore := &failingEventStore{failAppendAt: 5}
+	fakeModel := &scriptedModel{turns: []scriptedTurn{{events: []model.Event{{Delta: "partial"}}}}}
+	agent := New(Config{
+		Model:       fakeModel,
+		Events:      eventsStore,
+		Checkpoints: checkpointmemory.New(),
+	})
+
+	events, err := agent.Stream(context.Background(), Task{RunID: "run_event_delta_failure", Input: "do work"})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	var types []EventType
+	var runError string
+	for event := range events {
+		types = append(types, event.Type)
+		if event.Type == EventRunError {
+			runError = stringValue(event.Payload["error"])
+		}
+	}
+
+	if len(fakeModel.requests) != 1 {
+		t.Fatalf("model calls = %d, want 1", len(fakeModel.requests))
+	}
+	if countEvent(types, EventRunError) != 1 || !strings.Contains(runError, "append event model.delta") {
+		t.Fatalf("unexpected event persistence error: types=%v error=%q", types, runError)
+	}
+	if countEvent(types, EventModelDone) != 0 || countEvent(types, EventRunDone) != 0 {
+		t.Fatalf("run continued after event append failure: %v", types)
+	}
+}
+
+func TestAgentDoesNotRetryEventStoreWhenCheckpointEventAppendFails(t *testing.T) {
+	eventsStore := &failingEventStore{failAppendAt: 3}
+	fakeModel := &scriptedModel{turns: []scriptedTurn{{events: []model.Event{{Delta: "must not run"}}}}}
+	agent := New(Config{
+		Model:       fakeModel,
+		Events:      eventsStore,
+		Checkpoints: checkpointmemory.New(),
+	})
+
+	events, err := agent.Stream(context.Background(), Task{RunID: "run_checkpoint_event_failure", Input: "do work"})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	var got []Event
+	for event := range events {
+		got = append(got, event)
+	}
+
+	if len(fakeModel.requests) != 0 {
+		t.Fatalf("model calls = %d, want 0", len(fakeModel.requests))
+	}
+	if eventsStore.appendCalls != 3 {
+		t.Fatalf("event append calls = %d, want 3", eventsStore.appendCalls)
+	}
+	if len(got) != 3 || got[0].Type != EventRunStarted || got[1].Type != EventStepStarted || got[2].Type != EventRunError {
+		t.Fatalf("unexpected live events: %#v", got)
+	}
+	if !strings.Contains(stringValue(got[2].Payload["error"]), "append event checkpoint.created") {
+		t.Fatalf("run error = %q", stringValue(got[2].Payload["error"]))
+	}
+}
+
+func TestAgentTreatsTraceSinkFailureAsBestEffort(t *testing.T) {
+	agent := New(Config{
+		Events: &testEventStore{},
+		Trace: trace.SinkFunc(func(context.Context, trace.Event) error {
+			return errors.New("trace exporter unavailable")
+		}),
+	})
+
+	events, err := agent.Stream(context.Background(), Task{RunID: "run_trace_failure", Input: "hello"})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	var types []EventType
+	for event := range events {
+		types = append(types, event.Type)
+	}
+	if len(types) != 2 || types[0] != EventRunStarted || types[1] != EventRunDone {
+		t.Fatalf("trace failure changed run lifecycle: %v", types)
+	}
 }
 
 func TestAgentRunReturnsModelText(t *testing.T) {
@@ -1079,7 +1229,7 @@ func TestInvokeSubAgentToolSkipsCompletedSubtaskOnResume(t *testing.T) {
 			`]}`),
 	}
 
-	result, err := agent.invokeSubAgentTool(context.Background(), func(EventType, map[string]any) {}, func() error { return nil }, &state, call)
+	result, err := agent.invokeSubAgentTool(context.Background(), func(EventType, map[string]any) error { return nil }, func() error { return nil }, &state, call)
 	if err != nil {
 		t.Fatalf("invokeSubAgentTool returned error: %v", err)
 	}
@@ -1138,7 +1288,7 @@ func TestInvokeSubAgentToolResumesNonTerminalChildCheckpoint(t *testing.T) {
 		Arguments: json.RawMessage(`{"tasks":[{"id":"subtask_1","agent":"researcher","input":"summarize docs"}]}`),
 	}
 
-	result, err := agent.invokeSubAgentTool(context.Background(), func(EventType, map[string]any) {}, func() error { return nil }, &state, call)
+	result, err := agent.invokeSubAgentTool(context.Background(), func(EventType, map[string]any) error { return nil }, func() error { return nil }, &state, call)
 	if err != nil {
 		t.Fatalf("invokeSubAgentTool returned error: %v", err)
 	}
