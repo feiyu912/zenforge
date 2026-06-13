@@ -84,6 +84,17 @@ The rebuilt session is only a reference to an existing sandbox session. If the
 backend reports that it no longer exists, the host adapter should open a new
 session before executing more work.
 
+Checkpointed sandbox state includes the owning `runId` and `subtaskId`.
+`SessionFromState` refuses to restore state into a different scope. Legacy
+state without scope identity is treated as non-restorable and causes a fresh
+session to be opened.
+
+When `KeepSessionOpen` is false, shell execution closes the session on a
+best-effort basis and does not return that session as reusable metadata. A
+close failure cannot replace a successful command result. The shell result
+uses `sandbox.MetadataClearStateKey`, and the harness removes any previously
+checkpointed session before the next boundary.
+
 ## Environment Prompt
 
 Sandbox environments may provide prompt context describing:
@@ -124,3 +135,7 @@ The run should return an explicit error such as:
 ```text
 sandbox_unavailable
 ```
+
+Container Hub transport deadlines use `sandbox_timeout`; parent context
+cancellation remains `context.Canceled`. Neither condition falls back to local
+shell.

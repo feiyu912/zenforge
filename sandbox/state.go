@@ -1,9 +1,14 @@
 package sandbox
 
-const MetadataStateKey = "sandbox.state"
+const (
+	MetadataStateKey      = "sandbox.state"
+	MetadataClearStateKey = "sandbox.clearState"
+)
 
 type State struct {
 	SessionID     string         `json:"sessionId"`
+	RunID         string         `json:"runId"`
+	SubtaskID     string         `json:"subtaskId,omitempty"`
 	EnvironmentID string         `json:"environmentId"`
 	WorkingDir    string         `json:"workingDir,omitempty"`
 	Metadata      map[string]any `json:"metadata,omitempty"`
@@ -28,6 +33,8 @@ func StateFromMetadata(metadata map[string]any) (State, bool) {
 	case map[string]any:
 		out := State{
 			SessionID:     stringValue(state["sessionId"]),
+			RunID:         stringValue(state["runId"]),
+			SubtaskID:     stringValue(state["subtaskId"]),
 			EnvironmentID: stringValue(state["environmentId"]),
 			WorkingDir:    stringValue(state["workingDir"]),
 		}
@@ -46,6 +53,8 @@ func StateFromSession(session *Session) State {
 	}
 	return State{
 		SessionID:     session.ID,
+		RunID:         session.RunID,
+		SubtaskID:     session.SubtaskID,
 		EnvironmentID: session.EnvironmentID,
 		WorkingDir:    session.WorkingDir,
 		Metadata:      cloneMap(session.Metadata),
@@ -53,7 +62,7 @@ func StateFromSession(session *Session) State {
 }
 
 func SessionFromState(state State, runID, subtaskID string) *Session {
-	if state.SessionID == "" {
+	if state.SessionID == "" || state.RunID == "" || state.RunID != runID || state.SubtaskID != subtaskID {
 		return nil
 	}
 	return &Session{

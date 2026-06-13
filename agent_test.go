@@ -775,15 +775,29 @@ func TestAgentCarriesSandboxStateBetweenToolCalls(t *testing.T) {
 	if !ok {
 		t.Fatalf("second call missing sandbox state metadata: %#v", recorder.calls[1])
 	}
-	if state.SessionID != "session_run_sandbox_state" || state.EnvironmentID != "go" {
+	if state.SessionID != "session_run_sandbox_state" || state.RunID != "run_sandbox_state" || state.EnvironmentID != "go" {
 		t.Fatalf("unexpected sandbox state passed to second call: %#v", state)
 	}
 	cp, err := checkpoints.Load(context.Background(), "run_sandbox_state")
 	if err != nil {
 		t.Fatalf("Load checkpoint returned error: %v", err)
 	}
-	if cp.State.Sandbox.SessionID != "session_run_sandbox_state" || cp.State.Sandbox.EnvironmentID != "go" {
+	if cp.State.Sandbox.SessionID != "session_run_sandbox_state" || cp.State.Sandbox.RunID != "run_sandbox_state" || cp.State.Sandbox.EnvironmentID != "go" {
 		t.Fatalf("checkpoint missing sandbox state: %#v", cp.State.Sandbox)
+	}
+}
+
+func TestApplySandboxResultStateClearsClosedSession(t *testing.T) {
+	state := newRunState("run_sandbox_clear", "clear sandbox", nil)
+	state.Sandbox = harness.SandboxState{
+		SessionID: "session_1",
+		RunID:     "run_sandbox_clear",
+	}
+	applySandboxResultState(&state, tool.Result{Metadata: map[string]any{
+		sandbox.MetadataClearStateKey: true,
+	}})
+	if state.Sandbox.SessionID != "" || state.Sandbox.RunID != "" {
+		t.Fatalf("closed sandbox state was retained: %#v", state.Sandbox)
 	}
 }
 
@@ -2882,6 +2896,8 @@ func (t *sandboxStateTool) Call(ctx context.Context, input json.RawMessage, call
 		Metadata: map[string]any{
 			sandbox.MetadataStateKey: sandbox.State{
 				SessionID:     "session_" + call.RunID,
+				RunID:         call.RunID,
+				SubtaskID:     stringValue(call.Metadata["subtaskId"]),
 				EnvironmentID: "go",
 				WorkingDir:    "/workspace",
 				Metadata:      map[string]any{"lease": "lease_1"},

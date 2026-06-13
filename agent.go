@@ -1813,6 +1813,8 @@ func toolCallMetadata(state harness.RunState, callMeta map[string]any) map[strin
 		}
 		out[sandbox.MetadataStateKey] = sandbox.State{
 			SessionID:     state.Sandbox.SessionID,
+			RunID:         state.Sandbox.RunID,
+			SubtaskID:     state.Sandbox.SubtaskID,
 			EnvironmentID: state.Sandbox.EnvironmentID,
 			WorkingDir:    state.Sandbox.WorkingDir,
 			Metadata:      cloneMap(state.Sandbox.Meta),
@@ -1831,6 +1833,10 @@ func toolCallMetadata(state harness.RunState, callMeta map[string]any) map[strin
 }
 
 func applySandboxResultState(state *harness.RunState, result tool.Result) {
+	if sandboxStateCleared(result.Metadata) || sandboxStateCleared(result.Meta) {
+		state.Sandbox = harness.SandboxState{}
+		return
+	}
 	sandboxState, ok := sandbox.StateFromMetadata(result.Metadata)
 	if !ok {
 		sandboxState, ok = sandbox.StateFromMetadata(result.Meta)
@@ -1840,10 +1846,17 @@ func applySandboxResultState(state *harness.RunState, result tool.Result) {
 	}
 	state.Sandbox = harness.SandboxState{
 		SessionID:     sandboxState.SessionID,
+		RunID:         sandboxState.RunID,
+		SubtaskID:     sandboxState.SubtaskID,
 		EnvironmentID: sandboxState.EnvironmentID,
 		WorkingDir:    sandboxState.WorkingDir,
 		Meta:          cloneMap(sandboxState.Metadata),
 	}
+}
+
+func sandboxStateCleared(metadata map[string]any) bool {
+	cleared, _ := metadata[sandbox.MetadataClearStateKey].(bool)
+	return cleared
 }
 
 func (a *Agent) modelMessages(state harness.RunState) []model.Message {

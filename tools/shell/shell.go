@@ -64,6 +64,7 @@ type output struct {
 	Review       policy.CommandReview `json:"review"`
 	Sandbox      *sandbox.State       `json:"sandbox,omitempty"`
 	SandboxError string               `json:"sandboxError,omitempty"`
+	ClearSandbox bool                 `json:"-"`
 }
 
 type shellTool struct {
@@ -143,7 +144,7 @@ func (t shellTool) run(ctx context.Context, in input, call tool.Context) (tool.R
 	if t.config.Policy.MaxTimeout > 0 && timeout > t.config.Policy.MaxTimeout {
 		timeout = t.config.Policy.MaxTimeout
 	}
-	stdout, stderr, exitCode, backend, sandboxState, err := t.execute(ctx, call, in.Command, cwd, timeout)
+	stdout, stderr, exitCode, backend, sandboxState, clearSandbox, err := t.execute(ctx, call, in.Command, cwd, timeout)
 	combined := joinOutput(stdout, stderr)
 	truncated := false
 	maxOutput := t.config.Policy.MaxOutputBytes
@@ -152,14 +153,15 @@ func (t shellTool) run(ctx context.Context, in input, call tool.Context) (tool.R
 		truncated = true
 	}
 	out := output{
-		Command:   in.Command,
-		CWD:       cwd,
-		Output:    combined,
-		Backend:   backend,
-		ExitCode:  exitCode,
-		Truncated: truncated,
-		Review:    review,
-		Sandbox:   sandboxState,
+		Command:      in.Command,
+		CWD:          cwd,
+		Output:       combined,
+		Backend:      backend,
+		ExitCode:     exitCode,
+		Truncated:    truncated,
+		Review:       review,
+		Sandbox:      sandboxState,
+		ClearSandbox: clearSandbox,
 	}
 	if code := sandbox.Code(err); code != "" {
 		out.SandboxError = string(code)
@@ -197,7 +199,7 @@ func shellApprovalPlan(call tool.Context, in input, cwd string, review policy.Co
 	})
 }
 
-func (t shellTool) execute(ctx context.Context, call tool.Context, command, cwd string, timeout time.Duration) (string, string, int, ShellBackend, *sandbox.State, error) {
+func (t shellTool) execute(ctx context.Context, call tool.Context, command, cwd string, timeout time.Duration) (string, string, int, ShellBackend, *sandbox.State, bool, error) {
 	backend := t.config.Backend
 	if backend == "" {
 		backend = ShellBackendLocal
@@ -210,17 +212,17 @@ func (t shellTool) execute(ctx context.Context, call tool.Context, command, cwd 
 		if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
 			err = context.DeadlineExceeded
 		}
-		return stdout, stderr, exitCode, backend, nil, err
+		return stdout, stderr, exitCode, backend, nil, false, err
 	case ShellBackendSandbox:
 		return t.executeSandbox(ctx, call, command, cwd, timeout)
 	default:
-		return "", "", 1, backend, nil, fmt.Errorf("unknown shell backend: %s", backend)
+		return "", "", 1, backend, nil, false, fmt.Errorf("unknown shell backend: %s", backend)
 	}
 }
 
-func (t shellTool) executeSandbox(ctx context.Context, call tool.Context, command, cwd string, timeout time.Duration) (string, string, int, ShellBackend, *sandbox.State, error) {
+func (t shellTool) executeSandbox(ctx context.Context, call tool.Context, command, cwd string, timeout time.Duration) (string, string, int, ShellBackend, *sandbox.State, bool, error) {
 	if t.config.Sandbox == nil {
-		return "", "", 1, ShellBackendSandbox, nil, sandbox.ErrSandboxUnavailable
+		return "", "", 1, ShellBackendSandbox, nil, false, sandbox.ErrSandboxUnavailable
 	}
 	subtaskID := stringFromMetadata(call.Metadata, "subtaskId")
 	session, restored := restoredSandboxSession(call.Metadata, call.RunID, subtaskID)
@@ -238,7 +240,10 @@ func (t shellTool) executeSandbox(ctx context.Context, call tool.Context, comman
 			},
 		})
 		if err != nil {
-			return "", "", 1, ShellBackendSandbox, nil, err
+			return "", "", 1, ShellBackendSandbox, nil, false, err
+		}
+		if session == nil {
+			return "", "", 1, ShellBackendSandbox, nil, false, fmt.Errorf("%w: sandbox returned nil session", sandbox.ErrSessionOpenFailed)
 		}
 	}
 	stateValue := sandbox.StateFromSession(session)
@@ -253,18 +258,16 @@ func (t shellTool) executeSandbox(ctx context.Context, call tool.Context, comman
 		},
 	})
 	if !t.config.KeepSessionOpen {
-		closeErr := t.config.Sandbox.Close(ctx, session)
-		if closeErr != nil && err == nil {
-			err = closeErr
-		}
+		_ = t.config.Sandbox.Close(context.WithoutCancel(ctx), session)
+		state = nil
 	}
 	if restored && sandbox.Code(err) == sandbox.ErrClosed {
 		return t.executeSandboxWithoutRestore(ctx, call, command, cwd, timeout)
 	}
-	return result.Stdout, result.Stderr, result.ExitCode, ShellBackendSandbox, state, err
+	return result.Stdout, result.Stderr, result.ExitCode, ShellBackendSandbox, state, !t.config.KeepSessionOpen, err
 }
 
-func (t shellTool) executeSandboxWithoutRestore(ctx context.Context, call tool.Context, command, cwd string, timeout time.Duration) (string, string, int, ShellBackend, *sandbox.State, error) {
+func (t shellTool) executeSandboxWithoutRestore(ctx context.Context, call tool.Context, command, cwd string, timeout time.Duration) (string, string, int, ShellBackend, *sandbox.State, bool, error) {
 	metadata := cloneAnyMap(call.Metadata)
 	delete(metadata, sandbox.MetadataStateKey)
 	call.Metadata = metadata
@@ -303,6 +306,9 @@ func encodeOutput(out output, err error) (tool.Result, error) {
 	metadata := map[string]any{}
 	if out.Sandbox != nil {
 		metadata[sandbox.MetadataStateKey] = *out.Sandbox
+	}
+	if out.ClearSandbox {
+		metadata[sandbox.MetadataClearStateKey] = true
 	}
 	var structured map[string]any
 	if unmarshalErr := json.Unmarshal(data, &structured); unmarshalErr != nil {

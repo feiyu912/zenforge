@@ -87,6 +87,12 @@ Only a missing child checkpoint starts a fresh child stream. A checkpoint
 backend read failure is surfaced before model execution so the parent cannot
 silently duplicate child work.
 
+Sandbox session state is resumable only when its stored `runId` and
+`subtaskId` exactly match the current tool scope. Unscoped legacy state and
+cross-scope state open a fresh session instead of attaching to an environment
+whose ownership cannot be proven. Sessions intentionally closed by the shell
+tool are not persisted for reuse.
+
 ## Approval Resume
 
 If a run was waiting for approval, resume can continue with an approval broker:

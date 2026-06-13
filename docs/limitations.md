@@ -21,6 +21,8 @@ what is experimental, and what remains adapter territory.
 - Workspace tools enforce local root boundaries, but they are not a replacement
   for OS sandboxing when running untrusted workloads.
 - Sandbox support is adapter-based. Core works without Container Hub.
+- Legacy sandbox checkpoint state without run/subtask ownership is reopened
+  instead of reused.
 
 ## Planning And Sub-Agents
 

@@ -2,6 +2,7 @@ package containerhub
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -13,7 +14,7 @@ import (
 
 func TestClientShapesRequestsAndHeaders(t *testing.T) {
 	transport := &recordingTransport{responses: []httpResponse{
-		{status: 200, body: `{"id":"session_1","workingDir":"/workspace"}`, contentType: "application/json"},
+		{status: 200, body: `{"id":"session_1","runId":"forged","subtaskId":"forged","workingDir":"/workspace"}`, contentType: "application/json"},
 		{status: 200, body: `{"exitCode":0,"stdout":"ok","workingDirectory":"/workspace"}`, contentType: "application/json"},
 		{status: 204},
 	}}
@@ -36,7 +37,7 @@ func TestClientShapesRequestsAndHeaders(t *testing.T) {
 	if err := client.StopSession(context.Background(), session.ID); err != nil {
 		t.Fatalf("StopSession returned error: %v", err)
 	}
-	if session.ID != "session_1" || result.Stdout != "ok" {
+	if session.ID != "session_1" || session.RunID != "run_1" || session.SubtaskID != "" || result.Stdout != "ok" {
 		t.Fatalf("unexpected session/result: %#v %#v", session, result)
 	}
 	assertRequest(t, transport.requests[0], http.MethodPost, "/api/sessions/create", "Bearer token", `"runId":"run_1"`)
@@ -95,6 +96,30 @@ func TestClientMapsHTTPFailuresToSandboxCodes(t *testing.T) {
 	}
 }
 
+func TestClientMapsTransportCancellationAndTimeout(t *testing.T) {
+	timeoutClient, err := NewClient(Config{
+		BaseURL:    "https://hub.example",
+		HTTPClient: &http.Client{Transport: errorTransport{err: context.DeadlineExceeded}},
+	})
+	if err != nil {
+		t.Fatalf("NewClient returned error: %v", err)
+	}
+	if _, err := timeoutClient.RuntimeInfo(context.Background()); sandbox.Code(err) != sandbox.ErrTimeout {
+		t.Fatalf("timeout error code = %q err=%v", sandbox.Code(err), err)
+	}
+
+	cancelClient, err := NewClient(Config{
+		BaseURL:    "https://hub.example",
+		HTTPClient: &http.Client{Transport: errorTransport{err: context.Canceled}},
+	})
+	if err != nil {
+		t.Fatalf("NewClient returned error: %v", err)
+	}
+	if _, err := cancelClient.RuntimeInfo(context.Background()); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancellation error = %v", err)
+	}
+}
+
 func TestAdapterImplementsSandbox(t *testing.T) {
 	transport := &recordingTransport{responses: []httpResponse{
 		{status: 200, body: `{"id":"session_1","environmentId":"go"}`, contentType: "application/json"},
@@ -146,6 +171,14 @@ type recordedRequest struct {
 type recordingTransport struct {
 	requests  []recordedRequest
 	responses []httpResponse
+}
+
+type errorTransport struct {
+	err error
+}
+
+func (t errorTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, t.err
 }
 
 func (t *recordingTransport) RoundTrip(req *http.Request) (*http.Response, error) {

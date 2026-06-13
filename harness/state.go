@@ -212,6 +212,8 @@ type WorkspaceState struct {
 
 type SandboxState struct {
 	SessionID     string         `json:"sessionId,omitempty"`
+	RunID         string         `json:"runId,omitempty"`
+	SubtaskID     string         `json:"subtaskId,omitempty"`
 	EnvironmentID string         `json:"environmentId,omitempty"`
 	WorkingDir    string         `json:"workingDir,omitempty"`
 	Meta          map[string]any `json:"meta,omitempty"`

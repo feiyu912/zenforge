@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -39,12 +40,8 @@ func (c *Client) CreateSession(ctx context.Context, req sandbox.OpenRequest) (*s
 	if session.ID == "" {
 		session.ID = sandbox.SessionKey(req.RunID, req.SubtaskID)
 	}
-	if session.RunID == "" {
-		session.RunID = req.RunID
-	}
-	if session.SubtaskID == "" {
-		session.SubtaskID = req.SubtaskID
-	}
+	session.RunID = req.RunID
+	session.SubtaskID = req.SubtaskID
 	if session.EnvironmentID == "" {
 		session.EnvironmentID = req.EnvironmentID
 	}
@@ -146,6 +143,12 @@ func (c *Client) do(ctx context.Context, method, path string, body any) (*http.R
 	}
 	res, err := c.http.Do(req)
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, fmt.Errorf("%w: %v", sandbox.ErrTimeout, err)
+		}
+		if errors.Is(err, context.Canceled) {
+			return nil, context.Canceled
+		}
 		return nil, fmt.Errorf("%w: %v", sandbox.ErrSandboxUnavailable, err)
 	}
 	if res.StatusCode >= 200 && res.StatusCode < 300 {

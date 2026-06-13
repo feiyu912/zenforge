@@ -133,7 +133,8 @@ Config is JSON. See [`docs/config-reference.md`](docs/config-reference.md) and [
 
 **Sandbox**
 - Local, fake, and Container Hub (beta) backends.
-- `sandbox.State` helpers for cross-run session continuity.
+- Scoped `sandbox.State` helpers for same-run/subtask session continuity.
+- Closed or cross-scope sessions are never written back as reusable checkpoint state.
 
 ## Examples
 
@@ -256,7 +257,9 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - Approval run/rule grants survive checkpoints and resume, while mismatched scope keys require a new decision.
 - Harness-owned approval run/tool identity overrides tool-provided values, and mismatched broker decision IDs fail closed.
 - MVP validation maps HTTP resume invalid JSON handling to a concrete test.
-- `sandbox.State` for cross-run session continuity.
+- Sandbox checkpoint state binds sessions to the exact run/subtask scope.
+- Sandbox close is best-effort and cannot replace a successful command result.
+- Container Hub transport deadlines map to stable `sandbox_timeout` errors.
 - Trace metadata enrichment.
 - A hardening test suite and a failure-mode guide.
 

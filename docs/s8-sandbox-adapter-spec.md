@@ -235,6 +235,8 @@ Run state should store sandbox session metadata:
 ```go
 type SandboxState struct {
     SessionID     string `json:"sessionId"`
+    RunID         string `json:"runId"`
+    SubtaskID     string `json:"subtaskId,omitempty"`
     EnvironmentID string `json:"environmentId"`
     WorkingDir    string `json:"workingDir,omitempty"`
 }
@@ -247,11 +249,19 @@ Resume behavior:
 - if command was running during crash, do not assume it completed;
 - resume from checkpoint before command execution where possible.
 
+Restored state must match the current run and subtask exactly. State without
+scope identity, including legacy checkpoints, is non-restorable and opens a
+fresh session. A session intentionally closed after a command is not returned
+as reusable state. Close remains best-effort and does not override a successful
+command result.
+
 `sandbox.StateFromSession` and `sandbox.SessionFromState` provide the small
 conversion boundary between adapter session handles and checkpoint metadata.
 Sandbox tools pass this state through `sandbox.MetadataStateKey`; the harness
 copies successful tool metadata into `RunState.Sandbox` and injects checkpointed
-sandbox state into later tool calls.
+sandbox state into later tool calls. A tool that closes the active session sets
+`sandbox.MetadataClearStateKey`, which clears the durable state instead of
+leaving a stale session ID in later checkpoints.
 
 ## Failure Behavior
 
@@ -269,6 +279,8 @@ For shell tools this includes `backend: "sandbox"` and `sandboxError` with the
 stable sandbox error code when one is available.
 The Container Hub client maps HTTP and transport failures into these stable
 codes so adapter callers can branch on `sandbox.Code(err)`.
+Transport deadlines map to `sandbox_timeout`; parent cancellation remains a Go
+context cancellation rather than `sandbox_unavailable`.
 
 ## Migration From agent-platform
 

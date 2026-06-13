@@ -191,6 +191,12 @@ func TestShellRoutesCommandToSandboxBackend(t *testing.T) {
 	if len(fake.OpenCalls) != 1 || len(fake.ExecuteCalls) != 1 || len(fake.CloseCalls) != 1 {
 		t.Fatalf("expected sandbox lifecycle calls, got %#v", fake)
 	}
+	if _, ok := sandbox.StateFromMetadata(result.Metadata); ok {
+		t.Fatalf("closed sandbox session was returned for checkpoint reuse: %#v", result.Metadata)
+	}
+	if result.Metadata[sandbox.MetadataClearStateKey] != true {
+		t.Fatalf("closed sandbox result did not clear checkpoint state: %#v", result.Metadata)
+	}
 	if fake.OpenCalls[0].SubtaskID != "task_1" || fake.OpenCalls[0].EnvironmentID != "go" {
 		t.Fatalf("unexpected open request: %#v", fake.OpenCalls[0])
 	}
@@ -236,6 +242,65 @@ func TestShellReusesSandboxSessionFromMetadata(t *testing.T) {
 	}
 	if fake.ExecuteCalls[1].Session.ID != fake.ExecuteCalls[0].Session.ID {
 		t.Fatalf("second call did not reuse session: first=%#v second=%#v", fake.ExecuteCalls[0].Session, fake.ExecuteCalls[1].Session)
+	}
+}
+
+func TestShellSandboxCloseIsBestEffort(t *testing.T) {
+	root := t.TempDir()
+	fake := &sandboxfake.Sandbox{
+		Result:     sandbox.ExecuteResult{ExitCode: 0, Stdout: "sandbox ok"},
+		CloseError: sandbox.ErrSandboxUnavailable,
+	}
+	shell := Must(Config{
+		Policy: policy.ShellPolicy{
+			WorkingDir:    root,
+			AllowCommands: []string{"printf ok"},
+			MaxTimeout:    time.Second,
+		},
+		Backend: ShellBackendSandbox,
+		Sandbox: fake,
+	})
+	result, err := shell.Call(context.Background(), json.RawMessage(`{"command":"printf ok","description":"close best effort"}`), tool.Context{RunID: "run_1"})
+	if err != nil {
+		t.Fatalf("successful command was replaced by close error: result=%#v err=%v", result, err)
+	}
+	if result.Structured["output"] != "sandbox ok" || len(fake.CloseCalls) != 1 {
+		t.Fatalf("unexpected close result: result=%#v closes=%d", result, len(fake.CloseCalls))
+	}
+	if _, ok := sandbox.StateFromMetadata(result.Metadata); ok {
+		t.Fatalf("failed close leaked reusable state: %#v", result.Metadata)
+	}
+	if result.Metadata[sandbox.MetadataClearStateKey] != true {
+		t.Fatalf("failed close did not clear checkpoint state: %#v", result.Metadata)
+	}
+}
+
+func TestShellDoesNotRestoreSandboxSessionAcrossRunScope(t *testing.T) {
+	root := t.TempDir()
+	fake := &sandboxfake.Sandbox{Result: sandbox.ExecuteResult{ExitCode: 0, Stdout: "sandbox ok"}}
+	shell := Must(Config{
+		Policy: policy.ShellPolicy{
+			WorkingDir:    root,
+			AllowCommands: []string{"printf ok"},
+			MaxTimeout:    time.Second,
+		},
+		Backend:         ShellBackendSandbox,
+		Sandbox:         fake,
+		KeepSessionOpen: true,
+	})
+	first, err := shell.Call(context.Background(), json.RawMessage(`{"command":"printf ok","description":"first run"}`), tool.Context{RunID: "run_1"})
+	if err != nil {
+		t.Fatalf("first Call returned error: %v", err)
+	}
+	_, err = shell.Call(context.Background(), json.RawMessage(`{"command":"printf ok","description":"second run"}`), tool.Context{
+		RunID:    "run_2",
+		Metadata: first.Metadata,
+	})
+	if err != nil {
+		t.Fatalf("second Call returned error: %v", err)
+	}
+	if len(fake.OpenCalls) != 2 || fake.OpenCalls[1].RunID != "run_2" {
+		t.Fatalf("cross-run session was restored: %#v", fake.OpenCalls)
 	}
 }
 
