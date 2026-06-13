@@ -27,9 +27,10 @@ agent := zenforge.New(zenforge.Config{
         {Name: "reviewer", Instructions: "Find concrete risks."},
     },
     SubAgentOptions: zenforge.SubAgentOptions{
-        MaxTasks: 4,
-        MaxDepth: 1,
-        Parallel: true,
+        MaxTasks:       4,
+        MaxDepth:       1,
+        Parallel:       true,
+        InheritContext: true,
     },
 })
 ```
@@ -38,6 +39,16 @@ The host maximum controls both the model-facing task schema and runtime
 validation. Model-provided `maxTasks` may only make an individual call stricter.
 Nested delegation stays disabled unless the host sets `AllowNested: true` and a
 finite `MaxDepth` greater than one.
+
+Child runs are metadata-isolated by default. `InheritContext: true` copies the
+parent run metadata into each child while preserving cancellation and deadline
+propagation in both modes. Metadata precedence is task metadata, inherited
+parent context, host-configured `SubAgentSpec.Metadata`, then runtime-owned
+`parentRunId`, `subtaskId`, and `subagent.depth`. Task `files` are copied into
+the child model metadata as `subagent.files`. The configured workspace,
+checkpoint store, event store, approval broker, and trace sink remain available
+to the child runtime; the child's callable tools still come only from its
+`SubAgentSpec`.
 
 `Events` and `Checkpoints` are separate on purpose:
 

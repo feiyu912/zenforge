@@ -124,8 +124,10 @@ type Request struct {
     ParentStep   int
     ParentTaskID string
     ToolCallID   string
+    Depth        int
     Tasks        []TaskSpec
     Options      Options
+    Context      map[string]any // host-populated, never model-decoded
 }
 
 type TaskSpec struct {
@@ -212,6 +214,13 @@ Child run config is derived from:
 - child instructions;
 - inherited or scoped workspace;
 - inherited checkpoint/event stores.
+
+Parent run metadata is isolated unless the host enables `InheritContext`.
+Cancellation and deadlines always propagate through the Go context and are not
+controlled by that option. When inheritance is enabled, child metadata
+precedence is task metadata, inherited parent context, host-configured
+`SubAgentSpec.Metadata`, then runtime-owned identifiers and depth. `TaskSpec`
+files are copied into `subagent.files`.
 
 Child run ID:
 

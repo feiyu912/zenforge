@@ -98,6 +98,8 @@ Config is JSON. See [`docs/config-reference.md`](docs/config-reference.md) and [
 - Host-owned sub-agent limits drive the advertised task schema and cannot be widened by model requests.
 - Sub-agent tools are available independently of planner/todo configuration.
 - Nested delegation remains off by default and requires explicit host opt-in plus a finite maximum depth.
+- Child metadata is isolated by default; `InheritContext` explicitly carries trusted parent run metadata into children.
+- Task file scopes are exposed to children as `subagent.files`, and child configs retain the host workspace boundary.
 
 **Models**
 - OpenAI-compatible and Anthropic adapters.
@@ -181,6 +183,8 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - Cancelled child runs propagate as failed subtask results instead of false completion.
 - Pure sub-agent agents advertise `task` and `agent_invoke` without requiring planning, and validate host limits before child state is checkpointed.
 - Host-bounded nested delegation inherits child orchestration only below the configured maximum depth.
+- Sub-agent context inheritance is explicit: task metadata, trusted parent context, host spec metadata, and runtime-owned fields have deterministic precedence.
+- Child task file scopes are copied into `subagent.files`, and the configured workspace is retained through nested child configs.
 - Active tool resume is covered through durable JSONL checkpoints.
 - CLI run/resume are covered against local OpenAI-compatible streaming and durable JSONL checkpoints.
 - CLI argument error output is covered for common command mistakes.

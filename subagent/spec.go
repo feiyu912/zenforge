@@ -44,13 +44,14 @@ type Options struct {
 }
 
 type Request struct {
-	RunID        string     `json:"runId"`
-	ParentStep   int        `json:"parentStep,omitempty"`
-	ParentTaskID string     `json:"parentTaskId,omitempty"`
-	ToolCallID   string     `json:"toolCallId,omitempty"`
-	Depth        int        `json:"depth,omitempty"`
-	Tasks        []TaskSpec `json:"tasks"`
-	Options      Options    `json:"options,omitempty"`
+	RunID        string         `json:"runId"`
+	ParentStep   int            `json:"parentStep,omitempty"`
+	ParentTaskID string         `json:"parentTaskId,omitempty"`
+	ToolCallID   string         `json:"toolCallId,omitempty"`
+	Depth        int            `json:"depth,omitempty"`
+	Tasks        []TaskSpec     `json:"tasks"`
+	Options      Options        `json:"options,omitempty"`
+	Context      map[string]any `json:"-"`
 }
 
 type Result struct {

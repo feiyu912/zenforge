@@ -37,10 +37,11 @@ agent := zenforge.New(zenforge.Config{
         },
     },
     SubAgentOptions: zenforge.SubAgentOptions{
-        MaxTasks: 3,
-        MaxDepth: 1,
-        Parallel: true,
-        FailFast: false,
+        MaxTasks:       3,
+        MaxDepth:       1,
+        Parallel:       true,
+        FailFast:       false,
+        InheritContext: true,
     },
 })
 ```
@@ -85,6 +86,28 @@ creating or checkpointing child state.
 - block nested sub-agent calls;
 - aggregate all results;
 - failed child result does not hide successful child results.
+
+## Child Context
+
+Child metadata is isolated by default. Set `InheritContext: true` when children
+need trusted metadata from the parent run, such as platform session or tenant
+scope. This option does not control Go context propagation: cancellation and
+deadlines always flow from parent to child.
+
+Child model metadata has deterministic precedence:
+
+1. model-provided task metadata;
+2. inherited parent run metadata, when enabled;
+3. host-configured `SubAgentSpec.Metadata`;
+4. runtime-owned `parentRunId`, `subtaskId`, and `subagent.depth`.
+
+Task `files` are copied into `subagent.files` so the child can inspect its file
+scope without allowing later caller mutation to change the active run.
+
+The child config retains the parent's workspace, approval broker, checkpoint
+store, event store, and trace sink. Its callable tools remain scoped to
+`SubAgentSpec.Tools`; inheriting context never grants the parent's full tool
+set.
 
 ## Events
 

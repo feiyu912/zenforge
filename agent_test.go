@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -1494,6 +1495,152 @@ func TestRunChildSubAgentTreatsCancellationAsFailure(t *testing.T) {
 	}
 	if !foundCancelled {
 		t.Fatalf("cancelled child event missing: %#v", result.Events)
+	}
+}
+
+func TestInvokeSubAgentToolScopesParentContext(t *testing.T) {
+	tests := []struct {
+		name        string
+		inherit     bool
+		wantContext bool
+	}{
+		{name: "disabled"},
+		{name: "enabled", inherit: true, wantContext: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var captured subagent.Request
+			agent := New(Config{
+				Model: &scriptedModel{},
+				SubAgentSpecs: []subagent.SubAgentSpec{{
+					Name: "researcher",
+				}},
+				SubAgentOptions: subagent.Options{
+					MaxTasks:       1,
+					InheritContext: tt.inherit,
+				},
+				SubAgentRunner: subagent.RunnerFunc(func(_ context.Context, spec subagent.SubAgentSpec, task subagent.TaskSpec, req subagent.Request) (subagent.TaskResult, error) {
+					captured = req
+					return subagent.TaskResult{
+						ID:        task.ID,
+						AgentName: spec.Name,
+						Status:    subagent.StatusCompleted,
+					}, nil
+				}),
+			})
+			state := newRunState("run_parent_context", "delegate", map[string]any{
+				"platform.sessionId": "session_1",
+			})
+			call := harness.ToolCallState{
+				ID:        "task_context",
+				Name:      "task",
+				Arguments: json.RawMessage(`{"tasks":[{"id":"child_1","agent":"researcher","input":"inspect"}]}`),
+			}
+
+			_, err := agent.invokeSubAgentTool(
+				context.Background(),
+				func(EventType, map[string]any) error { return nil },
+				func() error { return nil },
+				&state,
+				call,
+			)
+			if err != nil {
+				t.Fatalf("invokeSubAgentTool returned error: %v", err)
+			}
+			if tt.wantContext {
+				if captured.Context["platform.sessionId"] != "session_1" {
+					t.Fatalf("inherited context = %#v", captured.Context)
+				}
+				return
+			}
+			if captured.Context != nil {
+				t.Fatalf("context inherited while disabled: %#v", captured.Context)
+			}
+		})
+	}
+}
+
+func TestRunChildSubAgentBuildsScopedMetadata(t *testing.T) {
+	fakeModel := &scriptedModel{turns: []scriptedTurn{{events: []model.Event{{Delta: "done"}}}}}
+	agent := New(Config{
+		Model:       fakeModel,
+		Checkpoints: checkpointmemory.New(),
+	})
+	files := []string{"README.md", "docs/s7-subagent-runtime-spec.md"}
+	task := subagent.TaskSpec{
+		ID:        "subtask_1",
+		AgentName: "researcher",
+		Input:     "summarize docs",
+		Files:     files,
+		Metadata: map[string]any{
+			"source":      "task",
+			"parentRunId": "task_override",
+		},
+	}
+
+	_, err := agent.runChildSubAgent(
+		context.Background(),
+		subagent.SubAgentSpec{
+			Name: "researcher",
+			Metadata: map[string]any{
+				"source": "spec",
+			},
+		},
+		task,
+		subagent.Request{
+			RunID: "run_parent",
+			Depth: 1,
+			Options: subagent.Options{
+				InheritContext: true,
+			},
+			Context: map[string]any{
+				"source":             "parent",
+				"platform.sessionId": "session_1",
+				"subtaskId":          "parent_override",
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("runChildSubAgent returned error: %v", err)
+	}
+	files[0] = "mutated"
+	if len(fakeModel.requests) != 1 {
+		t.Fatalf("child model calls = %d, want 1", len(fakeModel.requests))
+	}
+	meta := fakeModel.requests[0].Meta
+	if meta["source"] != "spec" || meta["platform.sessionId"] != "session_1" {
+		t.Fatalf("child metadata precedence = %#v", meta)
+	}
+	if meta["parentRunId"] != "run_parent" || meta["subtaskId"] != "subtask_1" || meta["subagent.depth"] != 2 {
+		t.Fatalf("reserved child metadata = %#v", meta)
+	}
+	gotFiles, ok := meta["subagent.files"].([]string)
+	if !ok || !reflect.DeepEqual(gotFiles, []string{"README.md", "docs/s7-subagent-runtime-spec.md"}) {
+		t.Fatalf("child file scope = %#v", meta["subagent.files"])
+	}
+}
+
+func TestRunChildSubAgentDoesNotInheritContextWhenDisabled(t *testing.T) {
+	fakeModel := &scriptedModel{turns: []scriptedTurn{{events: []model.Event{{Delta: "done"}}}}}
+	agent := New(Config{
+		Model:       fakeModel,
+		Checkpoints: checkpointmemory.New(),
+	})
+
+	_, err := agent.runChildSubAgent(
+		context.Background(),
+		subagent.SubAgentSpec{Name: "researcher"},
+		subagent.TaskSpec{ID: "subtask_1", AgentName: "researcher", Input: "summarize docs"},
+		subagent.Request{
+			RunID:   "run_parent",
+			Context: map[string]any{"platform.sessionId": "session_1"},
+		},
+	)
+	if err != nil {
+		t.Fatalf("runChildSubAgent returned error: %v", err)
+	}
+	if _, ok := fakeModel.requests[0].Meta["platform.sessionId"]; ok {
+		t.Fatalf("child inherited parent context while disabled: %#v", fakeModel.requests[0].Meta)
 	}
 }
 

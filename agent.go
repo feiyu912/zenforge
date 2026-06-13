@@ -1153,6 +1153,9 @@ func (a *Agent) invokeSubAgentTool(ctx context.Context, emit eventEmitter, check
 		req.Depth = depth
 	}
 	req.Options = mergeSubAgentRequestOptions(a.subAgentOptions(), req.Options)
+	if req.Options.InheritContext {
+		req.Context = cloneMap(state.Meta)
+	}
 	if err := req.Validate(); err != nil {
 		return tool.Result{Error: err.Error(), ExitCode: 1}, err
 	}
@@ -1406,9 +1409,13 @@ func (a *Agent) runChildSubAgent(ctx context.Context, spec subagent.SubAgentSpec
 		maxSteps = a.config.MaxSteps
 	}
 	childRunID := fmt.Sprintf("%s_sub_%s", req.RunID, task.ID)
-	childMeta := cloneMap(spec.Metadata)
-	if childMeta == nil {
-		childMeta = map[string]any{}
+	childMeta := cloneMap(task.Metadata)
+	if req.Options.InheritContext {
+		childMeta = mergeMetadata(childMeta, req.Context)
+	}
+	childMeta = mergeMetadata(childMeta, spec.Metadata)
+	if len(task.Files) > 0 {
+		childMeta["subagent.files"] = append([]string(nil), task.Files...)
 	}
 	childMeta["parentRunId"] = req.RunID
 	childMeta["subtaskId"] = task.ID
@@ -1421,6 +1428,7 @@ func (a *Agent) runChildSubAgent(ctx context.Context, spec subagent.SubAgentSpec
 		Checkpoints:  a.config.Checkpoints,
 		Events:       a.config.Events,
 		Trace:        a.config.Trace,
+		Workspace:    a.config.Workspace,
 		MaxSteps:     maxSteps,
 		Planning:     PlanningDisabled,
 	}
@@ -1824,6 +1832,17 @@ func cloneMap(in map[string]any) map[string]any {
 	}
 	out := make(map[string]any, len(in))
 	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
+
+func mergeMetadata(base, override map[string]any) map[string]any {
+	out := cloneMap(base)
+	if out == nil {
+		out = map[string]any{}
+	}
+	for key, value := range override {
 		out[key] = value
 	}
 	return out
