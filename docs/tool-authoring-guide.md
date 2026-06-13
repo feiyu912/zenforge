@@ -117,6 +117,30 @@ wrapped with middleware:
 - audit logging;
 - redaction.
 
+Retry is explicit:
+
+```go
+return tool.Result{}, tool.MarkRetryable(err)
+```
+
+Unmarked errors run once. Cancellation, deadline, timeout, validation, budget,
+and output-limit errors are never retried even when wrapped.
+
+`tool.RedactArguments("password", "token")` recursively redacts matching JSON
+keys in tool runtime audit events while the tool still receives the original
+arguments. For the top-level harness event log, configure:
+
+```go
+zenforge.Config{
+    ToolArgumentRedaction: []string{"password", "token"},
+}
+```
+
+This redacts event/audit projections, not checkpointed executable tool calls.
+Resume requires the original arguments. Avoid putting long-lived secrets in
+tool arguments and protect durable checkpoint storage with host-level access
+control and encryption where needed.
+
 The default built-in shell and workspace tools will use conservative safety
 defaults.
 

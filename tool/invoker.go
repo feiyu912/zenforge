@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -90,7 +91,7 @@ func (i *DefaultInvoker) emit(ctx context.Context, call Call, eventType EventTyp
 		RunID:      call.RunID,
 		ToolCallID: call.ID,
 		ToolName:   call.Name,
-		Arguments:  jsonValue(call.Arguments),
+		Arguments:  RedactJSONArguments(call.Arguments, call.RedactedArgumentKeys),
 		Output:     result.Output,
 		Error:      result.Error,
 		ExitCode:   result.ExitCode,
@@ -116,6 +117,21 @@ func missingToolResult(name string) Result {
 	return Result{Error: fmt.Sprintf("tool %q not found", name), ExitCode: 1}
 }
 
+func RedactJSONArguments(raw json.RawMessage, keys []string) any {
+	value := jsonValue(raw)
+	if len(keys) == 0 {
+		return value
+	}
+	redacted := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		key = strings.TrimSpace(strings.ToLower(key))
+		if key != "" {
+			redacted[key] = struct{}{}
+		}
+	}
+	return redactJSONValue(value, redacted)
+}
+
 func jsonValue(raw json.RawMessage) any {
 	if len(raw) == 0 {
 		return nil
@@ -127,10 +143,42 @@ func jsonValue(raw json.RawMessage) any {
 	return value
 }
 
+func redactJSONValue(value any, keys map[string]struct{}) any {
+	switch current := value.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(current))
+		for key, item := range current {
+			if _, ok := keys[strings.ToLower(key)]; ok {
+				out[key] = "[REDACTED]"
+				continue
+			}
+			out[key] = redactJSONValue(item, keys)
+		}
+		return out
+	case []any:
+		out := make([]any, len(current))
+		for i, item := range current {
+			out[i] = redactJSONValue(item, keys)
+		}
+		return out
+	default:
+		return value
+	}
+}
+
 func IsRetryable(err error) bool {
-	return err != nil &&
-		!errors.Is(err, context.Canceled) &&
-		!errors.Is(err, context.DeadlineExceeded) &&
-		!errors.Is(err, ErrInvalidArguments) &&
-		!errors.Is(err, ErrToolNotFound)
+	if err == nil ||
+		errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, ErrInvalidArguments) ||
+		errors.Is(err, ErrToolNotFound) ||
+		errors.Is(err, ErrTimeout) ||
+		errors.Is(err, ErrBudgetExceeded) ||
+		errors.Is(err, ErrOutputTooLarge) {
+		return false
+	}
+	var retryable interface {
+		Retryable() bool
+	}
+	return errors.As(err, &retryable) && retryable.Retryable()
 }

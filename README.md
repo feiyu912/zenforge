@@ -111,6 +111,7 @@ Config is JSON. See [`docs/config-reference.md`](docs/config-reference.md) and [
 - Typed tool helper that infers JSON schema from Go structs.
 - Workspace, shell (deny-by-default), todo, MCP bridge, sub-agent task tool.
 - Memory augmenter that hydrates normalized tasks from a store.
+- Explicit transient-error retry, per-run call budgets, UTF-8-safe output caps, and recursive audit argument redaction.
 
 **HTTP / SSE edge** — `server/harnesshttp`
 - `POST /run`, `POST /resume`, `GET /events` (replay with `afterSeq`), `GET /live` (live fanout).
@@ -260,6 +261,9 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - Sandbox checkpoint state binds sessions to the exact run/subtask scope.
 - Sandbox close is best-effort and cannot replace a successful command result.
 - Container Hub transport deadlines map to stable `sandbox_timeout` errors.
+- Tool retries require `tool.MarkRetryable`; permanent and policy errors run once.
+- `ToolArgumentRedaction` removes configured nested keys from durable `tool.call` events without changing tool input.
+- Tool call budgets are isolated by run, and output truncation preserves valid UTF-8.
 - Trace metadata enrichment.
 - A hardening test suite and a failure-mode guide.
 

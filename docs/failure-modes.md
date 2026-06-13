@@ -58,6 +58,10 @@ Tool authors should make side effects retry-aware:
 - return durable operation IDs when a remote system accepts work;
 - require approval for operations that are expensive or hard to reverse.
 
+The generic retry middleware retries only errors explicitly wrapped with
+`tool.MarkRetryable`. This prevents permanent failures, approval requests,
+budget errors, and unknown side effects from being repeated automatically.
+
 ## Waiting Approval
 
 When a run is waiting for approval, the checkpoint stores the approval request,

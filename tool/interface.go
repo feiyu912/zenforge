@@ -21,11 +21,12 @@ type Definition struct {
 }
 
 type Call struct {
-	ID        string          `json:"id"`
-	RunID     string          `json:"runId"`
-	Name      string          `json:"name"`
-	Arguments json.RawMessage `json:"arguments"`
-	Metadata  map[string]any  `json:"metadata,omitempty"`
+	ID                   string          `json:"id"`
+	RunID                string          `json:"runId"`
+	Name                 string          `json:"name"`
+	Arguments            json.RawMessage `json:"arguments"`
+	Metadata             map[string]any  `json:"metadata,omitempty"`
+	RedactedArgumentKeys []string        `json:"-"`
 }
 
 type Context struct {

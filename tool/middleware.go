@@ -4,8 +4,9 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 func Chain(middleware ...Middleware) Middleware {
@@ -58,14 +59,22 @@ func Retry(maxAttempts int) Middleware {
 }
 
 func MaxCalls(max int) Middleware {
-	var count int64
+	var mu sync.Mutex
+	counts := map[string]int{}
 	return func(next Invoker) Invoker {
 		return InvokerFunc(func(ctx context.Context, call Call) (Result, error) {
 			if max <= 0 {
 				return next.Invoke(ctx, call)
 			}
-			current := atomic.AddInt64(&count, 1)
-			if current > int64(max) {
+			runID := call.RunID
+			if runID == "" {
+				runID = "<unscoped>"
+			}
+			mu.Lock()
+			counts[runID]++
+			current := counts[runID]
+			mu.Unlock()
+			if current > max {
 				return Result{Error: ErrBudgetExceeded.Error(), ExitCode: 1}, ErrBudgetExceeded
 			}
 			return next.Invoke(ctx, call)
@@ -81,7 +90,7 @@ func MaxOutputBytes(max int) Middleware {
 				return result, err
 			}
 			originalBytes := len(result.Output)
-			result.Output = result.Output[:max]
+			result.Output = truncateUTF8(result.Output, max)
 			if result.Metadata == nil {
 				result.Metadata = map[string]any{}
 			}
@@ -122,13 +131,19 @@ func RedactArguments(keys ...string) Middleware {
 			if len(redacted) == 0 {
 				return next.Invoke(ctx, call)
 			}
-			metadata := cloneMap(call.Metadata)
-			if metadata == nil {
-				metadata = map[string]any{}
-			}
-			metadata["redactedArgumentKeys"] = keys
-			call.Metadata = metadata
+			call.RedactedArgumentKeys = append(append([]string(nil), call.RedactedArgumentKeys...), keys...)
 			return next.Invoke(ctx, call)
 		})
 	}
+}
+
+func truncateUTF8(value string, max int) string {
+	if max <= 0 || len(value) <= max {
+		return value
+	}
+	out := value[:max]
+	for !utf8.ValidString(out) {
+		out = out[:len(out)-1]
+	}
+	return out
 }

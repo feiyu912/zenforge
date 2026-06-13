@@ -245,6 +245,18 @@ Payload sketch:
 
 Argument persistence must respect redaction policy.
 
+`RedactArguments` recursively replaces matching JSON object keys in tool audit
+events while preserving the original arguments passed to the tool.
+`Config.ToolArgumentRedaction` applies the same policy to the harness'
+durable `tool.call` events.
+
+Retry is opt-in per error. Tools wrap a transient failure with
+`tool.MarkRetryable`; ordinary, cancellation, timeout, validation, budget, and
+output-limit errors are not retried. `MaxCalls` tracks budgets independently by
+`Call.RunID`, so one run cannot exhaust another run's tool budget.
+
+Byte output caps truncate only at a valid UTF-8 boundary.
+
 ## Error Model
 
 Use typed errors:
@@ -301,4 +313,3 @@ Minimum tests:
 - middleware chain is tested;
 - no ZenMind platform import;
 - S3 safety/workspace tools can build on this layer.
-

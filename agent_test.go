@@ -483,6 +483,47 @@ func TestAgentStreamRunsToolAndContinuesModelLoop(t *testing.T) {
 	}
 }
 
+func TestAgentRedactsDurableToolCallArguments(t *testing.T) {
+	eventStore := &testEventStore{}
+	fakeModel := &scriptedModel{turns: []scriptedTurn{
+		{events: []model.Event{{Message: &model.Message{ToolCalls: []model.ToolCallSpec{{
+			ID:        "call_secret",
+			Name:      "record",
+			Arguments: json.RawMessage(`{"password":"secret","nested":{"token":"abc"},"visible":"ok"}`),
+		}}}}}},
+		{events: []model.Event{{Delta: "done"}}},
+	}}
+	agent := New(Config{
+		Model:                 fakeModel,
+		Tools:                 []Tool{&recordingTool{}},
+		Events:                eventStore,
+		Checkpoints:           checkpointmemory.New(),
+		ToolArgumentRedaction: []string{"password", "token"},
+	})
+
+	events, err := agent.Stream(context.Background(), Task{RunID: "run_redacted_tool", Input: "use secret"})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	for range events {
+	}
+	for _, event := range eventStore.events {
+		if event.Type != EventToolCall {
+			continue
+		}
+		arguments, ok := event.Payload["arguments"].(map[string]any)
+		if !ok {
+			t.Fatalf("tool arguments = %#v", event.Payload["arguments"])
+		}
+		nested, _ := arguments["nested"].(map[string]any)
+		if arguments["password"] != "[REDACTED]" || nested["token"] != "[REDACTED]" || arguments["visible"] != "ok" {
+			t.Fatalf("durable tool arguments were not redacted: %#v", arguments)
+		}
+		return
+	}
+	t.Fatal("persisted tool.call event missing")
+}
+
 func TestAgentMaxStepsRunsPendingToolBeforeFinalNoToolTurn(t *testing.T) {
 	checkpoints := checkpointmemory.New()
 	fakeModel := &scriptedModel{turns: []scriptedTurn{

@@ -38,25 +38,26 @@ type EventStore interface {
 
 // Config describes the default high-level ZenForge agent.
 type Config struct {
-	Model                model.Model
-	Instructions         string
-	Tools                []tool.Tool
-	ToolInvoker          tool.Invoker
-	ToolRuntime          []tool.Middleware
-	Approval             approval.Broker
-	Todos                planner.Manager
-	SubAgentSpecs        []subagent.SubAgentSpec
-	SubAgentRegistry     subagent.Registry
-	SubAgentOrchestrator subagent.Orchestrator
-	SubAgentRunner       subagent.Runner
-	SubAgentOptions      subagent.Options
-	Workspace            workspace.Workspace
-	Events               EventStore
-	Checkpoints          checkpoint.Store
-	Trace                trace.Sink
-	MaxSteps             int
-	Planning             PlanningMode
-	SubAgents            SubAgentMode
+	Model                 model.Model
+	Instructions          string
+	Tools                 []tool.Tool
+	ToolInvoker           tool.Invoker
+	ToolRuntime           []tool.Middleware
+	ToolArgumentRedaction []string
+	Approval              approval.Broker
+	Todos                 planner.Manager
+	SubAgentSpecs         []subagent.SubAgentSpec
+	SubAgentRegistry      subagent.Registry
+	SubAgentOrchestrator  subagent.Orchestrator
+	SubAgentRunner        subagent.Runner
+	SubAgentOptions       subagent.Options
+	Workspace             workspace.Workspace
+	Events                EventStore
+	Checkpoints           checkpoint.Store
+	Trace                 trace.Sink
+	MaxSteps              int
+	Planning              PlanningMode
+	SubAgents             SubAgentMode
 }
 
 // Tool is re-exported for the high-level API.

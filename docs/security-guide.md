@@ -16,6 +16,12 @@ Default rules:
 - tool output is capped;
 - secrets should be redacted from events and traces.
 
+`Config.ToolArgumentRedaction` and `tool.RedactArguments` redact tool-call event
+projections recursively. Checkpoints still retain original tool arguments
+because deterministic resume must be able to retry a pending call. Hosts must
+protect checkpoint storage and should pass secret references instead of raw
+long-lived credentials.
+
 ## Workspace Safety
 
 Local workspace tools must:

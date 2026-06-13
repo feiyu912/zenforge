@@ -58,6 +58,10 @@ Markdown document links.
 | Requirement | Evidence |
 | --- | --- |
 | typed tool helper works | `tools.TestTypedToolCallsStructHandler` |
+| tool retry requires an explicit transient marker | `tool.TestRetryOnlyRetriesMarkedTransientErrors`, `tool.TestRetrySkipsContextCancellation` |
+| tool call budgets are isolated per run | `tool.TestMaxCallsIsScopedPerRun` |
+| tool output caps preserve valid UTF-8 | `tool.TestMaxOutputBytesPreservesUTF8` |
+| audit and durable tool arguments redact nested configured keys | `tool.TestRedactArgumentsHidesNestedAuditValuesButPreservesToolInput`, `TestAgentRedactsDurableToolCallArguments` |
 | workspace read/list/grep works | `tools/workspace.TestWorkspaceToolsReadListGrepWrite` |
 | workspace write respects roots | `workspace/local` escape tests and workspace tool write tests |
 | workspace write can require fresh read snapshots | `tools/workspace.TestWorkspaceWriteRequiresFreshReadSnapshot` |

@@ -1066,7 +1066,7 @@ func (a *Agent) runPendingTools(ctx context.Context, emit eventEmitter, checkpoi
 		if err := emit(EventToolCall, map[string]any{
 			"toolCallId": call.ID,
 			"toolName":   call.Name,
-			"arguments":  rawJSONValue(call.Arguments),
+			"arguments":  tool.RedactJSONArguments(call.Arguments, a.config.ToolArgumentRedaction),
 		}); err != nil {
 			return err
 		}
@@ -1512,11 +1512,12 @@ func (a *Agent) invokeTool(ctx context.Context, state harness.RunState, call har
 		invoker = tool.NewInvoker(registry, a.config.ToolRuntime...)
 	}
 	return invoker.Invoke(ctx, tool.Call{
-		ID:        call.ID,
-		RunID:     state.RunID,
-		Name:      call.Name,
-		Arguments: call.Arguments,
-		Metadata:  toolCallMetadata(state, call.Meta),
+		ID:                   call.ID,
+		RunID:                state.RunID,
+		Name:                 call.Name,
+		Arguments:            call.Arguments,
+		Metadata:             toolCallMetadata(state, call.Meta),
+		RedactedArgumentKeys: append([]string(nil), a.config.ToolArgumentRedaction...),
 	})
 }
 
@@ -1998,17 +1999,6 @@ func toolResultContent(result tool.Result) string {
 		return ""
 	}
 	return string(data)
-}
-
-func rawJSONValue(raw json.RawMessage) any {
-	if len(raw) == 0 {
-		return nil
-	}
-	var value any
-	if err := json.Unmarshal(raw, &value); err != nil {
-		return string(raw)
-	}
-	return value
 }
 
 func cloneMap(in map[string]any) map[string]any {

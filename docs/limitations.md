@@ -6,6 +6,8 @@ what is experimental, and what remains adapter territory.
 ## Runtime
 
 - Resume does not continue a partially streamed model response.
+- Tool argument event redaction does not remove original arguments from durable
+  checkpoints because resume needs them.
 - Resume does not assume an OS command completed if the process crashed while
   the command was running.
 - Resume is strongest at checkpoint boundaries: before model calls, after model

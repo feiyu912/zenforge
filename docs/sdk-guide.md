@@ -11,6 +11,7 @@ agent := zenforge.New(zenforge.Config{
     Model:        model,
     Instructions: "Use tools when useful and answer briefly.",
     Tools:        []zenforge.Tool{lookup},
+    ToolArgumentRedaction: []string{"password", "token"},
     Events:       eventlogjsonl.New(".zenforge/runs"),
     Checkpoints:  checkpointjsonl.New(".zenforge/runs"),
     Trace:        trace.Redact(trace.Stdout()),
