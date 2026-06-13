@@ -21,6 +21,7 @@ Markdown document links.
 | max steps drain pending tools before the final no-tool answer | `TestAgentMaxStepsRunsPendingToolBeforeFinalNoToolTurn` |
 | final no-tool turns reject provider tool calls | `TestAgentMaxStepsRejectsToolCallsFromFinalNoToolTurn`, `TestAgentPlanExecuteRejectsToolCallsFromSummaryTurn` |
 | cancellation persists a cancelled terminal state before model/tool execution | `TestAgentCancellationBeforeModelPersistsCancelledTerminalState`, `TestAgentCancellationBeforeToolPreservesPendingCall`, `TestAgentModelCancellationIsNotReportedAsFailure` |
+| synchronous Run returns cancellation as a Go context error | `TestAgentRunReturnsCancellation` |
 | plan/execute persists a terminal summary with monotonic SQLite checkpoints | `TestAgentPlanExecutePersistsTerminalSummaryInSQLite` |
 | checkpoint write failures stop before unsafe progress or false completion | `TestAgentStopsBeforeModelWhenCheckpointSaveFails`, `TestAgentDoesNotCompleteWhenPostModelCheckpointFails` |
 | event-log failures stop execution before unrecorded progress | `TestAgentStopsBeforeModelWhenInitialEventAppendFails`, `TestAgentStopsWhenModelDeltaEventAppendFails`, `TestAgentDoesNotRetryEventStoreWhenCheckpointEventAppendFails` |
@@ -62,6 +63,8 @@ Markdown document links.
 | shell allowlist blocks shell control chaining | `policy.TestReviewCommandBlocksShellControlOperatorsBeforeAllowlist`, `tools/shell.TestShellBlocksAllowlistedCommandWithShellControl` |
 | risky shell returns approval request or prompt | `TestShellApprovalRequiredShape`, `TestAgentApprovalBrokerApprovesAndRetriesTool`, CLI approval mode tests |
 | shell policy can produce broker-free approval plans | `approval.TestRequiredPlanValidatesRequest`, `tools/shell.TestShellApprovalPlanFromReview` |
+| missing approval broker pauses at a resumable checkpoint | `TestAgentPausesOnApprovalWithoutBroker`, `TestAgentRunReturnsApprovalRequiredWhenPaused`, `TestAgentResumeWaitingApprovalWithoutBrokerStaysPaused` |
+| approval abort persists a cancelled terminal run | `TestAgentApprovalAbortCancelsRun` |
 | MCP tools adapt into ZenForge tools | `adapters/mcp.TestToolsAdaptsMCPTool`, `adapters/mcp.TestJSONRPCClientListsAndCallsTools` |
 | memory entries augment normalized tasks | `adapters/memory.TestAugmentTaskAddsMemoryBlockAndMetadata` |
 | memory scope metadata filters cross-tenant entries | `adapters/memory.TestScopedStoreFiltersEntriesByQueryMetadata`, `adapters/memory.TestAugmentTaskUsesScopedStoreMetadata` |

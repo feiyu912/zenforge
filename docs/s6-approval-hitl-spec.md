@@ -211,6 +211,12 @@ reject -> return tool error
 abort -> cancel run
 ```
 
+When no broker is configured, the runtime stops after
+`approval.requested`. It keeps the active tool and waiting approval in the
+checkpoint, emits no terminal run event, and can be resumed later with a
+broker. The synchronous `Agent.Run` helper returns `approval.ErrRequired` for
+this paused outcome.
+
 ## Checkpoint Behavior
 
 Before waiting:
@@ -247,6 +253,9 @@ If context is cancelled while waiting:
 - run state becomes cancelled;
 - checkpoint terminal state;
 - emit `run.cancelled`.
+
+An explicit `DecisionAbort` follows the same durable cancelled path while
+retaining the operator's reason in run metadata.
 
 ## Approval Scopes
 

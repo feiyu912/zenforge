@@ -43,7 +43,17 @@ func (a *Agent) Run(ctx context.Context, task Task) (*Result, error) {
 		return nil, err
 	}
 	var result Result
+	var approvalPending bool
 	for event := range events {
+		if result.RunID == "" {
+			result.RunID = event.RunID()
+		}
+		if event.Type == EventApprovalRequested {
+			approvalPending = true
+		}
+		if event.Type == EventApprovalResolved || event.Type == EventApprovalExpired {
+			approvalPending = false
+		}
 		if event.Type == EventRunDone {
 			result.RunID = event.RunID()
 			result.Output = stringValue(event.Payload["output"])
@@ -52,6 +62,13 @@ func (a *Agent) Run(ctx context.Context, task Task) (*Result, error) {
 			result.RunID = event.RunID()
 			return &result, fmt.Errorf("%s", stringValue(event.Payload["error"]))
 		}
+		if event.Type == EventRunCancelled {
+			result.RunID = event.RunID()
+			return &result, runCancellationError(stringValue(event.Payload["error"]))
+		}
+	}
+	if approvalPending {
+		return &result, approval.ErrRequired
 	}
 	return &result, nil
 }
@@ -116,10 +133,38 @@ func stringValue(value any) string {
 	return text
 }
 
+func runCancellationError(message string) error {
+	switch message {
+	case "", context.Canceled.Error():
+		return context.Canceled
+	case context.DeadlineExceeded.Error():
+		return context.DeadlineExceeded
+	default:
+		return fmt.Errorf("%s: %w", message, context.Canceled)
+	}
+}
+
 type eventEmitter func(EventType, map[string]any) error
 
 type eventPersistenceError struct {
 	err error
+}
+
+var errApprovalPending = errors.New("approval pending")
+
+type approvalAbortError struct {
+	reason string
+}
+
+func (e approvalAbortError) Error() string {
+	if e.reason == "" {
+		return "approval aborted"
+	}
+	return "approval aborted: " + e.reason
+}
+
+func (approvalAbortError) Unwrap() error {
+	return context.Canceled
 }
 
 func (e *eventPersistenceError) Error() string {
@@ -665,6 +710,9 @@ func (a *Agent) runLoopMode(ctx context.Context, out chan<- Event, state harness
 		}
 		if state.Approval.Waiting != nil {
 			if err := a.resumeWaitingApproval(ctx, emit, checkpointState, &state); err != nil {
+				if errors.Is(err, errApprovalPending) {
+					return
+				}
 				fail(err)
 				return
 			}
@@ -698,6 +746,9 @@ func (a *Agent) runLoopMode(ctx context.Context, out chan<- Event, state harness
 		}
 		if len(state.Tool.Pending) > 0 {
 			if err := a.runPendingTools(ctx, emit, checkpointState, &state); err != nil {
+				if errors.Is(err, errApprovalPending) {
+					return terminal
+				}
 				fail(err)
 				return
 			}
@@ -857,9 +908,6 @@ func (a *Agent) resumeWaitingApproval(ctx context.Context, emit eventEmitter, ch
 	if state.Tool.Active == nil {
 		return fmt.Errorf("resume waiting approval requires active tool call")
 	}
-	if a.config.Approval == nil {
-		return fmt.Errorf("resume waiting approval requires approval broker")
-	}
 	call := *state.Tool.Active
 	req := approvalRequestFromState(*state.Approval.Waiting, state.RunID, call)
 	if err := emit(EventApprovalRequested, map[string]any{
@@ -872,6 +920,9 @@ func (a *Agent) resumeWaitingApproval(ctx context.Context, emit eventEmitter, ch
 		"resumed":    true,
 	}); err != nil {
 		return err
+	}
+	if a.config.Approval == nil {
+		return errApprovalPending
 	}
 	decision, err := a.config.Approval.Request(ctx, req)
 	if err != nil {
@@ -897,7 +948,7 @@ func (a *Agent) resumeWaitingApproval(ctx context.Context, emit eventEmitter, ch
 		return err
 	}
 	if decision.Action == approval.DecisionAbort {
-		return fmt.Errorf("approval aborted: %s", decision.Reason)
+		return approvalAbortError{reason: decision.Reason}
 	}
 	if approval.IsApprovedAction(decision.Action) {
 		call.Meta = approval.ApprovedMetadata(call.Meta, req, decision)
@@ -1040,49 +1091,50 @@ func (a *Agent) runPendingTools(ctx context.Context, emit eventEmitter, checkpoi
 			}); err != nil {
 				return err
 			}
-			if a.config.Approval != nil {
-				decision, approvalErr := a.config.Approval.Request(ctx, req)
-				if approvalErr != nil {
-					return approvalErr
+			if a.config.Approval == nil {
+				return errApprovalPending
+			}
+			decision, approvalErr := a.config.Approval.Request(ctx, req)
+			if approvalErr != nil {
+				return approvalErr
+			}
+			state.ResolveApproval(approvalDecisionState(decision))
+			if err := checkpointState(); err != nil {
+				return err
+			}
+			resolvedType := EventApprovalResolved
+			if decision.Action == approval.DecisionReject && decision.Reason == approval.ErrorExpired {
+				resolvedType = EventApprovalExpired
+			}
+			if err := emit(resolvedType, map[string]any{
+				"requestId":  decision.RequestID,
+				"toolCallId": call.ID,
+				"toolName":   call.Name,
+				"action":     string(decision.Action),
+				"scope":      string(decision.Scope),
+				"reason":     decision.Reason,
+			}); err != nil {
+				return err
+			}
+			if decision.Action == approval.DecisionAbort {
+				return approvalAbortError{reason: decision.Reason}
+			}
+			if approval.IsApprovedAction(decision.Action) {
+				approvedCall := call
+				approvedCall.Meta = approval.ApprovedMetadata(call.Meta, req, decision)
+				result, err = a.invokeTool(ctx, *state, approvedCall)
+				if err != nil && result.Error == "" {
+					result = tool.Result{Error: err.Error(), ExitCode: 1}
 				}
-				state.ResolveApproval(approvalDecisionState(decision))
-				if err := checkpointState(); err != nil {
-					return err
+				if result.Error != "" && result.ExitCode == 0 {
+					result.ExitCode = 1
 				}
-				resolvedType := EventApprovalResolved
-				if decision.Action == approval.DecisionReject && decision.Reason == approval.ErrorExpired {
-					resolvedType = EventApprovalExpired
-				}
-				if err := emit(resolvedType, map[string]any{
-					"requestId":  decision.RequestID,
-					"toolCallId": call.ID,
-					"toolName":   call.Name,
-					"action":     string(decision.Action),
-					"scope":      string(decision.Scope),
-					"reason":     decision.Reason,
-				}); err != nil {
-					return err
-				}
-				if decision.Action == approval.DecisionAbort {
-					return fmt.Errorf("approval aborted: %s", decision.Reason)
-				}
-				if approval.IsApprovedAction(decision.Action) {
-					approvedCall := call
-					approvedCall.Meta = approval.ApprovedMetadata(call.Meta, req, decision)
-					result, err = a.invokeTool(ctx, *state, approvedCall)
-					if err != nil && result.Error == "" {
-						result = tool.Result{Error: err.Error(), ExitCode: 1}
-					}
-					if result.Error != "" && result.ExitCode == 0 {
-						result.ExitCode = 1
-					}
-					applySandboxResultState(state, result)
-				} else {
-					result = tool.Result{Error: approval.ErrorRejected, ExitCode: 1, Structured: map[string]any{
-						"approval": req,
-						"decision": decision,
-					}}
-				}
+				applySandboxResultState(state, result)
+			} else {
+				result = tool.Result{Error: approval.ErrorRejected, ExitCode: 1, Structured: map[string]any{
+					"approval": req,
+					"decision": decision,
+				}}
 			}
 		}
 		status := harness.ToolCallDone

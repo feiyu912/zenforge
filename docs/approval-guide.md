@@ -102,4 +102,15 @@ UI and server adapters can map these to their own protocols.
 If no broker is configured:
 
 - risky operations should not run automatically;
-- tools should return `approval_required` or fail closed.
+- the approval request and active tool call are checkpointed;
+- `Stream` emits `approval.requested` and closes without a terminal run event;
+- `Run` returns `approval.ErrRequired`;
+- a later `Resume` with a configured broker continues from the same tool call.
+
+This is a durable pause, not a failed or completed run. Repeated resume attempts
+without a broker re-emit the pending request and leave the waiting checkpoint
+unchanged.
+
+An `abort` decision is different from a rejection. Rejection produces a failed
+tool result and lets the model continue; abort persists a cancelled run and
+emits `run.cancelled`.

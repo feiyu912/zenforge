@@ -645,6 +645,23 @@ func TestAgentCancellationBeforeModelPersistsCancelledTerminalState(t *testing.T
 	}
 }
 
+func TestAgentRunReturnsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	agent := New(Config{
+		Model:       &scriptedModel{},
+		Checkpoints: checkpointmemory.New(),
+	})
+
+	result, err := agent.Run(ctx, Task{RunID: "run_cancel_result", Input: "stop"})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run error = %v, want context canceled", err)
+	}
+	if result == nil || result.RunID != "run_cancel_result" {
+		t.Fatalf("cancelled Run result = %#v", result)
+	}
+}
+
 func TestAgentModelCancellationIsNotReportedAsFailure(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	checkpoints := checkpointmemory.New()
@@ -969,6 +986,71 @@ func TestAgentResumeWaitingApprovalUsesBroker(t *testing.T) {
 	assertContainsEvent(t, types, EventRunDone)
 }
 
+func TestAgentResumeWaitingApprovalWithoutBrokerStaysPaused(t *testing.T) {
+	checkpoints := checkpointmemory.New()
+	state := newRunState("run_waiting_without_broker", "approve later", nil)
+	state.Step = 1
+	now := time.Now().UTC()
+	state.Tool.Active = &harness.ToolCallState{
+		ID:        "call_approval",
+		Name:      "needs_approval",
+		Arguments: json.RawMessage(`{}`),
+		Status:    harness.ToolCallRunning,
+		StartedAt: &now,
+	}
+	state.SetWaitingApproval(harness.ApprovalRequestState{
+		ID:         "approval_resume",
+		RunID:      state.RunID,
+		ToolCallID: "call_approval",
+		ToolName:   "needs_approval",
+		Operation:  "test.approval",
+		Title:      "Approve resume",
+		Risk:       string(approval.RiskMedium),
+		Options:    []string{"Approve", "Reject"},
+	})
+	if err := checkpoints.Save(context.Background(), checkpoint.Checkpoint{
+		Version: checkpoint.CheckpointVersion,
+		RunID:   state.RunID,
+		Seq:     1,
+		State:   state,
+		SavedAt: now,
+	}); err != nil {
+		t.Fatalf("Save returned error: %v", err)
+	}
+	fakeModel := &scriptedModel{}
+	agent := New(Config{
+		Model:       fakeModel,
+		Tools:       []Tool{approvalTool{}},
+		Checkpoints: checkpoints,
+	})
+
+	events, err := agent.Resume(context.Background(), state.RunID)
+	if err != nil {
+		t.Fatalf("Resume returned error: %v", err)
+	}
+	var types []EventType
+	for event := range events {
+		types = append(types, event.Type)
+	}
+	assertContainsEvent(t, types, EventRunResumed)
+	assertContainsEvent(t, types, EventApprovalRequested)
+	for _, eventType := range types {
+		if eventType == EventRunDone || eventType == EventRunError || eventType == EventRunCancelled {
+			t.Fatalf("broker-free resume emitted terminal event %q: %#v", eventType, types)
+		}
+	}
+	if len(fakeModel.requests) != 0 {
+		t.Fatalf("model calls after broker-free resume = %d, want 0", len(fakeModel.requests))
+	}
+	latest, err := checkpoints.Load(context.Background(), state.RunID)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if latest.Seq != 1 || latest.State.Approval.Waiting == nil || latest.State.Tool.Active == nil {
+		t.Fatalf("broker-free resume changed waiting checkpoint: %#v", latest)
+	}
+}
+
 func TestAgentPlanningAddsTodoToolsAndCheckpointsTodos(t *testing.T) {
 	checkpoints := checkpointmemory.New()
 	model := &scriptedModel{turns: []scriptedTurn{
@@ -1011,7 +1093,7 @@ func TestAgentPlanningAddsTodoToolsAndCheckpointsTodos(t *testing.T) {
 	}
 }
 
-func TestAgentRecordsApprovalRequiredToolResult(t *testing.T) {
+func TestAgentPausesOnApprovalWithoutBroker(t *testing.T) {
 	checkpoints := checkpointmemory.New()
 	fakeModel := &scriptedModel{turns: []scriptedTurn{
 		{
@@ -1025,7 +1107,6 @@ func TestAgentRecordsApprovalRequiredToolResult(t *testing.T) {
 				},
 			}},
 		},
-		{events: []model.Event{{Delta: "final after approval request"}}},
 	}}
 	agent := New(Config{
 		Model:       fakeModel,
@@ -1042,7 +1123,14 @@ func TestAgentRecordsApprovalRequiredToolResult(t *testing.T) {
 		types = append(types, event.Type)
 	}
 	assertContainsEvent(t, types, EventApprovalRequested)
-	assertContainsEvent(t, types, EventToolError)
+	for _, eventType := range types {
+		if eventType == EventToolError || eventType == EventRunDone || eventType == EventRunError {
+			t.Fatalf("paused approval emitted terminal/progress event %q: %#v", eventType, types)
+		}
+	}
+	if len(fakeModel.requests) != 1 {
+		t.Fatalf("model calls after approval pause = %d, want 1", len(fakeModel.requests))
+	}
 
 	cp, err := checkpoints.Load(context.Background(), "run_approval")
 	if err != nil {
@@ -1053,6 +1141,39 @@ func TestAgentRecordsApprovalRequiredToolResult(t *testing.T) {
 	}
 	if cp.State.Approval.Waiting.ToolCallID != "call_approval" {
 		t.Fatalf("approval tool call id = %q", cp.State.Approval.Waiting.ToolCallID)
+	}
+	if cp.State.Phase != harness.RunPhaseApproval || cp.State.Control.Status != harness.RunStatusWaitingSubmit {
+		t.Fatalf("approval pause state = %#v", cp.State)
+	}
+	if cp.State.Tool.Active == nil || cp.State.Tool.Active.ID != "call_approval" {
+		t.Fatalf("approval pause lost active tool call: %#v", cp.State.Tool)
+	}
+}
+
+func TestAgentRunReturnsApprovalRequiredWhenPaused(t *testing.T) {
+	fakeModel := &scriptedModel{turns: []scriptedTurn{{
+		events: []model.Event{{
+			Message: &model.Message{
+				ToolCalls: []model.ToolCallSpec{{
+					ID:        "call_approval",
+					Name:      "needs_approval",
+					Arguments: json.RawMessage(`{}`),
+				}},
+			},
+		}},
+	}}}
+	agent := New(Config{
+		Model:       fakeModel,
+		Tools:       []Tool{approvalTool{}},
+		Checkpoints: checkpointmemory.New(),
+	})
+
+	result, err := agent.Run(context.Background(), Task{RunID: "run_approval_result", Input: "try risky thing"})
+	if !errors.Is(err, approval.ErrRequired) {
+		t.Fatalf("Run error = %v, want approval required", err)
+	}
+	if result == nil || result.RunID != "run_approval_result" || result.Output != "" {
+		t.Fatalf("paused Run result = %#v", result)
 	}
 }
 
@@ -1148,6 +1269,59 @@ func TestAgentApprovalTimeoutEmitsExpired(t *testing.T) {
 	}
 	if len(cp.State.Approval.Resolved) != 1 || cp.State.Approval.Resolved[0].Reason != approval.ErrorExpired {
 		t.Fatalf("expected expired approval decision, got %#v", cp.State.Approval)
+	}
+}
+
+func TestAgentApprovalAbortCancelsRun(t *testing.T) {
+	checkpoints := checkpointmemory.New()
+	fakeModel := &scriptedModel{turns: []scriptedTurn{{
+		events: []model.Event{{
+			Message: &model.Message{
+				ToolCalls: []model.ToolCallSpec{{
+					ID:        "call_approval",
+					Name:      "needs_approval",
+					Arguments: json.RawMessage(`{}`),
+				}},
+			},
+		}},
+	}}}
+	agent := New(Config{
+		Model: fakeModel,
+		Tools: []Tool{approvalTool{}},
+		Approval: approval.BrokerFunc(func(context.Context, approval.Request) (approval.Decision, error) {
+			return approval.Decision{
+				RequestID: "approval_test",
+				Action:    approval.DecisionAbort,
+				Scope:     approval.ScopeOnce,
+				Reason:    "operator stopped the run",
+				DecidedAt: time.Now().UTC(),
+			}, nil
+		}),
+		Checkpoints: checkpoints,
+	})
+
+	events, err := agent.Stream(context.Background(), Task{RunID: "run_approval_abort", Input: "try risky thing"})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	var types []EventType
+	for event := range events {
+		types = append(types, event.Type)
+	}
+	assertContainsEvent(t, types, EventApprovalResolved)
+	assertContainsEvent(t, types, EventRunCancelled)
+	cp, err := checkpoints.Load(context.Background(), "run_approval_abort")
+	if err != nil {
+		t.Fatalf("Load checkpoint returned error: %v", err)
+	}
+	if cp.State.Phase != harness.RunPhaseCancelled || cp.State.Control.Status != harness.RunStatusCancelled {
+		t.Fatalf("approval abort state = %#v", cp.State)
+	}
+	if got := stringValue(cp.State.Meta["error"]); got != "approval aborted: operator stopped the run" {
+		t.Fatalf("approval abort error = %q", got)
+	}
+	if cp.State.Approval.Waiting != nil || len(cp.State.Approval.Resolved) != 1 {
+		t.Fatalf("approval abort audit state = %#v", cp.State.Approval)
 	}
 }
 

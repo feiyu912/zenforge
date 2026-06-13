@@ -65,7 +65,17 @@ tool call, operation, risk, and payload. Resume emits `approval.requested` again
 with `resumed: true`, waits on the configured broker, then either continues the
 tool call or records the denial/expiry.
 
-Without a broker, approval-required tools fail closed.
+Without a broker, approval-required tools pause durably. ZenForge checkpoints
+the waiting request and active tool, emits `approval.requested`, and stops the
+current stream without `run.done` or `run.error`. `Agent.Run` returns
+`approval.ErrRequired`; the run can later continue through `Resume` with a
+broker.
+
+Approval rejection is a tool error that the model may handle. Approval abort is
+a run cancellation: the resolved decision is checkpointed for audit, followed
+by a cancelled terminal checkpoint and `run.cancelled`. The synchronous
+`Agent.Run` helper returns cancellation outcomes as errors compatible with
+`context.Canceled` or `context.DeadlineExceeded`.
 
 ## Shell Commands
 

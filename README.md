@@ -93,6 +93,7 @@ Config is JSON. See [`docs/config-reference.md`](docs/config-reference.md) and [
 - Single `zenforge.Agent` with `Stream`, `Run`, `Resume`.
 - Plan/execute preset with built-in todo manager.
 - Run-scoped pending approval broker (`approval.PendingBroker`).
+- Broker-free approval requests pause durably instead of allowing the model to continue past a risky tool.
 - Durable event log and checkpoint stores: memory, JSONL, SQLite.
 - Sub-agent runtime tool with checkpoint-aware child resume; nested sub-agents blocked by default.
 - Host-owned sub-agent limits drive the advertised task schema and cannot be widened by model requests.
@@ -248,6 +249,9 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - HTTP handler method guards are covered across run, resume, event, live event, and approval endpoints.
 - MVP validation maps HTTP handler method guards to a concrete test.
 - HTTP resume distinguishes invalid POST JSON from a missing run id.
+- Approval without a broker closes the current stream at a resumable waiting checkpoint; `Run` returns `approval.ErrRequired`.
+- Approval abort decisions persist a cancelled terminal checkpoint instead of a generic failed run.
+- `Agent.Run` returns cancellation and deadline terminal events as matching Go errors.
 - MVP validation maps HTTP resume invalid JSON handling to a concrete test.
 - `sandbox.State` for cross-run session continuity.
 - Trace metadata enrichment.
