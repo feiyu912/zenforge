@@ -928,7 +928,10 @@ func (a *Agent) resumeWaitingApproval(ctx context.Context, emit eventEmitter, ch
 	if err != nil {
 		return err
 	}
-	state.ResolveApproval(approvalDecisionState(decision))
+	decision = normalizeApprovalDecision(decision)
+	if err := resolveApproval(state, req, decision); err != nil {
+		return err
+	}
 	if err := checkpointState(); err != nil {
 		return err
 	}
@@ -1077,49 +1080,26 @@ func (a *Agent) runPendingTools(ctx context.Context, emit eventEmitter, checkpoi
 		}
 		applySandboxResultState(state, result)
 		if req, ok := approval.RequestFromResult(result); ok {
-			state.SetWaitingApproval(approvalRequestState(req, call))
-			if err := checkpointState(); err != nil {
+			req = normalizeApprovalRequest(req, *state, call)
+			if err := req.Validate(); err != nil {
 				return err
 			}
-			if err := emit(EventApprovalRequested, map[string]any{
-				"requestId":  req.ID,
-				"toolCallId": call.ID,
-				"toolName":   call.Name,
-				"operation":  req.Operation,
-				"risk":       string(req.Risk),
-				"request":    req,
-			}); err != nil {
-				return err
-			}
-			if a.config.Approval == nil {
-				return errApprovalPending
-			}
-			decision, approvalErr := a.config.Approval.Request(ctx, req)
-			if approvalErr != nil {
-				return approvalErr
-			}
-			state.ResolveApproval(approvalDecisionState(decision))
-			if err := checkpointState(); err != nil {
-				return err
-			}
-			resolvedType := EventApprovalResolved
-			if decision.Action == approval.DecisionReject && decision.Reason == approval.ErrorExpired {
-				resolvedType = EventApprovalExpired
-			}
-			if err := emit(resolvedType, map[string]any{
-				"requestId":  decision.RequestID,
-				"toolCallId": call.ID,
-				"toolName":   call.Name,
-				"action":     string(decision.Action),
-				"scope":      string(decision.Scope),
-				"reason":     decision.Reason,
-			}); err != nil {
-				return err
-			}
-			if decision.Action == approval.DecisionAbort {
-				return approvalAbortError{reason: decision.Reason}
-			}
-			if approval.IsApprovedAction(decision.Action) {
+			if decision, reused := reusedApprovalDecision(*state, req); reused {
+				state.ResolveApproval(approvalDecisionState(decision))
+				if err := checkpointState(); err != nil {
+					return err
+				}
+				if err := emit(EventApprovalResolved, map[string]any{
+					"requestId":  decision.RequestID,
+					"toolCallId": call.ID,
+					"toolName":   call.Name,
+					"action":     string(decision.Action),
+					"scope":      string(decision.Scope),
+					"reason":     decision.Reason,
+					"reused":     true,
+				}); err != nil {
+					return err
+				}
 				approvedCall := call
 				approvedCall.Meta = approval.ApprovedMetadata(call.Meta, req, decision)
 				result, err = a.invokeTool(ctx, *state, approvedCall)
@@ -1131,10 +1111,68 @@ func (a *Agent) runPendingTools(ctx context.Context, emit eventEmitter, checkpoi
 				}
 				applySandboxResultState(state, result)
 			} else {
-				result = tool.Result{Error: approval.ErrorRejected, ExitCode: 1, Structured: map[string]any{
-					"approval": req,
-					"decision": decision,
-				}}
+				state.SetWaitingApproval(approvalRequestState(req, call))
+				if err := checkpointState(); err != nil {
+					return err
+				}
+				if err := emit(EventApprovalRequested, map[string]any{
+					"requestId":  req.ID,
+					"toolCallId": call.ID,
+					"toolName":   call.Name,
+					"operation":  req.Operation,
+					"risk":       string(req.Risk),
+					"request":    req,
+				}); err != nil {
+					return err
+				}
+				if a.config.Approval == nil {
+					return errApprovalPending
+				}
+				decision, approvalErr := a.config.Approval.Request(ctx, req)
+				if approvalErr != nil {
+					return approvalErr
+				}
+				decision = normalizeApprovalDecision(decision)
+				if err := resolveApproval(state, req, decision); err != nil {
+					return err
+				}
+				if err := checkpointState(); err != nil {
+					return err
+				}
+				resolvedType := EventApprovalResolved
+				if decision.Action == approval.DecisionReject && decision.Reason == approval.ErrorExpired {
+					resolvedType = EventApprovalExpired
+				}
+				if err := emit(resolvedType, map[string]any{
+					"requestId":  decision.RequestID,
+					"toolCallId": call.ID,
+					"toolName":   call.Name,
+					"action":     string(decision.Action),
+					"scope":      string(decision.Scope),
+					"reason":     decision.Reason,
+				}); err != nil {
+					return err
+				}
+				if decision.Action == approval.DecisionAbort {
+					return approvalAbortError{reason: decision.Reason}
+				}
+				if approval.IsApprovedAction(decision.Action) {
+					approvedCall := call
+					approvedCall.Meta = approval.ApprovedMetadata(call.Meta, req, decision)
+					result, err = a.invokeTool(ctx, *state, approvedCall)
+					if err != nil && result.Error == "" {
+						result = tool.Result{Error: err.Error(), ExitCode: 1}
+					}
+					if result.Error != "" && result.ExitCode == 0 {
+						result.ExitCode = 1
+					}
+					applySandboxResultState(state, result)
+				} else {
+					result = tool.Result{Error: approval.ErrorRejected, ExitCode: 1, Structured: map[string]any{
+						"approval": req,
+						"decision": decision,
+					}}
+				}
 			}
 		}
 		status := harness.ToolCallDone
@@ -1309,9 +1347,22 @@ func approvalRequestState(req approval.Request, call harness.ToolCallState) harn
 		Description: req.Description,
 		Risk:        string(req.Risk),
 		Options:     options,
-		Payload:     req.Payload,
+		Payload:     cloneMap(req.Payload),
 		ExpiresAt:   req.ExpiresAt,
 	}
+}
+
+func normalizeApprovalRequest(req approval.Request, state harness.RunState, call harness.ToolCallState) approval.Request {
+	req.RunID = state.RunID
+	req.ToolCallID = call.ID
+	req.ToolName = call.Name
+	if req.ID == "" {
+		req.ID = approval.NewRequestID(state.RunID, call.ID, req.Operation)
+	}
+	if req.CreatedAt.IsZero() {
+		req.CreatedAt = time.Now().UTC()
+	}
+	return req
 }
 
 func approvalRequestFromState(state harness.ApprovalRequestState, runID string, call harness.ToolCallState) approval.Request {
@@ -1357,9 +1408,78 @@ func approvalDecisionState(decision approval.Decision) harness.ApprovalDecisionS
 		Action:    string(decision.Action),
 		Scope:     string(decision.Scope),
 		Reason:    decision.Reason,
-		Payload:   decision.Payload,
+		Payload:   cloneMap(decision.Payload),
 		DecidedAt: decision.DecidedAt,
 	}
+}
+
+func normalizeApprovalDecision(decision approval.Decision) approval.Decision {
+	if decision.Scope == "" {
+		decision.Scope = approval.ScopeOnce
+	}
+	if decision.DecidedAt.IsZero() {
+		decision.DecidedAt = time.Now().UTC()
+	}
+	return decision
+}
+
+func resolveApproval(state *harness.RunState, req approval.Request, decision approval.Decision) error {
+	decision = normalizeApprovalDecision(decision)
+	if err := decision.Validate(); err != nil {
+		return err
+	}
+	if decision.RequestID != req.ID {
+		return fmt.Errorf("approval decision request id %q does not match %q", decision.RequestID, req.ID)
+	}
+	var scopeKey string
+	if approval.IsApprovedAction(decision.Action) && decision.Scope != approval.ScopeOnce {
+		var err error
+		scopeKey, err = approval.ScopeKey(req, decision.Scope)
+		if err != nil {
+			return err
+		}
+	}
+	state.ResolveApproval(approvalDecisionState(decision))
+	if scopeKey == "" {
+		return nil
+	}
+	grant := harness.ApprovalGrantState{
+		RequestID: decision.RequestID,
+		Action:    string(decision.Action),
+		Scope:     string(decision.Scope),
+		GrantedAt: decision.DecidedAt,
+	}
+	switch decision.Scope {
+	case approval.ScopeRun:
+		grant.Fingerprint = scopeKey
+	case approval.ScopeRule:
+		grant.RuleKey = scopeKey
+	}
+	state.AddApprovalGrant(grant)
+	return nil
+}
+
+func reusedApprovalDecision(state harness.RunState, req approval.Request) (approval.Decision, bool) {
+	for i := len(state.Approval.Grants) - 1; i >= 0; i-- {
+		grant := state.Approval.Grants[i]
+		scope := approval.DecisionScope(grant.Scope)
+		key, err := approval.ScopeKey(req, scope)
+		if err != nil {
+			continue
+		}
+		matches := scope == approval.ScopeRun && grant.Fingerprint == key ||
+			scope == approval.ScopeRule && grant.RuleKey == key
+		if matches && approval.IsApprovedAction(grant.Action) {
+			return approval.Decision{
+				RequestID: req.ID,
+				Action:    approval.DecisionAction(grant.Action),
+				Scope:     scope,
+				Reason:    approval.ReasonReused,
+				DecidedAt: time.Now().UTC(),
+			}, true
+		}
+	}
+	return approval.Decision{}, false
 }
 
 func plannerTodos(value any) ([]harness.TodoState, bool) {

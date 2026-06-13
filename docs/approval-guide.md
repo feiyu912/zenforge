@@ -79,11 +79,26 @@ Once:
 
 Run:
 
-- applies to same fingerprint for the current run.
+- applies to the exact same non-empty `fingerprint` for the current run.
 
 Rule:
 
-- applies to same rule key for the current run.
+- applies to the exact same non-empty `ruleKey` for the current run.
+
+Approved run/rule decisions create grants in `RunState.Approval.Grants`. Grants
+are checkpointed, so matching tool calls can continue after resume without
+asking the broker again. Every reuse still appends a resolved audit decision
+and emits `approval.resolved` with `reused: true`; it does not emit a new
+`approval.requested`.
+
+A run-scoped approval without a request fingerprint, or a rule-scoped approval
+without a request rule key, is invalid and fails closed. A different key always
+requires a new broker decision.
+
+The harness owns approval routing identity. It overwrites tool-provided
+`runId`, `toolCallId`, and `toolName` with the active runtime values before
+checkpointing or calling a broker. A broker decision must return the exact
+pending `requestId`; mismatches fail closed without creating a grant.
 
 Cross-run persistent approvals are intentionally post-MVP.
 

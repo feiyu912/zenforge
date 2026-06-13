@@ -94,6 +94,7 @@ Config is JSON. See [`docs/config-reference.md`](docs/config-reference.md) and [
 - Plan/execute preset with built-in todo manager.
 - Run-scoped pending approval broker (`approval.PendingBroker`).
 - Broker-free approval requests pause durably instead of allowing the model to continue past a risky tool.
+- Run and rule approval scopes are durable grants matched by exact fingerprint or rule key.
 - Durable event log and checkpoint stores: memory, JSONL, SQLite.
 - Sub-agent runtime tool with checkpoint-aware child resume; nested sub-agents blocked by default.
 - Host-owned sub-agent limits drive the advertised task schema and cannot be widened by model requests.
@@ -172,7 +173,7 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 
 ## Project Status
 
-`v0.1.0` is the first usable release candidate. The current `main` branch adds the following on top of the v0.1.0 tag without changing the public surface:
+`v0.1.0` is the first usable release candidate. The current `main` branch adds the following on top of the v0.1.0 tag without intentional breaking changes:
 
 - `server/harnesshttp` access control hook for auth and tenancy injection.
 - `eventlog.Bus` and `eventlog.FanoutStore` for live multi-subscriber event fanout.
@@ -252,6 +253,8 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - Approval without a broker closes the current stream at a resumable waiting checkpoint; `Run` returns `approval.ErrRequired`.
 - Approval abort decisions persist a cancelled terminal checkpoint instead of a generic failed run.
 - `Agent.Run` returns cancellation and deadline terminal events as matching Go errors.
+- Approval run/rule grants survive checkpoints and resume, while mismatched scope keys require a new decision.
+- Harness-owned approval run/tool identity overrides tool-provided values, and mismatched broker decision IDs fail closed.
 - MVP validation maps HTTP resume invalid JSON handling to a concrete test.
 - `sandbox.State` for cross-run session continuity.
 - Trace metadata enrichment.

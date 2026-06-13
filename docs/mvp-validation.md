@@ -65,6 +65,9 @@ Markdown document links.
 | shell policy can produce broker-free approval plans | `approval.TestRequiredPlanValidatesRequest`, `tools/shell.TestShellApprovalPlanFromReview` |
 | missing approval broker pauses at a resumable checkpoint | `TestAgentPausesOnApprovalWithoutBroker`, `TestAgentRunReturnsApprovalRequiredWhenPaused`, `TestAgentResumeWaitingApprovalWithoutBrokerStaysPaused` |
 | approval abort persists a cancelled terminal run | `TestAgentApprovalAbortCancelsRun` |
+| run/rule approval scopes reuse only exact matching keys | `TestAgentReusesApprovalScopeWithinRun`, `TestAgentDoesNotReuseApprovalForDifferentScopeKey`, `approval.TestScopeKeyRequiresMatchingRequestIdentity` |
+| approval scope grants survive checkpoint resume | `TestAgentResumeReusesCheckpointedApprovalGrant`, `harness.TestApprovalGrantReplacesMatchingScopeKey` |
+| approval routing identity is harness-owned and decision IDs must match | `TestAgentNormalizesApprovalRuntimeIdentity`, `TestResolveApprovalRejectsMismatchedDecisionRequest` |
 | MCP tools adapt into ZenForge tools | `adapters/mcp.TestToolsAdaptsMCPTool`, `adapters/mcp.TestJSONRPCClientListsAndCallsTools` |
 | memory entries augment normalized tasks | `adapters/memory.TestAugmentTaskAddsMemoryBlockAndMetadata` |
 | memory scope metadata filters cross-tenant entries | `adapters/memory.TestScopedStoreFiltersEntriesByQueryMetadata`, `adapters/memory.TestAugmentTaskUsesScopedStoreMetadata` |

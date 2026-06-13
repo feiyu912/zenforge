@@ -112,6 +112,7 @@ const (
 type ApprovalState struct {
 	Waiting  *ApprovalRequestState   `json:"waiting,omitempty"`
 	Resolved []ApprovalDecisionState `json:"resolved,omitempty"`
+	Grants   []ApprovalGrantState    `json:"grants,omitempty"`
 }
 
 type ApprovalRequestState struct {
@@ -135,6 +136,15 @@ type ApprovalDecisionState struct {
 	Scope     string         `json:"scope,omitempty"`
 	Payload   map[string]any `json:"payload,omitempty"`
 	DecidedAt time.Time      `json:"decidedAt"`
+}
+
+type ApprovalGrantState struct {
+	RequestID   string    `json:"requestId"`
+	Action      string    `json:"action"`
+	Scope       string    `json:"scope"`
+	Fingerprint string    `json:"fingerprint,omitempty"`
+	RuleKey     string    `json:"ruleKey,omitempty"`
+	GrantedAt   time.Time `json:"grantedAt"`
 }
 
 type SubtaskState struct {

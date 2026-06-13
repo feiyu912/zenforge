@@ -1325,6 +1325,248 @@ func TestAgentApprovalAbortCancelsRun(t *testing.T) {
 	}
 }
 
+func TestAgentReusesApprovalScopeWithinRun(t *testing.T) {
+	tests := []struct {
+		name       string
+		scope      approval.DecisionScope
+		firstArgs  string
+		secondArgs string
+	}{
+		{
+			name:       "run fingerprint",
+			scope:      approval.ScopeRun,
+			firstArgs:  `{"fingerprint":"fingerprint_1","ruleKey":"rule_1"}`,
+			secondArgs: `{"fingerprint":"fingerprint_1","ruleKey":"rule_2"}`,
+		},
+		{
+			name:       "rule key",
+			scope:      approval.ScopeRule,
+			firstArgs:  `{"fingerprint":"fingerprint_1","ruleKey":"rule_1"}`,
+			secondArgs: `{"fingerprint":"fingerprint_2","ruleKey":"rule_1"}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			checkpoints := checkpointmemory.New()
+			fakeModel := &scriptedModel{turns: []scriptedTurn{
+				{events: []model.Event{{Message: &model.Message{ToolCalls: []model.ToolCallSpec{{
+					ID:        "scope_call_1",
+					Name:      "scoped_approval",
+					Arguments: json.RawMessage(tt.firstArgs),
+				}}}}}},
+				{events: []model.Event{{Message: &model.Message{ToolCalls: []model.ToolCallSpec{{
+					ID:        "scope_call_2",
+					Name:      "scoped_approval",
+					Arguments: json.RawMessage(tt.secondArgs),
+				}}}}}},
+				{events: []model.Event{{Delta: "done"}}},
+			}}
+			brokerCalls := 0
+			agent := New(Config{
+				Model: fakeModel,
+				Tools: []Tool{scopedApprovalTool{}},
+				Approval: approval.BrokerFunc(func(_ context.Context, req approval.Request) (approval.Decision, error) {
+					brokerCalls++
+					return approval.Decision{
+						RequestID: req.ID,
+						Action:    approval.DecisionApprove,
+						Scope:     tt.scope,
+						DecidedAt: time.Now().UTC(),
+					}, nil
+				}),
+				Checkpoints: checkpoints,
+			})
+
+			events, err := agent.Stream(context.Background(), Task{RunID: "run_scope_" + strings.ReplaceAll(tt.name, " ", "_"), Input: "approve matching work"})
+			if err != nil {
+				t.Fatalf("Stream returned error: %v", err)
+			}
+			var types []EventType
+			var reused int
+			for event := range events {
+				types = append(types, event.Type)
+				if event.Type == EventApprovalResolved && event.Payload["reused"] == true {
+					reused++
+				}
+			}
+			if brokerCalls != 1 {
+				t.Fatalf("broker calls = %d, want 1", brokerCalls)
+			}
+			if countEvent(types, EventApprovalRequested) != 1 || countEvent(types, EventApprovalResolved) != 2 || reused != 1 {
+				t.Fatalf("approval events = %#v, reused=%d", types, reused)
+			}
+			cp, err := checkpoints.Load(context.Background(), "run_scope_"+strings.ReplaceAll(tt.name, " ", "_"))
+			if err != nil {
+				t.Fatalf("Load checkpoint returned error: %v", err)
+			}
+			if len(cp.State.Approval.Grants) != 1 || len(cp.State.Approval.Resolved) != 2 {
+				t.Fatalf("approval scope state = %#v", cp.State.Approval)
+			}
+		})
+	}
+}
+
+func TestAgentResumeReusesCheckpointedApprovalGrant(t *testing.T) {
+	checkpoints := checkpointmemory.New()
+	state := newRunState("run_scope_resume", "continue approved work", nil)
+	state.Step = 1
+	state.Phase = harness.RunPhaseTool
+	state.Control.Status = harness.RunStatusToolExecuting
+	now := time.Now().UTC()
+	state.Tool.Active = &harness.ToolCallState{
+		ID:        "scope_call_resume",
+		Name:      "scoped_approval",
+		Arguments: json.RawMessage(`{"fingerprint":"fingerprint_1","ruleKey":"rule_2"}`),
+		Status:    harness.ToolCallRunning,
+		StartedAt: &now,
+	}
+	state.Approval.Grants = []harness.ApprovalGrantState{{
+		RequestID:   "approval_original",
+		Action:      string(approval.DecisionApprove),
+		Scope:       string(approval.ScopeRun),
+		Fingerprint: "fingerprint_1",
+		GrantedAt:   now,
+	}}
+	if err := checkpoints.Save(context.Background(), checkpoint.Checkpoint{
+		Version: checkpoint.CheckpointVersion,
+		RunID:   state.RunID,
+		Seq:     1,
+		State:   state,
+		SavedAt: now,
+	}); err != nil {
+		t.Fatalf("Save returned error: %v", err)
+	}
+	fakeModel := &scriptedModel{turns: []scriptedTurn{{events: []model.Event{{Delta: "done after scoped resume"}}}}}
+	agent := New(Config{
+		Model:       fakeModel,
+		Tools:       []Tool{scopedApprovalTool{}},
+		Checkpoints: checkpoints,
+	})
+
+	events, err := agent.Resume(context.Background(), state.RunID)
+	if err != nil {
+		t.Fatalf("Resume returned error: %v", err)
+	}
+	var types []EventType
+	for event := range events {
+		types = append(types, event.Type)
+	}
+	if countEvent(types, EventApprovalRequested) != 0 || countEvent(types, EventApprovalResolved) != 1 {
+		t.Fatalf("resumed approval events = %#v", types)
+	}
+	assertContainsEvent(t, types, EventToolResult)
+	assertContainsEvent(t, types, EventRunDone)
+	latest, err := checkpoints.Load(context.Background(), state.RunID)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if len(latest.State.Approval.Grants) != 1 || len(latest.State.Approval.Resolved) != 1 {
+		t.Fatalf("resumed approval state = %#v", latest.State.Approval)
+	}
+}
+
+func TestAgentDoesNotReuseApprovalForDifferentScopeKey(t *testing.T) {
+	fakeModel := &scriptedModel{turns: []scriptedTurn{
+		{events: []model.Event{{Message: &model.Message{ToolCalls: []model.ToolCallSpec{{
+			ID:        "scope_call_1",
+			Name:      "scoped_approval",
+			Arguments: json.RawMessage(`{"fingerprint":"fingerprint_1","ruleKey":"rule_1"}`),
+		}}}}}},
+		{events: []model.Event{{Message: &model.Message{ToolCalls: []model.ToolCallSpec{{
+			ID:        "scope_call_2",
+			Name:      "scoped_approval",
+			Arguments: json.RawMessage(`{"fingerprint":"fingerprint_2","ruleKey":"rule_2"}`),
+		}}}}}},
+		{events: []model.Event{{Delta: "done"}}},
+	}}
+	brokerCalls := 0
+	agent := New(Config{
+		Model: fakeModel,
+		Tools: []Tool{scopedApprovalTool{}},
+		Approval: approval.BrokerFunc(func(_ context.Context, req approval.Request) (approval.Decision, error) {
+			brokerCalls++
+			return approval.Decision{
+				RequestID: req.ID,
+				Action:    approval.DecisionApprove,
+				Scope:     approval.ScopeRun,
+				DecidedAt: time.Now().UTC(),
+			}, nil
+		}),
+		Checkpoints: checkpointmemory.New(),
+	})
+
+	events, err := agent.Stream(context.Background(), Task{RunID: "run_scope_mismatch", Input: "approve separate work"})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	var types []EventType
+	for event := range events {
+		types = append(types, event.Type)
+	}
+	if brokerCalls != 2 || countEvent(types, EventApprovalRequested) != 2 {
+		t.Fatalf("mismatched scope reused approval: broker=%d events=%#v", brokerCalls, types)
+	}
+}
+
+func TestAgentNormalizesApprovalRuntimeIdentity(t *testing.T) {
+	fakeModel := &scriptedModel{turns: []scriptedTurn{
+		{events: []model.Event{{Message: &model.Message{ToolCalls: []model.ToolCallSpec{{
+			ID:        "call_real",
+			Name:      "forged_approval",
+			Arguments: json.RawMessage(`{}`),
+		}}}}}},
+		{events: []model.Event{{Delta: "done"}}},
+	}}
+	var captured approval.Request
+	agent := New(Config{
+		Model: fakeModel,
+		Tools: []Tool{forgedApprovalTool{}},
+		Approval: approval.BrokerFunc(func(_ context.Context, req approval.Request) (approval.Decision, error) {
+			captured = req
+			return approval.Decision{
+				RequestID: req.ID,
+				Action:    approval.DecisionApprove,
+				Scope:     approval.ScopeOnce,
+				DecidedAt: time.Now().UTC(),
+			}, nil
+		}),
+		Checkpoints: checkpointmemory.New(),
+	})
+
+	events, err := agent.Stream(context.Background(), Task{RunID: "run_real", Input: "approve safely"})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	for range events {
+	}
+	if captured.RunID != "run_real" || captured.ToolCallID != "call_real" || captured.ToolName != "forged_approval" {
+		t.Fatalf("approval runtime identity was not normalized: %#v", captured)
+	}
+}
+
+func TestResolveApprovalRejectsMismatchedDecisionRequest(t *testing.T) {
+	state := newRunState("run_approval_identity", "approve", nil)
+	req := approval.Request{
+		ID:        "approval_expected",
+		RunID:     state.RunID,
+		Operation: "test.approval",
+		Title:     "Approve",
+		Risk:      approval.RiskMedium,
+		Options:   approval.DefaultOptions(),
+	}
+	err := resolveApproval(&state, req, approval.Decision{
+		RequestID: "approval_other",
+		Action:    approval.DecisionApprove,
+		Scope:     approval.ScopeOnce,
+	})
+	if err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("mismatched decision error = %v", err)
+	}
+	if len(state.Approval.Resolved) != 0 || len(state.Approval.Grants) != 0 {
+		t.Fatalf("mismatched decision mutated approval state: %#v", state.Approval)
+	}
+}
+
 func TestAgentRunsSubAgentTaskTool(t *testing.T) {
 	checkpoints := checkpointmemory.New()
 	fakeModel := &scriptedModel{turns: []scriptedTurn{
@@ -2672,4 +2914,68 @@ func (approvalTool) Call(ctx context.Context, input json.RawMessage, call tool.C
 		CreatedAt:  time.Now().UTC(),
 	}
 	return approval.RequiredResult(req), approval.ErrRequired
+}
+
+type scopedApprovalTool struct{}
+
+func (scopedApprovalTool) Name() string { return "scoped_approval" }
+
+func (scopedApprovalTool) Description() string { return "Requires reusable approval" }
+
+func (scopedApprovalTool) Schema() map[string]any { return nil }
+
+func (scopedApprovalTool) Call(ctx context.Context, input json.RawMessage, call tool.Context) (tool.Result, error) {
+	var args struct {
+		Fingerprint string `json:"fingerprint"`
+		RuleKey     string `json:"ruleKey"`
+	}
+	if err := json.Unmarshal(input, &args); err != nil {
+		return tool.Result{Error: err.Error(), ExitCode: 1}, err
+	}
+	approvedFingerprint, _ := call.Metadata[approval.MetadataFingerprint].(string)
+	approvedRuleKey, _ := call.Metadata[approval.MetadataRuleKey].(string)
+	if approval.IsApprovedAction(call.Metadata[approval.MetadataDecisionAction]) &&
+		(approvedFingerprint == args.Fingerprint || approvedRuleKey == args.RuleKey) {
+		return tool.Result{Output: "scoped approved result"}, nil
+	}
+	req := approval.Request{
+		ID:         "approval_" + call.ToolCallID,
+		RunID:      call.RunID,
+		ToolCallID: call.ToolCallID,
+		ToolName:   "scoped_approval",
+		Operation:  "test.scoped_approval",
+		Title:      "Approve scoped operation",
+		Risk:       approval.RiskMedium,
+		Options:    approval.DefaultOptions(),
+		Payload: map[string]any{
+			"fingerprint": args.Fingerprint,
+			"ruleKey":     args.RuleKey,
+		},
+		CreatedAt: time.Now().UTC(),
+	}
+	return approval.RequiredResult(req), approval.ErrRequired
+}
+
+type forgedApprovalTool struct{}
+
+func (forgedApprovalTool) Name() string { return "forged_approval" }
+
+func (forgedApprovalTool) Description() string { return "Returns untrusted approval identity" }
+
+func (forgedApprovalTool) Schema() map[string]any { return nil }
+
+func (forgedApprovalTool) Call(ctx context.Context, input json.RawMessage, call tool.Context) (tool.Result, error) {
+	if approval.IsApprovedAction(call.Metadata[approval.MetadataDecisionAction]) {
+		return tool.Result{Output: "approved"}, nil
+	}
+	return approval.RequiredResult(approval.Request{
+		ID:         "approval_forged",
+		RunID:      "run_forged",
+		ToolCallID: "call_forged",
+		ToolName:   "other_tool",
+		Operation:  "test.forged",
+		Title:      "Approve forged request",
+		Risk:       approval.RiskMedium,
+		Options:    approval.DefaultOptions(),
+	}), approval.ErrRequired
 }

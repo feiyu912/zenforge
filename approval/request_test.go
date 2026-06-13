@@ -73,3 +73,45 @@ func TestRequiredPlanValidatesRequest(t *testing.T) {
 		t.Fatalf("optional plan Validate returned error: %v", err)
 	}
 }
+
+func TestScopeKeyRequiresMatchingRequestIdentity(t *testing.T) {
+	req := testScopeRequest()
+	if got, err := ScopeKey(req, ScopeRun); err != nil || got != "fingerprint_1" {
+		t.Fatalf("run scope key = %q, err=%v", got, err)
+	}
+	if got, err := ScopeKey(req, ScopeRule); err != nil || got != "rule_1" {
+		t.Fatalf("rule scope key = %q, err=%v", got, err)
+	}
+	delete(req.Payload, "fingerprint")
+	if _, err := ScopeKey(req, ScopeRun); err == nil {
+		t.Fatal("run scope accepted missing fingerprint")
+	}
+	delete(req.Payload, "ruleKey")
+	if _, err := ScopeKey(req, ScopeRule); err == nil {
+		t.Fatal("rule scope accepted missing rule key")
+	}
+}
+
+func TestDecisionValidationRejectsUnknownActionAndScope(t *testing.T) {
+	if err := (Decision{RequestID: "approval_1", Action: "permit"}).Validate(); err == nil {
+		t.Fatal("unknown decision action was accepted")
+	}
+	if err := (Decision{RequestID: "approval_1", Action: DecisionApprove, Scope: "forever"}).Validate(); err == nil {
+		t.Fatal("unknown decision scope was accepted")
+	}
+}
+
+func testScopeRequest() Request {
+	return Request{
+		ID:        "approval_1",
+		RunID:     "run_1",
+		Operation: "shell.command",
+		Title:     "Approve command",
+		Risk:      RiskHigh,
+		Options:   DefaultOptions(),
+		Payload: map[string]any{
+			"fingerprint": "fingerprint_1",
+			"ruleKey":     "rule_1",
+		},
+	}
+}

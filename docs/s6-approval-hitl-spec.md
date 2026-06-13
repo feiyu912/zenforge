@@ -265,11 +265,23 @@ retaining the operator's reason in run metadata.
 
 `ScopeRun`:
 
-- approval applies to matching fingerprint for current run.
+- approval applies to the exact matching non-empty fingerprint for current run.
 
 `ScopeRule`:
 
-- approval applies to matching rule key for current run.
+- approval applies to the exact matching non-empty rule key for current run.
+
+Approved run/rule decisions create durable grants in
+`RunState.Approval.Grants`. Matching requests reuse the grant after checkpoint
+load or resume, append another resolved decision for audit, and emit
+`approval.resolved` with `reused: true` without emitting a new request.
+Mismatched keys require a new decision. Missing keys make the scoped decision
+invalid rather than widening it.
+
+Approval routing fields are runtime-owned. Before persistence or broker
+dispatch, the harness replaces request `runId`, `toolCallId`, and `toolName`
+with the active run/tool identity. Broker decisions must match the pending
+request ID exactly.
 
 Persistent cross-run approvals are post-MVP.
 

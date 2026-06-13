@@ -13,6 +13,7 @@ const (
 	ErrorRequired = "approval_required"
 	ErrorRejected = "approval_rejected"
 	ErrorExpired  = "approval_expired"
+	ReasonReused  = "approval_scope_reused"
 )
 
 var ErrRequired = errors.New(ErrorRequired)
@@ -107,8 +108,18 @@ func (d Decision) Validate() error {
 	if d.RequestID == "" {
 		return fmt.Errorf("approval decision request id is required")
 	}
-	if d.Action == "" {
-		return fmt.Errorf("approval decision action is required")
+	switch d.Action {
+	case DecisionApprove, DecisionReject, DecisionAlways, DecisionAbort:
+	default:
+		if d.Action == "" {
+			return fmt.Errorf("approval decision action is required")
+		}
+		return fmt.Errorf("unsupported approval decision action %q", d.Action)
+	}
+	switch d.Scope {
+	case "", ScopeOnce, ScopeRun, ScopeRule:
+	default:
+		return fmt.Errorf("unsupported approval decision scope %q", d.Scope)
 	}
 	return nil
 }
@@ -155,6 +166,25 @@ func ApprovedMetadata(metadata map[string]any, req Request, decision Decision) m
 		out[MetadataRuleKey] = ruleKey
 	}
 	return out
+}
+
+func ScopeKey(req Request, scope DecisionScope) (string, error) {
+	switch scope {
+	case "", ScopeOnce:
+		return "", nil
+	case ScopeRun:
+		if fingerprint, ok := stringFromPayload(req.Payload, "fingerprint"); ok && fingerprint != "" {
+			return fingerprint, nil
+		}
+		return "", fmt.Errorf("approval run scope requires request fingerprint")
+	case ScopeRule:
+		if ruleKey, ok := stringFromPayload(req.Payload, "ruleKey"); ok && ruleKey != "" {
+			return ruleKey, nil
+		}
+		return "", fmt.Errorf("approval rule scope requires request ruleKey")
+	default:
+		return "", fmt.Errorf("unsupported approval scope %q", scope)
+	}
 }
 
 func IsApprovedAction(action any) bool {

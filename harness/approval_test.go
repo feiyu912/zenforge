@@ -19,3 +19,22 @@ func TestApprovalStateHelpers(t *testing.T) {
 		t.Fatalf("control not restored: %#v", state.Control)
 	}
 }
+
+func TestApprovalGrantReplacesMatchingScopeKey(t *testing.T) {
+	state := RunState{}
+	state.AddApprovalGrant(ApprovalGrantState{
+		RequestID:   "approval_1",
+		Action:      "approve",
+		Scope:       "run",
+		Fingerprint: "fingerprint_1",
+	})
+	state.AddApprovalGrant(ApprovalGrantState{
+		RequestID:   "approval_2",
+		Action:      "always",
+		Scope:       "run",
+		Fingerprint: "fingerprint_1",
+	})
+	if len(state.Approval.Grants) != 1 || state.Approval.Grants[0].RequestID != "approval_2" {
+		t.Fatalf("approval grants = %#v", state.Approval.Grants)
+	}
+}

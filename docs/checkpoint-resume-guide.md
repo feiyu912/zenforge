@@ -89,7 +89,7 @@ silently duplicate child work.
 
 ## Approval Resume
 
-If a run was waiting for approval, resume requires an approval broker:
+If a run was waiting for approval, resume can continue with an approval broker:
 
 ```go
 agent := zenforge.New(zenforge.Config{
@@ -100,4 +100,10 @@ agent := zenforge.New(zenforge.Config{
 
 On resume, ZenForge emits `approval.requested` again with `resumed: true`, waits
 for a decision, checkpoints the decision, and continues the tool call when the
-decision approves it.
+decision approves it. Without a broker, resume re-emits the request and leaves
+the waiting checkpoint unchanged.
+
+Approved run/rule grants are also part of checkpoint state. After resume, an
+exact fingerprint or rule-key match can reuse the grant without another broker
+wait; the runtime still records a resolved audit decision for that reuse.
+Grants never cross run IDs.

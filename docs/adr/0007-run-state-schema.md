@@ -21,7 +21,7 @@ payload.
 - pending/active tool call;
 - latest tool result;
 - todos;
-- approval wait/decision;
+- approval wait/decision and run-scoped grants;
 - subtask status;
 - run control state;
 - usage;

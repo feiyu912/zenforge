@@ -20,6 +20,18 @@ func (s *RunState) ResolveApproval(decision ApprovalDecisionState) {
 	}
 }
 
+func (s *RunState) AddApprovalGrant(grant ApprovalGrantState) {
+	for i, current := range s.Approval.Grants {
+		if current.Scope == grant.Scope &&
+			current.Fingerprint == grant.Fingerprint &&
+			current.RuleKey == grant.RuleKey {
+			s.Approval.Grants[i] = grant
+			return
+		}
+	}
+	s.Approval.Grants = append(s.Approval.Grants, grant)
+}
+
 func NewApprovalDecisionState(requestID, action, scope, reason string, payload map[string]any) ApprovalDecisionState {
 	return ApprovalDecisionState{
 		RequestID: requestID,

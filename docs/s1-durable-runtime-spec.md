@@ -180,6 +180,7 @@ const (
 type ApprovalState struct {
     Waiting  *ApprovalRequestState  `json:"waiting,omitempty"`
     Resolved []ApprovalDecisionState `json:"resolved,omitempty"`
+    Grants   []ApprovalGrantState    `json:"grants,omitempty"`
 }
 
 type ApprovalRequestState struct {
@@ -201,7 +202,20 @@ type ApprovalDecisionState struct {
     Payload   map[string]any `json:"payload,omitempty"`
     DecidedAt time.Time      `json:"decidedAt"`
 }
+
+type ApprovalGrantState struct {
+    RequestID   string    `json:"requestId"`
+    Action      string    `json:"action"`
+    Scope       string    `json:"scope"`
+    Fingerprint string    `json:"fingerprint,omitempty"`
+    RuleKey     string    `json:"ruleKey,omitempty"`
+    GrantedAt   time.Time `json:"grantedAt"`
+}
 ```
+
+Run/rule grants are explicit checkpoint state so approval reuse remains
+deterministic after process restart. They are scoped to one run and never imply
+cross-run authorization.
 
 ### Subtask State
 
