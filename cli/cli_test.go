@@ -245,6 +245,76 @@ func TestRunWorkspaceReadHonorsConfigLimit(t *testing.T) {
 	}
 }
 
+func TestRunWorkspaceReadHonorsConfigRoots(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test")
+	dir := t.TempDir()
+	workspaceDir := filepath.Join(dir, "workspace")
+	if err := os.MkdirAll(filepath.Join(workspaceDir, "docs"), 0o755); err != nil {
+		t.Fatalf("MkdirAll docs returned error: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(workspaceDir, "tmp"), 0o755); err != nil {
+		t.Fatalf("MkdirAll tmp returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceDir, "tmp", "secret.txt"), []byte("secret"), 0o644); err != nil {
+		t.Fatalf("WriteFile secret returned error: %v", err)
+	}
+	configPath := filepath.Join(dir, "zenforge.json")
+	config := configFile{
+		Workspace: workspaceConfig{Root: workspaceDir, ReadRoots: []string{"docs"}},
+		Shell:     shellConfig{Enabled: boolPtr(false)},
+		Approval:  approvalConfig{Mode: "never"},
+	}
+	data, err := json.Marshal(config)
+	if err != nil {
+		t.Fatalf("Marshal returned error: %v", err)
+	}
+	if err := os.WriteFile(configPath, data, 0o644); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
+	}
+
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "text/event-stream")
+		switch requests {
+		case 1:
+			_, _ = fmt.Fprint(w,
+				"data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_read\",\"type\":\"function\",\"function\":{\"name\":\"workspace_read\",\"arguments\":\"{\\\"path\\\":\\\"tmp/secret.txt\\\"}\"}}]}}]}\n\n"+
+					"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n"+
+					"data: [DONE]\n\n",
+			)
+		default:
+			_, _ = fmt.Fprint(w,
+				"data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"policy blocked\"}}]}\n\n"+
+					"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"+
+					"data: [DONE]\n\n",
+			)
+		}
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Main(context.Background(), []string{
+		"run",
+		"--config", configPath,
+		"--base-url", server.URL,
+		"--checkpoint-dir", filepath.Join(dir, "runs"),
+		"--planning", "disabled",
+		"read outside configured root",
+	}, IO{Stdout: &stdout, Stderr: &stderr})
+	if code != 0 {
+		t.Fatalf("code = %d, want 0; stderr=%q stdout=%q", code, stderr.String(), stdout.String())
+	}
+	if requests != 2 {
+		t.Fatalf("requests = %d, want 2", requests)
+	}
+	output := stdout.String()
+	if !strings.Contains(output, "tool workspace_read") || !strings.Contains(output, "policy blocked") {
+		t.Fatalf("unexpected output: %q", output)
+	}
+}
+
 func TestEventsPrintsTimeline(t *testing.T) {
 	dir := t.TempDir()
 	store := eventlogjsonl.New(dir)
@@ -442,7 +512,7 @@ func TestOptionsFromConfig(t *testing.T) {
 	config := configFile{
 		Model:     modelConfig{Provider: "anthropic", Name: "claude-test", APIKeyEnv: "TEST_KEY", BaseURL: "https://api.example"},
 		Agent:     agentConfig{Instructions: "Be exact.", MaxSteps: 3, Planning: false},
-		Workspace: workspaceConfig{Root: "repo", MaxReadBytes: 7, MaxWriteBytes: 8},
+		Workspace: workspaceConfig{Root: "repo", MaxReadBytes: 7, MaxWriteBytes: 8, ReadRoots: []string{"docs"}, WriteRoots: []string{"generated"}},
 		Shell: shellConfig{
 			Enabled:        &enabled,
 			Allow:          []string{"go test ./..."},
@@ -471,6 +541,9 @@ func TestOptionsFromConfig(t *testing.T) {
 	}
 	if opts.workspace != "repo" || opts.workspaceMaxRead != 7 || opts.workspaceMaxWrite != 8 || !opts.noShell || opts.shellTimeout.String() != "5s" || opts.shellMaxOutputBytes != 99 {
 		t.Fatalf("tool opts not applied: %#v", opts)
+	}
+	if strings.Join(opts.workspaceReadRoots, ",") != "docs" || strings.Join(opts.workspaceWriteRoots, ",") != "generated" {
+		t.Fatalf("workspace roots not applied: %#v", opts)
 	}
 	if opts.approve != "always" {
 		t.Fatalf("approval opts not applied: %#v", opts)

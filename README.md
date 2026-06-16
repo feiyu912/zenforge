@@ -235,9 +235,10 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - User-facing guides no longer present themselves as drafts and use current tool, shell, and sandbox APIs.
 - Approval guide examples use neutral core decisions, with platform payload mapping kept at adapter edges.
 - CLI workspace writes require a fresh read snapshot by default.
-- Quickstart and config reference document the CLI workspace write snapshot default.
+- Quickstart and config reference document the CLI workspace write snapshot default and configurable file roots.
 - CLI workspace read/write byte limits from config are applied at runtime.
 - MVP validation maps CLI workspace byte-limit enforcement to a concrete test.
+- CLI workspace read/write roots from config are applied to runtime file policy.
 - CLI config rejects invalid shell timeout durations instead of silently falling back.
 - Config reference and MVP validation document invalid shell timeout handling.
 - CLI config rejects invalid agent planning modes instead of disabling planning silently.

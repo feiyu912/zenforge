@@ -81,6 +81,11 @@ For SQLite local storage:
   overwriting an existing file.
 - `workspace.maxReadBytes` and `workspace.maxWriteBytes`: local workspace byte
   limits. Negative values make config loading fail.
+- `workspace.readRoots` and `workspace.writeRoots`: optional
+  workspace-relative roots for file tools. Empty lists keep the default
+  root-bounded behavior. When roots are configured, file operations outside
+  those roots are denied when `approval.mode` is `never`, or returned as
+  approval requests when approval is enabled.
 - `shell.enabled`: enables the local shell tool.
 - `shell.workingDir`: working directory for shell commands.
 - `shell.allow`: allowlisted shell command prefixes.

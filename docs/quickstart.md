@@ -45,6 +45,10 @@ Workspace writes are conservative by default. The CLI records file metadata when
 `workspace_read` succeeds, and `workspace_write` requires a fresh read snapshot
 before overwriting an existing file.
 
+To narrow the file surface further, set `workspace.readRoots` and
+`workspace.writeRoots` in `zenforge.json`, or pass repeatable flags such as
+`--workspace-read-root docs` and `--workspace-write-root generated`.
+
 ## 4. Inspect Events
 
 List known runs:

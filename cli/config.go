@@ -31,9 +31,11 @@ type agentConfig struct {
 }
 
 type workspaceConfig struct {
-	Root          string `json:"root,omitempty"`
-	MaxReadBytes  int64  `json:"maxReadBytes,omitempty"`
-	MaxWriteBytes int64  `json:"maxWriteBytes,omitempty"`
+	Root          string   `json:"root,omitempty"`
+	MaxReadBytes  int64    `json:"maxReadBytes,omitempty"`
+	MaxWriteBytes int64    `json:"maxWriteBytes,omitempty"`
+	ReadRoots     []string `json:"readRoots,omitempty"`
+	WriteRoots    []string `json:"writeRoots,omitempty"`
 }
 
 type shellConfig struct {
@@ -71,6 +73,8 @@ func defaultConfigFile() configFile {
 			Root:          defaults.workspace,
 			MaxReadBytes:  1_000_000,
 			MaxWriteBytes: 1_000_000,
+			ReadRoots:     []string(defaults.workspaceReadRoots),
+			WriteRoots:    []string(defaults.workspaceWriteRoots),
 		},
 		Shell: shellConfig{
 			Enabled:        &enabled,
@@ -147,6 +151,12 @@ func applyConfig(opts *options, config configFile) error {
 	}
 	if config.Workspace.MaxWriteBytes > 0 {
 		opts.workspaceMaxWrite = config.Workspace.MaxWriteBytes
+	}
+	if len(config.Workspace.ReadRoots) > 0 {
+		opts.workspaceReadRoots = multiFlag(append([]string(nil), config.Workspace.ReadRoots...))
+	}
+	if len(config.Workspace.WriteRoots) > 0 {
+		opts.workspaceWriteRoots = multiFlag(append([]string(nil), config.Workspace.WriteRoots...))
 	}
 	if config.Shell.WorkingDir != "" {
 		opts.workspace = config.Shell.WorkingDir

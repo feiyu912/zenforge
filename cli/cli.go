@@ -256,6 +256,8 @@ type options struct {
 	workspace           string
 	workspaceMaxRead    int64
 	workspaceMaxWrite   int64
+	workspaceReadRoots  multiFlag
+	workspaceWriteRoots multiFlag
 	instructions        string
 	provider            string
 	model               string
@@ -277,6 +279,8 @@ func defaultOptions() options {
 		workspace:           ".",
 		workspaceMaxRead:    1_000_000,
 		workspaceMaxWrite:   1_000_000,
+		workspaceReadRoots:  nil,
+		workspaceWriteRoots: nil,
 		instructions:        "You are a senior Go backend engineer. Be concise, careful, and use tools when helpful.",
 		provider:            "openai",
 		model:               "gpt-4.1",
@@ -295,6 +299,8 @@ func defaultOptions() options {
 func bindOptions(fs *flag.FlagSet, opts *options) {
 	fs.StringVar(&opts.configPath, "config", opts.configPath, "config file path")
 	fs.StringVar(&opts.workspace, "workspace", opts.workspace, "workspace root")
+	fs.Var(&opts.workspaceReadRoots, "workspace-read-root", "workspace-relative readable root; repeatable")
+	fs.Var(&opts.workspaceWriteRoots, "workspace-write-root", "workspace-relative writable root; repeatable")
 	fs.StringVar(&opts.instructions, "instructions", opts.instructions, "agent instructions")
 	fs.StringVar(&opts.provider, "provider", opts.provider, "model provider: openai|anthropic")
 	fs.StringVar(&opts.model, "model", opts.model, "OpenAI-compatible model name")
@@ -340,6 +346,7 @@ func buildAgent(ctx context.Context, opts options, ioStreams IO) (*zenforge.Agen
 		Workspace:              ws,
 		Snapshots:              workspacetools.NewSnapshotStore(),
 		RequireReadBeforeWrite: true,
+		Policy:                 workspaceFilePolicy(opts),
 	})
 	if err != nil {
 		return nil, err
@@ -386,6 +393,16 @@ func buildAgent(ctx context.Context, opts options, ioStreams IO) (*zenforge.Agen
 		MaxSteps:     opts.maxSteps,
 		Planning:     planningMode(opts.planning),
 	}), nil
+}
+
+func workspaceFilePolicy(opts options) policy.FilePolicy {
+	readRoots := []string(opts.workspaceReadRoots)
+	writeRoots := []string(opts.workspaceWriteRoots)
+	return policy.FilePolicy{
+		ReadRoots:       readRoots,
+		WriteRoots:      writeRoots,
+		RequireApproval: opts.approve != "never" && (len(readRoots) > 0 || len(writeRoots) > 0),
+	}
 }
 
 func buildModel(opts options) (model.Model, error) {

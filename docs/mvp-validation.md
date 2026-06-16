@@ -122,6 +122,7 @@ Markdown document links.
 | invalid provider/checkpoint config fails clearly | `TestOptionsFromConfigRejectsInvalidProviderAndCheckpoint` |
 | negative agent/workspace/shell limit config fails clearly | `TestOptionsFromConfigRejectsNegativeLimits` |
 | workspace byte limits from config are enforced by CLI runtime | `TestRunWorkspaceReadHonorsConfigLimit` |
+| workspace roots from config are enforced by CLI runtime | `TestOptionsFromConfig`, `TestRunWorkspaceReadHonorsConfigRoots` |
 | SQLite stores work through CLI | `TestEventsCanReadSQLiteStore`, `TestRunsCanReadSQLiteStore` |
 | model provider config works | `TestOptionsFromConfig` covers `model.provider` |
 | CLI argument errors are useful | `TestCLIReportsUsefulArgumentErrors` |
