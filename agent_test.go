@@ -22,7 +22,9 @@ import (
 	"github.com/feiyu912/zenforge/sandbox"
 	"github.com/feiyu912/zenforge/subagent"
 	"github.com/feiyu912/zenforge/tool"
+	workspacetools "github.com/feiyu912/zenforge/tools/workspace"
 	"github.com/feiyu912/zenforge/trace"
+	workspacelocal "github.com/feiyu912/zenforge/workspace/local"
 )
 
 func TestAgentStreamEmitsLifecycleEvents(t *testing.T) {
@@ -480,6 +482,56 @@ func TestAgentStreamRunsToolAndContinuesModelLoop(t *testing.T) {
 	}
 	if cp.State.Phase != "completed" {
 		t.Fatalf("checkpoint phase = %s, want completed", cp.State.Phase)
+	}
+}
+
+func TestAgentWorkspaceWriteEmitsChangedEventAndDirtyPath(t *testing.T) {
+	ws, err := workspacelocal.New(workspacelocal.Config{Root: t.TempDir(), CreateParentDir: true})
+	if err != nil {
+		t.Fatalf("New workspace returned error: %v", err)
+	}
+	writeTool, err := workspacetools.Write(workspacetools.Config{Workspace: ws})
+	if err != nil {
+		t.Fatalf("Write tool returned error: %v", err)
+	}
+	checkpoints := checkpointmemory.New()
+	fakeModel := &scriptedModel{turns: []scriptedTurn{
+		{events: []model.Event{{Message: &model.Message{ToolCalls: []model.ToolCallSpec{{
+			ID:        "call_write",
+			Name:      "workspace_write",
+			Arguments: json.RawMessage(`{"path":"notes/out.txt","content":"hello","description":"record output"}`),
+		}}}}}},
+		{events: []model.Event{{Delta: "done"}}},
+	}}
+	agent := New(Config{
+		Model:       fakeModel,
+		Tools:       []Tool{writeTool},
+		Checkpoints: checkpoints,
+	})
+
+	events, err := agent.Stream(context.Background(), Task{RunID: "run_workspace_write", Input: "write file"})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	var changed *Event
+	for event := range events {
+		if event.Type == EventWorkspaceChanged {
+			eventCopy := event
+			changed = &eventCopy
+		}
+	}
+	if changed == nil {
+		t.Fatal("workspace.changed event missing")
+	}
+	if changed.Payload["path"] != "notes/out.txt" || changed.Payload["toolCallId"] != "call_write" {
+		t.Fatalf("unexpected workspace.changed payload: %#v", changed.Payload)
+	}
+	cp, err := checkpoints.Load(context.Background(), "run_workspace_write")
+	if err != nil {
+		t.Fatalf("Load checkpoint returned error: %v", err)
+	}
+	if !reflect.DeepEqual(cp.State.Workspace.DirtyPaths, []string{"notes/out.txt"}) {
+		t.Fatalf("dirty paths = %#v, want notes/out.txt", cp.State.Workspace.DirtyPaths)
 	}
 }
 

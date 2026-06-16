@@ -222,6 +222,7 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - Plan/execute failure and cancellation paths fail closed when their terminal checkpoint cannot be saved.
 - Workspace tools enforce file read/write roots before adapter access, return approval requests for policy exceptions, and reuse approved fingerprint/rule metadata.
 - Workspace read-before-write snapshots are scoped by run and compare SHA256 in addition to size, mtime, and file type.
+- Successful `workspace_write` calls emit `workspace.changed` and persist dirty paths in run state.
 - Local workspace writes reject final symlink escapes and non-regular targets before writing.
 - Failed plan/execute saves cannot mutate the last durable checkpoint through shared state metadata.
 - Planner update failures are surfaced and checkpointed instead of emitting a false todo/task transition.

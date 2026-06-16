@@ -67,6 +67,7 @@ Markdown document links.
 | workspace file policy can produce approval requests | `tools/workspace.TestWorkspacePolicyReturnsApprovalRequest` |
 | workspace write can require fresh read snapshots | `tools/workspace.TestWorkspaceWriteRequiresFreshReadSnapshot`, `tools/workspace.TestWorkspaceWriteSnapshotsAreRunScoped` |
 | workspace snapshots detect same-size content changes | `tools/workspace.TestWorkspaceSnapshotDetectsContentHashChange` |
+| workspace writes emit durable change events and dirty paths | `TestAgentWorkspaceWriteEmitsChangedEventAndDirtyPath` |
 | shell command allowlist works | `tools/shell.TestShellAllowsAllowlistedCommand` |
 | shell allowlist blocks shell control chaining | `policy.TestReviewCommandBlocksShellControlOperatorsBeforeAllowlist`, `tools/shell.TestShellBlocksAllowlistedCommandWithShellControl` |
 | risky shell returns approval request or prompt | `TestShellApprovalRequiredShape`, `TestAgentApprovalBrokerApprovesAndRetriesTool`, CLI approval mode tests |

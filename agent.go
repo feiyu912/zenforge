@@ -1198,6 +1198,10 @@ func (a *Agent) runPendingTools(ctx context.Context, emit eventEmitter, checkpoi
 				return err
 			}
 		}
+		changedPath, workspaceChanged := workspaceChangedPath(call, result)
+		if workspaceChanged {
+			state.Workspace.DirtyPaths = appendDirtyPath(state.Workspace.DirtyPaths, changedPath)
+		}
 		state.Messages = append(state.Messages, harness.MessageState{
 			Role:       "tool",
 			Content:    toolResultContent(result),
@@ -1207,6 +1211,16 @@ func (a *Agent) runPendingTools(ctx context.Context, emit eventEmitter, checkpoi
 		state.Control.Status = harness.RunStatusRunning
 		if err := checkpointState(); err != nil {
 			return err
+		}
+		if workspaceChanged {
+			if err := emit(EventWorkspaceChanged, map[string]any{
+				"toolCallId": call.ID,
+				"toolName":   call.Name,
+				"path":       changedPath,
+				"dirtyPaths": append([]string(nil), state.Workspace.DirtyPaths...),
+			}); err != nil {
+				return err
+			}
 		}
 		if err := emit(eventType, map[string]any{
 			"toolCallId": call.ID,
@@ -1219,6 +1233,29 @@ func (a *Agent) runPendingTools(ctx context.Context, emit eventEmitter, checkpoi
 		}
 	}
 	return nil
+}
+
+func workspaceChangedPath(call harness.ToolCallState, result tool.Result) (string, bool) {
+	if call.Name != "workspace_write" || result.Error != "" || result.ExitCode != 0 {
+		return "", false
+	}
+	path := stringValue(result.Structured["path"])
+	if path == "" {
+		return "", false
+	}
+	return path, true
+}
+
+func appendDirtyPath(paths []string, path string) []string {
+	if path == "" {
+		return paths
+	}
+	for _, existing := range paths {
+		if existing == path {
+			return paths
+		}
+	}
+	return append(paths, path)
 }
 
 func (a *Agent) invokeToolOrRuntime(ctx context.Context, emit eventEmitter, checkpointState func() error, state *harness.RunState, call harness.ToolCallState) (tool.Result, error) {
