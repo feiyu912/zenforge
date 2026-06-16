@@ -19,6 +19,7 @@ type TypedTool struct {
 	inputType   reflect.Type
 	outputType  reflect.Type
 	mode        handlerMode
+	contextual  bool
 }
 
 type handlerMode int
@@ -30,9 +31,10 @@ const (
 )
 
 var (
-	contextType = reflect.TypeOf((*context.Context)(nil)).Elem()
-	errorType   = reflect.TypeOf((*error)(nil)).Elem()
-	stringType  = reflect.TypeOf("")
+	contextType     = reflect.TypeOf((*context.Context)(nil)).Elem()
+	toolContextType = reflect.TypeOf(tool.Context{})
+	errorType       = reflect.TypeOf((*error)(nil)).Elem()
+	stringType      = reflect.TypeOf("")
 )
 
 func New(name, description string, handler any) (tool.Tool, error) {
@@ -57,10 +59,14 @@ func newTypedTool(name, description string, handler any) (*TypedTool, error) {
 		return nil, fmt.Errorf("%w: handler must be a function", tool.ErrInvalidTool)
 	}
 	typ := value.Type()
-	if typ.NumIn() != 2 || !typ.In(0).Implements(contextType) {
-		return nil, fmt.Errorf("%w: handler must accept context.Context and input", tool.ErrInvalidTool)
+	if (typ.NumIn() != 2 && typ.NumIn() != 3) || !typ.In(0).Implements(contextType) {
+		return nil, fmt.Errorf("%w: handler must accept context.Context, input, and optional tool.Context", tool.ErrInvalidTool)
 	}
 	inputType := typ.In(1)
+	contextual := typ.NumIn() == 3
+	if contextual && typ.In(2) != toolContextType {
+		return nil, fmt.Errorf("%w: third handler argument must be tool.Context", tool.ErrInvalidTool)
+	}
 
 	var mode handlerMode
 	var outputType reflect.Type
@@ -86,6 +92,7 @@ func newTypedTool(name, description string, handler any) (*TypedTool, error) {
 		inputType:   inputType,
 		outputType:  outputType,
 		mode:        mode,
+		contextual:  contextual,
 	}, nil
 }
 
@@ -106,7 +113,11 @@ func (t *TypedTool) Call(ctx context.Context, input json.RawMessage, call tool.C
 	if err != nil {
 		return tool.Result{Error: tool.ErrInvalidArguments.Error(), ExitCode: 1}, fmt.Errorf("%w: %v", tool.ErrInvalidArguments, err)
 	}
-	out := t.handler.Call([]reflect.Value{reflect.ValueOf(ctx), in})
+	args := []reflect.Value{reflect.ValueOf(ctx), in}
+	if t.contextual {
+		args = append(args, reflect.ValueOf(call))
+	}
+	out := t.handler.Call(args)
 	switch t.mode {
 	case modeErrorOnly:
 		if err := valueError(out[0]); err != nil {

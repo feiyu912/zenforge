@@ -57,14 +57,16 @@ Markdown document links.
 
 | Requirement | Evidence |
 | --- | --- |
-| typed tool helper works | `tools.TestTypedToolCallsStructHandler` |
+| typed tool helper works | `tools.TestTypedToolCallsStructHandler`, `tools.TestTypedToolSupportsToolContextHandler` |
 | tool retry requires an explicit transient marker | `tool.TestRetryOnlyRetriesMarkedTransientErrors`, `tool.TestRetrySkipsContextCancellation` |
 | tool call budgets are isolated per run | `tool.TestMaxCallsIsScopedPerRun` |
 | tool output caps preserve valid UTF-8 | `tool.TestMaxOutputBytesPreservesUTF8` |
 | audit and durable tool arguments redact nested configured keys | `tool.TestRedactArgumentsHidesNestedAuditValuesButPreservesToolInput`, `TestAgentRedactsDurableToolCallArguments` |
 | workspace read/list/grep works | `tools/workspace.TestWorkspaceToolsReadListGrepWrite` |
-| workspace write respects roots | `workspace/local` escape tests and workspace tool write tests |
-| workspace write can require fresh read snapshots | `tools/workspace.TestWorkspaceWriteRequiresFreshReadSnapshot` |
+| workspace write respects roots | `workspace/local` escape tests, `tools/workspace.TestWorkspacePolicyBlocksOutsideRoots`, `policy.TestPlanFileAccessRootsApprovalAndDeny` |
+| workspace file policy can produce approval requests | `tools/workspace.TestWorkspacePolicyReturnsApprovalRequest` |
+| workspace write can require fresh read snapshots | `tools/workspace.TestWorkspaceWriteRequiresFreshReadSnapshot`, `tools/workspace.TestWorkspaceWriteSnapshotsAreRunScoped` |
+| workspace snapshots detect same-size content changes | `tools/workspace.TestWorkspaceSnapshotDetectsContentHashChange` |
 | shell command allowlist works | `tools/shell.TestShellAllowsAllowlistedCommand` |
 | shell allowlist blocks shell control chaining | `policy.TestReviewCommandBlocksShellControlOperatorsBeforeAllowlist`, `tools/shell.TestShellBlocksAllowlistedCommandWithShellControl` |
 | risky shell returns approval request or prompt | `TestShellApprovalRequiredShape`, `TestAgentApprovalBrokerApprovesAndRetriesTool`, CLI approval mode tests |

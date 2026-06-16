@@ -72,6 +72,16 @@ func TestLocalWorkspaceBlocksTraversalAndSymlinkEscape(t *testing.T) {
 	if _, err := ws.Read(context.Background(), "link.txt"); !errors.Is(err, workspace.ErrPathEscape) {
 		t.Fatalf("expected ErrPathEscape for symlink, got %v", err)
 	}
+	if err := ws.Write(context.Background(), "link.txt", []byte("changed")); !errors.Is(err, workspace.ErrPathEscape) {
+		t.Fatalf("expected ErrPathEscape for symlink write, got %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(outside, "secret.txt"))
+	if err != nil {
+		t.Fatalf("ReadFile returned error: %v", err)
+	}
+	if string(data) != "secret" {
+		t.Fatalf("outside file was modified: %q", data)
+	}
 }
 
 func TestLocalWorkspaceLimitsAndBinaryHandling(t *testing.T) {

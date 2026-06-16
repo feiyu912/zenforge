@@ -28,6 +28,17 @@ if err != nil {
 }
 ```
 
+Typed handlers may also accept the runtime tool context as a third argument
+when they need run identity, tool-call identity, or trusted metadata:
+
+```go
+audit, err := tools.New("audit", "Record an audited action",
+    func(ctx context.Context, in AuditInput, call tool.Context) (AuditOutput, error) {
+        return AuditOutput{RunID: call.RunID}, nil
+    },
+)
+```
+
 ## Registry And Middleware
 
 ```go
@@ -158,7 +169,14 @@ if err != nil {
 }
 
 workspaceTools, err := workspacetools.Tools(workspacetools.Config{
-    Workspace: ws,
+    Workspace:              ws,
+    RequireReadBeforeWrite: true,
+    Snapshots:              workspacetools.NewSnapshotStore(),
+    Policy: policy.FilePolicy{
+        ReadRoots:       []string{"."},
+        WriteRoots:      []string{"docs", "generated"},
+        RequireApproval: true,
+    },
 })
 if err != nil {
     return err
@@ -176,6 +194,14 @@ The built-in workspace tools are:
 - `workspace_list`
 - `workspace_grep`
 - `workspace_write`
+
+`workspace_read`, `workspace_list`, and `workspace_grep` check
+`Policy.ReadRoots`; `workspace_write` checks `Policy.WriteRoots`. When a path is
+outside the configured roots and `RequireApproval` is true, the tool returns an
+approval request with a file access plan, and writes include a content SHA256
+write plan. Approved calls are replayed through the standard approval metadata
+fingerprint or rule key. When read-before-write is enabled, existing files must
+have a fresh snapshot from the same run before they can be overwritten.
 
 ## Shell Tool
 

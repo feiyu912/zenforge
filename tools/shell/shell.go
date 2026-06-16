@@ -286,16 +286,7 @@ func restoredSandboxSession(metadata map[string]any, runID, subtaskID string) (*
 	return session, true
 }
 func approvedByMetadata(metadata map[string]any, review policy.CommandReview) bool {
-	if metadata == nil || !approval.IsApprovedAction(metadata[approval.MetadataDecisionAction]) {
-		return false
-	}
-	if fingerprint, _ := metadata[approval.MetadataFingerprint].(string); fingerprint != "" && fingerprint == review.Fingerprint {
-		return true
-	}
-	if ruleKey, _ := metadata[approval.MetadataRuleKey].(string); ruleKey != "" && ruleKey == review.RuleKey {
-		return true
-	}
-	return false
+	return approval.MatchesApprovedMetadata(metadata, review.Fingerprint, review.RuleKey)
 }
 
 func encodeOutput(out output, err error) (tool.Result, error) {

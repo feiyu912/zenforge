@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -75,6 +77,9 @@ func (w *Workspace) Read(ctx context.Context, path string) ([]byte, error) {
 	if info.IsDir() {
 		return nil, fmt.Errorf("workspace read %q: is a directory", path)
 	}
+	if !info.Mode().IsRegular() {
+		return nil, workspace.ErrUnsupportedFile
+	}
 	if w.maxReadBytes > 0 && info.Size() > w.maxReadBytes {
 		return nil, workspace.ErrReadTooLarge
 	}
@@ -97,6 +102,11 @@ func (w *Workspace) Write(ctx context.Context, path string, data []byte) error {
 	}
 	resolved, _, err := w.resolve(path, false)
 	if err != nil {
+		return err
+	}
+	if info, err := os.Stat(resolved); err == nil && !info.Mode().IsRegular() {
+		return workspace.ErrUnsupportedFile
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	if w.createParentDir {
@@ -167,6 +177,13 @@ func (w *Workspace) Grep(ctx context.Context, query workspace.GrepQuery) ([]work
 		if entry.IsDir() {
 			return nil
 		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return nil
+		}
 		if len(matches) >= max {
 			return filepath.SkipAll
 		}
@@ -217,7 +234,16 @@ func (w *Workspace) Stat(ctx context.Context, path string) (workspace.FileInfo, 
 	if err != nil {
 		return workspace.FileInfo{}, err
 	}
-	return fileInfo(rel, info), nil
+	out := fileInfo(rel, info)
+	if info.Mode().IsRegular() {
+		data, err := os.ReadFile(resolved)
+		if err != nil {
+			return workspace.FileInfo{}, err
+		}
+		sum := sha256.Sum256(data)
+		out.SHA256 = hex.EncodeToString(sum[:])
+	}
+	return out, nil
 }
 
 func (w *Workspace) resolve(raw string, mustExist bool) (string, string, error) {
@@ -242,6 +268,14 @@ func (w *Workspace) resolve(raw string, mustExist bool) (string, string, error) 
 		} else {
 			checkPath = resolved
 		}
+	} else if _, err := os.Lstat(candidate); err == nil {
+		resolved, err := filepath.EvalSymlinks(candidate)
+		if err != nil {
+			return "", "", err
+		}
+		checkPath = resolved
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", "", err
 	} else {
 		parent := filepath.Dir(candidate)
 		resolvedParent, err := filepath.EvalSymlinks(parent)

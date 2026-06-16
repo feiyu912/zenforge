@@ -100,9 +100,6 @@ type FilePolicy struct {
     ReadRoots       []string
     WriteRoots      []string
     RequireApproval bool
-    MaxReadBytes    int64
-    MaxWriteBytes   int64
-    AllowBinaryRead bool
 }
 ```
 
@@ -110,12 +107,13 @@ Access plan:
 
 ```go
 type FileAccessPlan struct {
-    Operation  FileOperation
-    RawPath    string
-    Path       string
-    Root       string
-    Allowed    bool
-    RuleKey    string
+    Operation        FileOperation
+    RawPath          string
+    Path             string
+    Root             string
+    Allowed          bool
+    RequiresApproval bool
+    RuleKey          string
     Fingerprint string
     Reason     string
 }
@@ -164,7 +162,25 @@ The workspace tools expose the MVP strict path through
 `tools/workspace.SnapshotStore`. `workspace_read` records file metadata after a
 successful read. When `RequireReadBeforeWrite` is enabled, `workspace_write`
 requires a matching snapshot for existing files and fails stale writes if size,
-mtime, or file type changed since the read.
+mtime, SHA256, or file type changed since the read. Snapshots are scoped by
+run ID, so a read from one run cannot authorize a write in another run.
+
+## Current Implementation Notes
+
+- `policy.PlanFileAccess` normalizes workspace-relative paths, matches
+  configured read/write roots, and returns an allow, deny, or approval-required
+  plan with a stable rule key and fingerprint.
+- `policy.PlanFileWrite` adds content SHA256 and a content-sensitive
+  fingerprint for write approvals.
+- `tools/workspace.Config.Policy` wraps `workspace_read`, `workspace_list`,
+  `workspace_grep`, and `workspace_write` before adapter access. Denied file
+  operations return `policy.ErrFileAccessDenied` with the access plan in the
+  structured result.
+- Approval-required file operations return an `approval.Request` payload with
+  `accessPlan`, `writePlan` for writes, `fingerprint`, and `ruleKey`.
+  Decisions replay through the normal approval metadata keys.
+- `workspace/local` rejects final symlink write escapes and non-regular targets
+  before writing. Grep skips non-regular files.
 
 ## Workspace Tools
 

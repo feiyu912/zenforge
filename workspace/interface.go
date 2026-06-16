@@ -15,6 +15,7 @@ type FileInfo struct {
 	IsDir   bool
 	Size    int64
 	ModTime int64
+	SHA256  string
 }
 
 type GrepQuery struct {

@@ -196,6 +196,19 @@ func IsApprovedAction(action any) bool {
 	}
 }
 
+func MatchesApprovedMetadata(metadata map[string]any, fingerprint, ruleKey string) bool {
+	if metadata == nil || !IsApprovedAction(metadata[MetadataDecisionAction]) {
+		return false
+	}
+	if approved, _ := metadata[MetadataFingerprint].(string); fingerprint != "" && approved == fingerprint {
+		return true
+	}
+	if approved, _ := metadata[MetadataRuleKey].(string); ruleKey != "" && approved == ruleKey {
+		return true
+	}
+	return false
+}
+
 func RequestFromResult(result tool.Result) (Request, bool) {
 	if result.Error != ErrorRequired || result.Structured == nil {
 		return Request{}, false

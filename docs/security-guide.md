@@ -34,6 +34,12 @@ Local workspace tools must:
 - cap read and write sizes;
 - record read snapshots before writes where enabled.
 
+The local workspace blocks reads through escaping symlinks and blocks writes to
+an existing final symlink that resolves outside the workspace root. Reads reject
+non-regular files and grep skips non-regular files. File snapshots include
+SHA256 for regular files, and workspace tool snapshots are scoped to the current
+run ID.
+
 Recommended configuration:
 
 ```go
@@ -47,6 +53,25 @@ if err != nil {
     return err
 }
 ```
+
+Workspace tools can add a policy layer before adapter access:
+
+```go
+workspaceTools, err := workspacetools.Tools(workspacetools.Config{
+    Workspace:              workspace,
+    RequireReadBeforeWrite: true,
+    Snapshots:              workspacetools.NewSnapshotStore(),
+    Policy: policy.FilePolicy{
+        ReadRoots:       []string{"."},
+        WriteRoots:      []string{"docs", "generated"},
+        RequireApproval: true,
+    },
+})
+```
+
+Paths outside configured roots are denied by default, or returned as approval
+requests when `RequireApproval` is set. Approval reuse is matched by the file
+fingerprint or root rule key carried in approval metadata.
 
 ## Shell Safety
 
@@ -94,6 +119,10 @@ Risky operations should return or emit an approval request with:
 - risk;
 - fingerprint;
 - proposed scope.
+
+Approval metadata matching is exact: a replayed call must carry an approved
+decision action plus either the same fingerprint or the same rule key. Write
+approval fingerprints include the target path and content SHA256.
 
 Applications decide how to surface the request:
 

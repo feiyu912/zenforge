@@ -109,7 +109,9 @@ Config is JSON. See [`docs/config-reference.md`](docs/config-reference.md) and [
 
 **Tools**
 - Typed tool helper that infers JSON schema from Go structs.
+- Typed tool handlers can opt into the runtime `tool.Context` for run-scoped decisions.
 - Workspace, shell (deny-by-default), todo, MCP bridge, sub-agent task tool.
+- Workspace file policy supports read/write roots, approval requests, run-scoped read snapshots, and SHA256 stale-write detection.
 - Memory augmenter that hydrates normalized tasks from a store.
 - Explicit transient-error retry, per-run call budgets, UTF-8-safe output caps, and recursive audit argument redaction.
 
@@ -218,6 +220,9 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - Plan/execute orchestration failures persist terminal checkpoints and resume without retrying completed work.
 - Planner and failure-mode docs map durable orchestration failures to concrete resume tests.
 - Plan/execute failure and cancellation paths fail closed when their terminal checkpoint cannot be saved.
+- Workspace tools enforce file read/write roots before adapter access, return approval requests for policy exceptions, and reuse approved fingerprint/rule metadata.
+- Workspace read-before-write snapshots are scoped by run and compare SHA256 in addition to size, mtime, and file type.
+- Local workspace writes reject final symlink escapes and non-regular targets before writing.
 - Failed plan/execute saves cannot mutate the last durable checkpoint through shared state metadata.
 - Planner update failures are surfaced and checkpointed instead of emitting a false todo/task transition.
 - Core checkpoint writes fail closed before model/tool progress or successful terminal events.

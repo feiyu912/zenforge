@@ -54,6 +54,18 @@ func TestTypedToolSupportsStringAndErrorOnlyHandlers(t *testing.T) {
 	}
 }
 
+func TestTypedToolSupportsToolContextHandler(t *testing.T) {
+	contextual := Must("contextual", "Contextual", func(ctx context.Context, in struct {
+		Value string `json:"value"`
+	}, call tool.Context) (string, error) {
+		return call.RunID + ":" + in.Value, nil
+	})
+	result, err := contextual.Call(context.Background(), json.RawMessage(`{"value":"ok"}`), tool.Context{RunID: "run_1"})
+	if err != nil || result.Output != "run_1:ok" {
+		t.Fatalf("contextual result=%#v err=%v", result, err)
+	}
+}
+
 func TestTypedToolRejectsUnknownFields(t *testing.T) {
 	typed := Must("strict", "Strict", func(ctx context.Context, in struct {
 		Query string `json:"query"`
