@@ -4,8 +4,10 @@ Focused code-review workflow. It can read and grep the workspace, and can run
 allowlisted commands like `go test ./...`.
 
 Unknown shell commands are routed through the CLI approval broker before they
-run. File writes are constrained by a one-byte write limit and read-before-write
-snapshots, so the example is effectively read-only for normal code review use.
+run. File writes are limited to `.zenforge/generated`, require approval outside
+the configured root policy, and are also constrained by a one-byte write limit
+plus read-before-write snapshots, so the example is effectively read-only for
+normal code review use.
 
 ```bash
 OPENAI_API_KEY=... go run ./examples/code-review-agent

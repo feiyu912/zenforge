@@ -29,7 +29,16 @@ func main() {
 	})
 	must(err)
 
-	workspaceTools, err := workspacetools.Tools(workspacetools.Config{Workspace: ws})
+	workspaceTools, err := workspacetools.Tools(workspacetools.Config{
+		Workspace:              ws,
+		Snapshots:              workspacetools.NewSnapshotStore(),
+		RequireReadBeforeWrite: true,
+		Policy: policy.FilePolicy{
+			ReadRoots:       []string{"."},
+			WriteRoots:      []string{".zenforge/generated"},
+			RequireApproval: false,
+		},
+	})
 	must(err)
 	shellTool, err := shelltool.New(shelltool.Config{Policy: policy.ShellPolicy{
 		WorkingDir:     workspaceRoot,

@@ -29,9 +29,29 @@ func TestCodeReviewExampleWiresSafetyControls(t *testing.T) {
 		"RequireApproval: true",
 		"RequireReadBeforeWrite: true",
 		"workspacetools.NewSnapshotStore()",
+		"WriteRoots:      []string{\".zenforge/generated\"}",
 	} {
 		if !strings.Contains(source, want) {
 			t.Fatalf("code review example missing %q", want)
+		}
+	}
+}
+
+func TestRepoRefactorExampleWiresWorkspacePolicy(t *testing.T) {
+	data, err := os.ReadFile("repo-refactor-agent/main.go")
+	if err != nil {
+		t.Fatalf("ReadFile repo-refactor-agent/main.go returned error: %v", err)
+	}
+	source := string(data)
+	for _, want := range []string{
+		"RequireReadBeforeWrite: true",
+		"workspacetools.NewSnapshotStore()",
+		"ReadRoots:       []string{\".\"}",
+		"WriteRoots:      []string{\".zenforge/generated\"}",
+		"RequireApproval: false",
+	} {
+		if !strings.Contains(source, want) {
+			t.Fatalf("repo refactor example missing %q", want)
 		}
 	}
 }

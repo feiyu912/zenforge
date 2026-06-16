@@ -32,6 +32,11 @@ func main() {
 		Workspace:              ws,
 		Snapshots:              workspacetools.NewSnapshotStore(),
 		RequireReadBeforeWrite: true,
+		Policy: policy.FilePolicy{
+			ReadRoots:       []string{"."},
+			WriteRoots:      []string{".zenforge/generated"},
+			RequireApproval: true,
+		},
 	})
 	must(err)
 	shellTool, err := shelltool.New(shelltool.Config{Policy: policy.ShellPolicy{

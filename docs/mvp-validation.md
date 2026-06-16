@@ -129,6 +129,7 @@ Markdown document links.
 | approval prompt works | `approval/cli.TestCLIBrokerReadsDecision`, `TestApprovalBrokerModes` |
 | server-style approval submit works | `approval.TestPendingBrokerWaitsForSubmittedDecision`, `approval.TestPendingBrokerRejectsUnknownDecision` |
 | code-review example wires safety controls | `examples.TestCodeReviewExampleWiresSafetyControls` |
+| repo-refactor example wires explicit workspace policy | `examples.TestRepoRefactorExampleWiresWorkspacePolicy` |
 
 ## Docs
 
