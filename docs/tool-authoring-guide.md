@@ -222,7 +222,10 @@ if err != nil {
 
 The `shell` tool requires a description, blocks commands outside the allowlist
 by default, caps output, enforces timeout, and keeps `cwd` inside the configured
-working directory.
+working directory. Before allowlist matching, `safety/bashast` and
+`safety/bashsec` structurally inspect the command. Unsupported syntax requires
+approval when configured; hard-blocked syntax and dangerous shell constructs
+cannot be approved through the normal unknown-command path.
 
 ## Todo Tools
 

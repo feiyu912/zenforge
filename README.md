@@ -72,7 +72,7 @@ result, err := agent.Run(ctx, zenforge.Task{Input: "Review this package and summ
 go get github.com/feiyu912/zenforge@v0.1.0
 ```
 
-Go 1.22+. The core is dependency-light: OpenTelemetry SDK and pure-Go SQLite via `modernc.org/sqlite` (no cgo).
+Go 1.26+. The core uses OpenTelemetry SDK, pure-Go SQLite via `modernc.org/sqlite` (no cgo), and `mvdan.cc/sh/v3` for structural shell safety analysis.
 
 ## CLI
 
@@ -112,6 +112,7 @@ Config is JSON. See [`docs/config-reference.md`](docs/config-reference.md) and [
 - Typed tool handlers can opt into the runtime `tool.Context` for run-scoped decisions.
 - Workspace, shell (deny-by-default), todo, MCP bridge, sub-agent task tool.
 - Workspace file policy supports read/write roots, approval requests, run-scoped read snapshots, and SHA256 stale-write detection.
+- Shell policy uses a ported Bash AST walker and security classifier, blocking real control structures, redirections, substitutions, and dangerous embedded scripts without misreading quoted metacharacters.
 - Memory augmenter that hydrates normalized tasks from a store.
 - Explicit transient-error retry, per-run call budgets, UTF-8-safe output caps, and recursive audit argument redaction.
 
@@ -224,6 +225,7 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - Workspace read-before-write snapshots are scoped by run and compare SHA256 in addition to size, mtime, and file type.
 - Successful `workspace_write` calls emit `workspace.changed` and persist dirty paths in run state.
 - Local workspace writes reject final symlink escapes and non-regular targets before writing.
+- Platform-derived `safety/bashast` and `safety/bashsec` packages provide fail-closed structural shell review; unsupported syntax requires approval or is denied.
 - Failed plan/execute saves cannot mutate the last durable checkpoint through shared state metadata.
 - Planner update failures are surfaced and checkpointed instead of emitting a false todo/task transition.
 - Core checkpoint writes fail closed before model/tool progress or successful terminal events.

@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/feiyu912/zenforge/safety/bashsec"
 )
 
 type ReviewDecision string
@@ -41,16 +43,23 @@ func ReviewCommand(policy ShellPolicy, command string) CommandReview {
 	if normalized == "" {
 		return CommandReview{Decision: ReviewBlock, Reason: "empty command", RuleKey: "empty", Fingerprint: fingerprint, Risk: "invalid"}
 	}
-	if hasShellControl(normalized) {
-		return CommandReview{Decision: ReviewBlock, Reason: "shell control operators are not allowed", RuleKey: "shell_control", Fingerprint: fingerprint, Risk: "high"}
+	security := bashsec.Review(command, policy.Env)
+	switch security.Decision {
+	case bashsec.ReviewBlock:
+		return CommandReview{Decision: ReviewBlock, Reason: security.Reason, RuleKey: security.RuleKey, Fingerprint: fingerprint, Risk: security.Risk}
+	case bashsec.ReviewRequiresApproval:
+		if policy.RequireApproval {
+			return CommandReview{Decision: ReviewRequireApproval, Reason: security.Reason, RuleKey: security.RuleKey, Fingerprint: fingerprint, Risk: security.Risk}
+		}
+		return CommandReview{Decision: ReviewBlock, Reason: security.Reason, RuleKey: security.RuleKey, Fingerprint: fingerprint, Risk: "blocked"}
 	}
 	for _, deny := range policy.DenyCommands {
-		if commandMatches(normalized, deny) {
+		if commandMatches(normalized, deny) || anyParsedCommandMatches(security.Commands, deny) {
 			return CommandReview{Decision: ReviewBlock, Reason: "command denied by policy", RuleKey: "deny:" + deny, Fingerprint: fingerprint, Risk: "blocked"}
 		}
 	}
 	for _, allow := range policy.AllowCommands {
-		if commandMatches(normalized, allow) {
+		if commandMatches(normalized, allow) || allParsedCommandsMatch(security.Commands, allow) {
 			return CommandReview{Decision: ReviewAllow, Reason: "command allowed by policy", RuleKey: "allow:" + allow, Fingerprint: fingerprint}
 		}
 	}
@@ -58,6 +67,27 @@ func ReviewCommand(policy ShellPolicy, command string) CommandReview {
 		return CommandReview{Decision: ReviewRequireApproval, Reason: "command requires approval", RuleKey: "approval_required", Fingerprint: fingerprint, Risk: "approval_required"}
 	}
 	return CommandReview{Decision: ReviewBlock, Reason: "command is not allowlisted", RuleKey: "not_allowlisted", Fingerprint: fingerprint, Risk: "blocked"}
+}
+
+func anyParsedCommandMatches(commands [][]string, rule string) bool {
+	for _, command := range commands {
+		if commandMatches(strings.Join(command, " "), rule) {
+			return true
+		}
+	}
+	return false
+}
+
+func allParsedCommandsMatch(commands [][]string, rule string) bool {
+	if len(commands) == 0 {
+		return false
+	}
+	for _, command := range commands {
+		if len(command) == 0 || !commandMatches(strings.Join(command, " "), rule) {
+			return false
+		}
+	}
+	return true
 }
 
 func ResolveWorkingDir(root, cwd string) (string, error) {
@@ -110,16 +140,6 @@ func normalizeCommand(command string) string {
 func commandMatches(command, rule string) bool {
 	normalizedRule := normalizeCommand(rule)
 	return command == normalizedRule || strings.HasPrefix(command, normalizedRule+" ")
-}
-
-func hasShellControl(command string) bool {
-	control := []string{"&&", "||", ";", "|", "\n", "`", "$(", ">", "<"}
-	for _, op := range control {
-		if strings.Contains(command, op) {
-			return true
-		}
-	}
-	return false
 }
 
 func fingerprint(value string) string {

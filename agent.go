@@ -428,7 +428,7 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 			if err := emit(EventTaskError, map[string]any{"todoId": current.ID, "error": notes}); err != nil {
 				return
 			}
-			fail(planExecuteStageExecute, todos, fmt.Errorf(notes))
+			fail(planExecuteStageExecute, todos, errors.New(notes))
 			return
 		}
 		if err := emit(EventTaskDone, map[string]any{"todoId": current.ID, "status": string(updated.Status)}); err != nil {

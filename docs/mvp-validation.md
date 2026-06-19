@@ -70,6 +70,8 @@ Markdown document links.
 | workspace writes emit durable change events and dirty paths | `TestAgentWorkspaceWriteEmitsChangedEventAndDirtyPath` |
 | shell command allowlist works | `tools/shell.TestShellAllowsAllowlistedCommand` |
 | shell allowlist blocks shell control chaining | `policy.TestReviewCommandBlocksShellControlOperatorsBeforeAllowlist`, `tools/shell.TestShellBlocksAllowlistedCommandWithShellControl` |
+| shell safety uses AST structure without quoted-metacharacter false positives | `safety/bashast.TestParseForSecurityReportsCommandStructure`, `safety/bashsec.TestReviewClassifiesShellStructure`, `policy.TestReviewCommandUsesShellASTForQuotedMetacharacters` |
+| complex or dangerous shell syntax fails closed | `policy.TestReviewCommandBlocksASTDangerousStructures`, `policy.TestReviewCommandRequiresApprovalWhenASTIsTooComplex` |
 | risky shell returns approval request or prompt | `TestShellApprovalRequiredShape`, `TestAgentApprovalBrokerApprovesAndRetriesTool`, CLI approval mode tests |
 | shell policy can produce broker-free approval plans | `approval.TestRequiredPlanValidatesRequest`, `tools/shell.TestShellApprovalPlanFromReview` |
 | missing approval broker pauses at a resumable checkpoint | `TestAgentPausesOnApprovalWithoutBroker`, `TestAgentRunReturnsApprovalRequiredWhenPaused`, `TestAgentResumeWaitingApprovalWithoutBrokerStaysPaused` |

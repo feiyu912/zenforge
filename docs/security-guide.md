@@ -84,8 +84,15 @@ Shell tool must:
 - filter env vars;
 - review command risk;
 - require approval for unknown or risky commands;
-- block shell control operators such as `&&`, `;`, pipes, and redirects before
-  allowlist matching.
+- parse commands with the Bash AST safety layer before allowlist matching;
+- block real shell control structures, redirections, command substitutions,
+  dangerous builtins, and dangerous embedded interpreter scripts;
+- route unsupported-but-not-hard-blocked syntax to approval, or deny it when
+  approval is disabled.
+
+Quoted metacharacters such as `echo 'a|b'` are treated as argument data rather
+than shell structure. Parser precheck failures for control characters, Unicode
+whitespace, brace expansion, and similar ambiguity are hard blocks.
 
 Recommended configuration:
 

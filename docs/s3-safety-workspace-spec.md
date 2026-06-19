@@ -58,8 +58,9 @@ safety/bashast/
 safety/bashsec/
 ```
 
-`safety/bashast` and `safety/bashsec` can be ported from `agent-platform` with
-minimal platform coupling.
+`safety/bashast` and `safety/bashsec` are ported from `agent-platform` behind
+standalone ZenForge types. The AST layer uses `mvdan.cc/sh/v3`; the security
+layer classifies structural risk without importing platform contracts.
 
 ## Workspace Interface
 
@@ -316,6 +317,12 @@ Decisions:
 - allow;
 - require approval;
 - block.
+
+Current shell review parses Bash before applying allow/deny rules. Real control
+structures, redirects, command substitutions, dangerous shell builtins, and
+dangerous inline interpreter scripts are blocked. Metacharacters contained in
+quoted arguments remain ordinary data. Syntax that cannot be analyzed safely
+requires approval when configured and is denied otherwise.
 
 ## Approval Integration
 
