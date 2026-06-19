@@ -63,6 +63,7 @@ Markdown document links.
 | tool output caps preserve valid UTF-8 | `tool.TestMaxOutputBytesPreservesUTF8` |
 | audit and durable tool arguments redact nested configured keys | `tool.TestRedactArgumentsHidesNestedAuditValuesButPreservesToolInput`, `TestAgentRedactsDurableToolCallArguments` |
 | workspace read/list/grep works | `tools/workspace.TestWorkspaceToolsReadListGrepWrite` |
+| workspace binary and device files fail closed | `workspace.TestPlatformFileTypeClassification`, `workspace/local.TestLocalWorkspaceBlocksKnownBinaryExtensionsWithoutNULBytes`, `workspace/local.TestLocalWorkspaceGrepSkipsKnownBinaryExtensionsBeforeContentScan`, `workspace/local.TestLocalWorkspaceBlocksPlatformDeviceFiles` |
 | workspace write respects roots | `workspace/local` escape tests, `tools/workspace.TestWorkspacePolicyBlocksOutsideRoots`, `policy.TestPlanFileAccessRootsApprovalAndDeny` |
 | workspace file policy can produce approval requests | `tools/workspace.TestWorkspacePolicyReturnsApprovalRequest` |
 | workspace write can require fresh read snapshots | `tools/workspace.TestWorkspaceWriteRequiresFreshReadSnapshot`, `tools/workspace.TestWorkspaceWriteSnapshotsAreRunScoped` |

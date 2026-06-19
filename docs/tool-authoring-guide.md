@@ -203,6 +203,10 @@ write plan. Approved calls are replayed through the standard approval metadata
 fingerprint or rule key. When read-before-write is enabled, existing files must
 have a fresh snapshot from the same run before they can be overwritten.
 
+Known binary extensions and blocked device files follow the platform file-tool
+classification. Binary reads remain disabled unless `AllowBinaryRead` is set;
+workspace grep always skips known binary paths.
+
 ## Shell Tool
 
 ```go

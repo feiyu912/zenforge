@@ -113,6 +113,7 @@ Config is JSON. See [`docs/config-reference.md`](docs/config-reference.md) and [
 - Typed tool handlers can opt into the runtime `tool.Context` for run-scoped decisions.
 - Workspace, shell (deny-by-default), todo, MCP bridge, sub-agent task tool.
 - Workspace file policy supports read/write roots, approval requests, run-scoped read snapshots, and SHA256 stale-write detection.
+- Workspace reads and grep reuse the platform binary-extension/device denylist in addition to content-based NUL detection.
 - Shell policy uses the complete platform Bash AST and security classifiers. It hard-blocks dangerous or ambiguous forms, routes output redirections and complex structures to approval, and requires every parsed command in a chain or substitution to satisfy the allowlist.
 - Memory augmenter that hydrates normalized tasks from a store.
 - Explicit transient-error retry, per-run call budgets, UTF-8-safe output caps, and recursive audit argument redaction.

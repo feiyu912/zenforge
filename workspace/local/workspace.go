@@ -67,6 +67,9 @@ func (w *Workspace) Read(ctx context.Context, path string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	if workspace.IsBlockedDevicePath(resolved) {
+		return nil, workspace.ErrUnsupportedFile
+	}
 	info, err := os.Stat(resolved)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, workspace.ErrPathNotFound
@@ -79,6 +82,9 @@ func (w *Workspace) Read(ctx context.Context, path string) ([]byte, error) {
 	}
 	if !info.Mode().IsRegular() {
 		return nil, workspace.ErrUnsupportedFile
+	}
+	if !w.allowBinaryRead && workspace.IsBinaryPath(resolved) {
+		return nil, workspace.ErrBinaryFile
 	}
 	if w.maxReadBytes > 0 && info.Size() > w.maxReadBytes {
 		return nil, workspace.ErrReadTooLarge
@@ -182,6 +188,9 @@ func (w *Workspace) Grep(ctx context.Context, query workspace.GrepQuery) ([]work
 			return err
 		}
 		if !info.Mode().IsRegular() {
+			return nil
+		}
+		if workspace.IsBinaryPath(path) {
 			return nil
 		}
 		if len(matches) >= max {

@@ -84,6 +84,7 @@ type LocalConfig struct {
     FollowSymlink bool
     MaxReadBytes  int64
     MaxWriteBytes int64
+    AllowBinaryRead bool
 }
 ```
 
@@ -93,7 +94,8 @@ Rules:
 - `..` traversal is blocked after clean/eval;
 - symlinks escaping root are blocked;
 - device files are blocked;
-- binary reads can be blocked or summarized;
+- binary reads are blocked by platform extension classification and NUL-byte
+  detection unless `AllowBinaryRead` is explicitly enabled;
 - writes create parent directories only when configured.
 
 ## File Policy
@@ -320,11 +322,12 @@ Decisions:
 - require approval;
 - block.
 
-Current shell review parses Bash before applying allow/deny rules. Real control
-structures, redirects, command substitutions, dangerous shell builtins, and
-dangerous inline interpreter scripts are blocked. Metacharacters contained in
-quoted arguments remain ordinary data. Syntax that cannot be analyzed safely
-requires approval when configured and is denied otherwise.
+Current shell review parses Bash before applying allow/deny rules. Every command
+found in a chain, pipeline, or substitution must independently match an allow
+rule. Output redirects and statically unresolved targets require approval;
+sensitive input redirects, dangerous builtins, ambiguous syntax, wrappers, and
+dangerous inline interpreter scripts are blocked. Syntax that cannot be
+analyzed safely requires approval when configured and is denied otherwise.
 
 ## Approval Integration
 

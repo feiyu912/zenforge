@@ -72,6 +72,10 @@ workspaceTools, err := workspacetools.Tools(workspacetools.Config{
 Paths outside configured roots are denied by default, or returned as approval
 requests when `RequireApproval` is set. Approval reuse is matched by the file
 fingerprint or root rule key carried in approval metadata.
+Text reads reject the platform's known binary extensions before loading file
+contents and also detect NUL bytes. Grep skips those extensions before opening
+them. Hosts may explicitly set `AllowBinaryRead` only when their consumer can
+safely handle arbitrary bytes.
 
 ## Shell Safety
 
