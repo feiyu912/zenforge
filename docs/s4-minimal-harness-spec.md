@@ -54,13 +54,20 @@ model/openai/
 
 ```go
 type Runner struct {
-    Model       model.Model
-    Tools       tool.Invoker
-    Events      eventlog.Store
-    Checkpoints checkpoint.Store
-    Recorder    Recorder
+    MaxSteps int
+    Mode     string
+
+    Emit            func(RuntimeEvent, map[string]any) error
+    Checkpoint      func(context.Context, RunState) error
+    CallModel       func(context.Context, RunState, model.ToolChoice) (MessageState, model.Usage, error)
+    RunPendingTools func(context.Context, *RunState) error
 }
 ```
+
+The production runner also receives resume and error-classification hooks.
+Root `zenforge.Agent` owns concrete stores and integrations, then adapts them to
+these hooks. This preserves the package boundary because `checkpoint` stores a
+`harness.RunState` and therefore cannot be imported back into `harness`.
 
 ## Run Config
 

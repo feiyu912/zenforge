@@ -2,6 +2,10 @@
 
 This document breaks `s4-minimal-harness-spec.md` into concrete work.
 
+Status: implemented. The current repository keeps durable state types and the
+core state machine in `harness`, while root `zenforge.Agent` adapts concrete
+model, tool, event, checkpoint, approval, and sub-agent dependencies.
+
 ## 1. Refine Model Interface
 
 Update `model` package:
@@ -34,6 +38,8 @@ Acceptance:
 
 - runner can be constructed with fake dependencies;
 - no root package cycle.
+
+Evidence: `harness/runner.go` and `harness/runner_test.go`.
 
 ## 3. Implement Basic Loop With Fake Model
 
@@ -104,6 +110,9 @@ Acceptance:
 - `Agent.Stream` returns harness events;
 - `Agent.Run` returns final output.
 
+Evidence: `Agent.runHarnessLoop` delegates to `harness.Runner`; root Agent and
+runner-level tests exercise both sides of the boundary.
+
 ## 8. OpenAI-Compatible Adapter Stub
 
 Add package:
@@ -126,4 +135,3 @@ Acceptance:
 - fake model/tool integration test proves the harness;
 - no platform imports;
 - event/checkpoint/tool packages are used through public interfaces.
-

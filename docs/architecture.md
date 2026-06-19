@@ -24,6 +24,7 @@ eventlog/
   sqlite/
 
 harness/
+  runner.go
   state.go
 
 recorder/
@@ -87,6 +88,12 @@ adapters/
 ```
 
 ## Runtime Flow
+
+`zenforge.Agent` owns dependency assembly, durable stores, public event
+persistence, approvals, and sub-agent integration. It delegates the reusable
+model/tool state machine to `harness.Runner` through explicit model, tool,
+checkpoint, and event hooks. This keeps the harness independently testable
+without introducing an import cycle back to the root package.
 
 ```text
 Task input

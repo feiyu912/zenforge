@@ -613,241 +613,103 @@ type loopTerminal struct {
 }
 
 func (a *Agent) runLoop(ctx context.Context, out chan<- Event, state harness.RunState, resumed bool) {
-	a.runLoopMode(ctx, out, state, resumed, false)
+	a.runHarnessLoop(ctx, out, state, resumed, false)
 }
 
 func (a *Agent) runInternalLoop(ctx context.Context, out chan<- Event, state harness.RunState, resumed bool) loopTerminal {
-	return a.runLoopMode(ctx, out, state, resumed, true)
+	return a.runHarnessLoop(ctx, out, state, resumed, true)
 }
 
-func (a *Agent) runLoopMode(ctx context.Context, out chan<- Event, state harness.RunState, resumed, internal bool) (terminal loopTerminal) {
+func (a *Agent) runHarnessLoop(ctx context.Context, out chan<- Event, state harness.RunState, resumed, internal bool) loopTerminal {
 	runID := state.RunID
+	var captured loopTerminal
 	emit := eventEmitter(func(eventType EventType, data map[string]any) error {
 		if internal {
 			switch eventType {
 			case EventRunStarted, EventRunResumed:
 				return nil
 			case EventRunDone, EventRunError, EventRunCancelled:
-				terminal = loopTerminal{Type: eventType, Data: cloneMap(data)}
+				captured = loopTerminal{Type: eventType, Data: cloneMap(data)}
 				return nil
 			}
 		}
-		err := a.emit(ctx, out, eventType, runID, data)
-		if err != nil && internal {
-			terminal = loopTerminal{Type: EventRunError, Data: map[string]any{"error": err.Error()}, Err: err}
+		if err := a.emit(ctx, out, eventType, runID, data); err != nil {
+			if internal {
+				captured = loopTerminal{Type: EventRunError, Data: map[string]any{"error": err.Error()}, Err: err}
+			}
+			return err
 		}
-		return err
+		return nil
 	})
+
 	checkpointSeq, err := a.latestCheckpointSeq(ctx, runID)
 	if err != nil {
-		_ = emit(EventRunError, map[string]any{"error": fmt.Sprintf("load latest checkpoint: %v", err)})
-		return terminal
+		message := fmt.Sprintf("load latest checkpoint: %v", err)
+		_ = emit(EventRunError, map[string]any{"error": message})
+		if captured.Type != "" {
+			return captured
+		}
+		return loopTerminal{Type: EventRunError, Data: map[string]any{"error": message}}
 	}
-	checkpointState := func() error {
+	checkpointState := func(checkpointCtx context.Context, current harness.RunState) error {
 		if a.config.Checkpoints == nil {
 			return nil
 		}
-		saveCtx := ctx
-		if ctx.Err() != nil {
-			saveCtx = context.WithoutCancel(ctx)
+		saveCtx := checkpointCtx
+		if checkpointCtx.Err() != nil {
+			saveCtx = context.WithoutCancel(checkpointCtx)
 		}
 		nextSeq := checkpointSeq + 1
-		state.UpdatedAt = time.Now().UTC()
+		current.UpdatedAt = time.Now().UTC()
 		if err := a.config.Checkpoints.Save(saveCtx, checkpoint.Checkpoint{
 			Version: checkpoint.CheckpointVersion,
 			RunID:   runID,
 			Seq:     nextSeq,
-			State:   state,
+			State:   current,
 			SavedAt: time.Now().UTC(),
 		}); err != nil {
 			return fmt.Errorf("save checkpoint: %w", err)
 		}
 		checkpointSeq = nextSeq
-		if err := emit(EventCheckpointCreated, map[string]any{
+		return emit(EventCheckpointCreated, map[string]any{
 			"checkpointSeq": checkpointSeq,
-			"phase":         string(state.Phase),
-		}); err != nil {
-			return err
-		}
-		return nil
-	}
-	cancelRun := func(err error) {
-		if state.Meta == nil {
-			state.Meta = map[string]any{}
-		}
-		state.Meta["error"] = err.Error()
-		state.Phase = harness.RunPhaseCancelled
-		state.Control.Status = harness.RunStatusCancelled
-		if saveErr := checkpointState(); saveErr != nil {
-			if isEventPersistenceError(saveErr) {
-				return
-			}
-			_ = emit(EventRunError, map[string]any{"error": saveErr.Error()})
-			return
-		}
-		_ = emit(EventRunCancelled, map[string]any{"error": err.Error()})
-	}
-	fail := func(err error) {
-		if isEventPersistenceError(err) {
-			return
-		}
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			cancelRun(err)
-			return
-		}
-		if state.Meta == nil {
-			state.Meta = map[string]any{}
-		}
-		state.Meta["error"] = err.Error()
-		state.Phase = harness.RunPhaseFailed
-		state.Control.Status = harness.RunStatusFailed
-		if saveErr := checkpointState(); saveErr != nil {
-			if isEventPersistenceError(saveErr) {
-				return
-			}
-			_ = emit(EventRunError, map[string]any{"error": saveErr.Error()})
-			return
-		}
-		_ = emit(EventRunError, map[string]any{"error": err.Error()})
+			"phase":         string(current.Phase),
+		})
 	}
 
-	if err := ctx.Err(); err != nil {
-		cancelRun(err)
-		return
+	runner := harness.Runner{
+		MaxSteps: a.config.MaxSteps,
+		Mode:     string(runStateMode(state, a.config)),
+		Emit: func(eventType harness.RuntimeEvent, data map[string]any) error {
+			return emit(EventType(eventType), data)
+		},
+		Checkpoint: checkpointState,
+		CallModel: func(callCtx context.Context, current harness.RunState, choice model.ToolChoice) (harness.MessageState, model.Usage, error) {
+			return a.callModel(callCtx, emit, current, choice)
+		},
+		RunPendingTools: func(callCtx context.Context, current *harness.RunState) error {
+			return a.runPendingTools(callCtx, emit, func() error {
+				return checkpointState(callCtx, *current)
+			}, current)
+		},
+		ResumeWaitingApproval: func(callCtx context.Context, current *harness.RunState) error {
+			return a.resumeWaitingApproval(callCtx, emit, func() error {
+				return checkpointState(callCtx, *current)
+			}, current)
+		},
+		ResumeTerminal: func(current harness.RunState) bool {
+			return a.resumeTerminal(emit, current)
+		},
+		IsPause: func(err error) bool {
+			return errors.Is(err, errApprovalPending)
+		},
+		IsPersistenceError: isEventPersistenceError,
 	}
-	if resumed {
-		if err := emit(EventRunResumed, map[string]any{"input": state.Input, "mode": string(runStateMode(state, a.config))}); err != nil {
-			return terminal
-		}
-		if a.resumeTerminal(emit, state) {
-			return
-		}
-		if state.Approval.Waiting != nil {
-			if err := a.resumeWaitingApproval(ctx, emit, checkpointState, &state); err != nil {
-				if errors.Is(err, errApprovalPending) {
-					return
-				}
-				fail(err)
-				return
-			}
-		}
-		if state.Tool.Active != nil {
-			call := *state.Tool.Active
-			call.Status = harness.ToolCallPending
-			call.StartedAt = nil
-			state.Tool.Pending = append([]harness.ToolCallState{call}, state.Tool.Pending...)
-			state.Tool.Active = nil
-			state.Control.Status = harness.RunStatusRunning
-			if err := checkpointState(); err != nil {
-				fail(err)
-				return terminal
-			}
-		}
-	} else {
-		if err := emit(EventRunStarted, map[string]any{"input": state.Input, "mode": string(runStateMode(state, a.config))}); err != nil {
-			return terminal
-		}
+	result := runner.Run(ctx, state, resumed)
+	if result.Type == "" && captured.Type != "" {
+		return captured
 	}
-
-	maxSteps := a.config.MaxSteps
-	if maxSteps <= 0 {
-		maxSteps = 8
-	}
-	if runStateMode(state, a.config) == ModeOneshot && maxSteps > 2 {
-		maxSteps = 2
-	}
-	for {
-		if err := ctx.Err(); err != nil {
-			cancelRun(err)
-			return
-		}
-		if len(state.Tool.Pending) > 0 {
-			if err := a.runPendingTools(ctx, emit, checkpointState, &state); err != nil {
-				if errors.Is(err, errApprovalPending) {
-					return terminal
-				}
-				fail(err)
-				return
-			}
-			continue
-		}
-		if state.Step >= maxSteps {
-			break
-		}
-
-		state.Step++
-		state.Phase = harness.RunPhaseModel
-		state.Control.Status = harness.RunStatusModelStreaming
-		if err := emit(EventStepStarted, map[string]any{"step": state.Step}); err != nil {
-			return terminal
-		}
-		if err := checkpointState(); err != nil {
-			fail(err)
-			return terminal
-		}
-		if err := emit(EventModelStarted, map[string]any{"step": state.Step}); err != nil {
-			return terminal
-		}
-
-		assistant, usage, err := a.callModel(ctx, emit, state, model.ToolChoiceAuto)
-		if err != nil {
-			fail(err)
-			return
-		}
-		state.Messages = append(state.Messages, assistant)
-		applyUsage(&state, usage)
-		state.Phase = harness.RunPhaseModel
-		state.Control.Status = harness.RunStatusRunning
-		state.Tool.Pending = toolCallsToState(assistant.ToolCalls)
-		if err := checkpointState(); err != nil {
-			fail(err)
-			return terminal
-		}
-		if err := emit(EventModelDone, map[string]any{"step": state.Step, "toolCallCount": len(assistant.ToolCalls)}); err != nil {
-			return terminal
-		}
-
-		if len(state.Tool.Pending) == 0 {
-			state.Phase = harness.RunPhaseCompleted
-			state.Control.Status = harness.RunStatusCompleted
-			if err := checkpointState(); err != nil {
-				fail(err)
-				return terminal
-			}
-			_ = emit(EventRunDone, map[string]any{"output": assistant.Content})
-			return terminal
-		}
-	}
-
-	state.Phase = harness.RunPhaseFinalizing
-	state.Control.Status = harness.RunStatusModelStreaming
-	state.Messages = append(state.Messages, harness.MessageState{
-		Role:    "user",
-		Content: "You have reached the tool-use limit. Provide the best final answer using the available context.",
-	})
-	if err := checkpointState(); err != nil {
-		fail(err)
-		return terminal
-	}
-	assistant, usage, err := a.callModel(ctx, emit, state, model.ToolChoiceNone)
-	if err != nil {
-		fail(err)
-		return
-	}
-	if err := validateNoToolAnswer(assistant); err != nil {
-		fail(err)
-		return
-	}
-	state.Messages = append(state.Messages, assistant)
-	applyUsage(&state, usage)
-	state.Phase = harness.RunPhaseCompleted
-	state.Control.Status = harness.RunStatusCompleted
-	if err := checkpointState(); err != nil {
-		fail(err)
-		return terminal
-	}
-	_ = emit(EventRunDone, map[string]any{"output": assistant.Content})
-	return terminal
+	return loopTerminal{Type: EventType(result.Type), Data: cloneMap(result.Data), Err: result.Err}
 }
 
 func (a *Agent) latestCheckpointSeq(ctx context.Context, runID string) (int64, error) {

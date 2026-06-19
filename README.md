@@ -91,6 +91,7 @@ Config is JSON. See [`docs/config-reference.md`](docs/config-reference.md) and [
 
 **Runtime**
 - Single `zenforge.Agent` with `Stream`, `Run`, `Resume`.
+- Root Agent assembly delegates the durable model/tool state machine to the independently testable `harness.Runner`.
 - Platform-compatible `react`, `oneshot`, and `plan_execute` execution modes, persisted across resume.
 - Plan/execute preset with built-in todo manager.
 - Run-scoped pending approval broker (`approval.PendingBroker`).
@@ -279,6 +280,7 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - Tool call budgets are isolated by run, and output truncation preserves valid UTF-8.
 - Trace metadata enrichment.
 - A hardening test suite and a failure-mode guide.
+- The root Agent loop is now an adapter around `harness.Runner`; runner-level tests cover text completion, tool continuation, and oneshot finalization directly.
 
 Verification before each release:
 

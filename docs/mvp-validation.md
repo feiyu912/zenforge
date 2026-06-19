@@ -16,6 +16,7 @@ Markdown document links.
 
 | Requirement | Evidence |
 | --- | --- |
+| root Agent delegates the core state machine to an independently testable harness runner | `harness.TestRunnerCompletesTextOnlyRun`, `harness.TestRunnerExecutesPendingToolsBeforeNextModelTurn`, `harness.TestRunnerOneshotCapsAutoTurnsAndUsesFinalNoToolTurn`, root Agent lifecycle tests |
 | `Agent.Stream` works with fake model | `TestAgentStreamEmitsLifecycleEvents`, `TestAgentStreamRunsToolAndContinuesModelLoop` |
 | `Agent.Run` returns final output | `TestAgentRunReturnsModelText` |
 | max steps drain pending tools before the final no-tool answer | `TestAgentMaxStepsRunsPendingToolBeforeFinalNoToolTurn` |
