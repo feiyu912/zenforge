@@ -225,7 +225,9 @@ by default, caps output, enforces timeout, and keeps `cwd` inside the configured
 working directory. Before allowlist matching, `safety/bashast` and
 `safety/bashsec` structurally inspect the command. Unsupported syntax requires
 approval when configured; hard-blocked syntax and dangerous shell constructs
-cannot be approved through the normal unknown-command path.
+cannot be approved through the normal unknown-command path. Output redirection
+is an explicit approval class, while every command discovered in a chain,
+pipeline, or substitution must independently match an allow rule.
 
 ## Todo Tools
 

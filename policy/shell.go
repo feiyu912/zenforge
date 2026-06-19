@@ -46,10 +46,10 @@ func ReviewCommand(policy ShellPolicy, command string) CommandReview {
 	security := bashsec.Review(command, policy.Env)
 	switch security.Decision {
 	case bashsec.ReviewBlock:
-		return CommandReview{Decision: ReviewBlock, Reason: security.Reason, RuleKey: security.RuleKey, Fingerprint: fingerprint, Risk: security.Risk}
+		return CommandReview{Decision: ReviewBlock, Reason: security.Reason, RuleKey: security.RuleKey, Fingerprint: fingerprint, Risk: bashSecurityRisk(security)}
 	case bashsec.ReviewRequiresApproval:
 		if policy.RequireApproval {
-			return CommandReview{Decision: ReviewRequireApproval, Reason: security.Reason, RuleKey: security.RuleKey, Fingerprint: fingerprint, Risk: security.Risk}
+			return CommandReview{Decision: ReviewRequireApproval, Reason: security.Reason, RuleKey: security.RuleKey, Fingerprint: fingerprint, Risk: bashSecurityRisk(security)}
 		}
 		return CommandReview{Decision: ReviewBlock, Reason: security.Reason, RuleKey: security.RuleKey, Fingerprint: fingerprint, Risk: "blocked"}
 	}
@@ -58,15 +58,33 @@ func ReviewCommand(policy ShellPolicy, command string) CommandReview {
 			return CommandReview{Decision: ReviewBlock, Reason: "command denied by policy", RuleKey: "deny:" + deny, Fingerprint: fingerprint, Risk: "blocked"}
 		}
 	}
-	for _, allow := range policy.AllowCommands {
-		if commandMatches(normalized, allow) || allParsedCommandsMatch(security.Commands, allow) {
-			return CommandReview{Decision: ReviewAllow, Reason: "command allowed by policy", RuleKey: "allow:" + allow, Fingerprint: fingerprint}
+	if parsedCommandsAllowed(security.Commands, policy.AllowCommands) {
+		return CommandReview{Decision: ReviewAllow, Reason: "all parsed commands allowed by policy", RuleKey: "allow:parsed", Fingerprint: fingerprint}
+	}
+	if len(security.Commands) == 0 {
+		for _, allow := range policy.AllowCommands {
+			if commandMatches(normalized, allow) {
+				return CommandReview{Decision: ReviewAllow, Reason: "command allowed by policy", RuleKey: "allow:" + allow, Fingerprint: fingerprint}
+			}
 		}
 	}
 	if policy.RequireApproval {
 		return CommandReview{Decision: ReviewRequireApproval, Reason: "command requires approval", RuleKey: "approval_required", Fingerprint: fingerprint, Risk: "approval_required"}
 	}
 	return CommandReview{Decision: ReviewBlock, Reason: "command is not allowlisted", RuleKey: "not_allowlisted", Fingerprint: fingerprint, Risk: "blocked"}
+}
+
+func bashSecurityRisk(review bashsec.ReviewResult) string {
+	if review.Level >= 4 {
+		return "critical"
+	}
+	if review.Level >= 2 {
+		return "high"
+	}
+	if review.Decision == bashsec.ReviewBlock {
+		return "blocked"
+	}
+	return "approval_required"
 }
 
 func anyParsedCommandMatches(commands [][]string, rule string) bool {
@@ -78,12 +96,22 @@ func anyParsedCommandMatches(commands [][]string, rule string) bool {
 	return false
 }
 
-func allParsedCommandsMatch(commands [][]string, rule string) bool {
-	if len(commands) == 0 {
+func parsedCommandsAllowed(commands [][]string, rules []string) bool {
+	if len(commands) == 0 || len(rules) == 0 {
 		return false
 	}
 	for _, command := range commands {
-		if len(command) == 0 || !commandMatches(strings.Join(command, " "), rule) {
+		if len(command) == 0 {
+			return false
+		}
+		allowed := false
+		for _, rule := range rules {
+			if commandMatches(strings.Join(command, " "), rule) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
 			return false
 		}
 	}

@@ -58,9 +58,11 @@ safety/bashast/
 safety/bashsec/
 ```
 
-`safety/bashast` and `safety/bashsec` are ported from `agent-platform` behind
-standalone ZenForge types. The AST layer uses `mvdan.cc/sh/v3`; the security
-layer classifies structural risk without importing platform contracts.
+`safety/bashast` and the complete `safety/bashsec` validator set are ported from
+`agent-platform` behind standalone ZenForge types. The AST layer uses
+`mvdan.cc/sh/v3`; the security layer preserves platform AST, legacy fallback,
+wrapper-command, redirection, and embedded-script classification without
+importing platform contracts.
 
 ## Workspace Interface
 

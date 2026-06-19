@@ -85,13 +85,17 @@ Shell tool must:
 - review command risk;
 - require approval for unknown or risky commands;
 - parse commands with the Bash AST safety layer before allowlist matching;
-- block real shell control structures, redirections, command substitutions,
-  dangerous builtins, and dangerous embedded interpreter scripts;
+- require every AST-parsed command in chains and substitutions to match the
+  allowlist instead of trusting the raw command prefix;
+- require approval for output redirections and statically unresolved targets;
+- block sensitive input redirections, dangerous builtins, ambiguous syntax,
+  dangerous wrapper commands, and dangerous embedded interpreter scripts;
 - route unsupported-but-not-hard-blocked syntax to approval, or deny it when
   approval is disabled.
 
-Quoted metacharacters such as `echo 'a|b'` are treated as argument data rather
-than shell structure. Parser precheck failures for control characters, Unicode
+AST-safe quoted data such as `echo 'a|b'` is distinguished from a real pipeline.
+Legacy ambiguity checks remain intentionally conservative for forms such as
+quoted semicolons. Parser precheck failures for control characters, Unicode
 whitespace, brace expansion, and similar ambiguity are hard blocks.
 
 Recommended configuration:

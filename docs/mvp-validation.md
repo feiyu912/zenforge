@@ -69,9 +69,9 @@ Markdown document links.
 | workspace snapshots detect same-size content changes | `tools/workspace.TestWorkspaceSnapshotDetectsContentHashChange` |
 | workspace writes emit durable change events and dirty paths | `TestAgentWorkspaceWriteEmitsChangedEventAndDirtyPath` |
 | shell command allowlist works | `tools/shell.TestShellAllowsAllowlistedCommand` |
-| shell allowlist blocks shell control chaining | `policy.TestReviewCommandBlocksShellControlOperatorsBeforeAllowlist`, `tools/shell.TestShellBlocksAllowlistedCommandWithShellControl` |
-| shell safety uses AST structure without quoted-metacharacter false positives | `safety/bashast.TestParseForSecurityReportsCommandStructure`, `safety/bashsec.TestReviewClassifiesShellStructure`, `policy.TestReviewCommandUsesShellASTForQuotedMetacharacters` |
-| complex or dangerous shell syntax fails closed | `policy.TestReviewCommandBlocksASTDangerousStructures`, `policy.TestReviewCommandRequiresApprovalWhenASTIsTooComplex` |
+| shell allowlist cannot be bypassed by an allowed first command | `policy.TestReviewCommandDoesNotAllowChainsByFirstCommandPrefix`, `tools/shell.TestShellDoesNotAllowChainByFirstCommandPrefix` |
+| shell safety uses AST structure and complete platform classifier semantics | `safety/bashast.TestParseForSecurityReportsCommandStructure`, `safety/bashsec.TestReviewBashSecurityAllowsASTSimpleSafeCommand`, `policy.TestReviewCommandUsesPlatformBashSecuritySemantics` |
+| complex, redirected, or dangerous shell syntax fails closed or requires approval | `policy.TestReviewCommandRequiresApprovalForOutputRedirection`, `policy.TestReviewCommandRequiresApprovalWhenASTIsTooComplex`, `safety/bashsec.TestReviewBashSecurityStillBlocksHardFailures` |
 | risky shell returns approval request or prompt | `TestShellApprovalRequiredShape`, `TestAgentApprovalBrokerApprovesAndRetriesTool`, CLI approval mode tests |
 | shell policy can produce broker-free approval plans | `approval.TestRequiredPlanValidatesRequest`, `tools/shell.TestShellApprovalPlanFromReview` |
 | missing approval broker pauses at a resumable checkpoint | `TestAgentPausesOnApprovalWithoutBroker`, `TestAgentRunReturnsApprovalRequiredWhenPaused`, `TestAgentResumeWaitingApprovalWithoutBrokerStaysPaused` |

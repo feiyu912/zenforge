@@ -22,26 +22,29 @@ func TestReviewCommandAllowDenyAndApproval(t *testing.T) {
 	}
 }
 
-func TestReviewCommandBlocksShellControlOperatorsBeforeAllowlist(t *testing.T) {
+func TestReviewCommandDoesNotAllowChainsByFirstCommandPrefix(t *testing.T) {
 	policy := ShellPolicy{
 		AllowCommands:   []string{"go test ./..."},
 		RequireApproval: true,
 	}
-	cases := []struct {
-		command string
-		ruleKey string
-	}{
-		{command: "go test ./... && rm -rf tmp", ruleKey: "shell_control"},
-		{command: "go test ./...; rm -rf tmp", ruleKey: "shell_control"},
-		{command: "go test ./... | cat", ruleKey: "shell_control"},
-		{command: "go test ./... > out.txt", ruleKey: "shell_redirection"},
-		{command: "go test ./... $(printf bad)", ruleKey: "shell_substitution"},
+	cases := []string{
+		"go test ./... && rm -rf tmp",
+		"go test ./...; rm -rf tmp",
+		"go test ./... | cat",
+		"go test ./... $(printf bad)",
 	}
-	for _, tt := range cases {
-		review := ReviewCommand(policy, tt.command)
-		if review.Decision != ReviewBlock || review.RuleKey != tt.ruleKey {
-			t.Fatalf("ReviewCommand(%q) = %#v, want %s block", tt.command, review, tt.ruleKey)
+	for _, command := range cases {
+		review := ReviewCommand(policy, command)
+		if review.Decision == ReviewAllow {
+			t.Fatalf("ReviewCommand(%q) = %#v, want approval or block", command, review)
 		}
+	}
+}
+
+func TestReviewCommandRequiresApprovalForOutputRedirection(t *testing.T) {
+	review := ReviewCommand(ShellPolicy{AllowCommands: []string{"go test ./..."}, RequireApproval: true}, "go test ./... > out.txt")
+	if review.Decision != ReviewRequireApproval || review.RuleKey != "bashsec:redirections" {
+		t.Fatalf("review = %#v, want redirection approval", review)
 	}
 }
 
@@ -49,30 +52,33 @@ func TestReviewCommandUsesShellASTForQuotedMetacharacters(t *testing.T) {
 	policy := ShellPolicy{AllowCommands: []string{"echo"}}
 	for _, command := range []string{
 		`echo 'a|b'`,
-		`echo "a;b"`,
 		`echo 'x > y'`,
 	} {
 		if review := ReviewCommand(policy, command); review.Decision != ReviewAllow {
 			t.Fatalf("ReviewCommand(%q) = %#v, want allow", command, review)
 		}
 	}
+	if review := ReviewCommand(policy, `echo "a;b"`); review.Decision != ReviewBlock {
+		t.Fatalf("ambiguous quoted metacharacter review = %#v, want block", review)
+	}
 }
 
-func TestReviewCommandBlocksASTDangerousStructures(t *testing.T) {
+func TestReviewCommandUsesPlatformBashSecuritySemantics(t *testing.T) {
 	policy := ShellPolicy{AllowCommands: []string{"echo", "cat", "python3"}, RequireApproval: true}
 	tests := []struct {
-		command string
-		ruleKey string
+		command  string
+		decision ReviewDecision
+		ruleKey  string
 	}{
-		{command: `echo hi | cat`, ruleKey: "shell_control"},
-		{command: `echo hi > out.txt`, ruleKey: "shell_redirection"},
-		{command: `echo $(cat secret.txt)`, ruleKey: "shell_substitution"},
-		{command: `python3 -c 'import subprocess; subprocess.run(["id"])'`, ruleKey: "embedded_script:python"},
+		{command: `echo hi | cat`, decision: ReviewAllow, ruleKey: "allow:parsed"},
+		{command: `echo hi > out.txt`, decision: ReviewRequireApproval, ruleKey: "bashsec:redirections"},
+		{command: `echo $(cat secret.txt)`, decision: ReviewAllow, ruleKey: "allow:parsed"},
+		{command: `python3 -c 'import subprocess; subprocess.run(["id"])'`, decision: ReviewBlock},
 	}
 	for _, tt := range tests {
 		review := ReviewCommand(policy, tt.command)
-		if review.Decision != ReviewBlock || review.RuleKey != tt.ruleKey {
-			t.Fatalf("ReviewCommand(%q) = %#v, want block %q", tt.command, review, tt.ruleKey)
+		if review.Decision != tt.decision || review.RuleKey != tt.ruleKey {
+			t.Fatalf("ReviewCommand(%q) = %#v, want %s %q", tt.command, review, tt.decision, tt.ruleKey)
 		}
 	}
 }

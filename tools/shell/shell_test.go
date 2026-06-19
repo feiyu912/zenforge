@@ -51,7 +51,7 @@ func TestShellBlocksDeniedAndNotAllowlistedCommands(t *testing.T) {
 	}
 }
 
-func TestShellBlocksAllowlistedCommandWithShellControl(t *testing.T) {
+func TestShellDoesNotAllowChainByFirstCommandPrefix(t *testing.T) {
 	root := t.TempDir()
 	shell := Must(Config{Policy: policy.ShellPolicy{
 		WorkingDir:    root,
@@ -61,7 +61,7 @@ func TestShellBlocksAllowlistedCommandWithShellControl(t *testing.T) {
 	if err == nil || result.ExitCode == 0 {
 		t.Fatalf("expected shell control command error, got result=%#v err=%v", result, err)
 	}
-	if !strings.Contains(err.Error(), "shell control operators") {
+	if !strings.Contains(err.Error(), "not allowlisted") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
