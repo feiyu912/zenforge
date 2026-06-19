@@ -190,6 +190,11 @@ Then provide adapters:
 
 ## Phase 8: CLI And Examples
 
+Status: implemented. Both command entry points use the same runtime assembly;
+`code` additionally binds workspace and shell execution to its positional
+repository. The SDK, simple-tool, repository-refactor, and code-review examples
+exercise embedded, tool-using, and repository-oriented harness flows.
+
 Build:
 
 ```bash

@@ -121,6 +121,7 @@ Markdown document links.
 | Requirement | Evidence |
 | --- | --- |
 | `zenforge run` works | `TestRunStreamsOpenAICompatibleEndpoint`, README quickstart, full package tests |
+| `zenforge code` binds workspace and shell tools to its positional repository | `TestCodeUsesPositionalRepositoryAsWorkspace`, `TestCodeUsesPositionalRepositoryAsShellWorkingDirectory`, `TestCodeRejectsNonDirectoryRepository`, `TestCodeRejectsMissingRepository` |
 | `zenforge resume` works | `TestResumeLoadsJSONLCheckpoint`, config/checkpoint tests |
 | config file works | `TestOptionsFromConfig`, `TestEventsLoadsCheckpointDirFromConfig`, `TestInitCreatesDefaultConfig` |
 | invalid shell timeout config fails clearly | `TestOptionsFromConfigRejectsInvalidShellTimeout` |

@@ -6,6 +6,7 @@ ZenForge CLI is the fastest way to feel the runtime.
 
 ```text
 zenforge run
+zenforge code
 zenforge resume
 zenforge events
 zenforge runs
@@ -44,6 +45,19 @@ Behavior:
 - renders todos;
 - prompts for approval if configured;
 - writes checkpoints and event log.
+
+## `zenforge code`
+
+```bash
+zenforge code ./repo "Analyze failures and implement the fix"
+```
+
+`code` uses the same model, mode, approval, tool, event, and checkpoint
+assembly as `run`. Its first positional argument is authoritative: ZenForge
+resolves it to a real directory and uses that directory as both the local
+workspace root and shell working directory. A configured or flagged
+`workspace.root` cannot redirect this command away from the selected
+repository. Remaining positional arguments form the task input.
 
 ## `zenforge resume`
 

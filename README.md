@@ -80,6 +80,7 @@ Go 1.26. The project targets the Go 1.26 language and toolchain baseline only. T
 go run ./cmd/zenforge init
 export OPENAI_API_KEY=...
 go run ./cmd/zenforge run --config zenforge.json "Analyze this repo"
+go run ./cmd/zenforge code --config zenforge.json ./repo "Review and improve this codebase"
 go run ./cmd/zenforge run --checkpoint-type sqlite --checkpoint-dir .zenforge/runs.db "..."
 go run ./cmd/zenforge resume run_123
 go run ./cmd/zenforge runs
@@ -198,6 +199,7 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - Active tool resume is covered through durable JSONL checkpoints.
 - CLI run/resume are covered against local OpenAI-compatible streaming and durable JSONL checkpoints.
 - CLI argument error output is covered for common command mistakes.
+- `zenforge code <repo> <task>` binds workspace and shell execution to the resolved positional repository and rejects missing, nonexistent, or non-directory targets.
 - Config reference is checked against the generated `zenforge init` defaults.
 - Release notes version coverage is checked against `VERSION`.
 - Durable schema version docs and flattened event contract docs are checked.

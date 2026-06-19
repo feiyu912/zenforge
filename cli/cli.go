@@ -56,6 +56,8 @@ func Main(ctx context.Context, args []string, ioStreams IO) int {
 	switch args[0] {
 	case "run":
 		err = run(ctx, args[1:], ioStreams)
+	case "code":
+		err = code(ctx, args[1:], ioStreams)
 	case "resume":
 		err = resume(ctx, args[1:], ioStreams)
 	case "events":
@@ -95,6 +97,65 @@ func run(ctx context.Context, args []string, ioStreams IO) error {
 	if input == "" {
 		return fmt.Errorf("run input is required")
 	}
+	return streamTask(ctx, opts, input, ioStreams)
+}
+
+func code(ctx context.Context, args []string, ioStreams IO) error {
+	fs := flag.NewFlagSet("code", flag.ContinueOnError)
+	fs.SetOutput(ioStreams.Stderr)
+	opts, err := optionsFromArgs(args)
+	if err != nil {
+		return err
+	}
+	bindOptions(fs, &opts)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if err := resolveExecutionFlags(fs, &opts); err != nil {
+		return err
+	}
+	if fs.NArg() == 0 {
+		return fmt.Errorf("code repository path is required")
+	}
+	if fs.NArg() == 1 {
+		return fmt.Errorf("code input is required")
+	}
+	repository, err := resolveRepository(fs.Arg(0))
+	if err != nil {
+		return err
+	}
+	input := strings.TrimSpace(strings.Join(fs.Args()[1:], " "))
+	if input == "" {
+		return fmt.Errorf("code input is required")
+	}
+	opts.workspace = repository
+	return streamTask(ctx, opts, input, ioStreams)
+}
+
+func resolveRepository(path string) (string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", fmt.Errorf("code repository path is required")
+	}
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve repository path %q: %w", path, err)
+	}
+	realPath, err := filepath.EvalSymlinks(absPath)
+	if err != nil {
+		return "", fmt.Errorf("resolve repository path %q: %w", path, err)
+	}
+	info, err := os.Stat(realPath)
+	if err != nil {
+		return "", fmt.Errorf("inspect repository path %q: %w", path, err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("repository path %q is not a directory", path)
+	}
+	return filepath.Clean(realPath), nil
+}
+
+func streamTask(ctx context.Context, opts options, input string, ioStreams IO) error {
 	agent, err := buildAgent(ctx, opts, ioStreams)
 	if err != nil {
 		return err
@@ -674,7 +735,7 @@ func stringValue(value any) string {
 }
 
 func printUsage(out io.Writer) {
-	_, _ = fmt.Fprintln(out, "usage: zenforge <run|resume|events|runs|init|version> [options]")
+	_, _ = fmt.Fprintln(out, "usage: zenforge <run|code|resume|events|runs|init|version> [options]")
 }
 
 type multiFlag []string

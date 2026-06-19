@@ -41,6 +41,16 @@ go run ./cmd/zenforge run --config zenforge.json "Analyze this repo"
 The CLI streams model text, tool calls, todo updates, approval requests, and the
 final answer.
 
+For a repository-focused run, select the workspace positionally:
+
+```bash
+go run ./cmd/zenforge code --config zenforge.json ./repo "Review this repository"
+```
+
+The repository must exist and be a directory. `code` resolves symlinks and
+uses that directory for workspace tools and shell execution, while reusing the
+same model, approval, mode, and durable store configuration as `run`.
+
 Workspace writes are conservative by default. The CLI records file metadata when
 `workspace_read` succeeds, and `workspace_write` requires a fresh read snapshot
 before overwriting an existing file.

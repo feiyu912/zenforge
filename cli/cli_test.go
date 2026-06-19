@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -65,6 +66,18 @@ func TestCLIReportsUsefulArgumentErrors(t *testing.T) {
 			wantStderr: "resume requires run id",
 		},
 		{
+			name:       "code missing repository",
+			args:       []string{"code"},
+			wantCode:   1,
+			wantStderr: "code repository path is required",
+		},
+		{
+			name:       "code missing input",
+			args:       []string{"code", "."},
+			wantCode:   1,
+			wantStderr: "code input is required",
+		},
+		{
 			name:       "events missing run id",
 			args:       []string{"events"},
 			wantCode:   1,
@@ -88,6 +101,155 @@ func TestCLIReportsUsefulArgumentErrors(t *testing.T) {
 				t.Fatalf("stderr = %q, want to contain %q", stderr.String(), tt.wantStderr)
 			}
 		})
+	}
+}
+
+func TestCodeUsesPositionalRepositoryAsWorkspace(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test")
+	repository := t.TempDir()
+	otherWorkspace := t.TempDir()
+	const marker = "from-positional-repository"
+	if err := os.WriteFile(filepath.Join(repository, "project.txt"), []byte(marker), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	var requests int
+	var secondRequest string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("ReadAll returned error: %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		if requests == 1 {
+			_, _ = fmt.Fprint(w,
+				"data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_read\",\"type\":\"function\",\"function\":{\"name\":\"workspace_read\",\"arguments\":\"{\\\"path\\\":\\\"project.txt\\\"}\"}}]}}]}\n\n"+
+					"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n"+
+					"data: [DONE]\n\n",
+			)
+			return
+		}
+		secondRequest = string(body)
+		_, _ = fmt.Fprint(w,
+			"data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"repository read\"}}]}\n\n"+
+				"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"+
+				"data: [DONE]\n\n",
+		)
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := Main(context.Background(), []string{
+		"code",
+		"--base-url", server.URL,
+		"--checkpoint-dir", t.TempDir(),
+		"--planning", "disabled",
+		"--no-shell",
+		"--workspace", otherWorkspace,
+		repository,
+		"inspect project.txt",
+	}, IO{Stdout: &stdout, Stderr: &stderr})
+	if exitCode != 0 {
+		t.Fatalf("code = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+	if requests != 2 {
+		t.Fatalf("requests = %d, want 2", requests)
+	}
+	if !strings.Contains(secondRequest, marker) {
+		t.Fatalf("second model request did not contain positional repository content: %s", secondRequest)
+	}
+	if !strings.Contains(stdout.String(), "tool workspace_read") || !strings.Contains(stdout.String(), "repository read") {
+		t.Fatalf("unexpected output: %q", stdout.String())
+	}
+}
+
+func TestCodeUsesPositionalRepositoryAsShellWorkingDirectory(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test")
+	repository := t.TempDir()
+	otherWorkspace := t.TempDir()
+
+	var requests int
+	var secondRequest string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("ReadAll returned error: %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		if requests == 1 {
+			_, _ = fmt.Fprint(w,
+				"data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_shell\",\"type\":\"function\",\"function\":{\"name\":\"shell\",\"arguments\":\"{\\\"command\\\":\\\"pwd\\\",\\\"description\\\":\\\"verify repository working directory\\\"}\"}}]}}]}\n\n"+
+					"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n"+
+					"data: [DONE]\n\n",
+			)
+			return
+		}
+		secondRequest = string(body)
+		_, _ = fmt.Fprint(w,
+			"data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"shell complete\"}}]}\n\n"+
+				"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"+
+				"data: [DONE]\n\n",
+		)
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := Main(context.Background(), []string{
+		"code",
+		"--base-url", server.URL,
+		"--checkpoint-dir", t.TempDir(),
+		"--planning", "disabled",
+		"--approve", "always",
+		"--shell-allow", "pwd",
+		"--workspace", otherWorkspace,
+		repository,
+		"print working directory",
+	}, IO{Stdout: &stdout, Stderr: &stderr})
+	if exitCode != 0 {
+		t.Fatalf("code = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+	if requests != 2 {
+		t.Fatalf("requests = %d, want 2", requests)
+	}
+	if !strings.Contains(secondRequest, repository) {
+		t.Fatalf("second model request did not contain repository working directory %q: %s", repository, secondRequest)
+	}
+	if strings.Contains(secondRequest, otherWorkspace) {
+		t.Fatalf("second model request unexpectedly contained overridden workspace %q: %s", otherWorkspace, secondRequest)
+	}
+	if !strings.Contains(stdout.String(), "tool shell") || !strings.Contains(stdout.String(), "shell complete") {
+		t.Fatalf("unexpected output: %q", stdout.String())
+	}
+}
+
+func TestCodeRejectsNonDirectoryRepository(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "file.txt")
+	if err := os.WriteFile(path, []byte("not a repository"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	var stderr bytes.Buffer
+	exitCode := Main(context.Background(), []string{"code", path, "inspect"}, IO{Stderr: &stderr})
+	if exitCode != 1 {
+		t.Fatalf("code = %d, want 1", exitCode)
+	}
+	if !strings.Contains(stderr.String(), "is not a directory") {
+		t.Fatalf("unexpected stderr: %q", stderr.String())
+	}
+}
+
+func TestCodeRejectsMissingRepository(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing")
+	var stderr bytes.Buffer
+	exitCode := Main(context.Background(), []string{"code", path, "inspect"}, IO{Stderr: &stderr})
+	if exitCode != 1 {
+		t.Fatalf("code = %d, want 1", exitCode)
+	}
+	if !strings.Contains(stderr.String(), "resolve repository path") || !strings.Contains(stderr.String(), "no such file") {
+		t.Fatalf("unexpected stderr: %q", stderr.String())
 	}
 }
 
