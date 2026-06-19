@@ -1,6 +1,7 @@
 package approval
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,7 +17,35 @@ const (
 	ReasonReused  = "approval_scope_reused"
 )
 
-var ErrRequired = errors.New(ErrorRequired)
+var (
+	ErrRequired = errors.New(ErrorRequired)
+	ErrAborted  = errors.New("approval aborted")
+)
+
+// AbortError signals that an operator aborted the run rather than merely
+// rejecting one operation.
+type AbortError struct {
+	Reason string
+}
+
+func (e *AbortError) Error() string {
+	if e == nil || e.Reason == "" {
+		return ErrAborted.Error()
+	}
+	return ErrAborted.Error() + ": " + e.Reason
+}
+
+func (e *AbortError) Unwrap() error {
+	return context.Canceled
+}
+
+func (e *AbortError) Is(target error) bool {
+	return target == ErrAborted
+}
+
+func NewAbortError(reason string) error {
+	return &AbortError{Reason: reason}
+}
 
 const (
 	MetadataDecisionAction = "approval.decisionAction"
@@ -120,6 +149,23 @@ func (d Decision) Validate() error {
 	case "", ScopeOnce, ScopeRun, ScopeRule:
 	default:
 		return fmt.Errorf("unsupported approval decision scope %q", d.Scope)
+	}
+	return nil
+}
+
+// ValidateDecisionForRequest binds a broker decision to the exact request and
+// validates any requested reusable scope before execution can continue.
+func ValidateDecisionForRequest(req Request, decision Decision) error {
+	if err := decision.Validate(); err != nil {
+		return err
+	}
+	if decision.RequestID != req.ID {
+		return fmt.Errorf("approval decision request id %q does not match %q", decision.RequestID, req.ID)
+	}
+	if IsApprovedAction(decision.Action) && decision.Scope != "" && decision.Scope != ScopeOnce {
+		if _, err := ScopeKey(req, decision.Scope); err != nil {
+			return err
+		}
 	}
 	return nil
 }

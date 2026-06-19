@@ -281,7 +281,8 @@ invalid rather than widening it.
 Approval routing fields are runtime-owned. Before persistence or broker
 dispatch, the harness replaces request `runId`, `toolCallId`, and `toolName`
 with the active run/tool identity. Broker decisions must match the pending
-request ID exactly.
+request ID exactly. The generic approval middleware applies the same binding
+and validates reusable scope keys before a protected tool can be retried.
 
 Persistent cross-run approvals are post-MVP.
 
@@ -357,6 +358,8 @@ Minimum tests:
 - approval middleware runs tool only when approved;
 - rejected approval returns tool error;
 - abort decision cancels run.
+- middleware abort errors match both `approval.ErrAborted` and
+  `context.Canceled`.
 
 ## S6 Exit Criteria
 

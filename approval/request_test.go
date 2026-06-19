@@ -1,10 +1,40 @@
 package approval
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 )
+
+func TestAbortErrorSignalsRunCancellation(t *testing.T) {
+	err := NewAbortError("operator stopped")
+	if !errors.Is(err, ErrAborted) || !errors.Is(err, context.Canceled) {
+		t.Fatalf("abort error does not signal cancellation: %v", err)
+	}
+	if err.Error() != "approval aborted: operator stopped" {
+		t.Fatalf("abort error = %q", err)
+	}
+}
+
+func TestValidateDecisionForRequestBindsIdentityAndScope(t *testing.T) {
+	req := Request{ID: "approval_1", Payload: map[string]any{"fingerprint": "fp_1"}}
+	valid := Decision{RequestID: req.ID, Action: DecisionApprove, Scope: ScopeRun}
+	if err := ValidateDecisionForRequest(req, valid); err != nil {
+		t.Fatalf("valid decision returned error: %v", err)
+	}
+	wrong := valid
+	wrong.RequestID = "approval_other"
+	if err := ValidateDecisionForRequest(req, wrong); err == nil {
+		t.Fatal("expected mismatched request id error")
+	}
+	missingScopeKey := valid
+	missingScopeKey.Scope = ScopeRule
+	if err := ValidateDecisionForRequest(req, missingScopeKey); err == nil {
+		t.Fatal("expected missing rule key error")
+	}
+}
 
 func TestRequestJSONRoundTripAndValidation(t *testing.T) {
 	req := Request{

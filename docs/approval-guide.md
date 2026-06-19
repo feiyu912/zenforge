@@ -99,6 +99,8 @@ The harness owns approval routing identity. It overwrites tool-provided
 `runId`, `toolCallId`, and `toolName` with the active runtime values before
 checkpointing or calling a broker. A broker decision must return the exact
 pending `requestId`; mismatches fail closed without creating a grant.
+The standalone `tool/middleware.Approval` path enforces the same identity and
+scope-key checks before retrying its wrapped invoker.
 
 Cross-run persistent approvals are intentionally post-MVP.
 
@@ -128,4 +130,6 @@ unchanged.
 
 An `abort` decision is different from a rejection. Rejection produces a failed
 tool result and lets the model continue; abort persists a cancelled run and
-emits `run.cancelled`.
+emits `run.cancelled`. At lower-level middleware boundaries, abort returns an
+error matching both `approval.ErrAborted` and `context.Canceled` so hosts can
+route it through their normal cancellation path.

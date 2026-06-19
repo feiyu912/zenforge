@@ -268,6 +268,7 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - `Agent.Run` returns cancellation and deadline terminal events as matching Go errors.
 - Approval run/rule grants survive checkpoints and resume, while mismatched scope keys require a new decision.
 - Harness-owned approval run/tool identity overrides tool-provided values, and mismatched broker decision IDs fail closed.
+- Generic approval middleware binds decisions to the exact request and scope key before retrying a tool; aborts expose both `approval.ErrAborted` and `context.Canceled`.
 - MVP validation maps HTTP resume invalid JSON handling to a concrete test.
 - Sandbox checkpoint state binds sessions to the exact run/subtask scope.
 - Sandbox close is best-effort and cannot replace a successful command result.

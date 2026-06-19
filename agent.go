@@ -175,21 +175,6 @@ type eventPersistenceError struct {
 
 var errApprovalPending = errors.New("approval pending")
 
-type approvalAbortError struct {
-	reason string
-}
-
-func (e approvalAbortError) Error() string {
-	if e.reason == "" {
-		return "approval aborted"
-	}
-	return "approval aborted: " + e.reason
-}
-
-func (approvalAbortError) Unwrap() error {
-	return context.Canceled
-}
-
 func (e *eventPersistenceError) Error() string {
 	return e.err.Error()
 }
@@ -983,7 +968,7 @@ func (a *Agent) resumeWaitingApproval(ctx context.Context, emit eventEmitter, ch
 		return err
 	}
 	if decision.Action == approval.DecisionAbort {
-		return approvalAbortError{reason: decision.Reason}
+		return approval.NewAbortError(decision.Reason)
 	}
 	if approval.IsApprovedAction(decision.Action) {
 		call.Meta = approval.ApprovedMetadata(call.Meta, req, decision)
@@ -1186,7 +1171,7 @@ func (a *Agent) runPendingTools(ctx context.Context, emit eventEmitter, checkpoi
 					return err
 				}
 				if decision.Action == approval.DecisionAbort {
-					return approvalAbortError{reason: decision.Reason}
+					return approval.NewAbortError(decision.Reason)
 				}
 				if approval.IsApprovedAction(decision.Action) {
 					approvedCall := call
@@ -1494,11 +1479,8 @@ func normalizeApprovalDecision(decision approval.Decision) approval.Decision {
 
 func resolveApproval(state *harness.RunState, req approval.Request, decision approval.Decision) error {
 	decision = normalizeApprovalDecision(decision)
-	if err := decision.Validate(); err != nil {
+	if err := approval.ValidateDecisionForRequest(req, decision); err != nil {
 		return err
-	}
-	if decision.RequestID != req.ID {
-		return fmt.Errorf("approval decision request id %q does not match %q", decision.RequestID, req.ID)
 	}
 	var scopeKey string
 	if approval.IsApprovedAction(decision.Action) && decision.Scope != approval.ScopeOnce {

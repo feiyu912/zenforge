@@ -134,6 +134,9 @@ Risky operations should return or emit an approval request with:
 Approval metadata matching is exact: a replayed call must carry an approved
 decision action plus either the same fingerprint or the same rule key. Write
 approval fingerprints include the target path and content SHA256.
+Broker decisions must also carry the exact request ID. Generic approval
+middleware validates that identity and any reusable scope key before retrying
+the protected tool.
 
 Applications decide how to surface the request:
 
