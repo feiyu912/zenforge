@@ -21,6 +21,15 @@ const (
 	PlanningPlanExecute PlanningMode = "plan_execute"
 )
 
+// AgentMode selects a platform-compatible execution preset.
+type AgentMode string
+
+const (
+	ModeReact       AgentMode = "react"
+	ModeOneshot     AgentMode = "oneshot"
+	ModePlanExecute AgentMode = "plan_execute"
+)
+
 type SubAgentMode string
 
 const (
@@ -56,6 +65,7 @@ type Config struct {
 	Checkpoints           checkpoint.Store
 	Trace                 trace.Sink
 	MaxSteps              int
+	Mode                  AgentMode
 	Planning              PlanningMode
 	SubAgents             SubAgentMode
 }

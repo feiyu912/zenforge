@@ -88,6 +88,9 @@ func run(ctx context.Context, args []string, ioStreams IO) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	if err := resolveExecutionFlags(fs, &opts); err != nil {
+		return err
+	}
 	input := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	if input == "" {
 		return fmt.Errorf("run input is required")
@@ -112,6 +115,9 @@ func resume(ctx context.Context, args []string, ioStreams IO) error {
 	}
 	bindOptions(fs, &opts)
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if err := resolveExecutionFlags(fs, &opts); err != nil {
 		return err
 	}
 	if fs.NArg() != 1 {
@@ -266,6 +272,7 @@ type options struct {
 	checkpointType      string
 	checkpointDir       string
 	maxSteps            int
+	mode                string
 	planning            string
 	noShell             bool
 	approve             string
@@ -309,6 +316,7 @@ func bindOptions(fs *flag.FlagSet, opts *options) {
 	fs.StringVar(&opts.checkpointType, "checkpoint-type", opts.checkpointType, "event/checkpoint store type: jsonl|sqlite")
 	fs.StringVar(&opts.checkpointDir, "checkpoint-dir", opts.checkpointDir, "event/checkpoint directory")
 	fs.IntVar(&opts.maxSteps, "max-steps", opts.maxSteps, "max harness steps")
+	fs.StringVar(&opts.mode, "mode", opts.mode, "execution mode: react|oneshot|plan_execute")
 	fs.StringVar(&opts.planning, "planning", opts.planning, "planning mode: disabled|enabled|plan_execute")
 	fs.StringVar(&opts.approve, "approve", opts.approve, "approval mode: always|never|prompt")
 	fs.BoolVar(&opts.noShell, "no-shell", opts.noShell, "disable shell tool")
@@ -333,6 +341,14 @@ func optionsFromArgs(args []string) (options, error) {
 }
 
 func buildAgent(ctx context.Context, opts options, ioStreams IO) (*zenforge.Agent, error) {
+	var executionMode zenforge.AgentMode
+	if strings.TrimSpace(opts.mode) != "" {
+		mode, err := parseAgentMode(opts.mode)
+		if err != nil {
+			return nil, err
+		}
+		executionMode = mode
+	}
 	ws, err := workspacelocal.New(workspacelocal.Config{
 		Root:            opts.workspace,
 		MaxReadBytes:    opts.workspaceMaxRead,
@@ -391,8 +407,33 @@ func buildAgent(ctx context.Context, opts options, ioStreams IO) (*zenforge.Agen
 		Events:       events,
 		Checkpoints:  checkpoints,
 		MaxSteps:     opts.maxSteps,
+		Mode:         executionMode,
 		Planning:     planningMode(opts.planning),
 	}), nil
+}
+
+func resolveExecutionFlags(fs *flag.FlagSet, opts *options) error {
+	var modeSet, planningSet bool
+	fs.Visit(func(current *flag.Flag) {
+		switch current.Name {
+		case "mode":
+			modeSet = true
+		case "planning":
+			planningSet = true
+		}
+	})
+	if modeSet && planningSet {
+		return fmt.Errorf("--mode and --planning cannot be used together")
+	}
+	if planningSet {
+		opts.mode = ""
+	}
+	if strings.TrimSpace(opts.mode) != "" {
+		if _, err := parseAgentMode(opts.mode); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func workspaceFilePolicy(opts options) policy.FilePolicy {

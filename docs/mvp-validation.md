@@ -74,6 +74,7 @@ Markdown document links.
 | complex, redirected, or dangerous shell syntax fails closed or requires approval | `policy.TestReviewCommandRequiresApprovalForOutputRedirection`, `policy.TestReviewCommandRequiresApprovalWhenASTIsTooComplex`, `safety/bashsec.TestReviewBashSecurityStillBlocksHardFailures` |
 | risky shell returns approval request or prompt | `TestShellApprovalRequiredShape`, `TestAgentApprovalBrokerApprovesAndRetriesTool`, CLI approval mode tests |
 | shell policy can produce broker-free approval plans | `approval.TestRequiredPlanValidatesRequest`, `tools/shell.TestShellApprovalPlanFromReview` |
+| platform execution modes preserve react/oneshot/plan-execute behavior | `TestAgentOneshotCapsToolRoundsAndPersistsMode`, `TestAgentResumeUsesCheckpointedOneshotMode`, `TestAgentPlanExecutePresetPlansExecutesAndSummarizes`, `cli.TestAgentModeParsing` |
 | missing approval broker pauses at a resumable checkpoint | `TestAgentPausesOnApprovalWithoutBroker`, `TestAgentRunReturnsApprovalRequiredWhenPaused`, `TestAgentResumeWaitingApprovalWithoutBrokerStaysPaused` |
 | approval abort persists a cancelled terminal run | `TestAgentApprovalAbortCancelsRun` |
 | run/rule approval scopes reuse only exact matching keys | `TestAgentReusesApprovalScopeWithinRun`, `TestAgentDoesNotReuseApprovalForDifferentScopeKey`, `approval.TestScopeKeyRequiresMatchingRequestIdentity` |

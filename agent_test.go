@@ -701,6 +701,77 @@ func TestAgentMaxStepsRejectsToolCallsFromFinalNoToolTurn(t *testing.T) {
 	}
 }
 
+func TestAgentOneshotCapsToolRoundsAndPersistsMode(t *testing.T) {
+	checkpoints := checkpointmemory.New()
+	fakeModel := &scriptedModel{turns: []scriptedTurn{
+		{events: []model.Event{{Message: &model.Message{
+			ToolCalls: []model.ToolCallSpec{{
+				ID: "call_one", Name: "echo", Arguments: json.RawMessage(`{"text":"one"}`),
+			}},
+		}}}},
+		{events: []model.Event{{Message: &model.Message{
+			ToolCalls: []model.ToolCallSpec{{
+				ID: "call_two", Name: "echo", Arguments: json.RawMessage(`{"text":"two"}`),
+			}},
+		}}}},
+		{events: []model.Event{{Delta: "oneshot final"}}},
+	}}
+	agent := New(Config{
+		Model:       fakeModel,
+		Tools:       []Tool{echoTool{}},
+		Checkpoints: checkpoints,
+		MaxSteps:    20,
+		Mode:        ModeOneshot,
+	})
+
+	result, err := agent.Run(context.Background(), Task{RunID: "run_oneshot", Input: "use tools briefly"})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if result.Output != "oneshot final" || len(fakeModel.requests) != 3 {
+		t.Fatalf("unexpected oneshot result=%#v requests=%#v", result, fakeModel.requests)
+	}
+	if fakeModel.requests[2].ToolChoice != model.ToolChoiceNone {
+		t.Fatalf("final request tool choice = %q, want none", fakeModel.requests[2].ToolChoice)
+	}
+	cp, err := checkpoints.Load(context.Background(), "run_oneshot")
+	if err != nil {
+		t.Fatalf("Load checkpoint returned error: %v", err)
+	}
+	if cp.State.Mode != string(ModeOneshot) || cp.State.Step != 2 || cp.State.Phase != harness.RunPhaseCompleted {
+		t.Fatalf("unexpected oneshot checkpoint: %#v", cp.State)
+	}
+}
+
+func TestAgentResumeUsesCheckpointedOneshotMode(t *testing.T) {
+	checkpoints := checkpointmemory.New()
+	state := newRunState("run_oneshot_resume", "continue", nil)
+	state.Mode = string(ModeOneshot)
+	state.Step = 2
+	state.Phase = harness.RunPhaseModel
+	if err := checkpoints.Save(context.Background(), checkpoint.Checkpoint{
+		Version: checkpoint.CheckpointVersion,
+		RunID:   state.RunID,
+		Seq:     1,
+		State:   state,
+		SavedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("Save checkpoint returned error: %v", err)
+	}
+	fakeModel := &scriptedModel{turns: []scriptedTurn{{events: []model.Event{{Delta: "resumed final"}}}}}
+	agent := New(Config{Model: fakeModel, Checkpoints: checkpoints, Mode: ModeReact, MaxSteps: 8})
+
+	events, err := agent.Resume(context.Background(), state.RunID)
+	if err != nil {
+		t.Fatalf("Resume returned error: %v", err)
+	}
+	for range events {
+	}
+	if len(fakeModel.requests) != 1 || fakeModel.requests[0].ToolChoice != model.ToolChoiceNone {
+		t.Fatalf("resume ignored checkpointed oneshot mode: %#v", fakeModel.requests)
+	}
+}
+
 func TestAgentCancellationBeforeModelPersistsCancelledTerminalState(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -2280,9 +2351,9 @@ func TestAgentPlanExecutePresetPlansExecutesAndSummarizes(t *testing.T) {
 		{events: []model.Event{{Delta: "summary done"}}},
 	}}
 	agent := New(Config{
-		Model:    fakeModel,
-		Planning: PlanningPlanExecute,
-		Events:   eventStore,
+		Model:  fakeModel,
+		Mode:   ModePlanExecute,
+		Events: eventStore,
 	})
 
 	events, err := agent.Stream(context.Background(), Task{RunID: "run_plan_execute", Input: "do the work"})

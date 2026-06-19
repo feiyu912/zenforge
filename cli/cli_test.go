@@ -594,6 +594,27 @@ func TestOptionsFromConfigRejectsInvalidPlanningMode(t *testing.T) {
 	}
 }
 
+func TestOptionsFromConfigRejectsInvalidOrConflictingAgentMode(t *testing.T) {
+	for name, agent := range map[string]agentConfig{
+		"invalid":  {Mode: "batch"},
+		"conflict": {Mode: "react", Planning: "enabled"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "zenforge.json")
+			data, err := json.Marshal(configFile{Agent: agent})
+			if err != nil {
+				t.Fatalf("Marshal returned error: %v", err)
+			}
+			if err := os.WriteFile(path, data, 0o644); err != nil {
+				t.Fatalf("WriteFile returned error: %v", err)
+			}
+			if _, err := optionsFromArgs([]string{"--config", path}); err == nil || !strings.Contains(err.Error(), "agent.mode") {
+				t.Fatalf("expected agent.mode error, got %v", err)
+			}
+		})
+	}
+}
+
 func TestOptionsFromConfigRejectsInvalidApprovalMode(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "zenforge.json")
@@ -704,6 +725,9 @@ func TestInitCreatesDefaultConfig(t *testing.T) {
 	if config.Approval.Mode != "prompt" {
 		t.Fatalf("default approval mode = %q", config.Approval.Mode)
 	}
+	if config.Agent.Mode != "plan_execute" || config.Agent.Planning != nil {
+		t.Fatalf("default execution mode = %#v", config.Agent)
+	}
 	if !strings.Contains(stdout.String(), "created") {
 		t.Fatalf("unexpected stdout: %q", stdout.String())
 	}
@@ -786,5 +810,24 @@ func TestPlanningModeParsing(t *testing.T) {
 		if got := planningMode(input); got != want {
 			t.Fatalf("planningMode(%q) = %q, want %q", input, got, want)
 		}
+	}
+}
+
+func TestAgentModeParsing(t *testing.T) {
+	tests := map[string]zenforge.AgentMode{
+		"react":        zenforge.ModeReact,
+		"ONESHOT":      zenforge.ModeOneshot,
+		"one-shot":     zenforge.ModeOneshot,
+		"plan_execute": zenforge.ModePlanExecute,
+		"plan-execute": zenforge.ModePlanExecute,
+	}
+	for input, want := range tests {
+		got, err := parseAgentMode(input)
+		if err != nil || got != want {
+			t.Fatalf("parseAgentMode(%q) = %q, %v; want %q", input, got, err, want)
+		}
+	}
+	if _, err := parseAgentMode("batch"); err == nil {
+		t.Fatal("expected invalid mode error")
 	}
 }

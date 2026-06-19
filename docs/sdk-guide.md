@@ -9,6 +9,7 @@ on `zenforge.New`, `zenforge.Config`, `Agent.Stream`, `Agent.Run`, and
 ```go
 agent := zenforge.New(zenforge.Config{
     Model:        model,
+    Mode:         zenforge.ModeReact,
     Instructions: "Use tools when useful and answer briefly.",
     Tools:        []zenforge.Tool{lookup},
     ToolArgumentRedaction: []string{"password", "token"},
@@ -18,6 +19,12 @@ agent := zenforge.New(zenforge.Config{
     MaxSteps:     8,
 })
 ```
+
+Execution presets mirror the reusable platform modes: `ModeReact` is the
+normal bounded tool loop, `ModeOneshot` caps it at two rounds before a forced
+no-tool answer, and `ModePlanExecute` runs the durable plan/execute/summary
+preset. The selected mode is checkpointed, so resume keeps the original run
+semantics even if the host's current default changes.
 
 Sub-agents can be enabled without planning:
 

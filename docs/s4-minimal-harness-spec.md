@@ -19,6 +19,7 @@ After S4, ZenForge should support:
 - max steps;
 - cancellation;
 - final no-tool answer turn;
+- platform-compatible `react`, `oneshot`, and `plan_execute` presets;
 - basic resume from safe boundaries.
 
 ## Design Principles
@@ -68,12 +69,18 @@ type RunConfig struct {
     RunID        string
     Input        string
     Instructions string
+    Mode         AgentMode
     Messages     []MessageState
     MaxSteps     int
     ToolChoice   ToolChoice
     Metadata     map[string]any
 }
 ```
+
+Mode behavior follows `agent-platform/internal/llm/mode.go`: `react` uses the
+configured loop budget, `oneshot` caps the loop at two model/tool rounds, and
+`plan_execute` selects the S5 durable planner preset. The chosen mode is stored
+in `RunState` and remains authoritative on resume.
 
 `RunConfig` is deliberately smaller than ZenMind `QuerySession`.
 
@@ -282,6 +289,7 @@ Minimum tests:
 - model returns text, run completes;
 - model returns tool call, tool runs, model gets tool result;
 - max steps triggers final no-tool turn;
+- oneshot caps the loop at two rounds and persists its mode across resume;
 - checkpoint before and after tool call;
 - event order is stable;
 - cancellation before model call;

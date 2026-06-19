@@ -6,6 +6,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/feiyu912/zenforge"
 )
 
 type configFile struct {
@@ -27,6 +29,7 @@ type modelConfig struct {
 type agentConfig struct {
 	Instructions string `json:"instructions,omitempty"`
 	MaxSteps     int    `json:"maxSteps,omitempty"`
+	Mode         string `json:"mode,omitempty"`
 	Planning     any    `json:"planning,omitempty"`
 }
 
@@ -67,7 +70,7 @@ func defaultConfigFile() configFile {
 		Agent: agentConfig{
 			Instructions: defaults.instructions,
 			MaxSteps:     defaults.maxSteps,
-			Planning:     defaults.planning,
+			Mode:         "plan_execute",
 		},
 		Workspace: workspaceConfig{
 			Root:          defaults.workspace,
@@ -132,9 +135,19 @@ func applyConfig(opts *options, config configFile) error {
 	if config.Agent.MaxSteps > 0 {
 		opts.maxSteps = config.Agent.MaxSteps
 	}
+	if config.Agent.Mode != "" {
+		mode, err := parseAgentMode(config.Agent.Mode)
+		if err != nil {
+			return fmt.Errorf("agent.mode: %w", err)
+		}
+		opts.mode = string(mode)
+	}
 	if planning, ok, err := planningString(config.Agent.Planning); err != nil {
 		return err
 	} else if ok {
+		if config.Agent.Mode != "" {
+			return fmt.Errorf("agent.mode and agent.planning cannot both be set")
+		}
 		opts.planning = planning
 	}
 	if config.Workspace.Root != "" {
@@ -200,6 +213,19 @@ func applyConfig(opts *options, config configFile) error {
 		opts.checkpointDir = config.Checkpoint.Path
 	}
 	return nil
+}
+
+func parseAgentMode(value string) (zenforge.AgentMode, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "react":
+		return zenforge.ModeReact, nil
+	case "oneshot", "one-shot":
+		return zenforge.ModeOneshot, nil
+	case "plan_execute", "plan-execute":
+		return zenforge.ModePlanExecute, nil
+	default:
+		return "", fmt.Errorf("unknown execution mode %q", value)
+	}
 }
 
 func configPathFromArgs(args []string) string {

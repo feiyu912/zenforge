@@ -27,6 +27,7 @@ type RunState struct {
 	ParentRunID string          `json:"parentRunId,omitempty"`
 	TaskID      string          `json:"taskId,omitempty"`
 	Input       string          `json:"input"`
+	Mode        string          `json:"mode,omitempty"`
 	Phase       RunPhase        `json:"phase"`
 	Step        int             `json:"step"`
 	CreatedAt   time.Time       `json:"createdAt"`

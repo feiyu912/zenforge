@@ -25,10 +25,14 @@ Initial implementation:
 OPENAI_API_KEY=... zenforge run \
   --workspace . \
   --checkpoint-dir .zenforge/runs \
-  --planning plan_execute \
+  --mode plan_execute \
   --approve prompt \
   "Analyze this repo"
 ```
+
+`--mode react|oneshot|plan_execute` is the primary execution-preset flag.
+`--planning` remains for compatibility with earlier ZenForge configs; callers
+must not pass both flags in one command.
 
 Behavior:
 

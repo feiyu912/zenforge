@@ -91,6 +91,7 @@ Config is JSON. See [`docs/config-reference.md`](docs/config-reference.md) and [
 
 **Runtime**
 - Single `zenforge.Agent` with `Stream`, `Run`, `Resume`.
+- Platform-compatible `react`, `oneshot`, and `plan_execute` execution modes, persisted across resume.
 - Plan/execute preset with built-in todo manager.
 - Run-scoped pending approval broker (`approval.PendingBroker`).
 - Broker-free approval requests pause durably instead of allowing the model to continue past a risky tool.

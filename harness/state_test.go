@@ -12,6 +12,7 @@ func TestRunStateJSONRoundTrip(t *testing.T) {
 		Version:   RunStateVersion,
 		RunID:     "run_1",
 		Input:     "hello",
+		Mode:      "oneshot",
 		Phase:     RunPhaseTool,
 		Step:      2,
 		CreatedAt: now,
@@ -41,7 +42,7 @@ func TestRunStateJSONRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatalf("Unmarshal returned error: %v", err)
 	}
-	if got.Version != RunStateVersion || got.RunID != "run_1" || got.Phase != RunPhaseTool {
+	if got.Version != RunStateVersion || got.RunID != "run_1" || got.Mode != "oneshot" || got.Phase != RunPhaseTool {
 		t.Fatalf("unexpected state after round trip: %#v", got)
 	}
 	if got.Messages[1].ToolCalls[0].Name != "echo" {

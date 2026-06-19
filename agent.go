@@ -30,7 +30,7 @@ type Agent struct {
 // New creates an Agent with the provided runtime configuration.
 func New(config Config) *Agent {
 	todos := config.Todos
-	if todos == nil && (config.Planning == PlanningEnabled || config.Planning == PlanningPlanExecute) {
+	if todos == nil && (config.Planning == PlanningEnabled || agentModeForConfig(config) == ModePlanExecute) {
 		todos = planner.NewMemoryManager(planner.MemoryConfig{})
 	}
 	return &Agent{config: config, todos: todos}
@@ -82,7 +82,8 @@ func (a *Agent) Stream(ctx context.Context, task Task) (<-chan Event, error) {
 	if a.config.Model == nil {
 		return a.streamNoop(ctx, runID, task.Input), nil
 	}
-	if a.config.Planning == PlanningPlanExecute {
+	mode := agentModeForConfig(a.config)
+	if mode == ModePlanExecute {
 		events := make(chan Event, 64)
 		go func() {
 			defer close(events)
@@ -92,6 +93,7 @@ func (a *Agent) Stream(ctx context.Context, task Task) (<-chan Event, error) {
 	}
 
 	state := newRunState(runID, task.Input, task.Meta)
+	state.Mode = string(mode)
 	events := make(chan Event, 32)
 	go func() {
 		defer close(events)
@@ -112,7 +114,7 @@ func (a *Agent) Resume(ctx context.Context, runID string) (<-chan Event, error) 
 	events := make(chan Event, 32)
 	go func() {
 		defer close(events)
-		if a.config.Planning == PlanningPlanExecute && isPlanExecuteState(checkpoint.State) {
+		if AgentMode(checkpoint.State.Mode) == ModePlanExecute || isPlanExecuteState(checkpoint.State) {
 			a.runPlanExecute(ctx, events, runID, Task{
 				Input: planExecuteOriginalInput(checkpoint.State),
 				Meta:  planExecuteUserMeta(checkpoint.State.Meta),
@@ -126,6 +128,27 @@ func (a *Agent) Resume(ctx context.Context, runID string) (<-chan Event, error) 
 
 func newRunID() string {
 	return fmt.Sprintf("run_%d", time.Now().UnixNano())
+}
+
+func agentModeForConfig(config Config) AgentMode {
+	switch config.Mode {
+	case ModeReact, ModeOneshot, ModePlanExecute:
+		return config.Mode
+	case "":
+		if config.Planning == PlanningPlanExecute {
+			return ModePlanExecute
+		}
+	}
+	return ModeReact
+}
+
+func runStateMode(state harness.RunState, config Config) AgentMode {
+	switch AgentMode(state.Mode) {
+	case ModeReact, ModeOneshot, ModePlanExecute:
+		return AgentMode(state.Mode)
+	default:
+		return agentModeForConfig(config)
+	}
 }
 
 func stringValue(value any) string {
@@ -267,6 +290,7 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 	})
 	finish := func(stage string, todos []planner.Todo, eventType EventType, err error) error {
 		state := newRunState(runID, task.Input, planExecuteMeta(task.Meta, task.Input, stage))
+		state.Mode = string(ModePlanExecute)
 		loadCtx := ctx
 		if ctx.Err() != nil {
 			loadCtx = context.WithoutCancel(ctx)
@@ -283,6 +307,7 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 				state.Meta = cloneMap(cp.State.Meta)
 			}
 		}
+		state.Mode = string(ModePlanExecute)
 		if state.Meta == nil {
 			state.Meta = map[string]any{}
 		}
@@ -327,14 +352,14 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 		return
 	}
 	if resumeState != nil {
-		if err := emit(EventRunResumed, map[string]any{"input": task.Input, "preset": string(PlanningPlanExecute)}); err != nil {
+		if err := emit(EventRunResumed, map[string]any{"input": task.Input, "mode": string(ModePlanExecute), "preset": string(PlanningPlanExecute)}); err != nil {
 			return
 		}
 		if planExecuteTerminal(*resumeState) && a.resumeTerminal(emit, *resumeState) {
 			return
 		}
 	} else {
-		if err := emit(EventRunStarted, map[string]any{"input": task.Input, "preset": string(PlanningPlanExecute)}); err != nil {
+		if err := emit(EventRunStarted, map[string]any{"input": task.Input, "mode": string(ModePlanExecute), "preset": string(PlanningPlanExecute)}); err != nil {
 			return
 		}
 	}
@@ -347,6 +372,7 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 	if len(todos) == 0 {
 		planInput := task.Input + "\n\n" + planner.PlanPrompt
 		planState := newRunState(runID, planInput, planExecuteMeta(task.Meta, task.Input, planExecuteStagePlan))
+		planState.Mode = string(ModePlanExecute)
 		terminal := a.runInternalLoop(ctx, out, planState, resumeState != nil && planExecuteStage(resumeState.Meta) == planExecuteStagePlan)
 		if terminal.Type == EventRunError || terminal.Type == EventRunCancelled {
 			if terminal.Err != nil {
@@ -392,10 +418,12 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 		}
 
 		executeState := newRunState(runID, taskPrompt(todos, current), planExecuteMeta(task.Meta, task.Input, planExecuteStageExecute))
+		executeState.Mode = string(ModePlanExecute)
 		if resumeState != nil && planExecuteStage(resumeState.Meta) == planExecuteStageExecute {
 			executeState = *resumeState
 			resumeState = nil
 		}
+		executeState.Mode = string(ModePlanExecute)
 		terminal := a.runInternalLoop(ctx, out, executeState, true)
 		if terminal.Type == EventRunError || terminal.Type == EventRunCancelled {
 			if terminal.Err != nil {
@@ -441,6 +469,7 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 	}
 
 	summaryState := newRunState(runID, summaryPrompt(task.Input, todos), planExecuteMeta(task.Meta, task.Input, planExecuteStageSummary))
+	summaryState.Mode = string(ModePlanExecute)
 	summaryState.Todos, _ = plannerTodos(todos)
 	summaryState.Phase = harness.RunPhaseFinalizing
 	summaryState.Control.Status = harness.RunStatusModelStreaming
@@ -702,7 +731,7 @@ func (a *Agent) runLoopMode(ctx context.Context, out chan<- Event, state harness
 		return
 	}
 	if resumed {
-		if err := emit(EventRunResumed, map[string]any{"input": state.Input}); err != nil {
+		if err := emit(EventRunResumed, map[string]any{"input": state.Input, "mode": string(runStateMode(state, a.config))}); err != nil {
 			return terminal
 		}
 		if a.resumeTerminal(emit, state) {
@@ -730,7 +759,7 @@ func (a *Agent) runLoopMode(ctx context.Context, out chan<- Event, state harness
 			}
 		}
 	} else {
-		if err := emit(EventRunStarted, map[string]any{"input": state.Input}); err != nil {
+		if err := emit(EventRunStarted, map[string]any{"input": state.Input, "mode": string(runStateMode(state, a.config))}); err != nil {
 			return terminal
 		}
 	}
@@ -738,6 +767,9 @@ func (a *Agent) runLoopMode(ctx context.Context, out chan<- Event, state harness
 	maxSteps := a.config.MaxSteps
 	if maxSteps <= 0 {
 		maxSteps = 8
+	}
+	if runStateMode(state, a.config) == ModeOneshot && maxSteps > 2 {
+		maxSteps = 2
 	}
 	for {
 		if err := ctx.Err(); err != nil {

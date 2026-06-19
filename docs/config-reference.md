@@ -24,7 +24,7 @@ zenforge runs --config zenforge.json
   "agent": {
     "instructions": "You are a senior Go backend engineer. Be concise, careful, and use tools when helpful.",
     "maxSteps": 20,
-    "planning": "plan_execute"
+    "mode": "plan_execute"
   },
   "workspace": {
     "root": ".",
@@ -74,8 +74,12 @@ For SQLite local storage:
 - `agent.instructions`: system instructions for the harness.
 - `agent.maxSteps`: maximum model/tool loop steps. Negative values make config
   loading fail.
+- `agent.mode`: platform-compatible execution preset: `react`, `oneshot`, or
+  `plan_execute`. `oneshot` caps the normal model/tool loop at two rounds and
+  then forces a no-tool final answer when needed.
 - `agent.planning`: `disabled`, `enabled`, `plan_execute`, or boolean. Invalid
-  values make config loading fail instead of disabling planning silently.
+  values make config loading fail instead of disabling planning silently. This
+  remains a compatibility field; do not set it together with `agent.mode`.
 - `workspace.root`: local workspace root.
 - CLI workspace writes require a fresh `workspace_read` snapshot before
   overwriting an existing file.

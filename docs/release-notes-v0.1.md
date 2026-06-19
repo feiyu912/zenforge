@@ -6,6 +6,8 @@ long-running, tool-using, observable, and recoverable agents.
 ## Highlights
 
 - High-level `zenforge.Agent` with `Stream`, `Run`, and `Resume`.
+- Platform-compatible React, Oneshot, and Plan/Execute execution presets with
+  checkpointed mode identity.
 - Durable event log and checkpoint stores: memory, JSONL, and SQLite.
 - OpenAI-compatible and Anthropic model adapters.
 - Local workspace, shell, todo/planner, MCP, memory, and sub-agent tooling.
