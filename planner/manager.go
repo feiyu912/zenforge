@@ -3,6 +3,7 @@ package planner
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -53,6 +54,7 @@ func (m *MemoryManager) List(ctx context.Context, runID string) ([]Todo, error) 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	runID = strings.TrimSpace(runID)
 	if runID == "" {
 		return nil, fmt.Errorf("runID is required")
 	}
@@ -65,6 +67,7 @@ func (m *MemoryManager) Replace(ctx context.Context, runID string, todos []Todo)
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	runID = strings.TrimSpace(runID)
 	if runID == "" {
 		return nil, fmt.Errorf("runID is required")
 	}
@@ -83,14 +86,26 @@ func (m *MemoryManager) Update(ctx context.Context, runID string, id string, pat
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	runID = strings.TrimSpace(runID)
 	if runID == "" {
 		return nil, fmt.Errorf("runID is required")
 	}
+	id = strings.TrimSpace(id)
 	if id == "" {
 		return nil, fmt.Errorf("todo id is required")
 	}
+	if patch.Content == nil && patch.Status == nil && patch.Notes == nil && patch.Meta == nil {
+		return nil, fmt.Errorf("todo patch cannot be empty")
+	}
 	if patch.Status != nil && !ValidStatus(*patch.Status) {
 		return nil, fmt.Errorf("invalid todo status %q", *patch.Status)
+	}
+	if patch.Content != nil {
+		content := strings.TrimSpace(*patch.Content)
+		if content == "" {
+			return nil, fmt.Errorf("todo %q content is required", id)
+		}
+		patch.Content = &content
 	}
 	m.mu.Lock()
 	todos := cloneTodos(m.todos[runID])
@@ -111,12 +126,13 @@ func (m *MemoryManager) Update(ctx context.Context, runID string, id string, pat
 			todos[i].Notes = *patch.Notes
 		}
 		if patch.Meta != nil {
-			todos[i].Meta = patch.Meta
+			todos[i].Meta = cloneMap(patch.Meta)
 		}
 		todos[i].UpdatedAt = now
 		break
 	}
 	if !found {
+		m.mu.Unlock()
 		return nil, fmt.Errorf("todo %q not found", id)
 	}
 	m.todos[runID] = cloneTodos(todos)

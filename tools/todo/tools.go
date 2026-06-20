@@ -1,9 +1,11 @@
 package todo
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 
 	"github.com/feiyu912/zenforge/planner"
 	"github.com/feiyu912/zenforge/tool"
@@ -96,7 +98,25 @@ func (t todoTool) Schema() map[string]any {
 		return map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"todos": map[string]any{"type": "array"},
+				"todos": map[string]any{
+					"type":     "array",
+					"minItems": 1,
+					"items": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"id":      map[string]any{"type": "string"},
+							"content": map[string]any{"type": "string"},
+							"status": map[string]any{
+								"type": "string",
+								"enum": []string{"pending", "in_progress", "done", "failed", "cancelled"},
+							},
+							"notes": map[string]any{"type": "string"},
+							"meta":  map[string]any{"type": "object"},
+						},
+						"required":             []string{"content"},
+						"additionalProperties": false,
+					},
+				},
 			},
 			"required":             []string{"todos"},
 			"additionalProperties": false,
@@ -105,8 +125,11 @@ func (t todoTool) Schema() map[string]any {
 		return map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"id":         map[string]any{"type": "string"},
-				"status":     map[string]any{"type": "string"},
+				"id": map[string]any{"type": "string"},
+				"status": map[string]any{
+					"type": "string",
+					"enum": []string{"pending", "in_progress", "done", "failed", "cancelled"},
+				},
 				"content":    map[string]any{"type": "string"},
 				"setContent": map[string]any{"type": "boolean"},
 				"notes":      map[string]any{"type": "string"},
@@ -132,9 +155,13 @@ func (t todoTool) Call(ctx context.Context, input json.RawMessage, call tool.Con
 		if err := decode(input, &in); err != nil {
 			return invalidArguments(err)
 		}
-		todos, err := t.manager.Replace(ctx, runID, in.Todos)
+		todos, err := t.manager.Replace(ctx, runID, in.plannerTodos())
 		return result(todos, err)
 	case kindRead:
+		var in struct{}
+		if err := decode(input, &in); err != nil {
+			return invalidArguments(err)
+		}
 		todos, err := t.manager.List(ctx, runID)
 		return result(todos, err)
 	case kindUpdate:
@@ -143,10 +170,16 @@ func (t todoTool) Call(ctx context.Context, input json.RawMessage, call tool.Con
 			return invalidArguments(err)
 		}
 		patch := planner.Patch{
-			Content: optionalString(in.Content, in.SetContent),
-			Status:  optionalStatus(in.Status),
-			Notes:   optionalString(in.Notes, in.SetNotes),
+			Content: in.Content,
+			Status:  in.Status,
+			Notes:   in.Notes,
 			Meta:    in.Meta,
+		}
+		if patch.Content == nil && in.SetContent {
+			patch.Content = new(string)
+		}
+		if patch.Notes == nil && in.SetNotes {
+			patch.Notes = new(string)
 		}
 		todos, err := t.manager.Update(ctx, runID, in.ID, patch)
 		return result(todos, err)
@@ -156,24 +189,60 @@ func (t todoTool) Call(ctx context.Context, input json.RawMessage, call tool.Con
 }
 
 type writeInput struct {
-	Todos []planner.Todo `json:"todos"`
+	Todos []writeTodoInput `json:"todos"`
+}
+
+type writeTodoInput struct {
+	ID      string             `json:"id,omitempty"`
+	Content string             `json:"content"`
+	Status  planner.TodoStatus `json:"status,omitempty"`
+	Notes   string             `json:"notes,omitempty"`
+	Meta    map[string]any     `json:"meta,omitempty"`
+}
+
+func (in writeInput) plannerTodos() []planner.Todo {
+	todos := make([]planner.Todo, len(in.Todos))
+	for i, todo := range in.Todos {
+		todos[i] = planner.Todo{
+			ID:      todo.ID,
+			Content: todo.Content,
+			Status:  todo.Status,
+			Notes:   todo.Notes,
+			Meta:    todo.Meta,
+		}
+	}
+	return todos
 }
 
 type updateInput struct {
-	ID         string             `json:"id"`
-	Status     planner.TodoStatus `json:"status,omitempty"`
-	Content    string             `json:"content,omitempty"`
-	SetContent bool               `json:"setContent,omitempty"`
-	Notes      string             `json:"notes,omitempty"`
-	SetNotes   bool               `json:"setNotes,omitempty"`
-	Meta       map[string]any     `json:"meta,omitempty"`
+	ID         string              `json:"id"`
+	Status     *planner.TodoStatus `json:"status,omitempty"`
+	Content    *string             `json:"content,omitempty"`
+	SetContent bool                `json:"setContent,omitempty"`
+	Notes      *string             `json:"notes,omitempty"`
+	SetNotes   bool                `json:"setNotes,omitempty"`
+	Meta       map[string]any      `json:"meta,omitempty"`
 }
 
 func decode(raw json.RawMessage, out any) error {
 	if len(raw) == 0 {
 		raw = json.RawMessage(`{}`)
 	}
-	return json.Unmarshal(raw, out)
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return fmt.Errorf("arguments must be a JSON object")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(out); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("multiple JSON values are not allowed")
+		}
+		return err
+	}
+	return nil
 }
 
 func invalidArguments(err error) (tool.Result, error) {
@@ -192,18 +261,4 @@ func result(todos []planner.Todo, err error) (tool.Result, error) {
 			"text":  output,
 		},
 	}, nil
-}
-
-func optionalString(value string, set bool) *string {
-	if !set && value == "" {
-		return nil
-	}
-	return &value
-}
-
-func optionalStatus(status planner.TodoStatus) *planner.TodoStatus {
-	if status == "" {
-		return nil
-	}
-	return &status
 }

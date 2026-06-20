@@ -76,17 +76,29 @@ func NormalizeTodos(todos []Todo, now time.Time) ([]Todo, error) {
 	if len(todos) == 0 {
 		return nil, fmt.Errorf("todo list cannot be empty")
 	}
-	seen := map[string]struct{}{}
+	seen := make(map[string]struct{}, len(todos))
+	for _, todo := range todos {
+		id := strings.TrimSpace(todo.ID)
+		if id == "" {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			return nil, fmt.Errorf("duplicate todo id %q", id)
+		}
+		seen[id] = struct{}{}
+	}
 	out := make([]Todo, 0, len(todos))
 	for i, todo := range todos {
 		todo.ID = strings.TrimSpace(todo.ID)
 		if todo.ID == "" {
-			todo.ID = fmt.Sprintf("todo_%d", i+1)
+			for candidate := i + 1; ; candidate++ {
+				todo.ID = fmt.Sprintf("todo_%d", candidate)
+				if _, exists := seen[todo.ID]; !exists {
+					break
+				}
+			}
+			seen[todo.ID] = struct{}{}
 		}
-		if _, exists := seen[todo.ID]; exists {
-			return nil, fmt.Errorf("duplicate todo id %q", todo.ID)
-		}
-		seen[todo.ID] = struct{}{}
 		todo.Content = strings.TrimSpace(todo.Content)
 		if todo.Content == "" {
 			return nil, fmt.Errorf("todo %q content is required", todo.ID)
@@ -101,6 +113,7 @@ func NormalizeTodos(todos []Todo, now time.Time) ([]Todo, error) {
 			todo.CreatedAt = now
 		}
 		todo.UpdatedAt = now
+		todo.Meta = cloneMap(todo.Meta)
 		out = append(out, todo)
 	}
 	return out, nil
@@ -129,6 +142,43 @@ func FormatTodos(todos []Todo) string {
 
 func cloneTodos(todos []Todo) []Todo {
 	out := make([]Todo, len(todos))
-	copy(out, todos)
+	for i, todo := range todos {
+		out[i] = todo
+		out[i].Meta = cloneMap(todo.Meta)
+	}
 	return out
+}
+
+func cloneMap(value map[string]any) map[string]any {
+	if value == nil {
+		return nil
+	}
+	out := make(map[string]any, len(value))
+	for key, item := range value {
+		out[key] = cloneValue(item)
+	}
+	return out
+}
+
+func cloneValue(value any) any {
+	switch value := value.(type) {
+	case map[string]any:
+		return cloneMap(value)
+	case []any:
+		out := make([]any, len(value))
+		for i, item := range value {
+			out[i] = cloneValue(item)
+		}
+		return out
+	case []string:
+		return append([]string(nil), value...)
+	case []map[string]any:
+		out := make([]map[string]any, len(value))
+		for i, item := range value {
+			out[i] = cloneMap(item)
+		}
+		return out
+	default:
+		return value
+	}
 }

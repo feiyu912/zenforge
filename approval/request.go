@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/feiyu912/zenforge/tool"
@@ -112,29 +113,52 @@ type Decision struct {
 }
 
 func (r Request) Validate() error {
-	if r.ID == "" {
+	if strings.TrimSpace(r.ID) == "" {
 		return fmt.Errorf("approval request id is required")
 	}
-	if r.RunID == "" {
+	if strings.TrimSpace(r.RunID) == "" {
 		return fmt.Errorf("approval request run id is required")
 	}
-	if r.Operation == "" {
+	if strings.TrimSpace(r.Operation) == "" {
 		return fmt.Errorf("approval request operation is required")
 	}
-	if r.Title == "" {
+	if strings.TrimSpace(r.Title) == "" {
 		return fmt.Errorf("approval request title is required")
 	}
-	if r.Risk == "" {
-		return fmt.Errorf("approval request risk is required")
+	if !ValidRisk(r.Risk) {
+		if r.Risk == "" {
+			return fmt.Errorf("approval request risk is required")
+		}
+		return fmt.Errorf("unsupported approval request risk %q", r.Risk)
 	}
 	if len(r.Options) == 0 {
 		return fmt.Errorf("approval request options are required")
 	}
+	for i, option := range r.Options {
+		if strings.TrimSpace(option.Label) == "" {
+			return fmt.Errorf("approval request option %d label is required", i)
+		}
+		if err := (Decision{RequestID: r.ID, Action: option.Action, Scope: option.Scope}).Validate(); err != nil {
+			return fmt.Errorf("approval request option %d: %w", i, err)
+		}
+	}
+	if r.ExpiresAt != nil && !r.CreatedAt.IsZero() && r.ExpiresAt.Before(r.CreatedAt) {
+		return fmt.Errorf("approval request expiresAt cannot be before createdAt")
+	}
 	return nil
 }
 
+func ValidRisk(risk RiskLevel) bool {
+	switch risk {
+	case RiskLow, RiskMedium, RiskHigh, RiskCritical:
+		return true
+	default:
+		return false
+	}
+}
+
 func (d Decision) Validate() error {
-	if d.RequestID == "" {
+	if strings.TrimSpace(d.RequestID) == "" {
 		return fmt.Errorf("approval decision request id is required")
 	}
 	switch d.Action {
@@ -175,6 +199,22 @@ func DefaultOptions() []Option {
 		{Action: DecisionApprove, Label: "Approve", Scope: ScopeOnce},
 		{Action: DecisionReject, Label: "Reject", Scope: ScopeOnce},
 	}
+}
+
+// BindRequest replaces tool-provided routing fields with the active runtime
+// identity before the request crosses a persistence or broker boundary.
+func BindRequest(req Request, runID, toolCallID, toolName string) Request {
+	req = cloneRequest(req)
+	req.RunID = runID
+	req.ToolCallID = toolCallID
+	req.ToolName = toolName
+	if strings.TrimSpace(req.ID) == "" {
+		req.ID = NewRequestID(runID, toolCallID, req.Operation)
+	}
+	if req.CreatedAt.IsZero() {
+		req.CreatedAt = time.Now().UTC()
+	}
+	return req
 }
 
 func NewRequestID(runID, toolCallID, operation string) string {
@@ -219,12 +259,12 @@ func ScopeKey(req Request, scope DecisionScope) (string, error) {
 	case "", ScopeOnce:
 		return "", nil
 	case ScopeRun:
-		if fingerprint, ok := stringFromPayload(req.Payload, "fingerprint"); ok && fingerprint != "" {
+		if fingerprint, ok := stringFromPayload(req.Payload, "fingerprint"); ok && strings.TrimSpace(fingerprint) != "" {
 			return fingerprint, nil
 		}
 		return "", fmt.Errorf("approval run scope requires request fingerprint")
 	case ScopeRule:
-		if ruleKey, ok := stringFromPayload(req.Payload, "ruleKey"); ok && ruleKey != "" {
+		if ruleKey, ok := stringFromPayload(req.Payload, "ruleKey"); ok && strings.TrimSpace(ruleKey) != "" {
 			return ruleKey, nil
 		}
 		return "", fmt.Errorf("approval rule scope requires request ruleKey")
@@ -265,12 +305,12 @@ func RequestFromResult(result tool.Result) (Request, bool) {
 	}
 	switch req := value.(type) {
 	case Request:
-		return req, true
+		return cloneRequest(req), true
 	case *Request:
 		if req == nil {
 			return Request{}, false
 		}
-		return *req, true
+		return cloneRequest(*req), true
 	default:
 		data, err := json.Marshal(value)
 		if err != nil {
@@ -280,7 +320,7 @@ func RequestFromResult(result tool.Result) (Request, bool) {
 		if err := json.Unmarshal(data, &decoded); err != nil {
 			return Request{}, false
 		}
-		return decoded, true
+		return cloneRequest(decoded), true
 	}
 }
 
@@ -290,9 +330,51 @@ func cloneMetadata(metadata map[string]any) map[string]any {
 	}
 	out := make(map[string]any, len(metadata)+4)
 	for key, value := range metadata {
-		out[key] = value
+		out[key] = cloneValue(value)
 	}
 	return out
+}
+
+func cloneRequest(req Request) Request {
+	req.Options = append([]Option(nil), req.Options...)
+	if req.Payload != nil {
+		req.Payload = cloneMetadata(req.Payload)
+	}
+	if req.ExpiresAt != nil {
+		expiresAt := *req.ExpiresAt
+		req.ExpiresAt = &expiresAt
+	}
+	return req
+}
+
+func cloneDecision(decision Decision) Decision {
+	if decision.Payload != nil {
+		decision.Payload = cloneMetadata(decision.Payload)
+	}
+	return decision
+}
+
+func cloneValue(value any) any {
+	switch value := value.(type) {
+	case map[string]any:
+		return cloneMetadata(value)
+	case []any:
+		out := make([]any, len(value))
+		for i, item := range value {
+			out[i] = cloneValue(item)
+		}
+		return out
+	case []string:
+		return append([]string(nil), value...)
+	case []map[string]any:
+		out := make([]map[string]any, len(value))
+		for i, item := range value {
+			out[i] = cloneMetadata(item)
+		}
+		return out
+	default:
+		return value
+	}
 }
 
 func stringFromPayload(payload map[string]any, key string) (string, bool) {

@@ -120,6 +120,10 @@ func TestScopeKeyRequiresMatchingRequestIdentity(t *testing.T) {
 	if _, err := ScopeKey(req, ScopeRule); err == nil {
 		t.Fatal("rule scope accepted missing rule key")
 	}
+	req.Payload["fingerprint"] = "  "
+	if _, err := ScopeKey(req, ScopeRun); err == nil {
+		t.Fatal("run scope accepted blank fingerprint")
+	}
 }
 
 func TestDecisionValidationRejectsUnknownActionAndScope(t *testing.T) {
@@ -128,6 +132,45 @@ func TestDecisionValidationRejectsUnknownActionAndScope(t *testing.T) {
 	}
 	if err := (Decision{RequestID: "approval_1", Action: DecisionApprove, Scope: "forever"}).Validate(); err == nil {
 		t.Fatal("unknown decision scope was accepted")
+	}
+}
+
+func TestRequestValidationRejectsUnknownRiskAndInvalidOptions(t *testing.T) {
+	req := testRequest()
+	req.Risk = "severe"
+	if err := req.Validate(); err == nil {
+		t.Fatal("unknown risk was accepted")
+	}
+	req = testRequest()
+	req.Options = []Option{{Action: "permit", Label: "Permit"}}
+	if err := req.Validate(); err == nil {
+		t.Fatal("unknown option action was accepted")
+	}
+	req.Options = []Option{{Action: DecisionApprove}}
+	if err := req.Validate(); err == nil {
+		t.Fatal("empty option label was accepted")
+	}
+}
+
+func TestBindRequestOwnsRoutingIdentityAndCopiesPayload(t *testing.T) {
+	req := testRequest()
+	req.ID = ""
+	req.RunID = "forged_run"
+	req.ToolCallID = "forged_call"
+	req.ToolName = "forged_tool"
+	req.CreatedAt = time.Time{}
+	req.Payload = map[string]any{"nested": map[string]any{"value": "original"}}
+
+	bound := BindRequest(req, "run_real", "call_real", "tool_real")
+	if bound.ID == "" || bound.CreatedAt.IsZero() {
+		t.Fatalf("missing generated request identity: %#v", bound)
+	}
+	if bound.RunID != "run_real" || bound.ToolCallID != "call_real" || bound.ToolName != "tool_real" {
+		t.Fatalf("routing identity was not bound: %#v", bound)
+	}
+	bound.Payload["nested"].(map[string]any)["value"] = "changed"
+	if got := req.Payload["nested"].(map[string]any)["value"]; got != "original" {
+		t.Fatalf("binding aliased source payload: %v", got)
 	}
 }
 

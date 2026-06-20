@@ -19,11 +19,12 @@ func Approval(config ApprovalConfig) tool.Middleware {
 			if !ok {
 				return result, err
 			}
+			req = approval.BindRequest(req, call.RunID, call.ID, call.Name)
 			if validationErr := req.Validate(); validationErr != nil {
 				return tool.Result{Error: validationErr.Error(), ExitCode: 1}, validationErr
 			}
 			if config.Broker == nil {
-				return result, err
+				return approval.RequiredResult(req), approval.ErrRequired
 			}
 			decision, decisionErr := config.Broker.Request(ctx, req)
 			if decisionErr != nil {
@@ -41,7 +42,11 @@ func Approval(config ApprovalConfig) tool.Middleware {
 				err := approval.NewAbortError(decision.Reason)
 				return tool.Result{Error: err.Error(), ExitCode: 1}, err
 			default:
-				return tool.Result{Error: approval.ErrorRejected, ExitCode: 1, Structured: map[string]any{
+				errorCode := approval.ErrorRejected
+				if decision.Reason == approval.ErrorExpired {
+					errorCode = approval.ErrorExpired
+				}
+				return tool.Result{Error: errorCode, ExitCode: 1, Structured: map[string]any{
 					"approval": req,
 					"decision": decision,
 				}}, nil

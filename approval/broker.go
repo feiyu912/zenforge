@@ -58,26 +58,52 @@ func AlwaysDeny(reason string) Broker {
 
 func WithTimeout(next Broker, timeout time.Duration) Broker {
 	return BrokerFunc(func(ctx context.Context, req Request) (Decision, error) {
-		if timeout <= 0 {
+		if next == nil {
+			return Decision{}, fmt.Errorf("approval timeout broker is not configured")
+		}
+		if err := ctx.Err(); err != nil {
+			return Decision{}, err
+		}
+		if err := req.Validate(); err != nil {
+			return Decision{}, err
+		}
+		deadline := time.Time{}
+		if timeout > 0 {
+			deadline = time.Now().Add(timeout)
+		}
+		if req.ExpiresAt != nil && (deadline.IsZero() || req.ExpiresAt.Before(deadline)) {
+			deadline = *req.ExpiresAt
+		}
+		if deadline.IsZero() {
 			return next.Request(ctx, req)
 		}
-		waitCtx, cancel := context.WithTimeout(ctx, timeout)
+		if !deadline.After(time.Now()) {
+			return expiredDecision(req), nil
+		}
+		waitCtx, cancel := context.WithDeadline(ctx, deadline)
 		defer cancel()
 		decision, err := next.Request(waitCtx, req)
 		if err == nil {
 			return decision, nil
 		}
+		if ctx.Err() != nil {
+			return Decision{}, ctx.Err()
+		}
 		if waitCtx.Err() == context.DeadlineExceeded {
-			return Decision{
-				RequestID: req.ID,
-				Action:    DecisionReject,
-				Scope:     ScopeOnce,
-				Reason:    ErrorExpired,
-				DecidedAt: time.Now().UTC(),
-			}, nil
+			return expiredDecision(req), nil
 		}
 		return Decision{}, err
 	})
+}
+
+func expiredDecision(req Request) Decision {
+	return Decision{
+		RequestID: req.ID,
+		Action:    DecisionReject,
+		Scope:     ScopeOnce,
+		Reason:    ErrorExpired,
+		DecidedAt: time.Now().UTC(),
+	}
 }
 
 type ChannelBroker struct {
@@ -97,19 +123,20 @@ func (b ChannelBroker) Request(ctx context.Context, req Request) (Decision, erro
 		return Decision{}, err
 	}
 	select {
-	case b.Requests <- req:
+	case b.Requests <- cloneRequest(req):
 	case <-ctx.Done():
 		return Decision{}, ctx.Err()
 	}
 	select {
-	case decision := <-b.Decisions:
-		if decision.RequestID == "" {
-			decision.RequestID = req.ID
+	case decision, ok := <-b.Decisions:
+		if !ok {
+			return Decision{}, fmt.Errorf("approval decision channel is closed")
 		}
-		if decision.DecidedAt.IsZero() {
-			decision.DecidedAt = time.Now().UTC()
+		decision = normalizeDecision(decision)
+		if err := ValidateDecisionForRequest(req, decision); err != nil {
+			return Decision{}, err
 		}
-		return decision, decision.Validate()
+		return cloneDecision(decision), nil
 	case <-ctx.Done():
 		return Decision{}, ctx.Err()
 	}
@@ -154,7 +181,7 @@ func (b *PendingBroker) Request(ctx context.Context, req Request) (Decision, err
 		return Decision{}, err
 	}
 	waiting := pendingRequest{
-		req:      req,
+		req:      cloneRequest(req),
 		decision: make(chan Decision, 1),
 	}
 	b.mu.Lock()
@@ -166,16 +193,18 @@ func (b *PendingBroker) Request(ctx context.Context, req Request) (Decision, err
 	b.mu.Unlock()
 
 	select {
-	case b.requests <- req:
+	case b.requests <- cloneRequest(req):
 	default:
 	}
 
 	select {
 	case decision := <-waiting.decision:
-		return decision, nil
+		return cloneDecision(decision), nil
 	case <-ctx.Done():
-		b.remove(req.ID, waiting)
-		return Decision{}, ctx.Err()
+		if b.remove(req.ID, waiting) {
+			return Decision{}, ctx.Err()
+		}
+		return cloneDecision(<-waiting.decision), nil
 	}
 }
 
@@ -186,27 +215,25 @@ func (b *PendingBroker) Submit(ctx context.Context, decision Decision) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if decision.Scope == "" {
-		decision.Scope = ScopeOnce
-	}
-	if decision.DecidedAt.IsZero() {
-		decision.DecidedAt = time.Now().UTC()
-	}
+	decision = normalizeDecision(decision)
 	if err := decision.Validate(); err != nil {
 		return err
 	}
 
 	b.mu.Lock()
 	waiting, ok := b.pending[decision.RequestID]
-	if ok {
-		delete(b.pending, decision.RequestID)
-	}
-	b.mu.Unlock()
 	if !ok {
+		b.mu.Unlock()
 		return ErrRequestNotFound
 	}
+	if err := ValidateDecisionForRequest(waiting.req, decision); err != nil {
+		b.mu.Unlock()
+		return err
+	}
+	delete(b.pending, decision.RequestID)
+	b.mu.Unlock()
 
-	waiting.decision <- decision
+	waiting.decision <- cloneDecision(decision)
 	return nil
 }
 
@@ -217,7 +244,7 @@ func (b *PendingBroker) Pending(requestID string) (Request, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	waiting, ok := b.pending[requestID]
-	return waiting.req, ok
+	return cloneRequest(waiting.req), ok
 }
 
 func (b *PendingBroker) ListPending() []Request {
@@ -228,7 +255,7 @@ func (b *PendingBroker) ListPending() []Request {
 	defer b.mu.Unlock()
 	out := make([]Request, 0, len(b.pending))
 	for _, waiting := range b.pending {
-		out = append(out, waiting.req)
+		out = append(out, cloneRequest(waiting.req))
 	}
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].ID < out[j].ID
@@ -245,7 +272,7 @@ func (b *PendingBroker) ListPendingForRun(runID string) []Request {
 	out := make([]Request, 0, len(b.pending))
 	for _, waiting := range b.pending {
 		if waiting.req.RunID == runID {
-			out = append(out, waiting.req)
+			out = append(out, cloneRequest(waiting.req))
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -254,11 +281,23 @@ func (b *PendingBroker) ListPendingForRun(runID string) []Request {
 	return out
 }
 
-func (b *PendingBroker) remove(requestID string, waiting pendingRequest) {
+func (b *PendingBroker) remove(requestID string, waiting pendingRequest) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	current, ok := b.pending[requestID]
 	if ok && current.decision == waiting.decision {
 		delete(b.pending, requestID)
+		return true
 	}
+	return false
+}
+
+func normalizeDecision(decision Decision) Decision {
+	if decision.Scope == "" {
+		decision.Scope = ScopeOnce
+	}
+	if decision.DecidedAt.IsZero() {
+		decision.DecidedAt = time.Now().UTC()
+	}
+	return decision
 }

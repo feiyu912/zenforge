@@ -3,6 +3,7 @@ package approval
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -39,6 +40,36 @@ func TestTimeoutRejects(t *testing.T) {
 	}
 }
 
+func TestTimeoutHonorsRequestExpiry(t *testing.T) {
+	req := testRequest()
+	req.CreatedAt = time.Now().Add(-2 * time.Second)
+	expiresAt := time.Now().Add(-time.Second)
+	req.ExpiresAt = &expiresAt
+	called := false
+	decision, err := WithTimeout(BrokerFunc(func(context.Context, Request) (Decision, error) {
+		called = true
+		return Decision{}, nil
+	}), time.Hour).Request(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Request returned error: %v", err)
+	}
+	if called || decision.Reason != ErrorExpired {
+		t.Fatalf("called=%v decision=%#v", called, decision)
+	}
+}
+
+func TestTimeoutPropagatesParentDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+	_, err := WithTimeout(BrokerFunc(func(ctx context.Context, req Request) (Decision, error) {
+		<-ctx.Done()
+		return Decision{}, ctx.Err()
+	}), time.Hour).Request(ctx, testRequest())
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected parent deadline, got %v", err)
+	}
+}
+
 func TestChannelBroker(t *testing.T) {
 	requests := make(chan Request, 1)
 	decisions := make(chan Decision, 1)
@@ -53,6 +84,27 @@ func TestChannelBroker(t *testing.T) {
 	}
 	if decision.Action != DecisionApprove || decision.DecidedAt.IsZero() {
 		t.Fatalf("decision = %#v", decision)
+	}
+}
+
+func TestChannelBrokerRejectsMismatchedDecision(t *testing.T) {
+	requests := make(chan Request, 1)
+	decisions := make(chan Decision, 1)
+	broker := NewChannelBroker(requests, decisions)
+	decisions <- Decision{RequestID: "approval_other", Action: DecisionApprove}
+	_, err := broker.Request(context.Background(), testRequest())
+	if err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("expected request identity error, got %v", err)
+	}
+}
+
+func TestChannelBrokerRejectsClosedDecisionChannel(t *testing.T) {
+	requests := make(chan Request, 1)
+	decisions := make(chan Decision)
+	close(decisions)
+	_, err := NewChannelBroker(requests, decisions).Request(context.Background(), testRequest())
+	if err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("expected closed channel error, got %v", err)
 	}
 }
 
@@ -175,6 +227,100 @@ func TestPendingBrokerRejectsUnknownDecision(t *testing.T) {
 	err := broker.Submit(context.Background(), Decision{RequestID: "missing", Action: DecisionApprove})
 	if !errors.Is(err, ErrRequestNotFound) {
 		t.Fatalf("expected ErrRequestNotFound, got %v", err)
+	}
+}
+
+func TestPendingBrokerRejectsInvalidScopedDecisionWithoutRemovingRequest(t *testing.T) {
+	broker := NewPendingBroker(1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req := testRequest()
+	go func() {
+		_, _ = broker.Request(ctx, req)
+	}()
+	<-broker.Requests()
+
+	err := broker.Submit(context.Background(), Decision{
+		RequestID: req.ID,
+		Action:    DecisionApprove,
+		Scope:     ScopeRun,
+	})
+	if err == nil || !strings.Contains(err.Error(), "fingerprint") {
+		t.Fatalf("expected missing fingerprint error, got %v", err)
+	}
+	if _, ok := broker.Pending(req.ID); !ok {
+		t.Fatal("invalid decision removed pending request")
+	}
+}
+
+func TestPendingBrokerReturnsIsolatedSnapshots(t *testing.T) {
+	broker := NewPendingBroker(1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req := testRequest()
+	req.Payload = map[string]any{"nested": map[string]any{"value": "original"}}
+	go func() {
+		_, _ = broker.Request(ctx, req)
+	}()
+	observed := <-broker.Requests()
+	observed.Payload["nested"].(map[string]any)["value"] = "notification mutation"
+	pending, ok := broker.Pending(req.ID)
+	if !ok {
+		t.Fatal("pending request not found")
+	}
+	pending.Payload["nested"].(map[string]any)["value"] = "snapshot mutation"
+	again, ok := broker.Pending(req.ID)
+	if !ok || again.Payload["nested"].(map[string]any)["value"] != "original" {
+		t.Fatalf("pending request was mutated through snapshot: %#v", again)
+	}
+}
+
+func TestPendingBrokerSubmitCancellationRaceHasOneWinner(t *testing.T) {
+	for i := 0; i < 100; i++ {
+		broker := NewPendingBroker(1)
+		ctx, cancel := context.WithCancel(context.Background())
+		req := testRequest()
+		result := make(chan Decision, 1)
+		requestErr := make(chan error, 1)
+		go func() {
+			decision, err := broker.Request(ctx, req)
+			if err != nil {
+				requestErr <- err
+				return
+			}
+			result <- decision
+		}()
+		<-broker.Requests()
+
+		start := make(chan struct{})
+		submitErr := make(chan error, 1)
+		go func() {
+			<-start
+			submitErr <- broker.Submit(context.Background(), Decision{RequestID: req.ID, Action: DecisionApprove})
+		}()
+		close(start)
+		cancel()
+
+		submitted := <-submitErr
+		if submitted == nil {
+			select {
+			case decision := <-result:
+				if decision.Action != DecisionApprove {
+					t.Fatalf("iteration %d decision = %#v", i, decision)
+				}
+			case err := <-requestErr:
+				t.Fatalf("iteration %d submit succeeded but request failed: %v", i, err)
+			case <-time.After(time.Second):
+				t.Fatalf("iteration %d timed out waiting for submitted decision", i)
+			}
+			continue
+		}
+		if !errors.Is(submitted, ErrRequestNotFound) {
+			t.Fatalf("iteration %d submit error = %v", i, submitted)
+		}
+		if err := <-requestErr; !errors.Is(err, context.Canceled) {
+			t.Fatalf("iteration %d request error = %v", i, err)
+		}
 	}
 }
 
