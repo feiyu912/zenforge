@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 
@@ -41,8 +42,12 @@ func (s *Store) Append(ctx context.Context, event zenforge.Event) error {
 	if err := event.ValidatePersisted(); err != nil {
 		return err
 	}
+	stored, err := cloneEvent(event)
+	if err != nil {
+		return err
+	}
 
-	s.events[runID] = append(s.events[runID], event)
+	s.events[runID] = append(s.events[runID], stored)
 	return nil
 }
 
@@ -62,7 +67,11 @@ func (s *Store) Read(ctx context.Context, runID string, afterSeq int64, limit in
 		if event.Seq <= afterSeq {
 			continue
 		}
-		out = append(out, event)
+		cloned, err := cloneEvent(event)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, cloned)
 		if limit > 0 && len(out) == limit {
 			break
 		}
@@ -89,4 +98,16 @@ func latestSeq(events []zenforge.Event) int64 {
 		return 0
 	}
 	return events[len(events)-1].Seq
+}
+
+func cloneEvent(event zenforge.Event) (zenforge.Event, error) {
+	data, err := json.Marshal(event)
+	if err != nil {
+		return zenforge.Event{}, err
+	}
+	var cloned zenforge.Event
+	if err := json.Unmarshal(data, &cloned); err != nil {
+		return zenforge.Event{}, err
+	}
+	return cloned, nil
 }

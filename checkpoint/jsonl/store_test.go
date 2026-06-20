@@ -5,6 +5,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -79,6 +81,92 @@ func TestStoreLoadUsesLatestWhenHistoryHasCorruptLine(t *testing.T) {
 	}
 	if loaded.Seq != 1 {
 		t.Fatalf("unexpected checkpoint: %#v", loaded)
+	}
+}
+
+func TestStoresSharingRootDoNotRaceLatestFile(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	stores := []*Store{New(root), New(root)}
+	const count = 16
+
+	start := make(chan struct{})
+	errs := make(chan error, count)
+	var wg sync.WaitGroup
+	for i := 0; i < count; i++ {
+		wg.Add(1)
+		go func(i int, store *Store) {
+			defer wg.Done()
+			<-start
+			errs <- store.Save(ctx, testCheckpoint("run_1", int64(i+1)))
+		}(i, stores[i%len(stores)])
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	accepted := 0
+	for err := range errs {
+		if err == nil {
+			accepted++
+			continue
+		}
+		if !errors.Is(err, checkpoint.ErrStaleCheckpoint) {
+			t.Fatalf("concurrent Save returned unexpected error: %v", err)
+		}
+	}
+
+	loaded, err := stores[0].Load(ctx, "run_1")
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if loaded.Seq != count {
+		t.Fatalf("latest checkpoint seq = %d, want %d", loaded.Seq, count)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "run_1", checkpointsFileName))
+	if err != nil {
+		t.Fatalf("ReadFile returned error: %v", err)
+	}
+	if got := len(strings.Split(strings.TrimSpace(string(data)), "\n")); got != accepted {
+		t.Fatalf("history entry count = %d, want accepted count %d", got, accepted)
+	}
+}
+
+func TestStoreRejectsNonIncreasingSeqWithoutChangingFiles(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	store := New(root)
+	if err := store.Save(ctx, testCheckpoint("run_1", 2)); err != nil {
+		t.Fatalf("Save returned error: %v", err)
+	}
+	historyPath := filepath.Join(root, "run_1", checkpointsFileName)
+	latestPath := filepath.Join(root, "run_1", latestFileName)
+	historyBefore, err := os.ReadFile(historyPath)
+	if err != nil {
+		t.Fatalf("ReadFile history returned error: %v", err)
+	}
+	latestBefore, err := os.ReadFile(latestPath)
+	if err != nil {
+		t.Fatalf("ReadFile latest returned error: %v", err)
+	}
+
+	for _, seq := range []int64{2, 1} {
+		if err := store.Save(ctx, testCheckpoint("run_1", seq)); !errors.Is(err, checkpoint.ErrStaleCheckpoint) {
+			t.Fatalf("Save seq %d error = %v, want ErrStaleCheckpoint", seq, err)
+		}
+	}
+	historyAfter, err := os.ReadFile(historyPath)
+	if err != nil {
+		t.Fatalf("ReadFile history after rejects returned error: %v", err)
+	}
+	latestAfter, err := os.ReadFile(latestPath)
+	if err != nil {
+		t.Fatalf("ReadFile latest after rejects returned error: %v", err)
+	}
+	if string(historyAfter) != string(historyBefore) {
+		t.Fatalf("history changed after rejected saves")
+	}
+	if string(latestAfter) != string(latestBefore) {
+		t.Fatalf("latest changed after rejected saves")
 	}
 }
 

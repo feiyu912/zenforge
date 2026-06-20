@@ -42,9 +42,9 @@ func (r Recorder) RecordCheckpoint(ctx context.Context, state harness.RunState, 
 		return checkpoint.Checkpoint{}, err
 	}
 	event := zenforge.NewEvent(zenforge.EventCheckpointCreated, cp.RunID, map[string]any{
-		"seq":     cp.Seq,
-		"version": cp.Version,
-		"phase":   string(cp.State.Phase),
+		"checkpointSeq": cp.Seq,
+		"version":       cp.Version,
+		"phase":         string(cp.State.Phase),
 	})
 	if err := r.Events.Append(ctx, event); err != nil {
 		return checkpoint.Checkpoint{}, err
@@ -60,6 +60,15 @@ func (r Recorder) RecordEvent(ctx context.Context, event zenforge.Event) error {
 }
 
 func (r Recorder) Complete(ctx context.Context, state harness.RunState, seq int64, event zenforge.Event) (checkpoint.Checkpoint, error) {
+	if !terminalEvent(event.Type) {
+		return checkpoint.Checkpoint{}, fmt.Errorf("terminal event is required, got %q", event.Type)
+	}
+	if err := event.Validate(); err != nil {
+		return checkpoint.Checkpoint{}, err
+	}
+	if event.RunID() != state.RunID {
+		return checkpoint.Checkpoint{}, fmt.Errorf("terminal event runId %q does not match state runId %q", event.RunID(), state.RunID)
+	}
 	cp, err := r.RecordCheckpoint(ctx, state, seq)
 	if err != nil {
 		return checkpoint.Checkpoint{}, err
@@ -68,4 +77,13 @@ func (r Recorder) Complete(ctx context.Context, state harness.RunState, seq int6
 		return checkpoint.Checkpoint{}, err
 	}
 	return cp, nil
+}
+
+func terminalEvent(eventType zenforge.EventType) bool {
+	switch eventType {
+	case zenforge.EventRunDone, zenforge.EventRunError, zenforge.EventRunCancelled:
+		return true
+	default:
+		return false
+	}
 }

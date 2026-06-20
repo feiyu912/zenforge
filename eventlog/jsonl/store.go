@@ -17,11 +17,19 @@ const eventsFileName = "events.jsonl"
 
 type Store struct {
 	root string
-	mu   sync.Mutex
+	mu   *sync.Mutex
 }
 
+// rootLocks coordinates Store instances that target the same on-disk log.
+var rootLocks sync.Map
+
 func New(root string) *Store {
-	return &Store{root: root}
+	key := filepath.Clean(root)
+	if absolute, err := filepath.Abs(key); err == nil {
+		key = absolute
+	}
+	lock, _ := rootLocks.LoadOrStore(key, &sync.Mutex{})
+	return &Store{root: root, mu: lock.(*sync.Mutex)}
 }
 
 func (s *Store) Append(ctx context.Context, event zenforge.Event) error {
@@ -143,6 +151,7 @@ func (s *Store) scanLocked(ctx context.Context, runID string, visit func(zenforg
 	defer file.Close()
 
 	decoder := json.NewDecoder(file)
+	var previousSeq int64
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -160,6 +169,11 @@ func (s *Store) scanLocked(ctx context.Context, runID string, visit func(zenforg
 		if event.RunID() != runID {
 			return fmt.Errorf("read event %s: runID mismatch %q", path, event.RunID())
 		}
+		expectedSeq := zenforge.NextEventSeq(previousSeq)
+		if event.Seq != expectedSeq {
+			return fmt.Errorf("read event %s: event seq must be %d, got %d", path, expectedSeq, event.Seq)
+		}
+		previousSeq = event.Seq
 		if !visit(event) {
 			return nil
 		}

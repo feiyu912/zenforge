@@ -11,7 +11,10 @@ import (
 
 const CheckpointVersion = "zenforge.checkpoint.v1"
 
-var ErrNotFound = errors.New("checkpoint not found")
+var (
+	ErrNotFound        = errors.New("checkpoint not found")
+	ErrStaleCheckpoint = errors.New("checkpoint sequence must increase")
+)
 
 type Store interface {
 	Save(ctx context.Context, checkpoint Checkpoint) error

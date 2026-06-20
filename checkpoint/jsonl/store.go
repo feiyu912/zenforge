@@ -21,8 +21,11 @@ const (
 
 type Store struct {
 	root string
-	mu   sync.Mutex
+	mu   *sync.Mutex
 }
+
+// rootLocks coordinates Store instances that target the same checkpoint root.
+var rootLocks sync.Map
 
 // Summary is the latest checkpoint metadata for a run.
 type Summary struct {
@@ -35,7 +38,12 @@ type Summary struct {
 }
 
 func New(root string) *Store {
-	return &Store{root: root}
+	key := filepath.Clean(root)
+	if absolute, err := filepath.Abs(key); err == nil {
+		key = absolute
+	}
+	lock, _ := rootLocks.LoadOrStore(key, &sync.Mutex{})
+	return &Store{root: root, mu: lock.(*sync.Mutex)}
 }
 
 func (s *Store) Save(ctx context.Context, cp checkpoint.Checkpoint) error {
@@ -51,6 +59,14 @@ func (s *Store) Save(ctx context.Context, cp checkpoint.Checkpoint) error {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	latest, err := s.loadLocked(ctx, cp.RunID)
+	if err != nil && !errors.Is(err, checkpoint.ErrNotFound) {
+		return err
+	}
+	if err == nil && cp.Seq <= latest.Seq {
+		return fmt.Errorf("%w: runId %q latest seq %d, got %d", checkpoint.ErrStaleCheckpoint, cp.RunID, latest.Seq, cp.Seq)
+	}
 
 	runDir := filepath.Join(s.root, cp.RunID)
 	if err := os.MkdirAll(runDir, 0o755); err != nil {

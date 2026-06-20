@@ -2,6 +2,7 @@ package recorder
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -31,6 +32,20 @@ func TestRecorderSavesCheckpointBeforeCheckpointEvent(t *testing.T) {
 	if len(recorded) != 1 || recorded[0].Type != zenforge.EventCheckpointCreated {
 		t.Fatalf("unexpected events: %#v", recorded)
 	}
+	if got := recorded[0].Payload["checkpointSeq"]; got != float64(3) && got != int64(3) {
+		t.Fatalf("checkpointSeq = %#v, want 3", got)
+	}
+	encoded, err := json.Marshal(recorded[0])
+	if err != nil {
+		t.Fatalf("Marshal returned error: %v", err)
+	}
+	var persisted map[string]any
+	if err := json.Unmarshal(encoded, &persisted); err != nil {
+		t.Fatalf("Unmarshal returned error: %v", err)
+	}
+	if got := persisted["checkpointSeq"]; got != float64(3) {
+		t.Fatalf("persisted checkpointSeq = %#v, want 3", got)
+	}
 }
 
 func TestRecorderCompleteWritesTerminalEventAfterCheckpointEvent(t *testing.T) {
@@ -52,6 +67,31 @@ func TestRecorderCompleteWritesTerminalEventAfterCheckpointEvent(t *testing.T) {
 	}
 	if recorded[0].Type != zenforge.EventCheckpointCreated || recorded[1].Type != zenforge.EventRunDone {
 		t.Fatalf("unexpected event order: %#v", recorded)
+	}
+}
+
+func TestRecorderCompleteValidatesTerminalEventBeforeCheckpoint(t *testing.T) {
+	ctx := context.Background()
+	checkpoints := &recordingCheckpointStore{Store: checkpointmemory.New()}
+	recorder := Recorder{Events: eventmemory.New(), Checkpoints: checkpoints}
+	state := testRunState("run_1", harness.RunPhaseCompleted)
+
+	tests := []struct {
+		name  string
+		event zenforge.Event
+	}{
+		{name: "non-terminal", event: zenforge.NewEvent(zenforge.EventModelDone, "run_1", nil)},
+		{name: "wrong run", event: zenforge.NewEvent(zenforge.EventRunDone, "run_2", nil)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := recorder.Complete(ctx, state, 1, test.event); err == nil {
+				t.Fatalf("expected validation error")
+			}
+		})
+	}
+	if checkpoints.saved != 0 {
+		t.Fatalf("saved checkpoints = %d, want 0", checkpoints.saved)
 	}
 }
 

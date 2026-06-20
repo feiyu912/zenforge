@@ -73,13 +73,7 @@ func (s *Store) Save(ctx context.Context, cp checkpoint.Checkpoint) error {
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.ExecContext(ctx, `
-INSERT INTO checkpoints (run_id, seq, saved_at, checkpoint_json)
-VALUES (?, ?, ?, ?)`,
-		cp.RunID, cp.Seq, savedAt, encoded); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `
+	result, err := tx.ExecContext(ctx, `
 INSERT INTO latest_checkpoints (run_id, seq, phase, status, step, saved_at, checkpoint_json)
 VALUES (?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(run_id) DO UPDATE SET
@@ -88,8 +82,23 @@ ON CONFLICT(run_id) DO UPDATE SET
     status = excluded.status,
     step = excluded.step,
     saved_at = excluded.saved_at,
-    checkpoint_json = excluded.checkpoint_json`,
-		cp.RunID, cp.Seq, phase, status, cp.State.Step, savedAt, encoded); err != nil {
+    checkpoint_json = excluded.checkpoint_json
+WHERE excluded.seq > latest_checkpoints.seq`,
+		cp.RunID, cp.Seq, phase, status, cp.State.Step, savedAt, encoded)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return fmt.Errorf("%w: runId %q got seq %d", checkpoint.ErrStaleCheckpoint, cp.RunID, cp.Seq)
+	}
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO checkpoints (run_id, seq, saved_at, checkpoint_json)
+VALUES (?, ?, ?, ?)`,
+		cp.RunID, cp.Seq, savedAt, encoded); err != nil {
 		return err
 	}
 	return tx.Commit()

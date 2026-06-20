@@ -47,6 +47,35 @@ func TestStoreLoadMissingReturnsErrNotFound(t *testing.T) {
 	}
 }
 
+func TestStoreRejectsNonIncreasingSeqWithoutChangingHistory(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+	if err := store.Save(ctx, testCheckpoint("run_1", 2)); err != nil {
+		t.Fatalf("Save returned error: %v", err)
+	}
+
+	for _, seq := range []int64{2, 1} {
+		if err := store.Save(ctx, testCheckpoint("run_1", seq)); !errors.Is(err, checkpoint.ErrStaleCheckpoint) {
+			t.Fatalf("Save seq %d error = %v, want ErrStaleCheckpoint", seq, err)
+		}
+	}
+	loaded, err := store.Load(ctx, "run_1")
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if loaded.Seq != 2 {
+		t.Fatalf("latest checkpoint seq = %d, want 2", loaded.Seq)
+	}
+	var historyCount int
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM checkpoints WHERE run_id = ?`, "run_1").Scan(&historyCount); err != nil {
+		t.Fatalf("count history: %v", err)
+	}
+	if historyCount != 1 {
+		t.Fatalf("history count = %d, want 1", historyCount)
+	}
+}
+
 func TestStoreListSummaries(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t)

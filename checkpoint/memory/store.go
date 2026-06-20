@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
 
 	"github.com/feiyu912/zenforge/checkpoint"
@@ -26,13 +27,15 @@ func (s *Store) Save(ctx context.Context, cp checkpoint.Checkpoint) error {
 	if err := checkpoint.Validate(cp); err != nil {
 		return err
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if latest, ok := s.checkpoints[cp.RunID]; ok && cp.Seq <= latest.Seq {
+		return fmt.Errorf("%w: runId %q latest seq %d, got %d", checkpoint.ErrStaleCheckpoint, cp.RunID, latest.Seq, cp.Seq)
+	}
 	cloned, err := clone(cp)
 	if err != nil {
 		return err
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.checkpoints[cp.RunID] = cloned
 	return nil
 }

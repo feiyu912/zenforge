@@ -73,6 +73,43 @@ func TestStoreRejectsOutOfOrderSeq(t *testing.T) {
 	}
 }
 
+func TestStoreClonesAppendedAndReadEvents(t *testing.T) {
+	ctx := context.Background()
+	store := New()
+	event := zenforge.NewEvent(zenforge.EventModelDelta, "run_1", map[string]any{
+		"nested": map[string]any{"text": "original"},
+	})
+	if err := store.Append(ctx, event); err != nil {
+		t.Fatalf("Append returned error: %v", err)
+	}
+
+	event.Payload["nested"].(map[string]any)["text"] = "changed after append"
+	first, err := store.Read(ctx, "run_1", 0, 0)
+	if err != nil {
+		t.Fatalf("Read returned error: %v", err)
+	}
+	if got := first[0].Payload["nested"].(map[string]any)["text"]; got != "original" {
+		t.Fatalf("stored event was mutated: got %v", got)
+	}
+
+	first[0].Payload["nested"].(map[string]any)["text"] = "changed after read"
+	second, err := store.Read(ctx, "run_1", 0, 0)
+	if err != nil {
+		t.Fatalf("second Read returned error: %v", err)
+	}
+	if got := second[0].Payload["nested"].(map[string]any)["text"]; got != "original" {
+		t.Fatalf("read event was not cloned: got %v", got)
+	}
+}
+
+func TestStoreRejectsUnserializablePayload(t *testing.T) {
+	store := New()
+	event := zenforge.NewEvent(zenforge.EventModelDelta, "run_1", map[string]any{"bad": make(chan int)})
+	if err := store.Append(context.Background(), event); err == nil {
+		t.Fatalf("expected serialization error")
+	}
+}
+
 func TestStoreHonorsCanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

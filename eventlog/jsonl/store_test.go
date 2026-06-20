@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/feiyu912/zenforge"
@@ -76,6 +77,46 @@ func TestStoreRejectsOutOfOrderSeq(t *testing.T) {
 	}
 }
 
+func TestStoresSharingRootSerializeConcurrentAppends(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	stores := []*Store{New(root), New(root)}
+	const count = 32
+
+	start := make(chan struct{})
+	errs := make(chan error, count)
+	var wg sync.WaitGroup
+	for i := 0; i < count; i++ {
+		wg.Add(1)
+		go func(store *Store) {
+			defer wg.Done()
+			<-start
+			errs <- store.Append(ctx, zenforge.NewEvent(zenforge.EventModelDelta, "run_1", nil))
+		}(stores[i%len(stores)])
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent Append returned error: %v", err)
+		}
+	}
+
+	events, err := stores[0].Read(ctx, "run_1", 0, 0)
+	if err != nil {
+		t.Fatalf("Read returned error: %v", err)
+	}
+	if len(events) != count {
+		t.Fatalf("event count = %d, want %d", len(events), count)
+	}
+	for i, event := range events {
+		if event.Seq != int64(i+1) {
+			t.Fatalf("event %d seq = %d, want %d", i, event.Seq, i+1)
+		}
+	}
+}
+
 func TestStoreReturnsErrorForCorruptLine(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -94,6 +135,25 @@ func TestStoreReturnsErrorForCorruptLine(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "parse JSONL") {
 		t.Fatalf("expected parse JSONL error, got %v", err)
+	}
+}
+
+func TestStoreReturnsErrorForNonContiguousSequence(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	runDir := filepath.Join(root, "run_1")
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	body := "{\"seq\":1,\"type\":\"run.started\",\"runId\":\"run_1\",\"timestamp\":1}\n" +
+		"{\"seq\":1,\"type\":\"run.done\",\"runId\":\"run_1\",\"timestamp\":2}\n"
+	if err := os.WriteFile(filepath.Join(runDir, eventsFileName), []byte(body), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	_, err := New(root).Read(ctx, "run_1", 0, 0)
+	if err == nil || !strings.Contains(err.Error(), "event seq must be 2, got 1") {
+		t.Fatalf("expected sequence error, got %v", err)
 	}
 }
 
