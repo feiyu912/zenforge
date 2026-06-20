@@ -93,6 +93,7 @@ func (c *Client) Stream(ctx context.Context, req model.Request) (<-chan model.Ev
 		return nil, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "text/event-stream")
 	if c.apiKey != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
 	}
@@ -117,12 +118,16 @@ func (c *Client) Stream(ctx context.Context, req model.Request) (<-chan model.Ev
 }
 
 func (c *Client) chatRequest(req model.Request) chatRequest {
+	choice := toolChoice(req.ToolChoice)
+	if len(req.Tools) == 0 {
+		choice = nil
+	}
 	out := chatRequest{
 		Model:       c.model,
 		Stream:      true,
 		Messages:    make([]chatMessage, 0, len(req.Messages)),
 		Tools:       tools(req.Tools),
-		ToolChoice:  toolChoice(req.ToolChoice),
+		ToolChoice:  choice,
 		StreamUsage: map[string]bool{"include_usage": true},
 	}
 	for _, message := range req.Messages {
@@ -141,6 +146,7 @@ func readSSE(body io.Reader, events chan<- model.Event) error {
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	acc := newAccumulator()
+	terminal := false
 	for scanner.Scan() {
 		line := scanner.Text()
 		if line == "" || strings.HasPrefix(line, ":") {
@@ -152,15 +158,21 @@ func readSSE(body io.Reader, events chan<- model.Event) error {
 		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 		if data == "[DONE]" {
 			message := acc.message()
-			events <- model.Event{Type: model.EventDone, Message: &message}
+			events <- doneEvent(message, acc.finishReason)
 			return nil
 		}
 		var chunk chatChunk
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-			return err
+			return fmt.Errorf("decode openai stream chunk: %w", err)
+		}
+		if chunk.Error != nil {
+			return providerError(chunk.Error)
 		}
 		if chunk.Usage != nil {
-			events <- model.Event{Type: model.EventDone, Usage: usage(*chunk.Usage)}
+			events <- model.Event{Type: model.EventUsage, Usage: usage(*chunk.Usage)}
+		}
+		if len(chunk.Choices) == 0 && chunk.Usage == nil {
+			return fmt.Errorf("openai stream chunk contained neither choices nor usage")
 		}
 		for _, choice := range chunk.Choices {
 			if choice.Delta.Role != "" {
@@ -174,12 +186,42 @@ func readSSE(body io.Reader, events chan<- model.Event) error {
 				acc.addToolCall(toolCall)
 			}
 			if choice.FinishReason != "" {
-				message := acc.message()
-				events <- model.Event{Type: model.EventDone, Message: &message}
+				terminal = true
+				acc.finishReason = choice.FinishReason
 			}
 		}
 	}
-	return scanner.Err()
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+	if !terminal {
+		return io.ErrUnexpectedEOF
+	}
+	message := acc.message()
+	events <- doneEvent(message, acc.finishReason)
+	return nil
+}
+
+func doneEvent(message model.Message, finishReason string) model.Event {
+	event := model.Event{Type: model.EventDone, Message: &message}
+	if finishReason != "" {
+		event.Meta = map[string]any{"finish_reason": finishReason}
+	}
+	return event
+}
+
+func providerError(value *apiError) error {
+	if value == nil {
+		return nil
+	}
+	message := strings.TrimSpace(value.Message)
+	if message == "" {
+		message = "unknown provider error"
+	}
+	if value.Type != "" {
+		return fmt.Errorf("openai provider error (%s): %s", value.Type, message)
+	}
+	return fmt.Errorf("openai provider error: %s", message)
 }
 
 func tools(specs []model.ToolSpec) []chatTool {
@@ -210,6 +252,8 @@ func toolChoice(choice model.ToolChoice) any {
 		return "none"
 	case model.ToolChoiceAuto:
 		return "auto"
+	case model.ToolChoiceRequired:
+		return "required"
 	default:
 		return nil
 	}

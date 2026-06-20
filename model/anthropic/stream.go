@@ -3,7 +3,9 @@ package anthropic
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"io"
+	"sort"
 	"strings"
 
 	"github.com/feiyu912/zenforge/model"
@@ -18,8 +20,9 @@ type blockState struct {
 }
 
 type accumulator struct {
-	blocks map[int]*blockState
-	usage  model.Usage
+	blocks       map[int]*blockState
+	usage        model.Usage
+	finishReason string
 }
 
 func newAccumulator() *accumulator {
@@ -41,12 +44,26 @@ func readSSE(body io.Reader, events chan<- model.Event) error {
 		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 		var event streamEvent
 		if err := json.Unmarshal([]byte(data), &event); err != nil {
-			return err
+			return fmt.Errorf("decode anthropic stream event: %w", err)
+		}
+		if event.Type == "error" {
+			message := strings.TrimSpace(event.Error.Message)
+			if message == "" {
+				message = "unknown provider error"
+			}
+			if event.Error.Type != "" {
+				return fmt.Errorf("anthropic provider error (%s): %s", event.Error.Type, message)
+			}
+			return fmt.Errorf("anthropic provider error: %s", message)
 		}
 		acc.apply(event, events)
 		if event.Type == "message_stop" {
 			message := acc.message()
-			events <- model.Event{Type: model.EventDone, Message: &message, Usage: acc.usage}
+			done := model.Event{Type: model.EventDone, Message: &message, Usage: acc.usage}
+			if acc.finishReason != "" {
+				done.Meta = map[string]any{"finish_reason": acc.finishReason}
+			}
+			events <- done
 			return nil
 		}
 	}
@@ -58,10 +75,16 @@ func (a *accumulator) apply(event streamEvent, events chan<- model.Event) {
 	case "message_start":
 		a.usage = usageToModel(event.Message.Usage)
 	case "message_delta":
+		if event.Delta.StopReason != "" {
+			a.finishReason = event.Delta.StopReason
+			if a.finishReason == "tool_use" {
+				a.finishReason = "tool_calls"
+			}
+		}
 		if event.Usage.OutputTokens != 0 {
 			a.usage.CompletionTokens = event.Usage.OutputTokens
 			a.usage.TotalTokens = a.usage.PromptTokens + a.usage.CompletionTokens
-			events <- model.Event{Type: model.EventDone, Usage: a.usage}
+			events <- model.Event{Type: model.EventUsage, Usage: a.usage}
 		}
 	case "content_block_start":
 		a.blocks[event.Index] = &blockState{
@@ -103,7 +126,12 @@ func (a *accumulator) block(index int) *blockState {
 func (a *accumulator) message() model.Message {
 	var content strings.Builder
 	var calls []model.ToolCallSpec
-	for i := 0; i < len(a.blocks); i++ {
+	indices := make([]int, 0, len(a.blocks))
+	for index := range a.blocks {
+		indices = append(indices, index)
+	}
+	sort.Ints(indices)
+	for _, i := range indices {
 		block := a.blocks[i]
 		if block == nil {
 			continue

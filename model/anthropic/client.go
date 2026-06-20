@@ -97,7 +97,11 @@ func (c *Client) Stream(ctx context.Context, req model.Request) (<-chan model.Ev
 	if c.model == "" {
 		return nil, fmt.Errorf("anthropic model is required")
 	}
-	body, err := json.Marshal(c.messagesRequest(req))
+	providerReq, err := c.messagesRequest(req)
+	if err != nil {
+		return nil, err
+	}
+	body, err := json.Marshal(providerReq)
 	if err != nil {
 		return nil, err
 	}
@@ -106,6 +110,7 @@ func (c *Client) Stream(ctx context.Context, req model.Request) (<-chan model.Ev
 		return nil, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "text/event-stream")
 	httpReq.Header.Set("Anthropic-Version", c.anthropicVersion)
 	if c.apiKey != "" {
 		httpReq.Header.Set("X-API-Key", c.apiKey)
@@ -130,44 +135,73 @@ func (c *Client) Stream(ctx context.Context, req model.Request) (<-chan model.Ev
 	return events, nil
 }
 
-func (c *Client) messagesRequest(req model.Request) messagesRequest {
-	system, messages := messages(req.Messages)
+func (c *Client) messagesRequest(req model.Request) (messagesRequest, error) {
+	system, messages, err := messages(req.Messages)
+	if err != nil {
+		return messagesRequest{}, err
+	}
+	providerTools := tools(req.Tools)
+	choice := toolChoice(req.ToolChoice)
+	if len(providerTools) == 0 || req.ToolChoice == model.ToolChoiceNone {
+		providerTools = nil
+		choice = nil
+	}
 	return messagesRequest{
 		Model:      c.model,
 		MaxTokens:  c.maxTokens,
 		System:     system,
 		Messages:   messages,
-		Tools:      tools(req.Tools),
-		ToolChoice: toolChoice(req.ToolChoice),
+		Tools:      providerTools,
+		ToolChoice: choice,
 		Stream:     true,
-	}
+	}, nil
 }
 
-func messages(in []model.Message) (string, []message) {
+func messages(in []model.Message) (string, []message, error) {
 	var system []string
 	out := make([]message, 0, len(in))
-	for _, item := range in {
+	for index := 0; index < len(in); index++ {
+		item := in[index]
 		switch item.Role {
 		case "system":
 			if item.Content != "" {
 				system = append(system, item.Content)
 			}
 		case "assistant":
-			out = append(out, assistantMessage(item))
+			converted, err := assistantMessage(item)
+			if err != nil {
+				return "", nil, err
+			}
+			if len(converted.Content) > 0 {
+				out = append(out, converted)
+			}
 		case "tool":
-			out = append(out, message{Role: "user", Content: []contentBlock{{
-				Type:      "tool_result",
-				ToolUseID: item.ToolCallID,
-				Content:   item.Content,
-			}}})
+			blocks := make([]contentBlock, 0, 2)
+			for index < len(in) && in[index].Role == "tool" {
+				toolResult := in[index]
+				blocks = append(blocks, contentBlock{
+					Type:      "tool_result",
+					ToolUseID: toolResult.ToolCallID,
+					Content:   toolResult.Content,
+				})
+				index++
+			}
+			if index < len(in) && in[index].Role == "user" {
+				blocks = append(blocks, contentBlock{Type: "text", Text: in[index].Content})
+			} else {
+				index--
+			}
+			out = append(out, message{Role: "user", Content: blocks})
 		default:
-			out = append(out, message{Role: "user", Content: []contentBlock{{Type: "text", Text: item.Content}}})
+			if item.Content != "" {
+				out = append(out, message{Role: "user", Content: []contentBlock{{Type: "text", Text: item.Content}}})
+			}
 		}
 	}
-	return strings.Join(system, "\n\n"), out
+	return strings.Join(system, "\n\n"), out, nil
 }
 
-func assistantMessage(item model.Message) message {
+func assistantMessage(item model.Message) (message, error) {
 	blocks := make([]contentBlock, 0, 1+len(item.ToolCalls))
 	if item.Content != "" {
 		blocks = append(blocks, contentBlock{Type: "text", Text: item.Content})
@@ -175,7 +209,9 @@ func assistantMessage(item model.Message) message {
 	for _, call := range item.ToolCalls {
 		input := map[string]any{}
 		if len(call.Arguments) > 0 {
-			_ = json.Unmarshal(call.Arguments, &input)
+			if err := json.Unmarshal(call.Arguments, &input); err != nil {
+				return message{}, fmt.Errorf("decode anthropic assistant tool call %s: %w", call.ID, err)
+			}
 		}
 		blocks = append(blocks, contentBlock{
 			Type:  "tool_use",
@@ -184,7 +220,7 @@ func assistantMessage(item model.Message) message {
 			Input: input,
 		})
 	}
-	return message{Role: "assistant", Content: blocks}
+	return message{Role: "assistant", Content: blocks}, nil
 }
 
 func tools(specs []model.ToolSpec) []toolDefinition {
@@ -209,9 +245,11 @@ func tools(specs []model.ToolSpec) []toolDefinition {
 func toolChoice(choice model.ToolChoice) any {
 	switch choice {
 	case model.ToolChoiceNone:
-		return map[string]string{"type": "none"}
+		return nil
 	case model.ToolChoiceAuto:
 		return map[string]string{"type": "auto"}
+	case model.ToolChoiceRequired:
+		return map[string]string{"type": "any"}
 	default:
 		return nil
 	}

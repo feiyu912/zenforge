@@ -37,6 +37,7 @@ type EventType string
 
 const (
 	EventDelta EventType = "delta"
+	EventUsage EventType = "usage"
 	EventDone  EventType = "done"
 	EventError EventType = "error"
 )
@@ -64,8 +65,9 @@ type ToolSpec struct {
 type ToolChoice string
 
 const (
-	ToolChoiceAuto ToolChoice = "auto"
-	ToolChoiceNone ToolChoice = "none"
+	ToolChoiceAuto     ToolChoice = "auto"
+	ToolChoiceNone     ToolChoice = "none"
+	ToolChoiceRequired ToolChoice = "required"
 )
 
 type Usage struct {

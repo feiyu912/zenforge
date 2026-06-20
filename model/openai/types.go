@@ -2,6 +2,7 @@ package openai
 
 import (
 	"encoding/json"
+	"sort"
 	"strings"
 
 	"github.com/feiyu912/zenforge/model"
@@ -49,6 +50,13 @@ type chatToolCallFunction struct {
 type chatChunk struct {
 	Choices []chatChoice `json:"choices"`
 	Usage   *chatUsage   `json:"usage,omitempty"`
+	Error   *apiError    `json:"error,omitempty"`
+}
+
+type apiError struct {
+	Message string `json:"message"`
+	Type    string `json:"type,omitempty"`
+	Code    any    `json:"code,omitempty"`
 }
 
 type chatChoice struct {
@@ -87,9 +95,10 @@ type toolCallAccumulator struct {
 }
 
 type accumulator struct {
-	role      string
-	content   strings.Builder
-	toolCalls map[int]*toolCallAccumulator
+	role         string
+	content      strings.Builder
+	toolCalls    map[int]*toolCallAccumulator
+	finishReason string
 }
 
 func newAccumulator() *accumulator {
@@ -115,7 +124,12 @@ func (a *accumulator) addToolCall(delta chatToolDelta) {
 
 func (a *accumulator) message() model.Message {
 	calls := make([]model.ToolCallSpec, 0, len(a.toolCalls))
-	for i := 0; i < len(a.toolCalls); i++ {
+	indices := make([]int, 0, len(a.toolCalls))
+	for index := range a.toolCalls {
+		indices = append(indices, index)
+	}
+	sort.Ints(indices)
+	for _, i := range indices {
 		call := a.toolCalls[i]
 		if call == nil {
 			continue

@@ -38,12 +38,19 @@ type streamEvent struct {
 	Delta        streamDelta    `json:"delta,omitempty"`
 	Usage        usage          `json:"usage,omitempty"`
 	Message      messagePayload `json:"message,omitempty"`
+	Error        apiError       `json:"error,omitempty"`
+}
+
+type apiError struct {
+	Type    string `json:"type,omitempty"`
+	Message string `json:"message,omitempty"`
 }
 
 type streamDelta struct {
 	Type        string `json:"type"`
 	Text        string `json:"text,omitempty"`
 	PartialJSON string `json:"partial_json,omitempty"`
+	StopReason  string `json:"stop_reason,omitempty"`
 }
 
 type messagePayload struct {
