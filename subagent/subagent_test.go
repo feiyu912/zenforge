@@ -123,6 +123,91 @@ func TestOrchestratorRunsParallelTasksInStableOrder(t *testing.T) {
 	}
 }
 
+func TestOrchestratorSequentialContinueOnErrorReturnsAggregate(t *testing.T) {
+	orchestrator := NewOrchestrator(OrchestratorConfig{
+		Registry: MustRegistry(SubAgentSpec{Name: "worker"}),
+		Runner: RunnerFunc(func(_ context.Context, _ SubAgentSpec, task TaskSpec, _ Request) (TaskResult, error) {
+			if task.Input == "fail" {
+				return TaskResult{Error: "boom"}, errors.New("boom")
+			}
+			return TaskResult{Output: task.Input}, nil
+		}),
+	})
+
+	result, err := orchestrator.Invoke(context.Background(), Request{Tasks: []TaskSpec{
+		{Agent: "worker", Input: "fail"},
+		{Agent: "worker", Input: "continue"},
+	}})
+	if err != nil {
+		t.Fatalf("continue-on-error returned ordinary task error: %v", err)
+	}
+	if len(result.Tasks) != 2 || result.Tasks[0].Status != StatusFailed || result.Tasks[1].Output != "continue" {
+		t.Fatalf("continue-on-error aggregate = %#v", result)
+	}
+}
+
+func TestOrchestratorParallelContinueOnErrorReturnsAggregate(t *testing.T) {
+	orchestrator := NewOrchestrator(OrchestratorConfig{
+		Registry: MustRegistry(SubAgentSpec{Name: "worker"}),
+		Runner: RunnerFunc(func(_ context.Context, _ SubAgentSpec, task TaskSpec, _ Request) (TaskResult, error) {
+			if task.Input == "fail" {
+				return TaskResult{Error: "boom"}, errors.New("boom")
+			}
+			return TaskResult{Output: task.Input}, nil
+		}),
+		Options: Options{Parallel: true},
+	})
+
+	result, err := orchestrator.Invoke(context.Background(), Request{Tasks: []TaskSpec{
+		{Agent: "worker", Input: "fail"},
+		{Agent: "worker", Input: "continue"},
+	}})
+	if err != nil {
+		t.Fatalf("parallel continue-on-error returned ordinary task error: %v", err)
+	}
+	if len(result.Tasks) != 2 || result.Tasks[0].Status != StatusFailed || result.Tasks[1].Output != "continue" {
+		t.Fatalf("parallel continue-on-error aggregate = %#v", result)
+	}
+}
+
+func TestOrchestratorAlwaysPropagatesObserverError(t *testing.T) {
+	for _, parallel := range []bool{false, true} {
+		t.Run(fmt.Sprintf("parallel=%t", parallel), func(t *testing.T) {
+			observerErr := errors.New("observer unavailable")
+			orchestrator := NewOrchestrator(OrchestratorConfig{
+				Registry: MustRegistry(SubAgentSpec{Name: "worker"}),
+				Runner: RunnerFunc(func(ctx context.Context, _ SubAgentSpec, task TaskSpec, req Request) (TaskResult, error) {
+					if err := req.NotifySubtaskEvent(ctx, task, "child_run", Event{Type: "child.progress"}); err != nil {
+						return TaskResult{Error: err.Error()}, err
+					}
+					return TaskResult{Output: task.Input}, nil
+				}),
+				Options: Options{Parallel: parallel},
+			})
+			_, err := orchestrator.Invoke(context.Background(), Request{
+				Observer: failingEventObserver{err: observerErr},
+				Tasks: []TaskSpec{
+					{Agent: "worker", Input: "one"},
+					{Agent: "worker", Input: "two"},
+				},
+			})
+			if !errors.Is(err, observerErr) {
+				t.Fatalf("observer error = %v, want %v", err, observerErr)
+			}
+		})
+	}
+}
+
+type failingEventObserver struct {
+	err error
+}
+
+func (f failingEventObserver) SubtaskStarted(context.Context, TaskSpec) error { return nil }
+func (f failingEventObserver) SubtaskEvent(context.Context, TaskSpec, string, Event) error {
+	return f.err
+}
+func (f failingEventObserver) SubtaskFinished(context.Context, TaskResult) error { return nil }
+
 func TestOrchestratorParallelFailFastCancelsOtherTasks(t *testing.T) {
 	registry := MustRegistry(SubAgentSpec{Name: "worker"})
 	enteredSlow := make(chan struct{})

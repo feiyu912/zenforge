@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -201,6 +202,56 @@ func (s *rejectingCheckpointStore) Delete(ctx context.Context, runID string) err
 
 type loadErrorCheckpointStore struct {
 	err error
+}
+
+type recordingCheckpointStore struct {
+	mu      sync.Mutex
+	store   checkpoint.Store
+	saved   []checkpoint.Checkpoint
+	updates chan checkpoint.Checkpoint
+}
+
+func newRecordingCheckpointStore() *recordingCheckpointStore {
+	return &recordingCheckpointStore{
+		store:   checkpointmemory.New(),
+		updates: make(chan checkpoint.Checkpoint, 64),
+	}
+}
+
+func (s *recordingCheckpointStore) Save(ctx context.Context, cp checkpoint.Checkpoint) error {
+	data, err := json.Marshal(cp)
+	if err != nil {
+		return err
+	}
+	var cloned checkpoint.Checkpoint
+	if err := json.Unmarshal(data, &cloned); err != nil {
+		return err
+	}
+	if err := s.store.Save(ctx, cloned); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.saved = append(s.saved, cloned)
+	s.mu.Unlock()
+	select {
+	case s.updates <- cloned:
+	default:
+	}
+	return nil
+}
+
+func (s *recordingCheckpointStore) Load(ctx context.Context, runID string) (*checkpoint.Checkpoint, error) {
+	return s.store.Load(ctx, runID)
+}
+
+func (s *recordingCheckpointStore) Delete(ctx context.Context, runID string) error {
+	return s.store.Delete(ctx, runID)
+}
+
+func (s *recordingCheckpointStore) snapshots() []checkpoint.Checkpoint {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]checkpoint.Checkpoint(nil), s.saved...)
 }
 
 func (s loadErrorCheckpointStore) Save(context.Context, checkpoint.Checkpoint) error {
@@ -1814,6 +1865,159 @@ func TestAgentRunsSubAgentTaskTool(t *testing.T) {
 	}
 }
 
+func TestAgentStreamsChildEventsBeforeCompletion(t *testing.T) {
+	release := make(chan struct{})
+	childModel := &gatedChildModel{release: release}
+	fakeModel := &scriptedModel{turns: []scriptedTurn{
+		{events: []model.Event{{Message: &model.Message{ToolCalls: []model.ToolCallSpec{{
+			ID:        "call_task",
+			Name:      "task",
+			Arguments: json.RawMessage(`{"tasks":[{"id":"child_1","agent":"worker","input":"inspect"}]}`),
+		}}}}}},
+		{events: []model.Event{{Delta: "parent final"}}},
+	}}
+	agent := New(Config{
+		Model:            fakeModel,
+		SubAgents:        SubAgentsEnabled,
+		SubAgentRegistry: subagent.MustRegistry(subagent.SubAgentSpec{Name: "worker", Model: childModel}),
+	})
+
+	events, err := agent.Stream(context.Background(), Task{RunID: "run_stream_parent", Input: "delegate"})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	for {
+		select {
+		case event := <-events:
+			if event.Type != EventSubtaskEvent || event.Payload["childEventType"] != string(EventModelDelta) {
+				continue
+			}
+			if event.RunID() != "run_stream_parent" || event.Payload["parentRunId"] != "run_stream_parent" || event.Payload["subtaskId"] != "child_1" || event.Payload["childRunId"] != "run_stream_parent_sub_child_1" {
+				t.Fatalf("unclear child event identity: %#v", event)
+			}
+			select {
+			case <-release:
+				t.Fatalf("child event arrived only after the child completed")
+			default:
+			}
+			close(release)
+			for range events {
+			}
+			return
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for live child event")
+		}
+	}
+}
+
+func TestAgentCheckpointsEachSubtaskCompletion(t *testing.T) {
+	checkpoints := newRecordingCheckpointStore()
+	started := make(chan string, 2)
+	releases := map[string]chan struct{}{"child_1": make(chan struct{}), "child_2": make(chan struct{})}
+	fakeModel := &scriptedModel{turns: []scriptedTurn{
+		{events: []model.Event{{Message: &model.Message{ToolCalls: []model.ToolCallSpec{{
+			ID:   "call_task",
+			Name: "task",
+			Arguments: json.RawMessage(`{"tasks":[` +
+				`{"id":"child_1","agent":"worker","input":"first"},` +
+				`{"id":"child_2","agent":"worker","input":"second"}` +
+				`]}`),
+		}}}}}},
+		{events: []model.Event{{Delta: "parent final"}}},
+	}}
+	agent := New(Config{
+		Model:            fakeModel,
+		SubAgents:        SubAgentsEnabled,
+		SubAgentRegistry: subagent.MustRegistry(subagent.SubAgentSpec{Name: "worker"}),
+		SubAgentOptions:  subagent.Options{Parallel: true},
+		SubAgentRunner: subagent.RunnerFunc(func(_ context.Context, _ subagent.SubAgentSpec, task subagent.TaskSpec, _ subagent.Request) (subagent.TaskResult, error) {
+			started <- task.ID
+			<-releases[task.ID]
+			return subagent.TaskResult{RunID: "run_checkpoint_parent_sub_" + task.ID, Output: task.Input}, nil
+		}),
+		Checkpoints: checkpoints,
+	})
+
+	events, err := agent.Stream(context.Background(), Task{RunID: "run_checkpoint_parent", Input: "delegate"})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	drained := make(chan struct{})
+	go func() {
+		for range events {
+		}
+		close(drained)
+	}()
+	seen := map[string]bool{}
+	for len(seen) < 2 {
+		select {
+		case id := <-started:
+			seen[id] = true
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for parallel children to start: %#v", seen)
+		}
+	}
+	close(releases["child_1"])
+	partial := waitForSubtaskCheckpoint(t, checkpoints.updates, func(subtasks []harness.SubtaskState) bool {
+		return subtaskStatus(subtasks, "child_1") == harness.SubtaskCompleted && subtaskStatus(subtasks, "child_2") == harness.SubtaskRunning
+	})
+	if partial.State.Subtasks[0].RunID == "" {
+		t.Fatalf("completed child checkpoint omitted child run identity: %#v", partial.State.Subtasks)
+	}
+	close(releases["child_2"])
+	waitForSubtaskCheckpoint(t, checkpoints.updates, func(subtasks []harness.SubtaskState) bool {
+		return subtaskStatus(subtasks, "child_1") == harness.SubtaskCompleted && subtaskStatus(subtasks, "child_2") == harness.SubtaskCompleted
+	})
+	select {
+	case <-drained:
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for parent run completion")
+	}
+	var sawSingleStarted bool
+	for _, cp := range checkpoints.snapshots() {
+		if cp.RunID != "run_checkpoint_parent" || len(cp.State.Subtasks) != 2 {
+			continue
+		}
+		identified := 0
+		for _, task := range cp.State.Subtasks {
+			if task.RunID != "" {
+				identified++
+			}
+		}
+		if identified == 1 {
+			sawSingleStarted = true
+			break
+		}
+	}
+	if !sawSingleStarted {
+		t.Fatalf("checkpoint history omitted an individual child start boundary")
+	}
+}
+
+func waitForSubtaskCheckpoint(t *testing.T, updates <-chan checkpoint.Checkpoint, match func([]harness.SubtaskState) bool) checkpoint.Checkpoint {
+	t.Helper()
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case cp := <-updates:
+			if cp.RunID == "run_checkpoint_parent" && match(cp.State.Subtasks) {
+				return cp
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for subtask checkpoint")
+		}
+	}
+}
+
+func subtaskStatus(subtasks []harness.SubtaskState, id string) harness.SubtaskStatus {
+	for _, task := range subtasks {
+		if task.ID == id {
+			return task.Status
+		}
+	}
+	return ""
+}
+
 func TestAgentSubAgentRequestCannotRaiseHostTaskLimit(t *testing.T) {
 	runnerCalls := 0
 	agent := New(Config{
@@ -2935,6 +3139,47 @@ type scriptedTurn struct {
 type scriptedModel struct {
 	turns    []scriptedTurn
 	requests []model.Request
+}
+
+type gatedChildModel struct {
+	release <-chan struct{}
+}
+
+func (m *gatedChildModel) Generate(ctx context.Context, req model.Request) (*model.Response, error) {
+	stream, err := m.Stream(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	var response model.Response
+	for event := range stream {
+		if event.Error != nil {
+			return nil, event.Error
+		}
+		response.Message.Content += event.Delta
+	}
+	return &response, nil
+}
+
+func (m *gatedChildModel) Stream(ctx context.Context, _ model.Request) (<-chan model.Event, error) {
+	out := make(chan model.Event)
+	go func() {
+		defer close(out)
+		select {
+		case out <- model.Event{Delta: "working"}:
+		case <-ctx.Done():
+			return
+		}
+		select {
+		case <-m.release:
+		case <-ctx.Done():
+			return
+		}
+		select {
+		case out <- model.Event{Delta: " done"}:
+		case <-ctx.Done():
+		}
+	}()
+	return out, nil
 }
 
 func (m *scriptedModel) Generate(ctx context.Context, req model.Request) (*model.Response, error) {

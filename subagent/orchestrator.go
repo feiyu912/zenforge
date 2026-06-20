@@ -2,6 +2,7 @@ package subagent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 )
@@ -58,6 +59,9 @@ func (o *DefaultOrchestrator) invokeSequential(ctx context.Context, req Request)
 	for i, task := range req.Tasks {
 		result, err := o.runTask(ctx, req, task, i)
 		results = append(results, result)
+		if isObserverError(err) {
+			return Result{Tasks: results}, err
+		}
 		if shouldStop(req.Options, result, err) {
 			if err == nil {
 				err = fmt.Errorf("%s", result.Error)
@@ -94,21 +98,61 @@ func (o *DefaultOrchestrator) invokeParallel(ctx context.Context, req Request) (
 	wg.Wait()
 
 	out := make([]TaskResult, 0, len(results))
-	var firstErr error
+	var observerErr error
+	var stopErr error
 	for i, result := range results {
 		out = append(out, result)
-		if firstErr == nil && shouldStop(req.Options, result, errs[i]) {
-			firstErr = errs[i]
-			if firstErr == nil {
-				firstErr = fmt.Errorf("%s", result.Error)
+		if observerErr == nil && isObserverError(errs[i]) {
+			observerErr = errs[i]
+			continue
+		}
+		if stopErr == nil && shouldStop(req.Options, result, errs[i]) {
+			stopErr = errs[i]
+			if stopErr == nil {
+				stopErr = fmt.Errorf("%s", result.Error)
 			}
 		}
 	}
-	return Result{Tasks: out}, firstErr
+	if observerErr != nil {
+		return Result{Tasks: out}, observerErr
+	}
+	return Result{Tasks: out}, stopErr
 }
 
 func (o *DefaultOrchestrator) runTask(ctx context.Context, req Request, task TaskSpec, index int) (TaskResult, error) {
 	task = normalizeTask(task, index)
+	if req.Observer != nil {
+		if err := req.Observer.SubtaskStarted(ctx, task); err != nil {
+			return failedResult(task, err.Error()), &observerError{err}
+		}
+	}
+	result, err := o.executeTask(ctx, req, task)
+	if req.Observer != nil {
+		for _, event := range result.Events {
+			if observerErr := req.Observer.SubtaskEvent(ctx, task, result.RunID, event); observerErr != nil {
+				return result, &observerError{observerErr}
+			}
+		}
+		if observerErr := req.Observer.SubtaskFinished(ctx, result); observerErr != nil {
+			return result, &observerError{observerErr}
+		}
+	}
+	return result, err
+}
+
+type observerError struct {
+	err error
+}
+
+func (e *observerError) Error() string { return e.err.Error() }
+func (e *observerError) Unwrap() error { return e.err }
+
+func isObserverError(err error) bool {
+	var target *observerError
+	return errors.As(err, &target)
+}
+
+func (o *DefaultOrchestrator) executeTask(ctx context.Context, req Request, task TaskSpec) (TaskResult, error) {
 	if err := ctx.Err(); err != nil {
 		return failedResult(task, err.Error()), err
 	}

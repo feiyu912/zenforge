@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/feiyu912/zenforge/approval"
@@ -1174,55 +1175,36 @@ func (a *Agent) invokeSubAgentTool(ctx context.Context, emit eventEmitter, check
 		return tool.Result{Error: err.Error(), ExitCode: 1}, err
 	}
 	skipped, runnable := splitSubtasksForRun(*state, req)
-	for _, task := range runnable {
-		if err := emit(EventSubtaskStarted, map[string]any{
-			"subtaskId": task.ID,
-			"agentName": task.NormalizedAgentName(),
-			"name":      task.Name,
-		}); err != nil {
-			return tool.Result{Error: err.Error(), ExitCode: 1}, err
-		}
-	}
 	result := subagent.Result{Tasks: skipped}
 	var invokeErr error
 	if len(runnable) > 0 {
 		runReq := req
 		runReq.Tasks = runnable
+		observer := &parentSubtaskObserver{
+			checkpoint: checkpointState,
+			emit:       emit,
+			parentID:   req.ParentTaskID,
+			state:      state,
+		}
+		runReq.Observer = observer
 		runningResult, err := orchestrator.Invoke(ctx, runReq)
 		invokeErr = err
-		result.Tasks = mergeSubtaskResults(req.Tasks, skipped, runningResult.Tasks)
-	}
-	applySubtaskResults(state, req.ParentTaskID, result)
-	if err := checkpointState(); err != nil {
-		return tool.Result{Error: err.Error(), ExitCode: 1}, err
-	}
-	for _, task := range result.Tasks {
-		for _, childEvent := range task.Events {
-			if err := emit(EventSubtaskEvent, map[string]any{
-				"subtaskId":      task.ID,
-				"agentName":      task.AgentName,
-				"childRunId":     task.RunID,
-				"childEventType": childEvent.Type,
-				"childEvent":     childEvent,
-			}); err != nil {
+		for _, task := range runningResult.Tasks {
+			if observer.finishedTask(task.ID) {
+				continue
+			}
+			for _, childEvent := range task.Events {
+				if err := observer.SubtaskEvent(ctx, subagent.TaskSpec{ID: task.ID, AgentName: task.AgentName, Name: task.Name}, task.RunID, childEvent); err != nil {
+					return tool.Result{Error: err.Error(), ExitCode: 1}, err
+				}
+			}
+			if err := observer.SubtaskFinished(ctx, task); err != nil {
 				return tool.Result{Error: err.Error(), ExitCode: 1}, err
 			}
 		}
-		eventType := EventSubtaskDone
-		if task.Status == subagent.StatusFailed {
-			eventType = EventSubtaskError
-		}
-		if err := emit(eventType, map[string]any{
-			"subtaskId": task.ID,
-			"agentName": task.AgentName,
-			"status":    task.Status,
-			"output":    task.Output,
-			"error":     task.Error,
-			"runId":     task.RunID,
-		}); err != nil {
-			return tool.Result{Error: err.Error(), ExitCode: 1}, err
-		}
+		result.Tasks = mergeSubtaskResults(req.Tasks, skipped, runningResult.Tasks)
 	}
+	applySubtaskResults(state, req.ParentTaskID, result)
 	output, structured, err := result.ToolResultJSON()
 	if err != nil {
 		return tool.Result{Error: err.Error(), ExitCode: 1}, err
@@ -1238,6 +1220,75 @@ func (a *Agent) invokeSubAgentTool(ctx context.Context, emit eventEmitter, check
 		}
 	}
 	return toolResult, invokeErr
+}
+
+type parentSubtaskObserver struct {
+	mu         sync.Mutex
+	checkpoint func() error
+	emit       eventEmitter
+	parentID   string
+	state      *harness.RunState
+	finished   map[string]bool
+}
+
+func (o *parentSubtaskObserver) SubtaskStarted(_ context.Context, task subagent.TaskSpec) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	setSubtaskRunning(o.state, o.parentID, task)
+	if err := o.checkpoint(); err != nil {
+		return err
+	}
+	return o.emit(EventSubtaskStarted, map[string]any{
+		"parentRunId": o.state.RunID,
+		"subtaskId":   task.ID,
+		"agentName":   task.NormalizedAgentName(),
+		"name":        task.Name,
+	})
+}
+
+func (o *parentSubtaskObserver) SubtaskEvent(_ context.Context, task subagent.TaskSpec, childRunID string, event subagent.Event) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.emit(EventSubtaskEvent, map[string]any{
+		"parentRunId":    o.state.RunID,
+		"subtaskId":      task.ID,
+		"agentName":      task.NormalizedAgentName(),
+		"childRunId":     childRunID,
+		"childEventType": event.Type,
+		"childEvent":     event,
+	})
+}
+
+func (o *parentSubtaskObserver) SubtaskFinished(_ context.Context, result subagent.TaskResult) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	applySubtaskResults(o.state, o.parentID, subagent.Result{Tasks: []subagent.TaskResult{result}})
+	if err := o.checkpoint(); err != nil {
+		return err
+	}
+	if o.finished == nil {
+		o.finished = make(map[string]bool)
+	}
+	o.finished[result.ID] = true
+	eventType := EventSubtaskDone
+	if result.Status == subagent.StatusFailed {
+		eventType = EventSubtaskError
+	}
+	return o.emit(eventType, map[string]any{
+		"parentRunId": o.state.RunID,
+		"subtaskId":   result.ID,
+		"agentName":   result.AgentName,
+		"status":      result.Status,
+		"output":      result.Output,
+		"error":       result.Error,
+		"runId":       result.RunID,
+	})
+}
+
+func (o *parentSubtaskObserver) finishedTask(id string) bool {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.finished[id]
 }
 
 func approvalRequestState(req approval.Request, call harness.ToolCallState) harness.ApprovalRequestState {
@@ -1527,7 +1578,9 @@ func (a *Agent) runChildSubAgent(ctx context.Context, spec subagent.SubAgentSpec
 		childConfig.SubAgentOptions = a.subAgentOptions()
 	}
 	child := New(childConfig)
-	events, err := childSubAgentEvents(ctx, child, a.config.Checkpoints, childRunID, task.Input, childMeta)
+	childCtx, cancelChild := context.WithCancel(ctx)
+	defer cancelChild()
+	events, err := childSubAgentEvents(childCtx, child, a.config.Checkpoints, childRunID, task.Input, childMeta)
 	if err != nil {
 		return subagent.TaskResult{
 			ID:        task.ID,
@@ -1542,13 +1595,23 @@ func (a *Agent) runChildSubAgent(ctx context.Context, spec subagent.SubAgentSpec
 	var output string
 	var childEvents []subagent.Event
 	var runErr error
+	var observerErr error
 	for event := range events {
-		childEvents = append(childEvents, subagent.Event{
+		childEvent := subagent.Event{
 			Seq:       event.Seq,
 			Type:      string(event.Type),
 			Timestamp: event.Timestamp,
 			Payload:   cloneMap(event.Payload),
-		})
+		}
+		if req.Observer == nil {
+			childEvents = append(childEvents, childEvent)
+		}
+		if req.Observer != nil && observerErr == nil {
+			if err := req.NotifySubtaskEvent(ctx, task, childRunID, childEvent); err != nil {
+				observerErr = err
+				cancelChild()
+			}
+		}
 		if event.Type == EventRunDone {
 			output = stringValue(event.Payload["output"])
 		}
@@ -1566,6 +1629,9 @@ func (a *Agent) runChildSubAgent(ctx context.Context, spec subagent.SubAgentSpec
 				runErr = fmt.Errorf("%s", message)
 			}
 		}
+	}
+	if observerErr != nil {
+		runErr = observerErr
 	}
 	taskResult := subagent.TaskResult{
 		ID:        task.ID,
@@ -1621,6 +1687,15 @@ func startSubtasks(state *harness.RunState, req subagent.Request) {
 		state.Subtasks = append(state.Subtasks, subtask)
 	}
 	state.Phase = harness.RunPhaseSubtask
+}
+
+func setSubtaskRunning(state *harness.RunState, parentID string, task subagent.TaskSpec) {
+	idx := findSubtask(state.Subtasks, parentID, task.ID)
+	if idx < 0 {
+		return
+	}
+	state.Subtasks[idx].Status = harness.SubtaskRunning
+	state.Subtasks[idx].RunID = fmt.Sprintf("%s_sub_%s", state.RunID, task.ID)
 }
 
 func findSubtask(subtasks []harness.SubtaskState, parentID, id string) int {

@@ -1,6 +1,7 @@
 package subagent
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -52,6 +53,27 @@ type Request struct {
 	Tasks        []TaskSpec     `json:"tasks"`
 	Options      Options        `json:"options,omitempty"`
 	Context      map[string]any `json:"-"`
+	Observer     Observer       `json:"-"`
+}
+
+// Observer receives live child lifecycle and stream events. Implementations
+// must be safe for concurrent calls when parallel execution is enabled.
+type Observer interface {
+	SubtaskStarted(context.Context, TaskSpec) error
+	SubtaskEvent(context.Context, TaskSpec, string, Event) error
+	SubtaskFinished(context.Context, TaskResult) error
+}
+
+// NotifySubtaskEvent reports a live child event and preserves observer
+// failures across the runner boundary.
+func (r Request) NotifySubtaskEvent(ctx context.Context, task TaskSpec, childRunID string, event Event) error {
+	if r.Observer == nil {
+		return nil
+	}
+	if err := r.Observer.SubtaskEvent(ctx, task, childRunID, event); err != nil {
+		return &observerError{err}
+	}
+	return nil
 }
 
 type Result struct {
