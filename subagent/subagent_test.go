@@ -279,3 +279,40 @@ func TestRequestEnforcesNestedDepthLimit(t *testing.T) {
 		t.Fatalf("request widened host max depth: %v", err)
 	}
 }
+
+func TestOrchestratorKeepsRuntimeOptionsHostOnly(t *testing.T) {
+	task := TaskSpec{Agent: "worker", Input: "nested"}
+	var got Options
+	orchestrator := NewOrchestrator(OrchestratorConfig{
+		Registry: MustRegistry(SubAgentSpec{Name: "worker"}),
+		Runner: RunnerFunc(func(_ context.Context, _ SubAgentSpec, _ TaskSpec, req Request) (TaskResult, error) {
+			got = req.Options
+			return TaskResult{Output: "ok"}, nil
+		}),
+		Options: Options{AllowNested: true, MaxDepth: 2},
+	})
+	if _, err := orchestrator.Invoke(context.Background(), Request{
+		Depth:   1,
+		Tasks:   []TaskSpec{task},
+		Options: Options{MaxDepth: 1, InheritContext: true},
+	}); err != nil {
+		t.Fatalf("request changed host nesting options: %v", err)
+	}
+	if !got.AllowNested || got.MaxDepth != 2 || got.InheritContext {
+		t.Fatalf("runner options = %#v, want host nesting/context options", got)
+	}
+
+	blocked := NewOrchestrator(OrchestratorConfig{
+		Registry: MustRegistry(SubAgentSpec{Name: "worker"}),
+		Runner: RunnerFunc(func(context.Context, SubAgentSpec, TaskSpec, Request) (TaskResult, error) {
+			return TaskResult{Output: "must not run"}, nil
+		}),
+	})
+	if _, err := blocked.Invoke(context.Background(), Request{
+		Depth:   1,
+		Tasks:   []TaskSpec{task},
+		Options: Options{AllowNested: true, MaxDepth: 100, InheritContext: true},
+	}); err == nil || err.Error() != "nested_subagent_not_allowed" {
+		t.Fatalf("request enabled host-only options: %v", err)
+	}
+}

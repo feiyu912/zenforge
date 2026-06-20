@@ -140,20 +140,11 @@ func mergeOptions(base, override Options) Options {
 	if out.MaxDepth <= 0 {
 		out.MaxDepth = 1
 	}
-	if override.MaxDepth > 0 && override.MaxDepth < out.MaxDepth {
-		out.MaxDepth = override.MaxDepth
-	}
-	if override.AllowNested {
-		out.AllowNested = true
-	}
 	if override.Parallel {
 		out.Parallel = true
 	}
 	if override.FailFast {
 		out.FailFast = true
-	}
-	if override.InheritContext {
-		out.InheritContext = true
 	}
 	return out
 }

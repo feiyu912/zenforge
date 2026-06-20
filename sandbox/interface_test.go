@@ -49,4 +49,10 @@ func TestSessionKey(t *testing.T) {
 	if got := SessionKey("run_1", "task_1"); got != "run-run_1-task_1" {
 		t.Fatalf("SessionKey subtask = %q", got)
 	}
+	if got := SessionKey(" run_1 ", " task_1 "); got != "run-run_1-task_1" {
+		t.Fatalf("SessionKey normalized = %q", got)
+	}
+	if got := SessionKey(" ", "task_1"); got != "" {
+		t.Fatalf("SessionKey empty run = %q", got)
+	}
 }

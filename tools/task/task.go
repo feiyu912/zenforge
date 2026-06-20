@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 
 	"github.com/feiyu912/zenforge/subagent"
 	"github.com/feiyu912/zenforge/tool"
@@ -140,11 +142,35 @@ func Decode(raw json.RawMessage) (subagent.Request, error) {
 	if err := decoder.Decode(&in); err != nil {
 		return subagent.Request{}, fmt.Errorf("%w: %v", tool.ErrInvalidArguments, err)
 	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		if err == nil {
+			err = fmt.Errorf("multiple JSON values")
+		}
+		return subagent.Request{}, fmt.Errorf("%w: %v", tool.ErrInvalidArguments, err)
+	}
 	req := subagent.Request{Tasks: in.Tasks, Options: in.Options.toSubAgentOptions()}
-	if err := req.Validate(); err != nil {
+	if err := validateModelRequest(req); err != nil {
 		return subagent.Request{}, fmt.Errorf("%w: %v", tool.ErrInvalidArguments, err)
 	}
 	return req, nil
+}
+
+func validateModelRequest(req subagent.Request) error {
+	if len(req.Tasks) == 0 {
+		return fmt.Errorf("at least one subtask is required")
+	}
+	if req.Options.MaxTasks < 0 {
+		return fmt.Errorf("maxTasks must be greater than zero")
+	}
+	if req.Options.MaxTasks > 0 && len(req.Tasks) > req.Options.MaxTasks {
+		return fmt.Errorf("too many subtasks: %d > %d", len(req.Tasks), req.Options.MaxTasks)
+	}
+	for _, task := range req.Tasks {
+		if err := task.Validate(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 type taskOptions struct {

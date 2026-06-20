@@ -2,6 +2,7 @@ package containerhub
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -14,8 +15,8 @@ import (
 
 func TestClientShapesRequestsAndHeaders(t *testing.T) {
 	transport := &recordingTransport{responses: []httpResponse{
-		{status: 200, body: `{"id":"session_1","runId":"forged","subtaskId":"forged","workingDir":"/workspace"}`, contentType: "application/json"},
-		{status: 200, body: `{"exitCode":0,"stdout":"ok","workingDirectory":"/workspace"}`, contentType: "application/json"},
+		{status: 200, body: `{"session_id":"session_1","environment_name":"go","cwd":"/workspace"}`, contentType: "application/json"},
+		{status: 200, body: `{"exit_code":0,"stdout":"ok","working_directory":"/workspace"}`, contentType: "application/json"},
 		{status: 204},
 	}}
 	client, err := NewClient(Config{
@@ -26,29 +27,76 @@ func TestClientShapesRequestsAndHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient returned error: %v", err)
 	}
-	session, err := client.CreateSession(context.Background(), sandbox.OpenRequest{RunID: "run_1", EnvironmentID: "go", WorkingDir: "/workspace"})
+	session, err := client.CreateSession(context.Background(), sandbox.OpenRequest{
+		RunID:         "run_1",
+		SubtaskID:     "sub_1",
+		EnvironmentID: "go",
+		WorkingDir:    "/workspace",
+		Env:           map[string]string{"GOFLAGS": "-mod=readonly"},
+		Mounts:        []sandbox.Mount{{Source: "/host", Destination: "/workspace", Mode: "ro"}},
+		Metadata:      map[string]any{"toolCallId": "call_1", "ignored": 42},
+	})
 	if err != nil {
 		t.Fatalf("CreateSession returned error: %v", err)
 	}
-	result, err := client.ExecuteSession(context.Background(), session.ID, sandbox.ExecuteRequest{Command: "go test ./...", Timeout: time.Second})
+	result, err := client.ExecuteSession(context.Background(), session.ID, sandbox.ExecuteRequest{Command: "go test ./...", CWD: "/workspace", Timeout: time.Second})
 	if err != nil {
 		t.Fatalf("ExecuteSession returned error: %v", err)
 	}
 	if err := client.StopSession(context.Background(), session.ID); err != nil {
 		t.Fatalf("StopSession returned error: %v", err)
 	}
-	if session.ID != "session_1" || session.RunID != "run_1" || session.SubtaskID != "" || result.Stdout != "ok" {
+	if session.ID != "session_1" || session.RunID != "run_1" || session.SubtaskID != "sub_1" || result.Stdout != "ok" {
 		t.Fatalf("unexpected session/result: %#v %#v", session, result)
 	}
-	assertRequest(t, transport.requests[0], http.MethodPost, "/api/sessions/create", "Bearer token", `"runId":"run_1"`)
-	assertRequest(t, transport.requests[1], http.MethodPost, "/api/sessions/session_1/execute", "Bearer token", `"command":"go test ./..."`)
+	assertRequest(t, transport.requests[0], http.MethodPost, "/api/sessions/create", "Bearer token", "")
+	createBody := decodeBody(t, transport.requests[0])
+	if createBody["session_id"] != "run-run_1-sub_1" || createBody["environment_name"] != "go" || createBody["cwd"] != "/workspace" {
+		t.Fatalf("create body = %#v", createBody)
+	}
+	labels := createBody["labels"].(map[string]any)
+	if labels["runId"] != "run_1" || labels["subtaskId"] != "sub_1" || labels["toolCallId"] != "call_1" {
+		t.Fatalf("create labels = %#v", labels)
+	}
+	mount := createBody["mounts"].([]any)[0].(map[string]any)
+	if mount["read_only"] != true || mount["source"] != "/host" {
+		t.Fatalf("create mount = %#v", mount)
+	}
+	assertRequest(t, transport.requests[1], http.MethodPost, "/api/sessions/session_1/execute", "Bearer token", "")
+	executeBody := decodeBody(t, transport.requests[1])
+	if executeBody["command"] != "/bin/sh" || executeBody["cwd"] != "/workspace" || executeBody["timeout_ms"] != float64(1000) {
+		t.Fatalf("execute body = %#v", executeBody)
+	}
+	args := executeBody["args"].([]any)
+	if len(args) != 2 || args[0] != "-lc" || args[1] != "go test ./..." {
+		t.Fatalf("execute args = %#v", args)
+	}
 	assertRequest(t, transport.requests[2], http.MethodPost, "/api/sessions/session_1/stop", "Bearer token", "")
+}
+
+func TestClientHandlesPlainTextAndTimedOutExecution(t *testing.T) {
+	transport := &recordingTransport{responses: []httpResponse{
+		{status: 200, body: "plain output", contentType: "text/plain; charset=utf-8"},
+		{status: 200, body: `{"exit_code":124,"stderr":"timed out","timed_out":true}`, contentType: "application/json"},
+	}}
+	client, err := NewClient(Config{BaseURL: "https://hub.example", HTTPClient: &http.Client{Transport: transport}})
+	if err != nil {
+		t.Fatalf("NewClient returned error: %v", err)
+	}
+	plain, err := client.ExecuteSession(context.Background(), "session_1", sandbox.ExecuteRequest{Command: "printf ok", CWD: "/workspace"})
+	if err != nil || plain.Stdout != "plain output" || plain.WorkingDirectory != "/workspace" {
+		t.Fatalf("plain execution = %#v err=%v", plain, err)
+	}
+	timedOut, err := client.ExecuteSession(context.Background(), "session_1", sandbox.ExecuteRequest{Command: "sleep 2"})
+	if sandbox.Code(err) != sandbox.ErrTimeout || timedOut.ExitCode != 124 || timedOut.Stderr != "timed out" {
+		t.Fatalf("timed out execution = %#v err=%v", timedOut, err)
+	}
 }
 
 func TestClientPromptTextAndJSON(t *testing.T) {
 	transport := &recordingTransport{responses: []httpResponse{
 		{status: 200, body: "plain prompt", contentType: "text/plain"},
-		{status: 200, body: `{"content":"json prompt","metadata":{"k":"v"}}`, contentType: "application/json"},
+		{status: 200, body: `{"environment_name":"python","has_prompt":true,"prompt":"json prompt"}`, contentType: "application/json"},
 		{status: 200, body: `{"version":"dev"}`, contentType: "application/json"},
 	}}
 	client, err := NewClient(Config{BaseURL: "https://hub.example", HTTPClient: &http.Client{Transport: transport}})
@@ -75,11 +123,32 @@ func TestClientPromptTextAndJSON(t *testing.T) {
 	assertRequest(t, transport.requests[2], http.MethodGet, "/api/runtime-info", "", "")
 }
 
+func TestClientRejectsInvalidBaseURLAndEmptySessionIDs(t *testing.T) {
+	if _, err := NewClient(Config{BaseURL: "://bad"}); err == nil {
+		t.Fatalf("expected invalid base URL error")
+	}
+	client, err := NewClient(Config{BaseURL: "https://hub.example", HTTPClient: &http.Client{Transport: &recordingTransport{}}})
+	if err != nil {
+		t.Fatalf("NewClient returned error: %v", err)
+	}
+	if _, err := client.CreateSession(context.Background(), sandbox.OpenRequest{}); sandbox.Code(err) != sandbox.ErrSessionOpenFailed {
+		t.Fatalf("empty run error = %v", err)
+	}
+	if _, err := client.ExecuteSession(context.Background(), " ", sandbox.ExecuteRequest{}); sandbox.Code(err) != sandbox.ErrClosed {
+		t.Fatalf("empty execute session error = %v", err)
+	}
+	if err := client.StopSession(context.Background(), " "); sandbox.Code(err) != sandbox.ErrClosed {
+		t.Fatalf("empty stop session error = %v", err)
+	}
+}
+
 func TestClientMapsHTTPFailuresToSandboxCodes(t *testing.T) {
 	transport := &recordingTransport{responses: []httpResponse{
 		{status: 500, body: "create failed"},
 		{status: 500, body: "execute failed"},
 		{status: 404, body: "missing prompt"},
+		{status: 409, body: `{"message":"session is stopped"}`},
+		{status: 504, body: "gateway timeout"},
 	}}
 	client, err := NewClient(Config{BaseURL: "https://hub.example", HTTPClient: &http.Client{Transport: transport}})
 	if err != nil {
@@ -93,6 +162,33 @@ func TestClientMapsHTTPFailuresToSandboxCodes(t *testing.T) {
 	}
 	if _, err := client.EnvironmentPrompt(context.Background(), "missing"); sandbox.Code(err) != sandbox.ErrEnvironmentNotFound {
 		t.Fatalf("EnvironmentPrompt error code = %q err=%v", sandbox.Code(err), err)
+	}
+	if _, err := client.ExecuteSession(context.Background(), "stopped", sandbox.ExecuteRequest{Command: "printf ok"}); sandbox.Code(err) != sandbox.ErrClosed {
+		t.Fatalf("stopped session error code = %q err=%v", sandbox.Code(err), err)
+	}
+	if _, err := client.ExecuteSession(context.Background(), "slow", sandbox.ExecuteRequest{Command: "sleep 10"}); sandbox.Code(err) != sandbox.ErrTimeout {
+		t.Fatalf("gateway timeout error code = %q err=%v", sandbox.Code(err), err)
+	}
+}
+
+func TestClientMapsMalformedSuccessResponsesToSandboxCodes(t *testing.T) {
+	transport := &recordingTransport{responses: []httpResponse{
+		{status: 200, body: `{`, contentType: "application/json"},
+		{status: 200, body: `{`, contentType: "application/json"},
+		{status: 200, body: `{`, contentType: "application/json"},
+	}}
+	client, err := NewClient(Config{BaseURL: "https://hub.example", HTTPClient: &http.Client{Transport: transport}})
+	if err != nil {
+		t.Fatalf("NewClient returned error: %v", err)
+	}
+	if _, err := client.CreateSession(context.Background(), sandbox.OpenRequest{RunID: "run_1"}); sandbox.Code(err) != sandbox.ErrSessionOpenFailed {
+		t.Fatalf("malformed create error code = %q err=%v", sandbox.Code(err), err)
+	}
+	if _, err := client.ExecuteSession(context.Background(), "session_1", sandbox.ExecuteRequest{}); sandbox.Code(err) != sandbox.ErrExecuteFailed {
+		t.Fatalf("malformed execute error code = %q err=%v", sandbox.Code(err), err)
+	}
+	if _, err := client.EnvironmentPrompt(context.Background(), "go"); sandbox.Code(err) != sandbox.ErrSandboxUnavailable {
+		t.Fatalf("malformed prompt error code = %q err=%v", sandbox.Code(err), err)
 	}
 }
 
@@ -223,4 +319,13 @@ func assertRequest(t *testing.T, req recordedRequest, method, path, auth, bodyCo
 	if bodyContains != "" && !strings.Contains(req.body, bodyContains) {
 		t.Fatalf("body = %q, want to contain %q", req.body, bodyContains)
 	}
+}
+
+func decodeBody(t *testing.T, req recordedRequest) map[string]any {
+	t.Helper()
+	var body map[string]any
+	if err := json.Unmarshal([]byte(req.body), &body); err != nil {
+		t.Fatalf("decode request body %q: %v", req.body, err)
+	}
+	return body
 }

@@ -3,6 +3,7 @@ package sandbox
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -77,6 +78,11 @@ type Mount struct {
 }
 
 func SessionKey(runID, subtaskID string) string {
+	runID = strings.TrimSpace(runID)
+	subtaskID = strings.TrimSpace(subtaskID)
+	if runID == "" {
+		return ""
+	}
 	if subtaskID == "" {
 		return "run-" + runID
 	}

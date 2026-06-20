@@ -3,6 +3,7 @@ package task
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/feiyu912/zenforge/tool"
@@ -23,6 +24,45 @@ func TestTaskToolSchemaAndAlias(t *testing.T) {
 	properties := primary.Schema()["properties"].(map[string]any)
 	if properties["options"] == nil {
 		t.Fatalf("expected options schema: %#v", primary.Schema())
+	}
+}
+
+func TestDecodeDefersHostTaskCeiling(t *testing.T) {
+	tasks := make([]map[string]string, 9)
+	for i := range tasks {
+		tasks[i] = map[string]string{"agent": "worker", "input": fmt.Sprintf("task %d", i+1)}
+	}
+	raw, err := json.Marshal(map[string]any{"tasks": tasks})
+	if err != nil {
+		t.Fatalf("Marshal returned error: %v", err)
+	}
+	if _, err := Decode(raw); err != nil {
+		t.Fatalf("Decode applied an implicit host ceiling: %v", err)
+	}
+
+	withRequestLimit, err := json.Marshal(map[string]any{
+		"tasks":   tasks[:2],
+		"options": map[string]any{"maxTasks": 1},
+	})
+	if err != nil {
+		t.Fatalf("Marshal request limit returned error: %v", err)
+	}
+	if _, err := Decode(withRequestLimit); err == nil {
+		t.Fatalf("expected request-level maxTasks error")
+	}
+}
+
+func TestDecodeRejectsTrailingJSON(t *testing.T) {
+	raw := json.RawMessage(`{"tasks":[{"agent":"worker","input":"one"}]} {}`)
+	if _, err := Decode(raw); err == nil {
+		t.Fatalf("expected trailing JSON error")
+	}
+}
+
+func TestDecodeRejectsNegativeTaskLimit(t *testing.T) {
+	raw := json.RawMessage(`{"tasks":[{"agent":"worker","input":"one"}],"options":{"maxTasks":-1}}`)
+	if _, err := Decode(raw); err == nil {
+		t.Fatalf("expected negative maxTasks error")
 	}
 }
 
