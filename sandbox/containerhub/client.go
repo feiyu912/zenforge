@@ -15,6 +15,8 @@ import (
 	"github.com/feiyu912/zenforge/sandbox"
 )
 
+const maxResponseBytes int64 = 8 << 20
+
 type Client struct {
 	baseURL   string
 	authToken string
@@ -99,9 +101,9 @@ func (c *Client) ExecuteSession(ctx context.Context, sessionID string, req sandb
 		return sandbox.ExecuteResult{}, err
 	}
 	defer res.Body.Close()
-	data, err := io.ReadAll(res.Body)
+	data, err := readResponseBody(res.Body)
 	if err != nil {
-		return sandbox.ExecuteResult{}, fmt.Errorf("%w: read response: %v", sandbox.ErrExecuteFailed, err)
+		return sandbox.ExecuteResult{}, fmt.Errorf("%w: read execute response: %v", responseReadErrorCode(err, sandbox.ErrExecuteFailed), err)
 	}
 	if !strings.Contains(strings.ToLower(res.Header.Get("Content-Type")), "application/json") {
 		return sandbox.ExecuteResult{ExitCode: 0, Stdout: string(data), WorkingDirectory: req.CWD}, nil
@@ -142,9 +144,9 @@ func (c *Client) EnvironmentPrompt(ctx context.Context, environmentID string) (s
 		return sandbox.Prompt{}, err
 	}
 	defer res.Body.Close()
-	body, err := io.ReadAll(res.Body)
+	body, err := readResponseBody(res.Body)
 	if err != nil {
-		return sandbox.Prompt{}, fmt.Errorf("%w: read environment prompt: %v", sandbox.ErrSandboxUnavailable, err)
+		return sandbox.Prompt{}, fmt.Errorf("%w: read environment prompt: %v", responseReadErrorCode(err, sandbox.ErrSandboxUnavailable), err)
 	}
 	contentType := res.Header.Get("Content-Type")
 	if strings.Contains(contentType, "application/json") {
@@ -182,12 +184,15 @@ func (c *Client) doJSON(ctx context.Context, method, path string, body any, out 
 	}
 	defer res.Body.Close()
 	if out == nil {
-		_, _ = io.Copy(io.Discard, res.Body)
+		_, err := readResponseBody(res.Body)
+		if err != nil {
+			return fmt.Errorf("%w: read containerhub response: %v", responseReadErrorCode(err, containerHubErrorCode(path, res.StatusCode)), err)
+		}
 		return nil
 	}
-	data, err := io.ReadAll(res.Body)
+	data, err := readResponseBody(res.Body)
 	if err != nil {
-		return fmt.Errorf("%w: read containerhub response: %v", containerHubErrorCode(path, res.StatusCode), err)
+		return fmt.Errorf("%w: read containerhub response: %v", responseReadErrorCode(err, containerHubErrorCode(path, res.StatusCode)), err)
 	}
 	if len(bytes.TrimSpace(data)) == 0 {
 		return nil
@@ -196,6 +201,24 @@ func (c *Client) doJSON(ctx context.Context, method, path string, body any, out 
 		return fmt.Errorf("%w: decode containerhub response: %v", containerHubErrorCode(path, res.StatusCode), err)
 	}
 	return nil
+}
+
+func readResponseBody(body io.Reader) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(body, maxResponseBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxResponseBytes {
+		return nil, fmt.Errorf("%w: response exceeds %d byte limit", sandbox.ErrResponseTooLarge, maxResponseBytes)
+	}
+	return data, nil
+}
+
+func responseReadErrorCode(err error, fallback sandbox.ErrorCode) sandbox.ErrorCode {
+	if errors.Is(err, sandbox.ErrResponseTooLarge) {
+		return sandbox.ErrResponseTooLarge
+	}
+	return fallback
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body any) (*http.Response, error) {
@@ -232,7 +255,13 @@ func (c *Client) do(ctx context.Context, method, path string, body any) (*http.R
 		return res, nil
 	}
 	defer res.Body.Close()
-	data, _ := io.ReadAll(io.LimitReader(res.Body, 4096))
+	data, err := readResponseBody(res.Body)
+	if err != nil {
+		return nil, fmt.Errorf("%w: read containerhub error response: %v", responseReadErrorCode(err, containerHubErrorCode(path, res.StatusCode)), err)
+	}
+	if len(data) > 4096 {
+		data = data[:4096]
+	}
 	return nil, fmt.Errorf("%w: containerhub %s %s failed: status=%d detail=%s", containerHubErrorCode(path, res.StatusCode), method, path, res.StatusCode, errorDetail(data))
 }
 

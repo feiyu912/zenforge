@@ -51,7 +51,7 @@ func TestClientShapesRequestsAndHeaders(t *testing.T) {
 	}
 	assertRequest(t, transport.requests[0], http.MethodPost, "/api/sessions/create", "Bearer token", "")
 	createBody := decodeBody(t, transport.requests[0])
-	if createBody["session_id"] != "run-run_1-sub_1" || createBody["environment_name"] != "go" || createBody["cwd"] != "/workspace" {
+	if createBody["session_id"] != sandbox.SessionKey("run_1", "sub_1") || createBody["environment_name"] != "go" || createBody["cwd"] != "/workspace" {
 		t.Fatalf("create body = %#v", createBody)
 	}
 	labels := createBody["labels"].(map[string]any)
@@ -72,6 +72,32 @@ func TestClientShapesRequestsAndHeaders(t *testing.T) {
 		t.Fatalf("execute args = %#v", args)
 	}
 	assertRequest(t, transport.requests[2], http.MethodPost, "/api/sessions/session_1/stop", "Bearer token", "")
+}
+
+func TestClientRejectsOversizedSuccessResponses(t *testing.T) {
+	oversized := strings.Repeat("x", int(maxResponseBytes)+1)
+	transport := &recordingTransport{responses: []httpResponse{
+		{status: 200, body: oversized, contentType: "text/plain"},
+		{status: 200, body: oversized, contentType: "text/plain"},
+		{status: 200, body: oversized, contentType: "application/json"},
+		{status: 500, body: oversized, contentType: "text/plain"},
+	}}
+	client, err := NewClient(Config{BaseURL: "https://hub.example", HTTPClient: &http.Client{Transport: transport}})
+	if err != nil {
+		t.Fatalf("NewClient returned error: %v", err)
+	}
+	if _, err := client.ExecuteSession(context.Background(), "session_1", sandbox.ExecuteRequest{}); sandbox.Code(err) != sandbox.ErrResponseTooLarge {
+		t.Fatalf("oversized execute error code = %q err=%v", sandbox.Code(err), err)
+	}
+	if _, err := client.EnvironmentPrompt(context.Background(), "go"); sandbox.Code(err) != sandbox.ErrResponseTooLarge {
+		t.Fatalf("oversized prompt error code = %q err=%v", sandbox.Code(err), err)
+	}
+	if _, err := client.RuntimeInfo(context.Background()); sandbox.Code(err) != sandbox.ErrResponseTooLarge {
+		t.Fatalf("oversized runtime info error code = %q err=%v", sandbox.Code(err), err)
+	}
+	if _, err := client.RuntimeInfo(context.Background()); sandbox.Code(err) != sandbox.ErrResponseTooLarge {
+		t.Fatalf("oversized error response code = %q err=%v", sandbox.Code(err), err)
+	}
 }
 
 func TestClientHandlesPlainTextAndTimedOutExecution(t *testing.T) {

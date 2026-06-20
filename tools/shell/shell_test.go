@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/feiyu912/zenforge/approval"
 	"github.com/feiyu912/zenforge/policy"
@@ -144,6 +145,33 @@ func TestShellTimeoutAndOutputCap(t *testing.T) {
 	}
 	if result.Structured["output"] != "abc" || result.Structured["truncated"] != true {
 		t.Fatalf("expected truncated output, got %#v", result.Structured)
+	}
+}
+
+func TestShellOutputCapIsBoundedAndUTF8Safe(t *testing.T) {
+	root := t.TempDir()
+	shell := Must(Config{Policy: policy.ShellPolicy{
+		WorkingDir:     root,
+		AllowCommands:  []string{"printf"},
+		MaxTimeout:     time.Second,
+		MaxOutputBytes: 5,
+	}})
+	result, err := shell.Call(context.Background(), json.RawMessage(`{"command":"printf '你好世界'","description":"cap utf8 output"}`), tool.Context{})
+	if err != nil {
+		t.Fatalf("Call returned error: %v", err)
+	}
+	output, _ := result.Structured["output"].(string)
+	if output != "你" || !utf8.ValidString(output) || len(output) > 5 || result.Structured["truncated"] != true {
+		t.Fatalf("unexpected UTF-8 truncation: output=%q result=%#v", output, result.Structured)
+	}
+
+	buffer := newBoundedBuffer(16)
+	large := strings.Repeat("x", 1<<20)
+	if _, err := buffer.Write([]byte(large)); err != nil {
+		t.Fatalf("Write returned error: %v", err)
+	}
+	if len(buffer.data) != 16 || !buffer.Truncated() {
+		t.Fatalf("bounded buffer retained %d bytes, truncated=%v", len(buffer.data), buffer.Truncated())
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/feiyu912/zenforge/approval"
 	"github.com/feiyu912/zenforge/policy"
@@ -144,14 +145,9 @@ func (t shellTool) run(ctx context.Context, in input, call tool.Context) (tool.R
 	if t.config.Policy.MaxTimeout > 0 && timeout > t.config.Policy.MaxTimeout {
 		timeout = t.config.Policy.MaxTimeout
 	}
-	stdout, stderr, exitCode, backend, sandboxState, clearSandbox, err := t.execute(ctx, call, in.Command, cwd, timeout)
-	combined := joinOutput(stdout, stderr)
-	truncated := false
 	maxOutput := t.config.Policy.MaxOutputBytes
-	if maxOutput > 0 && int64(len(combined)) > maxOutput {
-		combined = combined[:maxOutput]
-		truncated = true
-	}
+	stdout, stderr, exitCode, backend, sandboxState, clearSandbox, captureTruncated, err := t.execute(ctx, call, in.Command, cwd, timeout, maxOutput)
+	combined, truncated := truncateOutput(joinOutput(stdout, stderr), maxOutput, captureTruncated)
 	out := output{
 		Command:      in.Command,
 		CWD:          cwd,
@@ -199,7 +195,7 @@ func shellApprovalPlan(call tool.Context, in input, cwd string, review policy.Co
 	})
 }
 
-func (t shellTool) execute(ctx context.Context, call tool.Context, command, cwd string, timeout time.Duration) (string, string, int, ShellBackend, *sandbox.State, bool, error) {
+func (t shellTool) execute(ctx context.Context, call tool.Context, command, cwd string, timeout time.Duration, maxOutput int64) (string, string, int, ShellBackend, *sandbox.State, bool, bool, error) {
 	backend := t.config.Backend
 	if backend == "" {
 		backend = ShellBackendLocal
@@ -208,15 +204,16 @@ func (t shellTool) execute(ctx context.Context, call tool.Context, command, cwd 
 	case ShellBackendLocal:
 		runCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
-		stdout, stderr, exitCode, err := run(runCtx, cwd, t.config.Policy, command)
+		stdout, stderr, exitCode, truncated, err := run(runCtx, cwd, t.config.Policy, command, maxOutput)
 		if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
 			err = context.DeadlineExceeded
 		}
-		return stdout, stderr, exitCode, backend, nil, false, err
+		return stdout, stderr, exitCode, backend, nil, false, truncated, err
 	case ShellBackendSandbox:
-		return t.executeSandbox(ctx, call, command, cwd, timeout)
+		stdout, stderr, exitCode, backend, state, clear, err := t.executeSandbox(ctx, call, command, cwd, timeout)
+		return stdout, stderr, exitCode, backend, state, clear, false, err
 	default:
-		return "", "", 1, backend, nil, false, fmt.Errorf("unknown shell backend: %s", backend)
+		return "", "", 1, backend, nil, false, false, fmt.Errorf("unknown shell backend: %s", backend)
 	}
 }
 
@@ -311,15 +308,15 @@ func encodeOutput(out output, err error) (tool.Result, error) {
 	return tool.Result{Output: string(data), Structured: structured, ExitCode: out.ExitCode, Metadata: metadata}, err
 }
 
-func run(ctx context.Context, cwd string, shellPolicy policy.ShellPolicy, command string) (string, string, int, error) {
+func run(ctx context.Context, cwd string, shellPolicy policy.ShellPolicy, command string, maxOutput int64) (string, string, int, bool, error) {
 	name, args := shellCommand(command)
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = cwd
 	cmd.Env = append(cmd.Environ(), policy.AllowedEnv(shellPolicy)...)
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	stdout := newBoundedBuffer(maxOutput)
+	stderr := newBoundedBuffer(maxOutput)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 	err := cmd.Run()
 	exitCode := 0
 	if err != nil {
@@ -329,7 +326,61 @@ func run(ctx context.Context, cwd string, shellPolicy policy.ShellPolicy, comman
 			exitCode = exitErr.ExitCode()
 		}
 	}
-	return stdout.String(), stderr.String(), exitCode, err
+	return stdout.String(), stderr.String(), exitCode, stdout.Truncated() || stderr.Truncated(), err
+}
+
+type boundedBuffer struct {
+	data      []byte
+	limit     int64
+	truncated bool
+}
+
+func newBoundedBuffer(limit int64) *boundedBuffer {
+	return &boundedBuffer{limit: limit}
+}
+
+func (b *boundedBuffer) Write(p []byte) (int, error) {
+	written := len(p)
+	if b.limit <= 0 {
+		b.data = append(b.data, p...)
+		return written, nil
+	}
+	remaining := b.limit - int64(len(b.data))
+	if remaining > 0 {
+		keep := int64(len(p))
+		if keep > remaining {
+			keep = remaining
+		}
+		b.data = append(b.data, p[:int(keep)]...)
+	}
+	if int64(len(p)) > remaining {
+		b.truncated = true
+	}
+	return written, nil
+}
+
+func (b *boundedBuffer) String() string {
+	return string(b.data)
+}
+
+func (b *boundedBuffer) Truncated() bool {
+	return b.truncated
+}
+
+func truncateOutput(output string, maxOutput int64, alreadyTruncated bool) (string, bool) {
+	truncated := alreadyTruncated
+	if maxOutput > 0 && int64(len(output)) > maxOutput {
+		output = output[:maxOutput]
+		truncated = true
+	}
+	if truncated && !utf8.ValidString(output) {
+		data := []byte(output)
+		for len(data) > 0 && !utf8.Valid(data) {
+			data = data[:len(data)-1]
+		}
+		output = string(data)
+	}
+	return output, truncated
 }
 
 func allowedEnvMap(shellPolicy policy.ShellPolicy) map[string]string {

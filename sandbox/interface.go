@@ -2,7 +2,9 @@ package sandbox
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -14,6 +16,7 @@ const (
 	ErrExecuteFailed       = ErrorCode("sandbox_execute_failed")
 	ErrTimeout             = ErrorCode("sandbox_timeout")
 	ErrClosed              = ErrorCode("sandbox_closed")
+	ErrResponseTooLarge    = ErrorCode("sandbox_response_too_large")
 )
 
 type ErrorCode string
@@ -83,8 +86,14 @@ func SessionKey(runID, subtaskID string) string {
 	if runID == "" {
 		return ""
 	}
+	runPart := sessionKeyPart(runID)
 	if subtaskID == "" {
-		return "run-" + runID
+		return "run-" + runPart
 	}
-	return "run-" + runID + "-" + subtaskID
+	return "run-" + runPart + "-" + sessionKeyPart(subtaskID)
+}
+
+func sessionKeyPart(value string) string {
+	encoded := base64.RawURLEncoding.EncodeToString([]byte(value))
+	return strconv.Itoa(len(encoded)) + "-" + encoded
 }
