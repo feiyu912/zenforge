@@ -61,14 +61,15 @@ func Read(config Config) (tool.Tool, error) {
 			offset = len(data)
 		}
 		limit := in.Limit
-		if limit <= 0 {
-			limit = len(data)
+		remaining := len(data) - offset
+		if limit <= 0 || limit > remaining {
+			limit = remaining
 		}
 		end := offset + limit
-		if end > len(data) {
-			end = len(data)
+		info, err := config.Workspace.Stat(ctx, in.Path)
+		if err != nil {
+			return readOutput{}, err
 		}
-		info, _ := config.Workspace.Stat(ctx, in.Path)
 		sum := sha256.Sum256(data)
 		info.SHA256 = hex.EncodeToString(sum[:])
 		config.Snapshots.RecordForRun(call.RunID, info)
@@ -158,7 +159,6 @@ func Write(config Config) (tool.Tool, error) {
 		if err != nil {
 			return writeOutput{}, err
 		}
-		config.Snapshots.RecordForRun(call.RunID, info)
 		return writeOutput{Path: info.Path, Bytes: len(in.Content), Info: info}, nil
 	})
 	if err != nil {

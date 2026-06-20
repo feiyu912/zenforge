@@ -67,9 +67,11 @@ func (i *DefaultInvoker) Invoke(ctx context.Context, call Call) (Result, error) 
 
 	start := time.Now()
 	i.emit(ctx, call, EventCall, Result{}, 0)
+	deadline, _ := ctx.Deadline()
 	result, err := selected.Call(ctx, call.Arguments, Context{
 		RunID:      call.RunID,
 		ToolCallID: call.ID,
+		Deadline:   deadline,
 		Metadata:   cloneMap(call.Metadata),
 		Meta:       cloneMap(call.Metadata),
 	})

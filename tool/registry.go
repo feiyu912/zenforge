@@ -2,6 +2,7 @@ package tool
 
 import (
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -31,7 +32,7 @@ func MustRegistry(tools ...Tool) *MemoryRegistry {
 }
 
 func (r *MemoryRegistry) Register(tool Tool) error {
-	if tool == nil {
+	if tool == nil || isNilTool(tool) {
 		return fmt.Errorf("%w: nil tool", ErrInvalidTool)
 	}
 	name := strings.TrimSpace(tool.Name())
@@ -50,6 +51,16 @@ func (r *MemoryRegistry) Register(tool Tool) error {
 	}
 	r.tools[key] = tool
 	return nil
+}
+
+func isNilTool(value Tool) bool {
+	reflected := reflect.ValueOf(value)
+	switch reflected.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return reflected.IsNil()
+	default:
+		return false
+	}
 }
 
 func (r *MemoryRegistry) Lookup(name string) (Tool, bool) {

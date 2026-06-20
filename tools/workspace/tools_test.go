@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -65,6 +67,49 @@ func TestWorkspaceToolsReadListGrepWrite(t *testing.T) {
 	}
 }
 
+func TestWorkspaceReadHandlesMaximumLimitWithoutOverflow(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("abcdef"), 0o644); err != nil {
+		t.Fatalf("seed file: %v", err)
+	}
+	ws, err := local.New(local.Config{Root: root})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	read, err := Read(Config{Workspace: ws})
+	if err != nil {
+		t.Fatalf("Read returned error: %v", err)
+	}
+	raw := json.RawMessage(fmt.Sprintf(`{"path":"a.txt","offset":1,"limit":%d}`, math.MaxInt))
+	result, err := read.Call(context.Background(), raw, tool.Context{})
+	if err != nil {
+		t.Fatalf("read Call returned error: %v", err)
+	}
+	if result.Structured["content"] != "bcdef" {
+		t.Fatalf("unexpected read result: %#v", result.Structured)
+	}
+}
+
+func TestWorkspaceReadReturnsStatFailure(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("content"), 0o644); err != nil {
+		t.Fatalf("seed file: %v", err)
+	}
+	ws, err := local.New(local.Config{Root: root})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	statErr := errors.New("stat failed")
+	read, err := Read(Config{Workspace: statFailWorkspace{Workspace: ws, err: statErr}})
+	if err != nil {
+		t.Fatalf("Read returned error: %v", err)
+	}
+	result, err := read.Call(context.Background(), json.RawMessage(`{"path":"a.txt"}`), tool.Context{})
+	if !errors.Is(err, statErr) || result.ExitCode == 0 {
+		t.Fatalf("expected stat failure, got result=%#v err=%v", result, err)
+	}
+}
+
 func TestWorkspaceWriteRequiresDescription(t *testing.T) {
 	ws, err := local.New(local.Config{Root: t.TempDir(), CreateParentDir: true})
 	if err != nil {
@@ -118,6 +163,9 @@ func TestWorkspaceWriteRequiresFreshReadSnapshot(t *testing.T) {
 	}
 	if _, err := write.Call(context.Background(), json.RawMessage(`{"path":"README.md","content":"new","description":"fresh overwrite"}`), tool.Context{}); err != nil {
 		t.Fatalf("fresh write returned error: %v", err)
+	}
+	if _, err := write.Call(context.Background(), json.RawMessage(`{"path":"README.md","content":"newer","description":"overwrite again"}`), tool.Context{}); !errors.Is(err, ErrSnapshotStale) {
+		t.Fatalf("expected a new read after writing, got %v", err)
 	}
 }
 
@@ -229,4 +277,13 @@ func TestWorkspacePolicyReturnsApprovalRequest(t *testing.T) {
 	if _, err := write.Call(context.Background(), raw, tool.Context{RunID: "run_1", ToolCallID: "call_2", Metadata: metadata}); err != nil {
 		t.Fatalf("approved write returned error: %v", err)
 	}
+}
+
+type statFailWorkspace struct {
+	workspacepkg.Workspace
+	err error
+}
+
+func (w statFailWorkspace) Stat(context.Context, string) (workspacepkg.FileInfo, error) {
+	return workspacepkg.FileInfo{}, w.err
 }

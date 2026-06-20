@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 )
 
 func TestRegistryLookupIsCaseInsensitiveAndDefinitionsAreSorted(t *testing.T) {
@@ -25,6 +26,14 @@ func TestRegistryRejectsDuplicateNormalizedName(t *testing.T) {
 	_, err := NewRegistry(fakeTool{name: "Search"}, fakeTool{name: "search"})
 	if !errors.Is(err, ErrDuplicateTool) {
 		t.Fatalf("expected ErrDuplicateTool, got %v", err)
+	}
+}
+
+func TestRegistryRejectsTypedNilTool(t *testing.T) {
+	var typedNil *nilTool
+	_, err := NewRegistry(typedNil)
+	if !errors.Is(err, ErrInvalidTool) {
+		t.Fatalf("expected ErrInvalidTool, got %v", err)
 	}
 }
 
@@ -69,10 +78,46 @@ func TestDefaultInvokerMissingToolReturnsModelFacingResult(t *testing.T) {
 	}
 }
 
+func TestDefaultInvokerPassesContextDeadlineToTool(t *testing.T) {
+	deadline := time.Now().Add(time.Minute)
+	var received time.Time
+	registry := MustRegistry(deadlineTool{received: &received})
+	invoker := NewDefaultInvoker(InvokerConfig{Registry: registry})
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
+	if _, err := invoker.Invoke(ctx, Call{Name: "deadline"}); err != nil {
+		t.Fatalf("Invoke returned error: %v", err)
+	}
+	if !received.Equal(deadline) {
+		t.Fatalf("tool deadline = %v, want %v", received, deadline)
+	}
+}
+
 type fakeTool struct {
 	name   string
 	result Result
 	err    error
+}
+
+type nilTool struct{}
+
+func (*nilTool) Name() string           { return "nil" }
+func (*nilTool) Description() string    { return "nil" }
+func (*nilTool) Schema() map[string]any { return nil }
+func (*nilTool) Call(context.Context, json.RawMessage, Context) (Result, error) {
+	return Result{}, nil
+}
+
+type deadlineTool struct {
+	received *time.Time
+}
+
+func (deadlineTool) Name() string           { return "deadline" }
+func (deadlineTool) Description() string    { return "deadline" }
+func (deadlineTool) Schema() map[string]any { return nil }
+func (t deadlineTool) Call(_ context.Context, _ json.RawMessage, call Context) (Result, error) {
+	*t.received = call.Deadline
+	return Result{}, nil
 }
 
 func (t fakeTool) Name() string {

@@ -63,14 +63,20 @@ func (w *Workspace) Read(ctx context.Context, path string) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	resolved, _, err := w.resolve(path, true)
+	resolved, rel, err := w.resolve(path, true)
 	if err != nil {
 		return nil, err
 	}
 	if workspace.IsBlockedDevicePath(resolved) {
 		return nil, workspace.ErrUnsupportedFile
 	}
-	info, err := os.Stat(resolved)
+	root, err := os.OpenRoot(w.root)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	rel = filepath.FromSlash(rel)
+	info, err := root.Stat(rel)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, workspace.ErrPathNotFound
 	}
@@ -89,7 +95,7 @@ func (w *Workspace) Read(ctx context.Context, path string) ([]byte, error) {
 	if w.maxReadBytes > 0 && info.Size() > w.maxReadBytes {
 		return nil, workspace.ErrReadTooLarge
 	}
-	data, err := os.ReadFile(resolved)
+	data, err := root.ReadFile(rel)
 	if err != nil {
 		return nil, err
 	}
@@ -106,32 +112,54 @@ func (w *Workspace) Write(ctx context.Context, path string, data []byte) error {
 	if w.maxWriteBytes > 0 && int64(len(data)) > w.maxWriteBytes {
 		return workspace.ErrWriteTooLarge
 	}
-	resolved, _, err := w.resolve(path, false)
+	resolved, rel, err := w.resolve(path, false)
 	if err != nil {
 		return err
 	}
-	if info, err := os.Stat(resolved); err == nil && !info.Mode().IsRegular() {
+	root, err := os.OpenRoot(w.root)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	rel = filepath.FromSlash(rel)
+	if info, err := root.Stat(rel); err == nil && !info.Mode().IsRegular() {
 		return workspace.ErrUnsupportedFile
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	if w.createParentDir {
-		if err := os.MkdirAll(filepath.Dir(resolved), 0o755); err != nil {
+		if err := root.MkdirAll(filepath.Dir(rel), 0o755); err != nil {
 			return err
 		}
 	}
-	return os.WriteFile(resolved, data, 0o644)
+	if workspace.IsBlockedDevicePath(resolved) {
+		return workspace.ErrUnsupportedFile
+	}
+	return root.WriteFile(rel, data, 0o644)
 }
 
 func (w *Workspace) List(ctx context.Context, path string) ([]workspace.FileInfo, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	resolved, rel, err := w.resolve(path, true)
+	_, rel, err := w.resolve(path, true)
 	if err != nil {
 		return nil, err
 	}
-	entries, err := os.ReadDir(resolved)
+	root, err := os.OpenRoot(w.root)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	dir, err := root.Open(filepath.FromSlash(rel))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, workspace.ErrPathNotFound
+		}
+		return nil, err
+	}
+	defer dir.Close()
+	entries, err := dir.ReadDir(-1)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, workspace.ErrPathNotFound
 	}
@@ -164,7 +192,7 @@ func (w *Workspace) Grep(ctx context.Context, query workspace.GrepQuery) ([]work
 	if err != nil {
 		return nil, workspace.ErrInvalidPattern
 	}
-	resolved, rootRel, err := w.resolve(query.Path, true)
+	_, rootRel, err := w.resolve(query.Path, true)
 	if err != nil {
 		return nil, err
 	}
@@ -173,7 +201,13 @@ func (w *Workspace) Grep(ctx context.Context, query workspace.GrepQuery) ([]work
 		max = 100
 	}
 	var matches []workspace.Match
-	err = filepath.WalkDir(resolved, func(path string, entry fs.DirEntry, walkErr error) error {
+	root, err := os.OpenRoot(w.root)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	rootFS := root.FS()
+	err = fs.WalkDir(rootFS, filepath.ToSlash(rootRel), func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
@@ -196,18 +230,14 @@ func (w *Workspace) Grep(ctx context.Context, query workspace.GrepQuery) ([]work
 		if len(matches) >= max {
 			return filepath.SkipAll
 		}
-		data, err := os.ReadFile(path)
+		data, err := fs.ReadFile(rootFS, path)
 		if err != nil {
 			return err
 		}
 		if isBinary(data) {
 			return nil
 		}
-		rel, err := filepath.Rel(resolved, path)
-		if err != nil {
-			return err
-		}
-		displayPath := filepath.ToSlash(filepath.Join(rootRel, rel))
+		displayPath := filepath.ToSlash(path)
 		scanner := bufio.NewScanner(bytes.NewReader(data))
 		lineNo := 0
 		for scanner.Scan() {
@@ -232,11 +262,17 @@ func (w *Workspace) Stat(ctx context.Context, path string) (workspace.FileInfo, 
 	if err := ctx.Err(); err != nil {
 		return workspace.FileInfo{}, err
 	}
-	resolved, rel, err := w.resolve(path, true)
+	_, rel, err := w.resolve(path, true)
 	if err != nil {
 		return workspace.FileInfo{}, err
 	}
-	info, err := os.Stat(resolved)
+	root, err := os.OpenRoot(w.root)
+	if err != nil {
+		return workspace.FileInfo{}, err
+	}
+	defer root.Close()
+	rootPath := filepath.FromSlash(rel)
+	info, err := root.Stat(rootPath)
 	if errors.Is(err, os.ErrNotExist) {
 		return workspace.FileInfo{}, workspace.ErrPathNotFound
 	}
@@ -245,7 +281,7 @@ func (w *Workspace) Stat(ctx context.Context, path string) (workspace.FileInfo, 
 	}
 	out := fileInfo(rel, info)
 	if info.Mode().IsRegular() {
-		data, err := os.ReadFile(resolved)
+		data, err := root.ReadFile(rootPath)
 		if err != nil {
 			return workspace.FileInfo{}, err
 		}
@@ -261,7 +297,7 @@ func (w *Workspace) resolve(raw string, mustExist bool) (string, string, error) 
 	}
 	clean := filepath.Clean(filepath.FromSlash(raw))
 	if filepath.IsAbs(clean) {
-		clean = strings.TrimPrefix(clean, string(filepath.Separator))
+		return "", "", workspace.ErrPathEscape
 	}
 	candidate := filepath.Join(w.root, clean)
 	if !inside(w.root, candidate) {
@@ -286,15 +322,11 @@ func (w *Workspace) resolve(raw string, mustExist bool) (string, string, error) 
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", "", err
 	} else {
-		parent := filepath.Dir(candidate)
-		resolvedParent, err := filepath.EvalSymlinks(parent)
+		resolvedAncestor, suffix, err := resolveNearestExistingAncestor(candidate)
 		if err != nil {
-			if !errors.Is(err, os.ErrNotExist) {
-				return "", "", err
-			}
-		} else {
-			checkPath = filepath.Join(resolvedParent, filepath.Base(candidate))
+			return "", "", err
 		}
+		checkPath = filepath.Join(resolvedAncestor, suffix)
 	}
 	if !inside(w.root, checkPath) {
 		return "", "", workspace.ErrPathEscape
@@ -304,6 +336,25 @@ func (w *Workspace) resolve(raw string, mustExist bool) (string, string, error) 
 		return "", "", err
 	}
 	return candidate, filepath.ToSlash(rel), nil
+}
+
+func resolveNearestExistingAncestor(path string) (string, string, error) {
+	ancestor := filepath.Dir(path)
+	for {
+		resolved, err := filepath.EvalSymlinks(ancestor)
+		if err == nil {
+			suffix, err := filepath.Rel(ancestor, path)
+			return resolved, suffix, err
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", "", err
+		}
+		parent := filepath.Dir(ancestor)
+		if parent == ancestor {
+			return "", "", err
+		}
+		ancestor = parent
+	}
 }
 
 func inside(root, path string) bool {

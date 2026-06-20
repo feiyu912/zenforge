@@ -46,11 +46,13 @@ type FileWritePlan struct {
 
 func PlanFileAccess(policy FilePolicy, operation FileOperation, rawPath string) FileAccessPlan {
 	path, ok := normalizeWorkspacePath(rawPath)
+	root := logicalPolicyRoot(path)
 	plan := FileAccessPlan{
 		Operation:   operation,
 		RawPath:     rawPath,
 		Path:        path,
-		RuleKey:     "file:" + string(operation),
+		Root:        root,
+		RuleKey:     fileRuleKey(operation, root),
 		Fingerprint: fileFingerprint(string(operation), path),
 	}
 	if !ok {
@@ -79,7 +81,7 @@ func PlanFileAccess(policy FilePolicy, operation FileOperation, rawPath string) 
 		if pathWithinRoot(path, root) {
 			plan.Allowed = true
 			plan.Root = root
-			plan.RuleKey = "file:" + string(operation) + ":" + root
+			plan.RuleKey = fileRuleKey(operation, root)
 			plan.Reason = "path allowed by file root"
 			return plan
 		}
@@ -113,12 +115,26 @@ func normalizeWorkspacePath(raw string) (string, bool) {
 	}
 	clean := filepath.Clean(filepath.FromSlash(raw))
 	if filepath.IsAbs(clean) {
-		clean = strings.TrimPrefix(clean, string(filepath.Separator))
+		return filepath.ToSlash(clean), false
 	}
 	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
 		return filepath.ToSlash(clean), false
 	}
 	return filepath.ToSlash(clean), true
+}
+
+func logicalPolicyRoot(path string) string {
+	if path == "" || path == "." {
+		return "."
+	}
+	if index := strings.IndexByte(path, '/'); index >= 0 {
+		return path[:index]
+	}
+	return "."
+}
+
+func fileRuleKey(operation FileOperation, root string) string {
+	return "file:" + string(operation) + ":" + root
 }
 
 func pathWithinRoot(path, root string) bool {

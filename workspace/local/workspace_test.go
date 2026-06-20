@@ -84,6 +84,40 @@ func TestLocalWorkspaceBlocksTraversalAndSymlinkEscape(t *testing.T) {
 	}
 }
 
+func TestLocalWorkspaceBlocksSymlinkEscapeThroughMissingDirectories(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(root, "link")); err != nil {
+		t.Fatalf("Symlink returned error: %v", err)
+	}
+	ws, err := New(Config{Root: root, CreateParentDir: true})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+
+	err = ws.Write(context.Background(), "link/missing/out.txt", []byte("escaped"))
+	if !errors.Is(err, workspace.ErrPathEscape) {
+		t.Fatalf("expected ErrPathEscape, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(outside, "missing", "out.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("outside file should not exist, got %v", err)
+	}
+}
+
+func TestLocalWorkspaceRejectsAbsolutePaths(t *testing.T) {
+	ws, err := New(Config{Root: t.TempDir(), CreateParentDir: true})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	absolute := filepath.Join(t.TempDir(), "outside.txt")
+	if _, err := ws.Read(context.Background(), absolute); !errors.Is(err, workspace.ErrPathEscape) {
+		t.Fatalf("absolute read should return ErrPathEscape, got %v", err)
+	}
+	if err := ws.Write(context.Background(), absolute, []byte("outside")); !errors.Is(err, workspace.ErrPathEscape) {
+		t.Fatalf("absolute write should return ErrPathEscape, got %v", err)
+	}
+}
+
 func TestLocalWorkspaceLimitsAndBinaryHandling(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "big.txt"), []byte("abcdef"), 0o644); err != nil {
