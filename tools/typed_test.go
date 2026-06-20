@@ -81,6 +81,97 @@ func TestTypedToolRejectsUnknownFields(t *testing.T) {
 	}
 }
 
+func TestTypedToolRejectsMissingRequiredField(t *testing.T) {
+	called := false
+	typed := Must("required", "Required", func(ctx context.Context, in struct {
+		Query string `json:"query,omitempty" jsonschema:"required"`
+	}) (string, error) {
+		called = true
+		return in.Query, nil
+	})
+
+	result, err := typed.Call(context.Background(), json.RawMessage(`{}`), tool.Context{})
+	if !errors.Is(err, tool.ErrInvalidArguments) {
+		t.Fatalf("expected ErrInvalidArguments, got result=%#v err=%v", result, err)
+	}
+	if called {
+		t.Fatal("handler was called with a missing required field")
+	}
+	if result.ExitCode == 0 || result.Error == "" {
+		t.Fatalf("expected invalid argument result, got %#v", result)
+	}
+}
+
+func TestTypedToolRejectsNullRequiredStructInput(t *testing.T) {
+	called := false
+	typed := Must("required", "Required", func(ctx context.Context, in struct {
+		Query string `json:"query"`
+	}) (string, error) {
+		called = true
+		return in.Query, nil
+	})
+
+	result, err := typed.Call(context.Background(), json.RawMessage(`null`), tool.Context{})
+	if !errors.Is(err, tool.ErrInvalidArguments) {
+		t.Fatalf("expected ErrInvalidArguments, got result=%#v err=%v", result, err)
+	}
+	if called {
+		t.Fatal("handler was called with null input")
+	}
+}
+
+func TestTypedToolRejectsNullArrayInput(t *testing.T) {
+	called := false
+	typed := Must("array", "Array", func(ctx context.Context, in []string) (string, error) {
+		called = true
+		return "ok", nil
+	})
+
+	result, err := typed.Call(context.Background(), json.RawMessage(`null`), tool.Context{})
+	if !errors.Is(err, tool.ErrInvalidArguments) {
+		t.Fatalf("expected ErrInvalidArguments, got result=%#v err=%v", result, err)
+	}
+	if called {
+		t.Fatal("handler was called with null input")
+	}
+}
+
+func TestTypedToolAcceptsPresentRequiredZeroValue(t *testing.T) {
+	typed := Must("required", "Required", func(ctx context.Context, in struct {
+		Limit int `json:"limit,omitempty" jsonschema:"required"`
+	}) (string, error) {
+		return "ok", nil
+	})
+
+	result, err := typed.Call(context.Background(), json.RawMessage(`{"limit":0}`), tool.Context{})
+	if err != nil || result.Output != "ok" {
+		t.Fatalf("unexpected result=%#v err=%v", result, err)
+	}
+}
+
+func TestTypedToolRejectsTrailingJSON(t *testing.T) {
+	typed := Must("strict", "Strict", func(ctx context.Context, in struct{}) (string, error) {
+		return "ok", nil
+	})
+
+	for _, input := range []string{`{} {}`, `{} trailing`} {
+		t.Run(input, func(t *testing.T) {
+			result, err := typed.Call(context.Background(), json.RawMessage(input), tool.Context{})
+			if !errors.Is(err, tool.ErrInvalidArguments) {
+				t.Fatalf("expected ErrInvalidArguments, got result=%#v err=%v", result, err)
+			}
+		})
+	}
+}
+
+func TestTypedToolRejectsNilHandler(t *testing.T) {
+	var handler func(context.Context, struct{}) (string, error)
+	_, err := New("nil", "Nil", handler)
+	if !errors.Is(err, tool.ErrInvalidTool) {
+		t.Fatalf("expected ErrInvalidTool, got %v", err)
+	}
+}
+
 func TestTypedToolRejectsUnsupportedSignature(t *testing.T) {
 	_, err := New("bad", "Bad", func(in string) string {
 		return in

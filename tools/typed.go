@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"reflect"
 
 	"github.com/feiyu912/zenforge/tool"
@@ -55,7 +56,7 @@ func Must(name, description string, handler any) tool.Tool {
 
 func newTypedTool(name, description string, handler any) (*TypedTool, error) {
 	value := reflect.ValueOf(handler)
-	if !value.IsValid() || value.Kind() != reflect.Func {
+	if !value.IsValid() || value.Kind() != reflect.Func || value.IsNil() {
 		return nil, fmt.Errorf("%w: handler must be a function", tool.ErrInvalidTool)
 	}
 	typ := value.Type()
@@ -109,7 +110,7 @@ func (t *TypedTool) Schema() map[string]any {
 }
 
 func (t *TypedTool) Call(ctx context.Context, input json.RawMessage, call tool.Context) (tool.Result, error) {
-	in, err := decodeInput(input, t.inputType)
+	in, err := decodeInput(input, t.inputType, t.schema)
 	if err != nil {
 		return tool.Result{Error: tool.ErrInvalidArguments.Error(), ExitCode: 1}, fmt.Errorf("%w: %v", tool.ErrInvalidArguments, err)
 	}
@@ -137,7 +138,7 @@ func (t *TypedTool) Call(ctx context.Context, input json.RawMessage, call tool.C
 	}
 }
 
-func decodeInput(raw json.RawMessage, typ reflect.Type) (reflect.Value, error) {
+func decodeInput(raw json.RawMessage, typ reflect.Type, schema map[string]any) (reflect.Value, error) {
 	targetType := typ
 	pointer := false
 	if typ.Kind() == reflect.Pointer {
@@ -155,10 +156,80 @@ func decodeInput(raw json.RawMessage, typ reflect.Type) (reflect.Value, error) {
 	if err := decoder.Decode(target.Interface()); err != nil {
 		return reflect.Value{}, err
 	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return reflect.Value{}, fmt.Errorf("unexpected trailing JSON value")
+		}
+		return reflect.Value{}, fmt.Errorf("unexpected trailing JSON: %w", err)
+	}
+	var decoded any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return reflect.Value{}, err
+	}
+	if err := validateRequired(decoded, schema, ""); err != nil {
+		return reflect.Value{}, err
+	}
 	if pointer {
 		return target, nil
 	}
 	return target.Elem(), nil
+}
+
+func validateRequired(value any, schema map[string]any, path string) error {
+	switch schema["type"] {
+	case "object":
+		object, ok := value.(map[string]any)
+		if !ok {
+			return fmt.Errorf("%s must be an object", jsonPathLabel(path))
+		}
+		if required, ok := schema["required"].([]string); ok {
+			for _, name := range required {
+				if _, present := object[name]; !present {
+					return fmt.Errorf("required field %q is missing", joinJSONPath(path, name))
+				}
+			}
+		}
+		properties, _ := schema["properties"].(map[string]any)
+		for name, child := range object {
+			childSchema, ok := properties[name].(map[string]any)
+			if !ok {
+				continue
+			}
+			if err := validateRequired(child, childSchema, joinJSONPath(path, name)); err != nil {
+				return err
+			}
+		}
+	case "array":
+		items, ok := schema["items"].(map[string]any)
+		if !ok {
+			return nil
+		}
+		array, ok := value.([]any)
+		if !ok {
+			return fmt.Errorf("%s must be an array", jsonPathLabel(path))
+		}
+		for index, item := range array {
+			if err := validateRequired(item, items, fmt.Sprintf("%s[%d]", path, index)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func joinJSONPath(path, name string) string {
+	if path == "" {
+		return name
+	}
+	return path + "." + name
+}
+
+func jsonPathLabel(path string) string {
+	if path == "" {
+		return "input"
+	}
+	return fmt.Sprintf("field %q", path)
 }
 
 func encodeOutput(output any) (tool.Result, error) {
