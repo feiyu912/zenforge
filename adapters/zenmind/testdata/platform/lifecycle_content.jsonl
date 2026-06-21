@@ -1,0 +1,8 @@
+{"fixture":"complete agent-platform content lifecycle wire","sourceRepo":"/Users/kaicheng/coding/zenmind-develop/agent-platform","sourceCommit":"1893edb51b8dc691ae974cea2719a835e0e21de4","sourceFiles":["internal/stream/assembler.go","internal/stream/event.go","internal/stream/dispatcher_content.go","internal/stream/dispatcher_lifecycle.go"]}
+{"seq":1,"type":"run.start","runId":"run_content","chatId":"chat_content","agentKey":"zenmind","timestamp":100}
+{"seq":2,"type":"content.start","contentId":"run_content_c_1","runId":"run_content","timestamp":110}
+{"seq":3,"type":"content.delta","contentId":"run_content_c_1","delta":"Hello","timestamp":110}
+{"seq":4,"type":"content.delta","contentId":"run_content_c_1","delta":" world","timestamp":120}
+{"seq":5,"type":"content.end","contentId":"run_content_c_1","timestamp":130}
+{"seq":6,"type":"content.snapshot","contentId":"run_content_c_1","runId":"run_content","text":"Hello world","timestamp":130}
+{"seq":7,"type":"run.complete","runId":"run_content","finishReason":"stop","timestamp":140}

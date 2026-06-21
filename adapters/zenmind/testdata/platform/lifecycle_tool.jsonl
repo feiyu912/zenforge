@@ -1,0 +1,8 @@
+{"fixture":"complete agent-platform tool lifecycle wire","sourceRepo":"/Users/kaicheng/coding/zenmind-develop/agent-platform","sourceCommit":"1893edb51b8dc691ae974cea2719a835e0e21de4","sourceFiles":["internal/stream/assembler.go","internal/stream/event.go","internal/stream/dispatcher_tool.go","internal/stream/dispatcher_lifecycle.go"]}
+{"seq":1,"type":"run.start","runId":"run_tool","chatId":"chat_tool","agentKey":"zenmind","timestamp":200}
+{"seq":2,"type":"tool.start","toolId":"call_1","runId":"run_tool","toolName":"shell","timestamp":210}
+{"seq":3,"type":"tool.args","toolId":"call_1","delta":"{\"command\":\"echo hi\",\"timeout\":5}","chunkIndex":0,"timestamp":210}
+{"seq":4,"type":"tool.end","toolId":"call_1","timestamp":220}
+{"seq":5,"type":"tool.snapshot","toolId":"call_1","runId":"run_tool","toolName":"shell","arguments":"{\"command\":\"echo hi\",\"timeout\":5}","timestamp":220}
+{"seq":6,"type":"tool.result","toolId":"call_1","result":"hi\n","timestamp":220}
+{"seq":7,"type":"run.complete","runId":"run_tool","finishReason":"stop","timestamp":230}
