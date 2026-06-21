@@ -128,7 +128,7 @@ func (c *Client) Stream(ctx context.Context, req model.Request) (<-chan model.Ev
 	go func() {
 		defer close(events)
 		defer resp.Body.Close()
-		if err := readSSE(resp.Body, events); err != nil && !errors.Is(err, io.EOF) {
+		if err := parseStream(resp.Body, events); err != nil && !errors.Is(err, io.EOF) {
 			events <- model.Event{Type: model.EventError, Error: err}
 		}
 	}()

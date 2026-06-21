@@ -3,6 +3,8 @@ package anthropic
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -151,28 +153,159 @@ func TestClientRejectsInvalidAssistantToolArguments(t *testing.T) {
 }
 
 func TestClientReturnsStreamingProviderError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = w.Write([]byte("event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"try again\"}}\n\n"))
-	}))
-	defer server.Close()
+	httpClient := &http.Client{Transport: anthropicRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     make(http.Header),
+			Body: io.NopCloser(strings.NewReader(
+				"event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"try again\"}}\n\n",
+			)),
+		}, nil
+	})}
+	client := New(Config{BaseURL: "https://example.test", Model: "claude-test", HTTPClient: httpClient})
+	events, err := client.Stream(context.Background(), model.Request{})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	var errorCount int
+	var doneCount int
+	for event := range events {
+		if event.Type == model.EventError {
+			errorCount++
+			if event.Error == nil || !strings.Contains(event.Error.Error(), "try again") {
+				t.Fatalf("error event = %#v", event)
+			}
+		}
+		if event.Type == model.EventDone {
+			doneCount++
+		}
+	}
+	if errorCount != 1 || doneCount != 0 {
+		t.Fatalf("error events = %d, done events = %d; want 1, 0", errorCount, doneCount)
+	}
 
-	_, err := New(Config{BaseURL: server.URL, Model: "claude-test"}).Generate(context.Background(), model.Request{})
+	_, err = client.Generate(context.Background(), model.Request{})
 	if err == nil || !strings.Contains(err.Error(), "try again") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
-func TestStreamEmitsUsageThenSingleDone(t *testing.T) {
+func TestParseStreamRejectsEOFBeforeMessageStop(t *testing.T) {
 	events := make(chan model.Event, 4)
-	err := readSSE(strings.NewReader(strings.Join([]string{
+	err := parseStream(strings.NewReader(strings.Join([]string{
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}`,
+		``,
+	}, "\n")), events)
+	if !errors.Is(err, io.ErrUnexpectedEOF) || !strings.Contains(err.Error(), "anthropic provider stream") {
+		t.Fatalf("parseStream error = %v, want anthropic provider unexpected EOF", err)
+	}
+	close(events)
+
+	var delta string
+	var doneCount int
+	for event := range events {
+		delta += event.Delta
+		if event.Type == model.EventDone {
+			doneCount++
+		}
+	}
+	if delta != "partial" {
+		t.Fatalf("delta = %q, want partial", delta)
+	}
+	if doneCount != 0 {
+		t.Fatalf("done event count = %d, want 0", doneCount)
+	}
+}
+
+func TestParseStreamWrapsUnexpectedReadErrorAfterPartialContent(t *testing.T) {
+	events := make(chan model.Event, 4)
+	body := &anthropicFailingReader{
+		data: []byte(strings.Join([]string{
+			`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+			`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}`,
+			``,
+		}, "\n")),
+		err: io.ErrUnexpectedEOF,
+	}
+	err := parseStream(body, events)
+	if !errors.Is(err, io.ErrUnexpectedEOF) || !strings.Contains(err.Error(), "anthropic provider stream") {
+		t.Fatalf("parseStream error = %v, want wrapped anthropic provider unexpected EOF", err)
+	}
+	close(events)
+
+	var delta string
+	var doneCount int
+	for event := range events {
+		delta += event.Delta
+		if event.Type == model.EventDone {
+			doneCount++
+		}
+	}
+	if delta != "partial" || doneCount != 0 {
+		t.Fatalf("delta = %q, done events = %d; want partial, 0", delta, doneCount)
+	}
+}
+
+func TestClientGenerateRejectsPartialResponseOnUnexpectedEOF(t *testing.T) {
+	body := strings.Join([]string{
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}`,
+		``,
+	}, "\n")
+	httpClient := &http.Client{Transport: anthropicRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(body)),
+		}, nil
+	})}
+	client := New(Config{BaseURL: "https://example.test", Model: "claude-test", HTTPClient: httpClient})
+
+	events, err := client.Stream(context.Background(), model.Request{})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	var errorCount int
+	var doneCount int
+	for event := range events {
+		if event.Type == model.EventError {
+			errorCount++
+			if !errors.Is(event.Error, io.ErrUnexpectedEOF) {
+				t.Fatalf("error event = %#v, want unexpected EOF", event)
+			}
+		}
+		if event.Type == model.EventDone {
+			doneCount++
+		}
+	}
+	if errorCount != 1 || doneCount != 0 {
+		t.Fatalf("error events = %d, done events = %d; want 1, 0", errorCount, doneCount)
+	}
+
+	response, err := client.Generate(context.Background(), model.Request{})
+	if response != nil {
+		t.Fatalf("response = %#v, want nil", response)
+	}
+	if !errors.Is(err, io.ErrUnexpectedEOF) || !strings.Contains(err.Error(), "anthropic provider stream") {
+		t.Fatalf("Generate error = %v, want anthropic provider unexpected EOF", err)
+	}
+}
+
+func TestParseStreamEmitsUsageThenSingleDone(t *testing.T) {
+	events := make(chan model.Event, 4)
+	err := parseStream(strings.NewReader(strings.Join([]string{
 		`data: {"type":"message_start","message":{"usage":{"input_tokens":3}}}`,
 		`data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":2}}`,
 		`data: {"type":"message_stop"}`,
+		`data: {"type":"message_stop"}`,
+		`data: not-json`,
 		``,
 	}, "\n")), events)
 	if err != nil {
-		t.Fatalf("readSSE returned error: %v", err)
+		t.Fatalf("parseStream returned error: %v", err)
 	}
 	close(events)
 
@@ -209,4 +342,24 @@ func TestClientReturnsHTTPError(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "anthropic messages failed") {
 		t.Fatalf("unexpected error: %v", err)
 	}
+}
+
+type anthropicRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f anthropicRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+type anthropicFailingReader struct {
+	data []byte
+	err  error
+}
+
+func (r *anthropicFailingReader) Read(p []byte) (int, error) {
+	if len(r.data) == 0 {
+		return 0, r.err
+	}
+	n := copy(p, r.data)
+	r.data = r.data[n:]
+	return n, nil
 }

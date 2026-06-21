@@ -29,7 +29,7 @@ func newAccumulator() *accumulator {
 	return &accumulator{blocks: map[int]*blockState{}}
 }
 
-func readSSE(body io.Reader, events chan<- model.Event) error {
+func parseStream(body io.Reader, events chan<- model.Event) error {
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	acc := newAccumulator()
@@ -67,7 +67,10 @@ func readSSE(body io.Reader, events chan<- model.Event) error {
 			return nil
 		}
 	}
-	return scanner.Err()
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("read anthropic provider stream: %w", err)
+	}
+	return fmt.Errorf("anthropic provider stream: %w", io.ErrUnexpectedEOF)
 }
 
 func (a *accumulator) apply(event streamEvent, events chan<- model.Event) {
