@@ -39,8 +39,4 @@ jobs:
         run: go test ./examples/...
 
       - name: Verify platform boundary
-        run: |
-          if grep -R -n -E 'agent-platform|ZenMind' --include='*.go' .; then
-            echo "Go source must not import or reference platform-private names."
-            exit 1
-          fi
+        run: go test ./docs/...
