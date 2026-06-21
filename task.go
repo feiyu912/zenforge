@@ -1,9 +1,12 @@
 package zenforge
 
+import "github.com/feiyu912/zenforge/model"
+
 type Task struct {
-	RunID string
-	Input string
-	Meta  map[string]any
+	RunID           string
+	Input           string
+	InitialMessages []model.Message
+	Meta            map[string]any
 }
 
 type Result struct {
@@ -11,4 +14,3 @@ type Result struct {
 	Output string
 	Meta   map[string]any
 }
-

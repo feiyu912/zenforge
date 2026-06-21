@@ -31,9 +31,38 @@ events, err := agent.Stream(ctx, run.Task)
 
 The adapter maps platform `key`, `modelKey`, `mode`, tools, skills, context
 tags, budget, stage settings, tool overrides, workspace/host access, request,
-chat/run identity, history, and access level into `zenforge.Config`, `Task`, and
-namespaced task metadata. Unknown model keys and modes fail closed. Deprecated
-DTO aliases remain for earlier adapter callers.
+chat/run identity, history, resolved prompt, and access level into
+`zenforge.Config`, `Task`, and namespaced task metadata. Unknown model keys and
+modes fail closed. Deprecated DTO aliases remain for earlier adapter callers.
+
+`Session.ResolvedPrompt` is the host-resolved execution prompt and takes
+precedence over the legacy `CatalogAgent.Instructions` fallback. The host is
+responsible for assembling that prompt from its catalog, workspace, memory,
+skills, and policy inputs before calling `BuildRun`.
+
+### History Input Contract
+
+`BuildRun` converts `Session.HistoryMessages` into `Task.InitialMessages` in
+the supplied order. It accepts `user`, `assistant`, `system`, and `tool` roles,
+string `content` and `name`, OpenAI-style assistant `tool_calls`, and tool-call
+identity under either `tool_call_id` or `toolCallId`. Each tool call requires a
+non-blank `id`, a non-blank `function.name`, and JSON
+`function.arguments`. Tool-call arrays are valid only on assistant messages;
+tool-call identity is valid only on tool messages, where it is required.
+
+Malformed input fails `BuildRun` before execution. Errors identify the
+zero-based history position, for example
+`history message 1: tool_calls[0] function.arguments must be valid JSON`.
+Unknown platform-only message fields are retained only in namespaced session
+metadata and do not enter the neutral model message.
+
+The current session message is mapped to `Task.Input`, not appended to history
+by the adapter. ZenForge persists the converted history first and appends that
+input exactly once. Resume uses checkpointed messages without reinjecting
+history; in `plan_execute`, only planning receives conversation history. At the
+core task boundary, `json.RawMessage` tool arguments in `InitialMessages` are
+deep-copied into run state, so later caller mutation cannot alter model requests
+or checkpoints.
 
 Golden inputs:
 
@@ -41,7 +70,7 @@ Golden inputs:
 - `adapters/zenmind/testdata/platform/query_session.json`
 
 The host still owns catalog loading, auth, tenancy, model/tool construction,
-prompt policy, and storage selection.
+prompt assembly and policy, and storage selection.
 
 ## Routing And Fallback
 

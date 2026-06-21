@@ -52,6 +52,89 @@ func TestAgentStreamEmitsLifecycleEvents(t *testing.T) {
 	}
 }
 
+func TestAgentInitialMessagesReachModelAndCheckpointResumeWithoutDuplication(t *testing.T) {
+	history := []model.Message{
+		{Role: "user", Content: "earlier question"},
+		{Role: "assistant", Content: "earlier answer", ToolCalls: []model.ToolCallSpec{{ID: "call_1", Name: "lookup", Arguments: json.RawMessage(`{"id":1}`)}}},
+		{Role: "tool", Content: "lookup result", Name: "lookup", ToolCallID: "call_1"},
+	}
+	fakeModel := &scriptedModel{turns: []scriptedTurn{{events: []model.Event{{Delta: "done"}}}}}
+	agent := New(Config{Model: fakeModel})
+	result, err := agent.Run(context.Background(), Task{RunID: "run_history", Input: "current query", InitialMessages: history})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if result.Output != "done" || len(fakeModel.requests) != 1 {
+		t.Fatalf("unexpected result=%#v requests=%#v", result, fakeModel.requests)
+	}
+	want := append(append([]model.Message(nil), history...), model.Message{Role: "user", Content: "current query"})
+	if !equalModelMessages(fakeModel.requests[0].Messages, want) {
+		t.Fatalf("model messages = %#v, want %#v", fakeModel.requests[0].Messages, want)
+	}
+
+	checkpoints := checkpointmemory.New()
+	state := newTaskRunState("run_history_resume", "current query", history, nil)
+	state.Phase = harness.RunPhaseModel
+	state.Control.Status = harness.RunStatusModelStreaming
+	if err := checkpoints.Save(context.Background(), checkpoint.Checkpoint{
+		Version: checkpoint.CheckpointVersion,
+		RunID:   state.RunID,
+		Seq:     1,
+		State:   state,
+		SavedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("Save checkpoint returned error: %v", err)
+	}
+	resumeModel := &scriptedModel{turns: []scriptedTurn{{events: []model.Event{{Delta: "resumed"}}}}}
+	resumingAgent := New(Config{Model: resumeModel, Checkpoints: checkpoints})
+	events, err := resumingAgent.Resume(context.Background(), state.RunID)
+	if err != nil {
+		t.Fatalf("Resume returned error: %v", err)
+	}
+	for range events {
+	}
+	if len(resumeModel.requests) != 1 || !equalModelMessages(resumeModel.requests[0].Messages, want) {
+		t.Fatalf("resume duplicated or lost history: %#v", resumeModel.requests)
+	}
+}
+
+func TestAgentInitialToolArgumentsAreOwnedByRunState(t *testing.T) {
+	arguments := json.RawMessage(`{"id":1}`)
+	checkpoints := checkpointmemory.New()
+	probe := &ownershipProbeModel{
+		request: make(chan model.Request, 1),
+		release: make(chan struct{}),
+	}
+	agent := New(Config{Model: probe, Checkpoints: checkpoints})
+	events, err := agent.Stream(context.Background(), Task{
+		RunID: "run_history_ownership",
+		Input: "continue",
+		InitialMessages: []model.Message{{
+			Role:      "assistant",
+			ToolCalls: []model.ToolCallSpec{{ID: "call_1", Name: "lookup", Arguments: arguments}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	request := <-probe.request
+	copy(arguments, `{"id":9}`)
+	requestKeptCopy := string(request.Messages[0].ToolCalls[0].Arguments) == `{"id":1}`
+	close(probe.release)
+	for range events {
+	}
+	cp, err := checkpoints.Load(context.Background(), "run_history_ownership")
+	if err != nil {
+		t.Fatalf("Load checkpoint returned error: %v", err)
+	}
+	if !requestKeptCopy {
+		t.Fatalf("model request retained caller-owned arguments: %s", request.Messages[0].ToolCalls[0].Arguments)
+	}
+	if got := string(cp.State.Messages[0].ToolCalls[0].Arguments); got != `{"id":1}` {
+		t.Fatalf("checkpoint retained caller-owned arguments: %s", got)
+	}
+}
+
 func TestAgentStreamEmitsTraceEvents(t *testing.T) {
 	traces := trace.NewMemorySink()
 	agent := New(Config{Events: &testEventStore{}, Trace: traces})
@@ -2729,7 +2812,8 @@ func TestAgentPlanExecutePresetPlansExecutesAndSummarizes(t *testing.T) {
 		Events: eventStore,
 	})
 
-	events, err := agent.Stream(context.Background(), Task{RunID: "run_plan_execute", Input: "do the work"})
+	history := []model.Message{{Role: "user", Content: "earlier request"}, {Role: "assistant", Content: "earlier response"}}
+	events, err := agent.Stream(context.Background(), Task{RunID: "run_plan_execute", Input: "do the work", InitialMessages: history})
 	if err != nil {
 		t.Fatalf("Stream returned error: %v", err)
 	}
@@ -2763,9 +2847,76 @@ func TestAgentPlanExecutePresetPlansExecutesAndSummarizes(t *testing.T) {
 	if !hasTool(fakeModel.requests[0].Tools, "todo_write") {
 		t.Fatalf("plan request missing todo_write tool: %#v", fakeModel.requests[0].Tools)
 	}
+	for i := 0; i < 2; i++ {
+		if len(fakeModel.requests[i].Messages) < 3 || !equalModelMessages(fakeModel.requests[i].Messages[:2], history) {
+			t.Fatalf("planning request %d missing history: %#v", i, fakeModel.requests[i].Messages)
+		}
+		if countMessageContent(fakeModel.requests[i].Messages, "do the work\n\n"+planner.PlanPrompt) != 1 {
+			t.Fatalf("planning request %d duplicated current input: %#v", i, fakeModel.requests[i].Messages)
+		}
+	}
+	for i := 2; i < len(fakeModel.requests); i++ {
+		if countMessageContent(fakeModel.requests[i].Messages, "earlier request") != 0 || countMessageContent(fakeModel.requests[i].Messages, "earlier response") != 0 {
+			t.Fatalf("stage request %d unexpectedly repeated conversation history: %#v", i, fakeModel.requests[i].Messages)
+		}
+	}
 	if fakeModel.requests[4].ToolChoice != model.ToolChoiceNone {
 		t.Fatalf("summary request tool choice = %q, want none", fakeModel.requests[4].ToolChoice)
 	}
+}
+
+func TestAgentPlanExecuteResumeKeepsCheckpointedHistoryOnce(t *testing.T) {
+	checkpoints := checkpointmemory.New()
+	history := []model.Message{{Role: "user", Content: "earlier request"}, {Role: "assistant", Content: "earlier response"}}
+	planInput := "current request\n\n" + planner.PlanPrompt
+	state := newTaskRunState("run_plan_history_resume", planInput, history, planExecuteMeta(nil, "current request", planExecuteStagePlan))
+	state.Mode = string(ModePlanExecute)
+	state.Phase = harness.RunPhaseModel
+	state.Control.Status = harness.RunStatusModelStreaming
+	if err := checkpoints.Save(context.Background(), checkpoint.Checkpoint{
+		Version: checkpoint.CheckpointVersion,
+		RunID:   state.RunID,
+		Seq:     1,
+		State:   state,
+		SavedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("Save checkpoint returned error: %v", err)
+	}
+	fakeModel := &scriptedModel{turns: []scriptedTurn{{events: []model.Event{{Delta: "still planning"}}}}}
+	agent := New(Config{Model: fakeModel, Mode: ModePlanExecute, Checkpoints: checkpoints})
+	events, err := agent.Resume(context.Background(), state.RunID)
+	if err != nil {
+		t.Fatalf("Resume returned error: %v", err)
+	}
+	for range events {
+	}
+	want := append(append([]model.Message(nil), history...), model.Message{Role: "user", Content: planInput})
+	if len(fakeModel.requests) != 1 || !equalModelMessages(fakeModel.requests[0].Messages, want) {
+		t.Fatalf("resumed planning duplicated or lost history: %#v", fakeModel.requests)
+	}
+}
+
+func countMessageContent(messages []model.Message, content string) int {
+	count := 0
+	for _, message := range messages {
+		if message.Content == content {
+			count++
+		}
+	}
+	return count
+}
+
+func equalModelMessages(got, want []model.Message) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		toolCallsEqual := reflect.DeepEqual(got[i].ToolCalls, want[i].ToolCalls) || (len(got[i].ToolCalls) == 0 && len(want[i].ToolCalls) == 0)
+		if got[i].Role != want[i].Role || got[i].Content != want[i].Content || got[i].Name != want[i].Name || got[i].ToolCallID != want[i].ToolCallID || !toolCallsEqual {
+			return false
+		}
+	}
+	return true
 }
 
 func TestAgentPlanExecuteStopsAfterInternalStageFailure(t *testing.T) {
@@ -3308,6 +3459,34 @@ type scriptedTurn struct {
 type scriptedModel struct {
 	turns    []scriptedTurn
 	requests []model.Request
+}
+
+type ownershipProbeModel struct {
+	request chan model.Request
+	release chan struct{}
+}
+
+func (m *ownershipProbeModel) Generate(context.Context, model.Request) (*model.Response, error) {
+	return nil, errors.New("Generate is not used")
+}
+
+func (m *ownershipProbeModel) Stream(ctx context.Context, req model.Request) (<-chan model.Event, error) {
+	out := make(chan model.Event, 1)
+	go func() {
+		defer close(out)
+		select {
+		case m.request <- req:
+		case <-ctx.Done():
+			return
+		}
+		select {
+		case <-m.release:
+		case <-ctx.Done():
+			return
+		}
+		out <- model.Event{Delta: "done"}
+	}()
+	return out, nil
 }
 
 type gatedChildModel struct {

@@ -6,6 +6,8 @@ long-running, tool-using, observable, and recoverable agents.
 ## Highlights
 
 - High-level `zenforge.Agent` with `Stream`, `Run`, and `Resume`.
+- Ordered initial conversation history that is persisted once, survives resume,
+  and remains confined to planning in the Plan/Execute preset.
 - Platform-compatible React, Oneshot, and Plan/Execute execution presets with
   checkpointed mode identity.
 - Durable event log and checkpoint stores: memory, JSONL, and SQLite.
@@ -18,8 +20,9 @@ long-running, tool-using, observable, and recoverable agents.
   Container Hub sandbox adapter beta. Local execution is not a
   `sandbox.Sandbox` backend.
 - ZenMind adapter with platform catalog/session DTOs and model resolution,
-  fail-closed rollout routing, stateful flat-wire projection, approval protocol
-  translation, and event-line JSONL output. Wire goldens are pinned to
+  resolved-prompt precedence, strict tool-aware history conversion, fail-closed
+  rollout routing, stateful flat-wire projection, approval protocol translation,
+  and event-line JSONL output. Wire goldens are pinned to
   `agent-platform@1893edb5`.
 
 ## Safety Defaults

@@ -24,6 +24,7 @@ Markdown document links.
 | root Agent delegates the core state machine to an independently testable harness runner | `harness.TestRunnerCompletesTextOnlyRun`, `harness.TestRunnerExecutesPendingToolsBeforeNextModelTurn`, `harness.TestRunnerOneshotCapsAutoTurnsAndUsesFinalNoToolTurn`, root Agent lifecycle tests |
 | `Agent.Stream` works with fake model | `TestAgentStreamEmitsLifecycleEvents`, `TestAgentStreamRunsToolAndContinuesModelLoop` |
 | `Agent.Run` returns final output | `TestAgentRunReturnsModelText` |
+| initial conversation history is checkpointed once and owned by run state | `TestAgentInitialMessagesReachModelAndCheckpointResumeWithoutDuplication`, `TestAgentInitialToolArgumentsAreOwnedByRunState` |
 | max steps drain pending tools before the final no-tool answer | `TestAgentMaxStepsRunsPendingToolBeforeFinalNoToolTurn` |
 | final no-tool turns reject provider tool calls | `TestAgentMaxStepsRejectsToolCallsFromFinalNoToolTurn`, `TestAgentPlanExecuteRejectsToolCallsFromSummaryTurn` |
 | cancellation persists a cancelled terminal state before model/tool execution | `TestAgentCancellationBeforeModelPersistsCancelledTerminalState`, `TestAgentCancellationBeforeToolPreservesPendingCall`, `TestAgentModelCancellationIsNotReportedAsFailure` |
@@ -119,6 +120,7 @@ Markdown document links.
 | --- | --- |
 | todo tools work | `tools/todo.TestTodoToolsWorkThroughInvoker` |
 | plan/execute preset works with fake model | `TestAgentPlanExecutePresetPlansExecutesAndSummarizes` |
+| plan/execute gives history only to planning and does not duplicate it on resume | `TestAgentPlanExecutePresetPlansExecutesAndSummarizes`, `TestAgentPlanExecuteResumeKeepsCheckpointedHistoryOnce` |
 | plan/execute exposes one top-level lifecycle and stops on stage failure | `TestAgentPlanExecutePresetPlansExecutesAndSummarizes`, `TestAgentPlanExecuteStopsAfterInternalStageFailure` |
 | plan/execute orchestration failures persist terminal checkpoints | `TestAgentPlanExecuteStopsAfterInternalStageFailure`, `TestAgentPlanExecutePersistsPlanNotCreatedFailure` |
 | plan/execute terminal checkpoint failures preserve the previous resume boundary | `TestAgentPlanExecuteFailsClosedWhenTerminalCheckpointSaveFails`, `TestAgentPlanExecuteDoesNotReportSummaryFailureWhenItsCheckpointFails` |
@@ -161,7 +163,7 @@ Markdown document links.
 | limitations section | `docs/limitations.md` |
 | provider guide | `docs/provider-guide.md` |
 | adapter guides | `docs/zenmind-adapter-guide.md`, `docs/mcp-adapter-guide.md`, `docs/memory-adapter-guide.md` |
-| platform catalog/session DTOs and model resolution | `adapters/zenmind.TestBuildRunMapsCatalogSessionToConfigAndTask`, `adapters/zenmind.TestBuildRunRejectsUnknownModelAndMode`; fixtures `adapters/zenmind/testdata/platform/catalog_agent.json`, `adapters/zenmind/testdata/platform/query_session.json` |
+| platform catalog/session DTOs, resolved prompt, strict history conversion, and model resolution | `adapters/zenmind.TestBuildRunMapsCatalogSessionToConfigAndTask`, `adapters/zenmind.TestBuildRunPrefersResolvedPromptAndStrictlyConvertsHistory`, `adapters/zenmind.TestBuildRunRejectsMalformedHistoryWithIndex`, `adapters/zenmind.TestBuildRunPreservesToolCallIdentityWhitespaceAfterValidation`, `adapters/zenmind.TestBuildRunRejectsUnknownModelAndMode`; fixtures `adapters/zenmind/testdata/platform/catalog_agent.json`, `adapters/zenmind/testdata/platform/query_session.json` |
 | fail-closed AgentKey/ChatID/RunID routing | `adapters/zenmind.TestRouterFailsClosed`, `adapters/zenmind.TestRouterRoutesOnlyExplicitInitializedZenForge`, `adapters/zenmind.TestRouterTargetsAgentChatAndRunIDs` |
 | stateful content/tool wire projection and flat envelope | `adapters/zenmind.TestProjectorContentLifecycleGolden`, `adapters/zenmind.TestProjectorToolLifecycleGolden`, `adapters/zenmind.TestMapperMarshalUsesFlatWireEnvelope`; fixtures `adapters/zenmind/testdata/platform/lifecycle_content.jsonl`, `adapters/zenmind/testdata/platform/lifecycle_tool.jsonl` |
 | platform approval ask/submit/answer roundtrip | `adapters/zenmind.TestApprovalRoundTripGolden`, `adapters/zenmind.TestRequestSubmitRequiresIdentityAndExactApprovalIDs`; fixture `adapters/zenmind/testdata/platform/approval_roundtrip.jsonl` |

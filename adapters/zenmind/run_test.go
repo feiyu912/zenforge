@@ -84,6 +84,9 @@ func TestBuildRunMapsCatalogSessionToConfigAndTask(t *testing.T) {
 	if run.Task.RunID != "run-platform-1" || run.Task.Input != "Inspect the checkpoint DTO changes." {
 		t.Fatalf("platform message/runId should win aliases: %#v", run.Task)
 	}
+	if !reflect.DeepEqual(run.Task.InitialMessages, []model.Message{{Role: "user", Content: "Check the DTO boundary."}, {Role: "assistant", Content: "I will inspect it."}}) {
+		t.Fatalf("history messages were not converted: %#v", run.Task.InitialMessages)
+	}
 	if run.Task.Meta["session"] != "metadata-value" {
 		t.Fatalf("session metadata was not retained: %#v", run.Task.Meta)
 	}
@@ -109,6 +112,90 @@ func TestBuildRunMapsCatalogSessionToConfigAndTask(t *testing.T) {
 	if sessionMeta["accessLevel"] != "auto_approve" || sessionMeta["workspaceRoot"] != "/workspace/zenforge" || len(sessionMeta["historyMessages"].([]map[string]any)) != 2 {
 		t.Fatalf("session execution context not mapped: %#v", sessionMeta)
 	}
+}
+
+func TestBuildRunPrefersResolvedPromptAndStrictlyConvertsHistory(t *testing.T) {
+	run, err := BuildRun(context.Background(), CatalogAgent{Instructions: "catalog fallback"}, Session{
+		Message:        "current query",
+		ResolvedPrompt: "fully resolved platform prompt",
+		HistoryMessages: []map[string]any{
+			{"role": "assistant", "content": "calling", "name": "assistant-name", "runId": "ignored", "reasoning_content": "ignored", "tool_calls": []any{map[string]any{
+				"id": "call_1", "type": "function", "function": map[string]any{"name": "lookup", "arguments": `{"id":1}`},
+			}}},
+			{"role": "tool", "content": "result", "name": "lookup", "toolCallId": "call_1", "ts": 123, "_msgId": "ignored"},
+			{"role": "tool", "content": "second result", "tool_call_id": "call_2"},
+		},
+	}, Runtime{})
+	if err != nil {
+		t.Fatalf("BuildRun returned error: %v", err)
+	}
+	if run.Config.Instructions != "fully resolved platform prompt" {
+		t.Fatalf("instructions = %q", run.Config.Instructions)
+	}
+	want := []model.Message{
+		{Role: "assistant", Content: "calling", Name: "assistant-name", ToolCalls: []model.ToolCallSpec{{ID: "call_1", Name: "lookup", Arguments: json.RawMessage(`{"id":1}`)}}},
+		{Role: "tool", Content: "result", Name: "lookup", ToolCallID: "call_1"},
+		{Role: "tool", Content: "second result", ToolCallID: "call_2"},
+	}
+	if !reflect.DeepEqual(run.Task.InitialMessages, want) {
+		t.Fatalf("history = %#v, want %#v", run.Task.InitialMessages, want)
+	}
+	if countTaskInput(run.Task.InitialMessages, run.Task.Input) != 0 {
+		t.Fatalf("adapter duplicated current query in history: %#v", run.Task.InitialMessages)
+	}
+}
+
+func TestBuildRunRejectsMalformedHistoryWithIndex(t *testing.T) {
+	tests := []struct {
+		name    string
+		message map[string]any
+		want    string
+	}{
+		{name: "role", message: map[string]any{"role": "developer", "content": "no"}, want: `history message 1: invalid role "developer"`},
+		{name: "content", message: map[string]any{"role": "user", "content": []any{"no"}}, want: "history message 1: content must be a string"},
+		{name: "arguments", message: map[string]any{"role": "assistant", "tool_calls": []any{map[string]any{"id": "call", "function": map[string]any{"name": "lookup", "arguments": "{"}}}}, want: "history message 1: tool_calls[0] function.arguments must be valid JSON"},
+		{name: "call identity", message: map[string]any{"role": "assistant", "tool_calls": []any{map[string]any{"function": map[string]any{"name": "lookup", "arguments": `{}`}}}}, want: "history message 1: tool_calls[0] requires id and function.name"},
+		{name: "tool identity", message: map[string]any{"role": "tool", "content": "result"}, want: "history message 1: tool message requires tool call identity"},
+		{name: "user tool calls", message: map[string]any{"role": "user", "content": "bad", "tool_calls": []any{map[string]any{}}}, want: "history message 1: tool_calls is only valid for assistant messages"},
+		{name: "tool tool calls", message: map[string]any{"role": "tool", "content": "bad", "tool_call_id": "call", "tool_calls": []any{map[string]any{}}}, want: "history message 1: tool_calls is only valid for assistant messages"},
+		{name: "assistant empty tool calls", message: map[string]any{"role": "assistant", "tool_calls": []any{}}, want: "history message 1: tool_calls must contain at least one call"},
+		{name: "assistant tool identity", message: map[string]any{"role": "assistant", "content": "bad", "tool_call_id": "call"}, want: "history message 1: tool call identity is only valid for tool messages"},
+		{name: "user camel identity", message: map[string]any{"role": "user", "content": "bad", "toolCallId": "call"}, want: "history message 1: tool call identity is only valid for tool messages"},
+		{name: "identity type", message: map[string]any{"role": "tool", "content": "bad", "tool_call_id": 1}, want: "history message 1: tool_call_id must be a string"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := BuildRun(context.Background(), CatalogAgent{}, Session{Message: "current", HistoryMessages: []map[string]any{{"role": "user", "content": "valid"}, tt.message}}, Runtime{})
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want containing %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildRunPreservesToolCallIdentityWhitespaceAfterValidation(t *testing.T) {
+	run, err := BuildRun(context.Background(), CatalogAgent{}, Session{
+		Message: "current",
+		HistoryMessages: []map[string]any{{
+			"role": "tool", "content": "result", "tool_call_id": " call_1 ",
+		}},
+	}, Runtime{})
+	if err != nil {
+		t.Fatalf("BuildRun returned error: %v", err)
+	}
+	if got := run.Task.InitialMessages[0].ToolCallID; got != " call_1 " {
+		t.Fatalf("tool call identity = %q, want original value", got)
+	}
+}
+
+func countTaskInput(messages []model.Message, input string) int {
+	count := 0
+	for _, message := range messages {
+		if message.Role == "user" && message.Content == input {
+			count++
+		}
+	}
+	return count
 }
 
 func TestBuildRunRetainsLegacyAliases(t *testing.T) {

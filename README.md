@@ -29,6 +29,7 @@ import (
     "github.com/feiyu912/zenforge"
     checkpointsqlite "github.com/feiyu912/zenforge/checkpoint/sqlite"
     eventlogsqlite "github.com/feiyu912/zenforge/eventlog/sqlite"
+    "github.com/feiyu912/zenforge/model"
     "github.com/feiyu912/zenforge/model/openai"
     "github.com/feiyu912/zenforge/tools"
     "github.com/feiyu912/zenforge/trace"
@@ -63,10 +64,21 @@ agent := zenforge.New(zenforge.Config{
     MaxSteps:     8,
 })
 
-result, err := agent.Run(ctx, zenforge.Task{Input: "Review this package and summarize the risk."})
+result, err := agent.Run(ctx, zenforge.Task{
+    Input: "Review this package and summarize the risk.",
+    InitialMessages: []model.Message{
+        {Role: "user", Content: "We are reviewing the storage package."},
+        {Role: "assistant", Content: "I will preserve that context."},
+    },
+})
 // for ev := range agent.Stream(ctx, task) { ... }
 // agent.Resume(ctx, "run_123")
 ```
+
+`Task.InitialMessages` supplies prior conversation in model order. ZenForge
+checkpoints that history before appending the current `Input`; checkpoint
+resume reuses it without duplication. In `plan_execute`, only the planning
+stage receives the conversation history.
 
 ## Install
 
@@ -159,8 +171,9 @@ state (`0` is success).
 
 **Platform adapters**
 - `adapters/zenmind` — platform catalog/session DTOs with `ModelResolver`,
-  fail-closed AgentKey/ChatID/RunID routing, stateful content/tool projection,
-  approval wire translation, and platform event-line JSONL output.
+  strict history conversion, resolved-prompt precedence, fail-closed
+  AgentKey/ChatID/RunID routing, stateful content/tool projection, approval wire
+  translation, and platform event-line JSONL output.
 - `adapters/mcp` — MCP tool bridge (resources/prompts/sampling/OAuth stay with the host).
 - `adapters/memory` — scoped memory augmentation into normalized tasks.
 
@@ -171,6 +184,12 @@ These goldens cover catalog/session input, flat stream envelopes, content/tool
 lifecycles, approval ask/submit/answer, and chat event lines. They do not prove
 that the external platform engine, feature flag, SSE/WS paths, or fallback E2E
 are wired.
+
+`BuildRun` maps `Session.HistoryMessages` into `Task.InitialMessages`, including
+OpenAI `tool_calls` and snake/camel tool-call IDs, and rejects malformed history
+with its message index. `Session.ResolvedPrompt` takes precedence over the
+legacy catalog instruction field. Raw tool arguments are copied into run-owned
+state so later caller mutation cannot alter model requests or checkpoints.
 
 For the platform event-line read model, project events first, then append each
 `StreamEvent` with an explicit chat ID:
@@ -248,6 +267,8 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - `approval.PendingBroker` for run-scoped pending approvals, exposed via `GET /approvals` and `POST /approval`.
 - `adapters/zenmind`: run configuration mapping, chat JSONL projection, and a
   fail-closed routing helper for a host-owned feature flag.
+- Platform sessions can provide a fully resolved prompt and strict conversation
+  history, including tool-call turns, without duplicating history on resume.
 - `adapters/memory`: scoped memory augmentation.
 - Sub-agent resume reuses terminal children and continues existing child checkpoints.
 - Child checkpoint backend failures stop before model execution, while missing checkpoints alone start fresh child runs.

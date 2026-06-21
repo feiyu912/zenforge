@@ -17,6 +17,10 @@ Initial usable ZenForge release candidate.
   local shell execution remains a direct workspace execution path, not a
   `sandbox.Sandbox` backend.
 - ZenMind compatibility event and approval adapter.
+- Initial conversation messages with checkpoint-safe first-run, resume, and
+  plan/execute semantics; caller-owned tool arguments are copied into run state.
+- ZenMind resolved-prompt precedence and strict platform history conversion,
+  including OpenAI tool calls and snake/camel tool-call identity fields.
 - SDK, provider, adapter, safety, resume, and release documentation.
 
 ### Known Limitations

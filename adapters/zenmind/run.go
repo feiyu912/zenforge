@@ -2,6 +2,7 @@ package zenmind
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -71,6 +72,7 @@ type Session struct {
 	PlanningMode    bool             `json:"planningMode,omitempty"`
 	AccessLevel     string           `json:"accessLevel,omitempty"`
 	HistoryMessages []map[string]any `json:"historyMessages,omitempty"`
+	ResolvedPrompt  string           `json:"resolvedPrompt,omitempty"`
 	WorkspaceRoot   string           `json:"workspaceRoot,omitempty"`
 	Message         string           `json:"message,omitempty"`
 
@@ -141,11 +143,16 @@ func BuildRun(ctx context.Context, agent CatalogAgent, session Session, runtime 
 	if err != nil {
 		return RunConfig{}, err
 	}
+	history, err := historyMessages(session.HistoryMessages)
+	if err != nil {
+		return RunConfig{}, err
+	}
 
 	task := zenforge.Task{
-		RunID: session.RunID,
-		Input: input,
-		Meta:  taskMeta(agent, session, modelKey, modeValue),
+		RunID:           session.RunID,
+		Input:           input,
+		InitialMessages: history,
+		Meta:            taskMeta(agent, session, modelKey, modeValue),
 	}
 	if len(session.Memory) > 0 {
 		augmented, _, err := memoryadapter.Augmenter{
@@ -161,7 +168,7 @@ func BuildRun(ctx context.Context, agent CatalogAgent, session Session, runtime 
 	return RunConfig{
 		Config: zenforge.Config{
 			Model:                resolvedModel,
-			Instructions:         agent.Instructions,
+			Instructions:         firstNonBlank(session.ResolvedPrompt, agent.Instructions),
 			Tools:                filterTools(runtime.Tools, preferredStrings(agent.Tools, agent.ToolNames)),
 			ToolInvoker:          runtime.ToolInvoker,
 			ToolRuntime:          runtime.ToolRuntime,
@@ -182,6 +189,111 @@ func BuildRun(ctx context.Context, agent CatalogAgent, session Session, runtime 
 		},
 		Task: task,
 	}, nil
+}
+
+func historyMessages(raw []map[string]any) ([]model.Message, error) {
+	messages := make([]model.Message, 0, len(raw))
+	for i, item := range raw {
+		message, err := historyMessage(item)
+		if err != nil {
+			return nil, fmt.Errorf("zenmind history message %d: %w", i, err)
+		}
+		messages = append(messages, message)
+	}
+	return messages, nil
+}
+
+func historyMessage(raw map[string]any) (model.Message, error) {
+	role, ok := raw["role"].(string)
+	if !ok || strings.TrimSpace(role) == "" {
+		return model.Message{}, fmt.Errorf("role must be a non-empty string")
+	}
+	switch role {
+	case "system", "user", "assistant", "tool":
+	default:
+		return model.Message{}, fmt.Errorf("invalid role %q", role)
+	}
+
+	message := model.Message{Role: role}
+	if content, exists := raw["content"]; exists {
+		var contentOK bool
+		message.Content, contentOK = content.(string)
+		if !contentOK {
+			return model.Message{}, fmt.Errorf("content must be a string")
+		}
+	}
+	if name, exists := raw["name"]; exists {
+		var nameOK bool
+		message.Name, nameOK = name.(string)
+		if !nameOK {
+			return model.Message{}, fmt.Errorf("name must be a string")
+		}
+	}
+	toolCallID, hasToolCallID, err := historyToolCallID(raw)
+	if err != nil {
+		return model.Message{}, err
+	}
+	if role != "tool" && hasToolCallID {
+		return model.Message{}, fmt.Errorf("tool call identity is only valid for tool messages")
+	}
+	if role == "tool" {
+		if !hasToolCallID || strings.TrimSpace(toolCallID) == "" {
+			return model.Message{}, fmt.Errorf("tool message requires tool call identity")
+		}
+		message.ToolCallID = toolCallID
+	}
+	if value, exists := raw["tool_calls"]; exists {
+		if role != "assistant" {
+			return model.Message{}, fmt.Errorf("tool_calls is only valid for assistant messages")
+		}
+		calls, ok := value.([]any)
+		if !ok {
+			return model.Message{}, fmt.Errorf("tool_calls must be an array")
+		}
+		if len(calls) == 0 {
+			return model.Message{}, fmt.Errorf("tool_calls must contain at least one call")
+		}
+		message.ToolCalls = make([]model.ToolCallSpec, 0, len(calls))
+		for i, value := range calls {
+			call, ok := value.(map[string]any)
+			if !ok {
+				return model.Message{}, fmt.Errorf("tool_calls[%d] must be an object", i)
+			}
+			id, _ := call["id"].(string)
+			function, _ := call["function"].(map[string]any)
+			name, _ := function["name"].(string)
+			arguments, argumentsOK := function["arguments"].(string)
+			if strings.TrimSpace(id) == "" || strings.TrimSpace(name) == "" {
+				return model.Message{}, fmt.Errorf("tool_calls[%d] requires id and function.name", i)
+			}
+			if !argumentsOK || !json.Valid([]byte(arguments)) {
+				return model.Message{}, fmt.Errorf("tool_calls[%d] function.arguments must be valid JSON", i)
+			}
+			message.ToolCalls = append(message.ToolCalls, model.ToolCallSpec{ID: id, Name: name, Arguments: json.RawMessage(arguments)})
+		}
+	}
+	return message, nil
+}
+
+func historyToolCallID(values map[string]any) (string, bool, error) {
+	var identity string
+	found := false
+	for _, key := range []string{"tool_call_id", "toolCallId"} {
+		value, exists := values[key]
+		if !exists {
+			continue
+		}
+		text, ok := value.(string)
+		if !ok {
+			return "", true, fmt.Errorf("%s must be a string", key)
+		}
+		if found && text != identity {
+			return "", true, fmt.Errorf("tool call identity aliases conflict")
+		}
+		identity = text
+		found = true
+	}
+	return identity, found, nil
 }
 
 func resolveModel(ctx context.Context, key string, runtime Runtime) (model.Model, error) {

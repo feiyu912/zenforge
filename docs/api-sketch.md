@@ -42,6 +42,10 @@ agent := zenforge.New(zenforge.Config{
 ```go
 events, err := agent.Stream(ctx, zenforge.Task{
     Input: "Review this repo and propose a refactor plan.",
+    InitialMessages: []model.Message{
+        {Role: "user", Content: "The repository is a Go service."},
+        {Role: "assistant", Content: "I will keep that context."},
+    },
 })
 if err != nil {
     return err
@@ -60,6 +64,22 @@ for event := range events {
     }
 }
 ```
+
+The current normalized task shape is:
+
+```go
+type Task struct {
+    RunID           string
+    Input           string
+    InitialMessages []model.Message
+    Meta            map[string]any
+}
+```
+
+On a new run, `InitialMessages` are persisted in order and the current `Input`
+is appended once. Resume reads the checkpointed messages and does not inject
+the initial history again. For `PlanningPlanExecute`, history is supplied only
+to the planning stage; execute and summary stages use their stage-owned state.
 
 ## Resume A Run
 

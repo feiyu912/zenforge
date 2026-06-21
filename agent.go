@@ -93,7 +93,7 @@ func (a *Agent) Stream(ctx context.Context, task Task) (<-chan Event, error) {
 		return events, nil
 	}
 
-	state := newRunState(runID, task.Input, task.Meta)
+	state := newTaskRunState(runID, task.Input, task.InitialMessages, task.Meta)
 	state.Mode = string(mode)
 	events := make(chan Event, 32)
 	go func() {
@@ -275,7 +275,7 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 		return a.emit(ctx, out, eventType, runID, data)
 	})
 	finish := func(stage string, todos []planner.Todo, eventType EventType, err error) error {
-		state := newRunState(runID, task.Input, planExecuteMeta(task.Meta, task.Input, stage))
+		state := newTaskRunState(runID, task.Input, task.InitialMessages, planExecuteMeta(task.Meta, task.Input, stage))
 		state.Mode = string(ModePlanExecute)
 		loadCtx := ctx
 		if ctx.Err() != nil {
@@ -354,9 +354,14 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 	}
 	if len(todos) == 0 {
 		planInput := task.Input + "\n\n" + planner.PlanPrompt
-		planState := newRunState(runID, planInput, planExecuteMeta(task.Meta, task.Input, planExecuteStagePlan))
+		planState := newTaskRunState(runID, planInput, task.InitialMessages, planExecuteMeta(task.Meta, task.Input, planExecuteStagePlan))
+		resumedPlan := resumeState != nil && planExecuteStage(resumeState.Meta) == planExecuteStagePlan
+		if resumedPlan {
+			planState = *resumeState
+			resumeState = nil
+		}
 		planState.Mode = string(ModePlanExecute)
-		terminal := a.runInternalLoop(ctx, out, planState, resumeState != nil && planExecuteStage(resumeState.Meta) == planExecuteStagePlan)
+		terminal := a.runInternalLoop(ctx, out, planState, resumedPlan)
 		if terminal.Type == EventRunError || terminal.Type == EventRunCancelled {
 			if terminal.Err != nil {
 				return
@@ -585,7 +590,16 @@ func plannerTodosFromState(todos []harness.TodoState) []planner.Todo {
 }
 
 func newRunState(runID, input string, meta map[string]any) harness.RunState {
+	return newTaskRunState(runID, input, nil, meta)
+}
+
+func newTaskRunState(runID, input string, initial []model.Message, meta map[string]any) harness.RunState {
 	now := time.Now().UTC()
+	messages := make([]harness.MessageState, 0, len(initial)+1)
+	for _, message := range initial {
+		messages = append(messages, modelMessageToHarness(message))
+	}
+	messages = append(messages, harness.MessageState{Role: "user", Content: input})
 	return harness.RunState{
 		Version:   harness.RunStateVersion,
 		RunID:     runID,
@@ -593,11 +607,19 @@ func newRunState(runID, input string, meta map[string]any) harness.RunState {
 		Phase:     harness.RunPhaseCreated,
 		CreatedAt: now,
 		UpdatedAt: now,
-		Messages: []harness.MessageState{
-			{Role: "user", Content: input},
-		},
-		Control: harness.RunControlState{Status: harness.RunStatusRunning},
-		Meta:    cloneMap(meta),
+		Messages:  messages,
+		Control:   harness.RunControlState{Status: harness.RunStatusRunning},
+		Meta:      cloneMap(meta),
+	}
+}
+
+func modelMessageToHarness(message model.Message) harness.MessageState {
+	return harness.MessageState{
+		Role:       message.Role,
+		Content:    message.Content,
+		Name:       message.Name,
+		ToolCallID: message.ToolCallID,
+		ToolCalls:  modelToolCallsToHarness(message.ToolCalls),
 	}
 }
 
@@ -1925,7 +1947,11 @@ func (a *Agent) configuredTools() ([]tool.Tool, error) {
 func modelToolCallsToHarness(calls []model.ToolCallSpec) []harness.ToolCallSpec {
 	out := make([]harness.ToolCallSpec, 0, len(calls))
 	for _, call := range calls {
-		out = append(out, harness.ToolCallSpec{ID: call.ID, Name: call.Name, Arguments: call.Arguments})
+		out = append(out, harness.ToolCallSpec{
+			ID:        call.ID,
+			Name:      call.Name,
+			Arguments: append(json.RawMessage(nil), call.Arguments...),
+		})
 	}
 	return out
 }
