@@ -13,6 +13,8 @@ jobs:
   test:
     name: Go tests
     runs-on: ubuntu-latest
+    env:
+      GOTOOLCHAIN: local
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -22,6 +24,13 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+
+      - name: Verify Go 1.26 toolchain
+        run: |
+          case "$(go env GOVERSION)" in
+            go1.26.*) ;;
+            *) echo "expected Go 1.26.x, got $(go env GOVERSION)"; exit 1 ;;
+          esac
 
       - name: Run all tests
         run: go test ./...

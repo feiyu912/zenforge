@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -35,11 +36,70 @@ func TestMainVersion(t *testing.T) {
 	}
 }
 
+func TestExitCodeClassification(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want int
+	}{
+		{name: "runtime", err: errors.New("boom"), want: exitRuntimeError},
+		{name: "invalid usage", err: fmt.Errorf("bad flag: %w", errInvalidUsage), want: exitInvalidUsage},
+		{name: "cancelled event", err: fmt.Errorf("stopped: %w", errRunCancelled), want: exitRunCancelled},
+		{name: "cancelled context", err: context.Canceled, want: exitRunCancelled},
+		{name: "approval rejected", err: fmt.Errorf("tool denied: %w", errApprovalRejected), want: exitApprovalRejected},
+		{name: "unsupported resume", err: fmt.Errorf("future state: %w", errUnsupportedResume), want: exitUnsupportedResume},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := exitCode(tt.err); got != tt.want {
+				t.Fatalf("exitCode(%v) = %d, want %d", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRenderStreamClassifiesOutcomes(t *testing.T) {
+	tests := []struct {
+		name   string
+		events []zenforge.Event
+		want   error
+	}{
+		{
+			name: "approval rejection survives run completion",
+			events: []zenforge.Event{
+				zenforge.NewEvent(zenforge.EventApprovalResolved, "run_1", map[string]any{"action": "reject"}),
+				zenforge.NewEvent(zenforge.EventRunDone, "run_1", map[string]any{"output": "continued"}),
+			},
+			want: errApprovalRejected,
+		},
+		{
+			name: "cancellation takes precedence",
+			events: []zenforge.Event{
+				zenforge.NewEvent(zenforge.EventApprovalResolved, "run_1", map[string]any{"action": "reject"}),
+				zenforge.NewEvent(zenforge.EventRunCancelled, "run_1", map[string]any{"error": "context canceled"}),
+			},
+			want: errRunCancelled,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			events := make(chan zenforge.Event, len(tt.events))
+			for _, event := range tt.events {
+				events <- event
+			}
+			close(events)
+			if err := renderStream(io.Discard, events); !errors.Is(err, tt.want) {
+				t.Fatalf("renderStream error = %v, want %v", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestRunRequiresInputBeforeAPIKey(t *testing.T) {
 	var stderr bytes.Buffer
 	code := Main(context.Background(), []string{"run"}, IO{Stderr: &stderr})
-	if code != 1 {
-		t.Fatalf("code = %d, want 1", code)
+	if code != exitInvalidUsage {
+		t.Fatalf("code = %d, want %d", code, exitInvalidUsage)
 	}
 	if !strings.Contains(stderr.String(), "run input is required") {
 		t.Fatalf("unexpected stderr: %q", stderr.String())
@@ -62,31 +122,31 @@ func TestCLIReportsUsefulArgumentErrors(t *testing.T) {
 		{
 			name:       "resume missing run id",
 			args:       []string{"resume"},
-			wantCode:   1,
+			wantCode:   2,
 			wantStderr: "resume requires run id",
 		},
 		{
 			name:       "code missing repository",
 			args:       []string{"code"},
-			wantCode:   1,
+			wantCode:   2,
 			wantStderr: "code repository path is required",
 		},
 		{
 			name:       "code missing input",
 			args:       []string{"code", "."},
-			wantCode:   1,
+			wantCode:   2,
 			wantStderr: "code input is required",
 		},
 		{
 			name:       "events missing run id",
 			args:       []string{"events"},
-			wantCode:   1,
+			wantCode:   2,
 			wantStderr: "events requires run id",
 		},
 		{
 			name:       "runs rejects positional args",
 			args:       []string{"runs", "run_1"},
-			wantCode:   1,
+			wantCode:   2,
 			wantStderr: "runs does not accept positional arguments",
 		},
 	}
@@ -94,6 +154,122 @@ func TestCLIReportsUsefulArgumentErrors(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var stderr bytes.Buffer
 			code := Main(context.Background(), tt.args, IO{Stderr: &stderr})
+			if code != tt.wantCode {
+				t.Fatalf("code = %d, want %d; stderr=%q", code, tt.wantCode, stderr.String())
+			}
+			if !strings.Contains(stderr.String(), tt.wantStderr) {
+				t.Fatalf("stderr = %q, want to contain %q", stderr.String(), tt.wantStderr)
+			}
+		})
+	}
+}
+
+func TestMainClassifiesInvalidUsageAndRuntimeErrors(t *testing.T) {
+	tests := []struct {
+		name       string
+		args       func(t *testing.T) []string
+		wantCode   int
+		wantStderr string
+	}{
+		{
+			name: "unknown flag",
+			args: func(*testing.T) []string {
+				return []string{"run", "--unknown", "task"}
+			},
+			wantCode:   exitInvalidUsage,
+			wantStderr: "flag provided but not defined",
+		},
+		{
+			name: "invalid config json",
+			args: func(t *testing.T) []string {
+				path := filepath.Join(t.TempDir(), "invalid.json")
+				if err := os.WriteFile(path, []byte("{"), 0o644); err != nil {
+					t.Fatalf("WriteFile returned error: %v", err)
+				}
+				return []string{"run", "--config", path, "task"}
+			},
+			wantCode:   exitInvalidUsage,
+			wantStderr: "parse config",
+		},
+		{
+			name: "invalid config field",
+			args: func(t *testing.T) []string {
+				path := filepath.Join(t.TempDir(), "invalid.json")
+				data, err := json.Marshal(configFile{Approval: approvalConfig{Mode: "sometimes"}})
+				if err != nil {
+					t.Fatalf("Marshal returned error: %v", err)
+				}
+				if err := os.WriteFile(path, data, 0o644); err != nil {
+					t.Fatalf("WriteFile returned error: %v", err)
+				}
+				return []string{"run", "--config", path, "task"}
+			},
+			wantCode:   exitInvalidUsage,
+			wantStderr: "approval.mode",
+		},
+		{
+			name: "invalid provider flag",
+			args: func(t *testing.T) []string {
+				t.Setenv("OPENAI_API_KEY", "test")
+				return []string{"run", "--provider", "nonsense", "task"}
+			},
+			wantCode:   exitInvalidUsage,
+			wantStderr: "unknown model provider",
+		},
+		{
+			name: "invalid approval flag",
+			args: func(*testing.T) []string {
+				return []string{"run", "--approve", "nonsense", "task"}
+			},
+			wantCode:   exitInvalidUsage,
+			wantStderr: "unknown approval mode",
+		},
+		{
+			name: "invalid events checkpoint type",
+			args: func(*testing.T) []string {
+				return []string{"events", "--checkpoint-type", "nonsense", "run_1"}
+			},
+			wantCode:   exitInvalidUsage,
+			wantStderr: "unknown checkpoint type",
+		},
+		{
+			name: "invalid runs checkpoint type",
+			args: func(*testing.T) []string {
+				return []string{"runs", "--checkpoint-type", "nonsense"}
+			},
+			wantCode:   exitInvalidUsage,
+			wantStderr: "unknown checkpoint type",
+		},
+		{
+			name: "checkpoint not found remains runtime",
+			args: func(t *testing.T) []string {
+				return []string{"resume", "--checkpoint-dir", t.TempDir(), "run_missing"}
+			},
+			wantCode:   exitRuntimeError,
+			wantStderr: "checkpoint not found",
+		},
+		{
+			name: "model setup remains runtime",
+			args: func(t *testing.T) []string {
+				t.Setenv("OPENAI_API_KEY", "")
+				return []string{"run", "--checkpoint-dir", t.TempDir(), "task"}
+			},
+			wantCode:   exitRuntimeError,
+			wantStderr: "OPENAI_API_KEY is not set",
+		},
+		{
+			name: "database open failure remains runtime",
+			args: func(t *testing.T) []string {
+				return []string{"runs", "--checkpoint-type", "sqlite", "--checkpoint-dir", t.TempDir()}
+			},
+			wantCode:   exitRuntimeError,
+			wantStderr: "error:",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stderr bytes.Buffer
+			code := Main(context.Background(), tt.args(t), IO{Stdout: io.Discard, Stderr: &stderr})
 			if code != tt.wantCode {
 				t.Fatalf("code = %d, want %d; stderr=%q", code, tt.wantCode, stderr.String())
 			}
@@ -226,6 +402,76 @@ func TestCodeUsesPositionalRepositoryAsShellWorkingDirectory(t *testing.T) {
 	}
 }
 
+func TestRunKeepsWorkspaceAndShellWorkingDirectoryIndependent(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test")
+	workspaceDir := t.TempDir()
+	shellDir := t.TempDir()
+	const marker = "workspace-root-marker"
+	if err := os.WriteFile(filepath.Join(workspaceDir, "project.txt"), []byte(marker), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	configPath := filepath.Join(t.TempDir(), "zenforge.json")
+	configData, err := json.Marshal(configFile{
+		Workspace: workspaceConfig{Root: workspaceDir},
+		Shell:     shellConfig{WorkingDir: shellDir, Allow: []string{"pwd"}},
+		Approval:  approvalConfig{Mode: "always"},
+	})
+	if err != nil {
+		t.Fatalf("Marshal returned error: %v", err)
+	}
+	if err := os.WriteFile(configPath, configData, 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	var requests int
+	var finalRequest string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		body, readErr := io.ReadAll(r.Body)
+		if readErr != nil {
+			t.Errorf("ReadAll returned error: %v", readErr)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		switch requests {
+		case 1:
+			_, _ = fmt.Fprint(w,
+				"data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_read\",\"type\":\"function\",\"function\":{\"name\":\"workspace_read\",\"arguments\":\"{\\\"path\\\":\\\"project.txt\\\"}\"}}]}}]}\n\n"+
+					"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n"+
+					"data: [DONE]\n\n",
+			)
+		case 2:
+			if !strings.Contains(string(body), marker) {
+				t.Errorf("workspace result missing from model request: %s", body)
+			}
+			_, _ = fmt.Fprint(w,
+				"data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_shell\",\"type\":\"function\",\"function\":{\"name\":\"shell\",\"arguments\":\"{\\\"command\\\":\\\"pwd\\\",\\\"description\\\":\\\"print cwd\\\"}\"}}]}}]}\n\n"+
+					"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n"+
+					"data: [DONE]\n\n",
+			)
+		default:
+			finalRequest = string(body)
+			_, _ = fmt.Fprint(w,
+				"data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"done\"}}]}\n\n"+
+					"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"+
+					"data: [DONE]\n\n",
+			)
+		}
+	}))
+	defer server.Close()
+
+	var stderr bytes.Buffer
+	code := Main(context.Background(), []string{
+		"run", "--config", configPath, "--base-url", server.URL,
+		"--checkpoint-dir", t.TempDir(), "--planning", "disabled", "inspect",
+	}, IO{Stdout: io.Discard, Stderr: &stderr})
+	if code != 0 {
+		t.Fatalf("code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if requests != 3 || !strings.Contains(finalRequest, shellDir) {
+		t.Fatalf("requests = %d, shell working directory %q missing from final request: %s", requests, shellDir, finalRequest)
+	}
+}
+
 func TestCodeRejectsNonDirectoryRepository(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "file.txt")
 	if err := os.WriteFile(path, []byte("not a repository"), 0o644); err != nil {
@@ -233,8 +479,8 @@ func TestCodeRejectsNonDirectoryRepository(t *testing.T) {
 	}
 	var stderr bytes.Buffer
 	exitCode := Main(context.Background(), []string{"code", path, "inspect"}, IO{Stderr: &stderr})
-	if exitCode != 1 {
-		t.Fatalf("code = %d, want 1", exitCode)
+	if exitCode != exitInvalidUsage {
+		t.Fatalf("code = %d, want %d", exitCode, exitInvalidUsage)
 	}
 	if !strings.Contains(stderr.String(), "is not a directory") {
 		t.Fatalf("unexpected stderr: %q", stderr.String())
@@ -245,8 +491,8 @@ func TestCodeRejectsMissingRepository(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "missing")
 	var stderr bytes.Buffer
 	exitCode := Main(context.Background(), []string{"code", path, "inspect"}, IO{Stderr: &stderr})
-	if exitCode != 1 {
-		t.Fatalf("code = %d, want 1", exitCode)
+	if exitCode != exitInvalidUsage {
+		t.Fatalf("code = %d, want %d", exitCode, exitInvalidUsage)
 	}
 	if !strings.Contains(stderr.String(), "resolve repository path") || !strings.Contains(stderr.String(), "no such file") {
 		t.Fatalf("unexpected stderr: %q", stderr.String())
@@ -288,6 +534,57 @@ func TestRunStreamsOpenAICompatibleEndpoint(t *testing.T) {
 	output := stdout.String()
 	if !strings.Contains(output, "run ") || !strings.Contains(output, "cli ok") || !strings.Contains(output, "done") {
 		t.Fatalf("unexpected output: %q", output)
+	}
+}
+
+func TestMainReturnsRunCancelledExitCode(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var stderr bytes.Buffer
+	code := Main(ctx, []string{
+		"run", "--checkpoint-dir", t.TempDir(), "--planning", "disabled", "--no-shell", "cancel",
+	}, IO{Stdout: io.Discard, Stderr: &stderr})
+	if code != exitRunCancelled {
+		t.Fatalf("code = %d, want %d; stderr=%q", code, exitRunCancelled, stderr.String())
+	}
+}
+
+func TestMainReturnsApprovalRejectedExitCode(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test")
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "text/event-stream")
+		if requests == 1 {
+			_, _ = fmt.Fprint(w,
+				"data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_shell\",\"type\":\"function\",\"function\":{\"name\":\"shell\",\"arguments\":\"{\\\"command\\\":\\\"git status\\\",\\\"description\\\":\\\"inspect status\\\"}\"}}]}}]}\n\n"+
+					"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n"+
+					"data: [DONE]\n\n",
+			)
+			return
+		}
+		_, _ = fmt.Fprint(w,
+			"data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"continued\"}}]}\n\n"+
+				"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"+
+				"data: [DONE]\n\n",
+		)
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := Main(context.Background(), []string{
+		"run", "--base-url", server.URL, "--checkpoint-dir", t.TempDir(),
+		"--planning", "disabled", "--shell-allow", "pwd", "reject",
+	}, IO{Stdin: strings.NewReader("2\n"), Stdout: &stdout, Stderr: &stderr})
+	if code != exitApprovalRejected {
+		t.Fatalf("code = %d, want %d; stderr=%q", code, exitApprovalRejected, stderr.String())
+	}
+	if requests != 2 || !strings.Contains(stdout.String(), "continued") || !strings.Contains(stdout.String(), "done") {
+		t.Fatalf("rejected run did not continue to run.done: requests=%d stdout=%q", requests, stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "2. Reject") {
+		t.Fatalf("approval rejection was not prompted: stderr=%q", stderr.String())
 	}
 }
 
@@ -619,6 +916,75 @@ func TestResumeLoadsJSONLCheckpoint(t *testing.T) {
 	}
 }
 
+func TestResumeReturnsUnsupportedStateExitCode(t *testing.T) {
+	dir := t.TempDir()
+	cp := testCLICheckpoint("run_future", 1)
+	cp.State.Version = "zenforge.run_state.v2"
+	if err := checkpointjsonl.New(dir).Save(context.Background(), cp); err != nil {
+		t.Fatalf("Save returned error: %v", err)
+	}
+
+	var stderr bytes.Buffer
+	code := Main(context.Background(), []string{
+		"resume", "--checkpoint-dir", dir, "run_future",
+	}, IO{Stdout: io.Discard, Stderr: &stderr})
+	if code != exitUnsupportedResume {
+		t.Fatalf("code = %d, want %d; stderr=%q", code, exitUnsupportedResume, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "unsupported run state version") {
+		t.Fatalf("unexpected stderr: %q", stderr.String())
+	}
+}
+
+func TestResumeReturnsUnsupportedCheckpointExitCode(t *testing.T) {
+	dir := t.TempDir()
+	runID := "run_future_checkpoint"
+	runDir := filepath.Join(dir, runID)
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	cp := testCLICheckpoint(runID, 1)
+	cp.Version = "zenforge.checkpoint.v2"
+	data, err := json.Marshal(cp)
+	if err != nil {
+		t.Fatalf("Marshal returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(runDir, "latest.json"), data, 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	var stderr bytes.Buffer
+	code := Main(context.Background(), []string{
+		"resume", "--checkpoint-dir", dir, runID,
+	}, IO{Stdout: io.Discard, Stderr: &stderr})
+	if code != exitUnsupportedResume {
+		t.Fatalf("code = %d, want %d; stderr=%q", code, exitUnsupportedResume, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "unsupported checkpoint version") {
+		t.Fatalf("unexpected stderr: %q", stderr.String())
+	}
+}
+
+func TestResumeReturnsUnsupportedPhaseExitCode(t *testing.T) {
+	dir := t.TempDir()
+	cp := testCLICheckpoint("run_future_phase", 1)
+	cp.State.Phase = harness.RunPhase("future")
+	if err := checkpointjsonl.New(dir).Save(context.Background(), cp); err != nil {
+		t.Fatalf("Save returned error: %v", err)
+	}
+
+	var stderr bytes.Buffer
+	code := Main(context.Background(), []string{
+		"resume", "--checkpoint-dir", dir, cp.RunID,
+	}, IO{Stdout: io.Discard, Stderr: &stderr})
+	if code != exitUnsupportedResume {
+		t.Fatalf("code = %d, want %d; stderr=%q", code, exitUnsupportedResume, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "unsupported run phase") {
+		t.Fatalf("unexpected stderr: %q", stderr.String())
+	}
+}
+
 func TestRunsJSONOutput(t *testing.T) {
 	dir := t.TempDir()
 	store := checkpointjsonl.New(dir)
@@ -677,6 +1043,7 @@ func TestOptionsFromConfig(t *testing.T) {
 		Workspace: workspaceConfig{Root: "repo", MaxReadBytes: 7, MaxWriteBytes: 8, ReadRoots: []string{"docs"}, WriteRoots: []string{"generated"}},
 		Shell: shellConfig{
 			Enabled:        &enabled,
+			WorkingDir:     "shell-repo",
 			Allow:          []string{"go test ./..."},
 			Timeout:        "5s",
 			MaxOutputBytes: 99,
@@ -701,7 +1068,7 @@ func TestOptionsFromConfig(t *testing.T) {
 	if opts.instructions != "Be exact." || opts.maxSteps != 3 || opts.planning != "disabled" {
 		t.Fatalf("agent opts not applied: %#v", opts)
 	}
-	if opts.workspace != "repo" || opts.workspaceMaxRead != 7 || opts.workspaceMaxWrite != 8 || !opts.noShell || opts.shellTimeout.String() != "5s" || opts.shellMaxOutputBytes != 99 {
+	if opts.workspace != "repo" || opts.shellWorkingDir != "shell-repo" || opts.workspaceMaxRead != 7 || opts.workspaceMaxWrite != 8 || !opts.noShell || opts.shellTimeout.String() != "5s" || opts.shellMaxOutputBytes != 99 {
 		t.Fatalf("tool opts not applied: %#v", opts)
 	}
 	if strings.Join(opts.workspaceReadRoots, ",") != "docs" || strings.Join(opts.workspaceWriteRoots, ",") != "generated" {

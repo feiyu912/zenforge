@@ -81,7 +81,7 @@ func defaultConfigFile() configFile {
 		},
 		Shell: shellConfig{
 			Enabled:        &enabled,
-			WorkingDir:     defaults.workspace,
+			WorkingDir:     defaults.shellWorkingDir,
 			Allow:          []string(defaults.shellAllow),
 			Timeout:        defaults.shellTimeout.String(),
 			MaxOutputBytes: defaults.shellMaxOutputBytes,
@@ -172,7 +172,7 @@ func applyConfig(opts *options, config configFile) error {
 		opts.workspaceWriteRoots = multiFlag(append([]string(nil), config.Workspace.WriteRoots...))
 	}
 	if config.Shell.WorkingDir != "" {
-		opts.workspace = config.Shell.WorkingDir
+		opts.shellWorkingDir = config.Shell.WorkingDir
 	}
 	if config.Shell.Enabled != nil {
 		opts.noShell = !*config.Shell.Enabled

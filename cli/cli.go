@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -20,6 +21,7 @@ import (
 	"github.com/feiyu912/zenforge/eventlog"
 	eventlogjsonl "github.com/feiyu912/zenforge/eventlog/jsonl"
 	eventlogsqlite "github.com/feiyu912/zenforge/eventlog/sqlite"
+	"github.com/feiyu912/zenforge/harness"
 	"github.com/feiyu912/zenforge/model"
 	"github.com/feiyu912/zenforge/model/anthropic"
 	"github.com/feiyu912/zenforge/model/openai"
@@ -31,6 +33,21 @@ import (
 )
 
 const Version = "0.1.0"
+
+const (
+	exitRuntimeError      = 1
+	exitInvalidUsage      = 2
+	exitRunCancelled      = 3
+	exitApprovalRejected  = 4
+	exitUnsupportedResume = 5
+)
+
+var (
+	errInvalidUsage      = errors.New("invalid config or usage")
+	errRunCancelled      = errors.New("run cancelled")
+	errApprovalRejected  = errors.New("approval rejected")
+	errUnsupportedResume = errors.New("unsupported resume state")
+)
 
 type IO struct {
 	Stdin  io.Reader
@@ -50,7 +67,7 @@ func Main(ctx context.Context, args []string, ioStreams IO) int {
 	}
 	if len(args) == 0 {
 		printUsage(ioStreams.Stderr)
-		return 2
+		return exitInvalidUsage
 	}
 	var err error
 	switch args[0] {
@@ -70,11 +87,11 @@ func Main(ctx context.Context, args []string, ioStreams IO) int {
 		_, err = fmt.Fprintln(ioStreams.Stdout, Version)
 	default:
 		printUsage(ioStreams.Stderr)
-		return 2
+		return exitInvalidUsage
 	}
 	if err != nil {
 		_, _ = fmt.Fprintln(ioStreams.Stderr, "error:", err)
-		return 1
+		return exitCode(err)
 	}
 	return 0
 }
@@ -88,14 +105,17 @@ func run(ctx context.Context, args []string, ioStreams IO) error {
 	}
 	bindOptions(fs, &opts)
 	if err := fs.Parse(args); err != nil {
-		return err
+		return invalidUsage(err)
 	}
 	if err := resolveExecutionFlags(fs, &opts); err != nil {
-		return err
+		return invalidUsage(err)
+	}
+	if err := validateOptionEnums(opts); err != nil {
+		return invalidUsage(err)
 	}
 	input := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	if input == "" {
-		return fmt.Errorf("run input is required")
+		return invalidUsage(errors.New("run input is required"))
 	}
 	return streamTask(ctx, opts, input, ioStreams)
 }
@@ -109,26 +129,30 @@ func code(ctx context.Context, args []string, ioStreams IO) error {
 	}
 	bindOptions(fs, &opts)
 	if err := fs.Parse(args); err != nil {
-		return err
+		return invalidUsage(err)
 	}
 	if err := resolveExecutionFlags(fs, &opts); err != nil {
-		return err
+		return invalidUsage(err)
+	}
+	if err := validateOptionEnums(opts); err != nil {
+		return invalidUsage(err)
 	}
 	if fs.NArg() == 0 {
-		return fmt.Errorf("code repository path is required")
+		return invalidUsage(errors.New("code repository path is required"))
 	}
 	if fs.NArg() == 1 {
-		return fmt.Errorf("code input is required")
+		return invalidUsage(errors.New("code input is required"))
 	}
 	repository, err := resolveRepository(fs.Arg(0))
 	if err != nil {
-		return err
+		return invalidUsage(err)
 	}
 	input := strings.TrimSpace(strings.Join(fs.Args()[1:], " "))
 	if input == "" {
-		return fmt.Errorf("code input is required")
+		return invalidUsage(errors.New("code input is required"))
 	}
 	opts.workspace = repository
+	opts.shellWorkingDir = repository
 	return streamTask(ctx, opts, input, ioStreams)
 }
 
@@ -176,13 +200,19 @@ func resume(ctx context.Context, args []string, ioStreams IO) error {
 	}
 	bindOptions(fs, &opts)
 	if err := fs.Parse(args); err != nil {
-		return err
+		return invalidUsage(err)
 	}
 	if err := resolveExecutionFlags(fs, &opts); err != nil {
-		return err
+		return invalidUsage(err)
+	}
+	if err := validateOptionEnums(opts); err != nil {
+		return invalidUsage(err)
 	}
 	if fs.NArg() != 1 {
-		return fmt.Errorf("resume requires run id")
+		return invalidUsage(errors.New("resume requires run id"))
+	}
+	if err := validateResumeCheckpoint(ctx, opts, fs.Arg(0)); err != nil {
+		return err
 	}
 	agent, err := buildAgent(ctx, opts, ioStreams)
 	if err != nil {
@@ -207,11 +237,14 @@ func events(ctx context.Context, args []string, ioStreams IO) error {
 	checkpointDir := fs.String("checkpoint-dir", opts.checkpointDir, "event/checkpoint directory")
 	jsonOut := fs.Bool("json", false, "print JSON events")
 	if err := fs.Parse(args); err != nil {
-		return err
+		return invalidUsage(err)
+	}
+	if err := validateCheckpointType(*checkpointType); err != nil {
+		return invalidUsage(err)
 	}
 	_ = configPath
 	if fs.NArg() != 1 {
-		return fmt.Errorf("events requires run id")
+		return invalidUsage(errors.New("events requires run id"))
 	}
 	store, closeStore, err := openEventStore(ctx, *checkpointType, *checkpointDir)
 	if err != nil {
@@ -248,11 +281,14 @@ func runs(ctx context.Context, args []string, ioStreams IO) error {
 	checkpointDir := fs.String("checkpoint-dir", opts.checkpointDir, "event/checkpoint directory")
 	jsonOut := fs.Bool("json", false, "print JSON summaries")
 	if err := fs.Parse(args); err != nil {
-		return err
+		return invalidUsage(err)
+	}
+	if err := validateCheckpointType(*checkpointType); err != nil {
+		return invalidUsage(err)
 	}
 	_ = configPath
 	if fs.NArg() != 0 {
-		return fmt.Errorf("runs does not accept positional arguments")
+		return invalidUsage(errors.New("runs does not accept positional arguments"))
 	}
 	summaries, closeStore, err := listRuns(ctx, *checkpointType, *checkpointDir)
 	if err != nil {
@@ -289,10 +325,10 @@ func initConfig(args []string, ioStreams IO) error {
 	fs.SetOutput(ioStreams.Stderr)
 	configPath := fs.String("config", "zenforge.json", "config file path")
 	if err := fs.Parse(args); err != nil {
-		return err
+		return invalidUsage(err)
 	}
 	if fs.NArg() != 0 {
-		return fmt.Errorf("init does not accept positional arguments")
+		return invalidUsage(errors.New("init does not accept positional arguments"))
 	}
 	if err := os.MkdirAll(".zenforge/runs", 0o755); err != nil {
 		return err
@@ -340,6 +376,7 @@ type options struct {
 	shellTimeout        time.Duration
 	shellMaxOutputBytes int64
 	shellAllow          multiFlag
+	shellWorkingDir     string
 }
 
 func defaultOptions() options {
@@ -361,6 +398,7 @@ func defaultOptions() options {
 		shellTimeout:        30 * time.Second,
 		shellMaxOutputBytes: 256_000,
 		shellAllow:          multiFlag{"go test ./...", "go vet ./...", "grep", "find"},
+		shellWorkingDir:     ".",
 	}
 }
 
@@ -392,11 +430,11 @@ func optionsFromArgs(args []string) (options, error) {
 	}
 	config, err := loadConfigFile(configPath)
 	if err != nil {
-		return opts, err
+		return opts, invalidUsage(err)
 	}
 	opts.configPath = configPath
 	if err := applyConfig(&opts, config); err != nil {
-		return opts, err
+		return opts, invalidUsage(err)
 	}
 	return opts, nil
 }
@@ -431,7 +469,7 @@ func buildAgent(ctx context.Context, opts options, ioStreams IO) (*zenforge.Agen
 	tools := append([]tool.Tool(nil), workspaceTools...)
 	if !opts.noShell {
 		shell, err := shelltool.New(shelltool.Config{Policy: policy.ShellPolicy{
-			WorkingDir:      opts.workspace,
+			WorkingDir:      opts.shellWorkingDir,
 			AllowCommands:   []string(opts.shellAllow),
 			RequireApproval: opts.approve != "never",
 			MaxTimeout:      opts.shellTimeout,
@@ -495,6 +533,29 @@ func resolveExecutionFlags(fs *flag.FlagSet, opts *options) error {
 		}
 	}
 	return nil
+}
+
+func validateOptionEnums(opts options) error {
+	switch strings.ToLower(opts.provider) {
+	case "openai", "anthropic":
+	default:
+		return fmt.Errorf("unknown model provider: %s", opts.provider)
+	}
+	switch opts.approve {
+	case "prompt", "always", "never":
+	default:
+		return fmt.Errorf("unknown approval mode: %s", opts.approve)
+	}
+	return validateCheckpointType(opts.checkpointType)
+}
+
+func validateCheckpointType(value string) error {
+	switch strings.ToLower(value) {
+	case "jsonl", "sqlite":
+		return nil
+	default:
+		return fmt.Errorf("unknown checkpoint type: %s", value)
+	}
 }
 
 func workspaceFilePolicy(opts options) policy.FilePolicy {
@@ -624,13 +685,75 @@ func planningMode(value string) zenforge.PlanningMode {
 
 func renderStream(out io.Writer, events <-chan zenforge.Event) error {
 	var finalErr error
+	var approvalRejected bool
+	var runCancelled bool
 	for event := range events {
 		renderEvent(out, event)
-		if event.Type == zenforge.EventRunError {
+		switch event.Type {
+		case zenforge.EventApprovalResolved, zenforge.EventApprovalExpired:
+			if stringValue(event.Payload["action"]) == string(approval.DecisionReject) {
+				approvalRejected = true
+			}
+		case zenforge.EventRunCancelled:
+			runCancelled = true
+		case zenforge.EventRunError:
 			finalErr = fmt.Errorf("%s", stringValue(event.Payload["error"]))
 		}
 	}
+	if runCancelled {
+		return fmt.Errorf("%w", errRunCancelled)
+	}
+	if approvalRejected {
+		return fmt.Errorf("%w", errApprovalRejected)
+	}
 	return finalErr
+}
+
+func exitCode(err error) int {
+	switch {
+	case errors.Is(err, errUnsupportedResume):
+		return exitUnsupportedResume
+	case errors.Is(err, errApprovalRejected):
+		return exitApprovalRejected
+	case errors.Is(err, errRunCancelled), errors.Is(err, context.Canceled):
+		return exitRunCancelled
+	case errors.Is(err, errInvalidUsage):
+		return exitInvalidUsage
+	default:
+		return exitRuntimeError
+	}
+}
+
+func invalidUsage(err error) error {
+	return fmt.Errorf("%w: %w", errInvalidUsage, err)
+}
+
+func validateResumeCheckpoint(ctx context.Context, opts options, runID string) error {
+	store, closeStore, err := openCheckpointStore(ctx, opts.checkpointType, opts.checkpointDir)
+	if err != nil {
+		return err
+	}
+	defer closeStore()
+	cp, err := store.Load(ctx, runID)
+	if err != nil {
+		// Checkpoint stores currently return validation errors without a typed
+		// schema sentinel, so classify only their exact unsupported-version error.
+		if strings.Contains(err.Error(), "unsupported checkpoint version") {
+			return fmt.Errorf("%w: %v", errUnsupportedResume, err)
+		}
+		return err
+	}
+	if cp.State.Version != "" && cp.State.Version != harness.RunStateVersion {
+		return fmt.Errorf("%w: unsupported run state version %q", errUnsupportedResume, cp.State.Version)
+	}
+	switch cp.State.Phase {
+	case harness.RunPhaseCreated, harness.RunPhaseModel, harness.RunPhaseTool,
+		harness.RunPhaseApproval, harness.RunPhaseSubtask, harness.RunPhaseFinalizing,
+		harness.RunPhaseCompleted, harness.RunPhaseFailed, harness.RunPhaseCancelled:
+	default:
+		return fmt.Errorf("%w: unsupported run phase %q", errUnsupportedResume, cp.State.Phase)
+	}
+	return nil
 }
 
 func renderEvent(out io.Writer, event zenforge.Event) {
