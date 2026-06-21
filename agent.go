@@ -311,17 +311,14 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 			state.Phase = harness.RunPhaseFailed
 			state.Control.Status = harness.RunStatusFailed
 		}
-		seq, saveErr := a.saveCheckpointAfterLatest(ctx, state)
+		cp, saveErr := a.saveCheckpointAfterLatest(ctx, state)
 		if saveErr != nil {
 			return emit(EventRunError, map[string]any{
 				"error": fmt.Sprintf("save checkpoint: %v", saveErr),
 			})
 		}
-		if seq > 0 {
-			if emitErr := emit(EventCheckpointCreated, map[string]any{
-				"checkpointSeq": seq,
-				"phase":         string(state.Phase),
-			}); emitErr != nil {
+		if cp.Seq > 0 {
+			if emitErr := emit(EventCheckpointCreated, checkpointCreatedPayload(cp)); emitErr != nil {
 				return emitErr
 			}
 		}
@@ -460,14 +457,11 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 	summaryState.Phase = harness.RunPhaseFinalizing
 	summaryState.Control.Status = harness.RunStatusModelStreaming
 	saveSummaryState := func() error {
-		seq, err := a.saveCheckpointAfterLatest(ctx, summaryState)
+		cp, err := a.saveCheckpointAfterLatest(ctx, summaryState)
 		if err != nil {
 			return err
 		}
-		if err := emit(EventCheckpointCreated, map[string]any{
-			"checkpointSeq": seq,
-			"phase":         string(summaryState.Phase),
-		}); err != nil {
+		if err := emit(EventCheckpointCreated, checkpointCreatedPayload(cp)); err != nil {
 			return err
 		}
 		return nil
@@ -660,22 +654,12 @@ func (a *Agent) runHarnessLoop(ctx context.Context, out chan<- Event, state harn
 		if checkpointCtx.Err() != nil {
 			saveCtx = context.WithoutCancel(checkpointCtx)
 		}
-		nextSeq := checkpointSeq + 1
-		current.UpdatedAt = time.Now().UTC()
-		if err := a.config.Checkpoints.Save(saveCtx, checkpoint.Checkpoint{
-			Version: checkpoint.CheckpointVersion,
-			RunID:   runID,
-			Seq:     nextSeq,
-			State:   current,
-			SavedAt: time.Now().UTC(),
-		}); err != nil {
+		cp := newCheckpoint(current, checkpointSeq+1)
+		if err := a.saveCheckpoint(saveCtx, cp); err != nil {
 			return fmt.Errorf("save checkpoint: %w", err)
 		}
-		checkpointSeq = nextSeq
-		return emit(EventCheckpointCreated, map[string]any{
-			"checkpointSeq": checkpointSeq,
-			"phase":         string(current.Phase),
-		})
+		checkpointSeq = cp.Seq
+		return emit(EventCheckpointCreated, checkpointCreatedPayload(cp))
 	}
 
 	runner := harness.Runner{
@@ -731,9 +715,37 @@ func (a *Agent) latestCheckpointSeq(ctx context.Context, runID string) (int64, e
 	return cp.Seq, nil
 }
 
-func (a *Agent) saveCheckpointAfterLatest(ctx context.Context, state harness.RunState) (int64, error) {
+func newCheckpoint(state harness.RunState, seq int64) checkpoint.Checkpoint {
+	now := time.Now().UTC()
+	state.UpdatedAt = now
+	return checkpoint.Checkpoint{
+		Version: checkpoint.CheckpointVersion,
+		RunID:   state.RunID,
+		Seq:     seq,
+		State:   state,
+		SavedAt: now,
+	}
+}
+
+func checkpointCreatedPayload(cp checkpoint.Checkpoint) map[string]any {
+	return map[string]any{
+		"checkpointSeq": cp.Seq,
+		"version":       cp.Version,
+		"phase":         string(cp.State.Phase),
+	}
+}
+
+func (a *Agent) saveCheckpoint(ctx context.Context, cp checkpoint.Checkpoint) error {
+	saveCtx := ctx
+	if ctx.Err() != nil {
+		saveCtx = context.WithoutCancel(ctx)
+	}
+	return a.config.Checkpoints.Save(saveCtx, cp)
+}
+
+func (a *Agent) saveCheckpointAfterLatest(ctx context.Context, state harness.RunState) (checkpoint.Checkpoint, error) {
 	if a.config.Checkpoints == nil {
-		return 0, nil
+		return checkpoint.Checkpoint{}, nil
 	}
 	saveCtx := ctx
 	if ctx.Err() != nil {
@@ -741,21 +753,13 @@ func (a *Agent) saveCheckpointAfterLatest(ctx context.Context, state harness.Run
 	}
 	latest, err := a.latestCheckpointSeq(saveCtx, state.RunID)
 	if err != nil {
-		return 0, err
+		return checkpoint.Checkpoint{}, err
 	}
-	seq := latest + 1
-	now := time.Now().UTC()
-	state.UpdatedAt = now
-	if err := a.config.Checkpoints.Save(saveCtx, checkpoint.Checkpoint{
-		Version: checkpoint.CheckpointVersion,
-		RunID:   state.RunID,
-		Seq:     seq,
-		State:   state,
-		SavedAt: now,
-	}); err != nil {
-		return 0, err
+	cp := newCheckpoint(state, latest+1)
+	if err := a.saveCheckpoint(saveCtx, cp); err != nil {
+		return checkpoint.Checkpoint{}, err
 	}
-	return seq, nil
+	return cp, nil
 }
 
 func validateNoToolAnswer(message harness.MessageState) error {

@@ -82,6 +82,7 @@ func TestRecorderCompleteValidatesTerminalEventBeforeCheckpoint(t *testing.T) {
 	}{
 		{name: "non-terminal", event: zenforge.NewEvent(zenforge.EventModelDone, "run_1", nil)},
 		{name: "wrong run", event: zenforge.NewEvent(zenforge.EventRunDone, "run_2", nil)},
+		{name: "wrong terminal phase", event: zenforge.NewEvent(zenforge.EventRunError, "run_1", map[string]any{"error": "failed"})},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -92,6 +93,29 @@ func TestRecorderCompleteValidatesTerminalEventBeforeCheckpoint(t *testing.T) {
 	}
 	if checkpoints.saved != 0 {
 		t.Fatalf("saved checkpoints = %d, want 0", checkpoints.saved)
+	}
+}
+
+func TestRecorderCompletePersistsCancelledTerminalWithCancelledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	checkpoints := checkpointmemory.New()
+	events := eventmemory.New()
+	recorder := Recorder{Events: events, Checkpoints: checkpoints}
+	state := testRunState("run_cancelled", harness.RunPhaseCancelled)
+	state.Control.Status = harness.RunStatusCancelled
+	terminal := zenforge.NewEvent(zenforge.EventRunCancelled, state.RunID, map[string]any{"error": context.Canceled.Error()})
+
+	if _, err := recorder.Complete(ctx, state, 2, terminal); err != nil {
+		t.Fatalf("Complete returned error: %v", err)
+	}
+	cp, err := checkpoints.Load(context.Background(), state.RunID)
+	if err != nil || cp.State.Phase != harness.RunPhaseCancelled {
+		t.Fatalf("cancelled checkpoint not persisted: cp=%#v err=%v", cp, err)
+	}
+	recorded, err := events.Read(context.Background(), state.RunID, 0, 0)
+	if err != nil || len(recorded) != 2 || recorded[1].Type != zenforge.EventRunCancelled {
+		t.Fatalf("cancelled events not persisted: events=%#v err=%v", recorded, err)
 	}
 }
 

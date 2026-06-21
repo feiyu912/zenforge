@@ -27,7 +27,7 @@ func (r Recorder) SaveCheckpoint(ctx context.Context, state harness.RunState, se
 		State:   state,
 		SavedAt: time.Now().UTC(),
 	}
-	if err := r.Checkpoints.Save(ctx, cp); err != nil {
+	if err := r.Checkpoints.Save(writeContext(ctx), cp); err != nil {
 		return checkpoint.Checkpoint{}, err
 	}
 	return cp, nil
@@ -46,7 +46,7 @@ func (r Recorder) RecordCheckpoint(ctx context.Context, state harness.RunState, 
 		"version":       cp.Version,
 		"phase":         string(cp.State.Phase),
 	})
-	if err := r.Events.Append(ctx, event); err != nil {
+	if err := r.Events.Append(writeContext(ctx), event); err != nil {
 		return checkpoint.Checkpoint{}, err
 	}
 	return cp, nil
@@ -69,14 +69,37 @@ func (r Recorder) Complete(ctx context.Context, state harness.RunState, seq int6
 	if event.RunID() != state.RunID {
 		return checkpoint.Checkpoint{}, fmt.Errorf("terminal event runId %q does not match state runId %q", event.RunID(), state.RunID)
 	}
+	if !terminalPhaseMatchesEvent(state.Phase, event.Type) {
+		return checkpoint.Checkpoint{}, fmt.Errorf("terminal event %q does not match state phase %q", event.Type, state.Phase)
+	}
 	cp, err := r.RecordCheckpoint(ctx, state, seq)
 	if err != nil {
 		return checkpoint.Checkpoint{}, err
 	}
-	if err := r.RecordEvent(ctx, event); err != nil {
+	if err := r.RecordEvent(writeContext(ctx), event); err != nil {
 		return checkpoint.Checkpoint{}, err
 	}
 	return cp, nil
+}
+
+func writeContext(ctx context.Context) context.Context {
+	if ctx.Err() != nil {
+		return context.WithoutCancel(ctx)
+	}
+	return ctx
+}
+
+func terminalPhaseMatchesEvent(phase harness.RunPhase, eventType zenforge.EventType) bool {
+	switch eventType {
+	case zenforge.EventRunDone:
+		return phase == harness.RunPhaseCompleted
+	case zenforge.EventRunError:
+		return phase == harness.RunPhaseFailed
+	case zenforge.EventRunCancelled:
+		return phase == harness.RunPhaseCancelled
+	default:
+		return false
+	}
 }
 
 func terminalEvent(eventType zenforge.EventType) bool {

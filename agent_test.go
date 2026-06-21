@@ -117,6 +117,22 @@ type failingEventStore struct {
 	latestErr    error
 }
 
+type failEventTypeOnceStore struct {
+	testEventStore
+	failType  EventType
+	failPhase string
+	failed    bool
+}
+
+func (s *failEventTypeOnceStore) Append(ctx context.Context, event Event) error {
+	phase := stringValue(event.Payload["phase"])
+	if !s.failed && event.Type == s.failType && (s.failPhase == "" || phase == s.failPhase) {
+		s.failed = true
+		return errors.New("event backend unavailable")
+	}
+	return s.testEventStore.Append(ctx, event)
+}
+
 func (s *failingEventStore) Append(ctx context.Context, event Event) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -377,6 +393,159 @@ func TestAgentDoesNotRetryEventStoreWhenCheckpointEventAppendFails(t *testing.T)
 	if !strings.Contains(stringValue(got[2].Payload["error"]), "append event checkpoint.created") {
 		t.Fatalf("run error = %q", stringValue(got[2].Payload["error"]))
 	}
+}
+
+func TestAgentCheckpointCreatedPayloadMatchesAcrossProductionPaths(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(*testing.T) []Event
+	}{
+		{
+			name: "ordinary harness",
+			run: func(t *testing.T) []Event {
+				agent := New(Config{
+					Model:       &scriptedModel{turns: []scriptedTurn{{events: []model.Event{{Delta: "done"}}}}},
+					Checkpoints: checkpointmemory.New(),
+				})
+				return collectAgentEvents(t, agent, "run_payload_harness", "work")
+			},
+		},
+		{
+			name: "plan execute terminal",
+			run: func(t *testing.T) []Event {
+				agent := New(Config{
+					Model:       &scriptedModel{turns: []scriptedTurn{{events: []model.Event{{Delta: "no plan"}}}}},
+					Planning:    PlanningPlanExecute,
+					Checkpoints: checkpointmemory.New(),
+				})
+				return collectAgentEvents(t, agent, "run_payload_terminal", "work")
+			},
+		},
+		{
+			name: "summary",
+			run: func(t *testing.T) []Event {
+				manager := planner.NewMemoryManager(planner.MemoryConfig{})
+				if _, err := manager.Replace(context.Background(), "run_payload_summary", []planner.Todo{{ID: "done", Content: "done", Status: planner.TodoDone}}); err != nil {
+					t.Fatalf("Replace returned error: %v", err)
+				}
+				agent := New(Config{
+					Model:       &scriptedModel{turns: []scriptedTurn{{events: []model.Event{{Delta: "summary"}}}}},
+					Planning:    PlanningPlanExecute,
+					Todos:       manager,
+					Checkpoints: checkpointmemory.New(),
+				})
+				return collectAgentEvents(t, agent, "run_payload_summary", "work")
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			events := test.run(t)
+			seen := 0
+			for _, event := range events {
+				if event.Type != EventCheckpointCreated {
+					continue
+				}
+				seen++
+				if event.Payload["checkpointSeq"] == nil || event.Payload["version"] != checkpoint.CheckpointVersion || stringValue(event.Payload["phase"]) == "" {
+					t.Fatalf("inconsistent checkpoint payload: %#v", event.Payload)
+				}
+			}
+			if seen == 0 {
+				t.Fatalf("no checkpoint.created event in %#v", events)
+			}
+		})
+	}
+}
+
+func TestAgentResumeAfterTerminalEventAppendFailureReplaysTerminalWithoutWork(t *testing.T) {
+	checkpoints := checkpointmemory.New()
+	eventsStore := &failEventTypeOnceStore{failType: EventRunDone}
+	toolCall := model.Event{Message: &model.Message{ToolCalls: []model.ToolCallSpec{{
+		ID: "call_once", Name: "record", Arguments: json.RawMessage(`{}`),
+	}}}}
+	fakeModel := &scriptedModel{turns: []scriptedTurn{
+		{events: []model.Event{toolCall}},
+		{events: []model.Event{{Delta: "original terminal"}}},
+	}}
+	record := &recordingTool{}
+	agent := New(Config{Model: fakeModel, Tools: []Tool{record}, Events: eventsStore, Checkpoints: checkpoints})
+
+	first := collectAgentEvents(t, agent, "run_terminal_append_split", "work")
+	if countTypedEvents(first, EventRunDone) != 0 || countTypedEvents(first, EventRunError) != 1 {
+		t.Fatalf("unexpected first run events: %#v", first)
+	}
+
+	resumed, err := agent.Resume(context.Background(), "run_terminal_append_split")
+	if err != nil {
+		t.Fatalf("Resume returned error: %v", err)
+	}
+	var replayed string
+	for event := range resumed {
+		if event.Type == EventRunDone {
+			replayed = stringValue(event.Payload["output"])
+		}
+	}
+	if replayed != "original terminal" {
+		t.Fatalf("replayed output = %q", replayed)
+	}
+	if len(fakeModel.requests) != 2 || record.calls != 1 {
+		t.Fatalf("resume reran model: %#v", fakeModel.requests)
+	}
+}
+
+func TestAgentResumeAfterTerminalCheckpointEventFailureReplaysTerminalWithoutWork(t *testing.T) {
+	checkpoints := checkpointmemory.New()
+	eventsStore := &failEventTypeOnceStore{failType: EventCheckpointCreated, failPhase: string(harness.RunPhaseCompleted)}
+	fakeModel := &scriptedModel{turns: []scriptedTurn{{events: []model.Event{{Delta: "durable terminal"}}}}}
+	agent := New(Config{Model: fakeModel, Events: eventsStore, Checkpoints: checkpoints})
+
+	first := collectAgentEvents(t, agent, "run_checkpoint_event_split", "work")
+	if countTypedEvents(first, EventRunDone) != 0 || countTypedEvents(first, EventRunError) != 1 {
+		t.Fatalf("unexpected first run events: %#v", first)
+	}
+	cp, err := checkpoints.Load(context.Background(), "run_checkpoint_event_split")
+	if err != nil || cp.State.Phase != harness.RunPhaseCompleted {
+		t.Fatalf("terminal checkpoint not durable: cp=%#v err=%v", cp, err)
+	}
+
+	resumed, err := agent.Resume(context.Background(), "run_checkpoint_event_split")
+	if err != nil {
+		t.Fatalf("Resume returned error: %v", err)
+	}
+	var replayed string
+	for event := range resumed {
+		if event.Type == EventRunDone {
+			replayed = stringValue(event.Payload["output"])
+		}
+	}
+	if replayed != "durable terminal" || len(fakeModel.requests) != 1 {
+		t.Fatalf("resume replayed=%q model calls=%d", replayed, len(fakeModel.requests))
+	}
+}
+
+func collectAgentEvents(t *testing.T, agent *Agent, runID, input string) []Event {
+	t.Helper()
+	stream, err := agent.Stream(context.Background(), Task{RunID: runID, Input: input})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	var events []Event
+	for event := range stream {
+		events = append(events, event)
+	}
+	return events
+}
+
+func countTypedEvents(events []Event, eventType EventType) int {
+	count := 0
+	for _, event := range events {
+		if event.Type == eventType {
+			count++
+		}
+	}
+	return count
 }
 
 func TestAgentTreatsTraceSinkFailureAsBestEffort(t *testing.T) {
