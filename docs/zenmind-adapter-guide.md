@@ -1,35 +1,22 @@
 # ZenMind Adapter Guide
 
-ZenForge core emits neutral runtime events. ZenMind can keep its existing UI
-and server protocols by mapping those events at the platform boundary.
-
-The `adapters/zenmind` package provides compatibility helpers without importing
-ZenMind platform packages.
+ZenForge core emits neutral runtime events. `adapters/zenmind` provides a
+platform boundary without importing `agent-platform` packages. Its wire
+contracts are checked against fixtures captured from
+`agent-platform@1893edb5`; the external engine integration is not implemented
+by this repository.
 
 ## Catalog And Session Mapping
 
-Host platform code can translate catalog/session data into a normalized
-ZenForge config and task:
+`CatalogAgent` and `Session` model the platform catalog agent and the subset of
+query request/session fields needed at execution time. When a platform
+`modelKey` is present, the host resolves it through `ModelResolver`:
 
 ```go
-run, err := zenmind.BuildRun(ctx, zenmind.CatalogAgent{
-    Name:         "reviewer",
-    Instructions: "Review carefully.",
-    Model:        zenmind.ModelRef{Provider: "openai", Name: "gpt-4.1"},
-    ToolNames:    []string{"workspace_read", "workspace_grep"},
-    MaxSteps:     20,
-    Planning:     "plan_execute",
-}, zenmind.Session{
-    RunID:          "run_123",
-    Input:          "Analyze this repo.",
-    UserID:         "user_1",
-    ConversationID: "chat_1",
-    Memory: []zenmind.MemoryEntry{{
-        ID:   "profile",
-        Text: "The user prefers concise answers.",
-    }},
-}, zenmind.Runtime{
-    Model:       model,
+run, err := zenmind.BuildRun(ctx, catalogAgent, session, zenmind.Runtime{
+    ModelResolver: zenmind.ModelResolverFunc(func(ctx context.Context, key string) (model.Model, error) {
+        return platformModels.Resolve(ctx, key)
+    }),
     Tools:       tools,
     Events:      events,
     Checkpoints: checkpoints,
@@ -42,109 +29,148 @@ agent := zenforge.New(run.Config)
 events, err := agent.Stream(ctx, run.Task)
 ```
 
-The adapter filters tools by catalog names, maps planning/sub-agent modes, adds
-platform session metadata under `task.Meta["zenmind"]`, and uses
-`adapters/memory` to inject retrieved memory into the normalized task input.
-The host still owns catalog loading, auth, tenancy, model construction, tool
-construction, and storage selection.
+The adapter maps platform `key`, `modelKey`, `mode`, tools, skills, context
+tags, budget, stage settings, tool overrides, workspace/host access, request,
+chat/run identity, history, and access level into `zenforge.Config`, `Task`, and
+namespaced task metadata. Unknown model keys and modes fail closed. Deprecated
+DTO aliases remain for earlier adapter callers.
 
-## Feature Flag And Fallback Routing
+Golden inputs:
 
-ZenMind should not replace its current runtime in one jump. Use `Router` to
-decide whether a catalog/session should run through ZenForge or the legacy
-runtime:
+- `adapters/zenmind/testdata/platform/catalog_agent.json`
+- `adapters/zenmind/testdata/platform/query_session.json`
+
+The host still owns catalog loading, auth, tenancy, model/tool construction,
+prompt policy, and storage selection.
+
+## Routing And Fallback
+
+New integrations should route with resolved platform identities:
 
 ```go
 router := zenmind.Router{
-    Default: zenmind.RouteLegacy,
-    Agents: map[string]zenmind.RouteDecision{
-        "reviewer": zenmind.RouteZenForge,
+    AgentRoutes: map[string]zenmind.RouteConfig{
+        "reviewer": {Engine: zenmind.EngineZenForge, Feature: zenmind.FeatureEnabled},
+    },
+    Initialize: func(input zenmind.RouteInput) error {
+        return initializeZenForgeRun(input)
     },
 }
 
-decision := router.Decide(agent, session)
+decision := router.Route(zenmind.RouteInput{
+    AgentKey: agentKey,
+    ChatID:   chatID,
+    RunID:    runID,
+})
 if !decision.UseZenForge() {
     return runLegacy(ctx, session)
 }
-
-run, err := zenmind.BuildRun(ctx, agent, session, runtime)
 ```
 
-Routing can be controlled by explicit agent/session maps or by metadata such as
-`{"zenforge": true}`. The default is `legacy`, so rollout is opt-in.
+Agent, chat, and run overrides are applied in that order, so the run route is
+most specific. ZenForge is selected only when engine and feature values are
+explicitly supported and `Initialize` succeeds. Missing identity/configuration,
+unknown values, or initialization failure return `RouteLegacy`. `Decide` and
+its legacy fields remain compatibility APIs.
+
+This is fail-closed routing logic, not an installed `agent-platform` feature
+flag or an engine bridge. External engine selection, SSE/WS delivery, and
+fallback E2E remain unverified.
+
+## Stateful Stream Projection
+
+Use one `Projector` per run. It turns neutral events into complete platform
+content/tool block lifecycles and assigns platform-local sequence numbers:
 
 ```go
-mapped := zenmind.MapEvent(event)
-```
-
-Default event names follow the compatibility mapping from ADR 0002:
-
-| ZenForge event | Adapter event |
-| --- | --- |
-| `run.started` | `run.start` |
-| `run.done` | `run.complete` |
-| `model.delta` | `content.delta` |
-| `tool.call` | `tool.start` |
-| `tool.result` | `tool.result` |
-| `todo.updated` | `plan.update` |
-| `approval.requested` | `awaiting.ask` |
-| `approval.resolved` | `awaiting.answer` |
-| `subtask.started` | `task.start` |
-| `subtask.done` | `task.complete` |
-
-Host code can override names when a specific frontend stream expects a
-different split, for example mapping model deltas to `reasoning.delta`.
-
-```go
-mapper := zenmind.NewMapper()
-mapper.Types[zenforge.EventModelDelta] = "reasoning.delta"
-```
-
-## Approval Submit Mapping
-
-ZenMind submit routes should translate their payloads into
-`approval.Decision`, then pass the decision to the configured approval broker.
-
-```go
-decision, err := zenmind.DecisionFromJSON(body)
-```
-
-The adapter helper understands the neutral fields:
-
-```json
-{
-  "requestId": "approval_123",
-  "action": "approve",
-  "scope": "once",
-  "reason": "",
-  "payload": {}
-}
-```
-
-Core still does not know about `/api/submit`, WebSocket messages, pending
-awaiting repositories, or frontend form DTOs. Those remain in the host
-platform.
-
-## Chat JSONL Read Model
-
-ZenMind can keep a chat JSONL-style read model by projecting ZenForge events at
-the platform boundary:
-
-```go
-writer := zenmind.NewChatJSONLWriter(".zenmind/chats", zenmind.NewMapper())
+projector := zenmind.NewProjectorWithIdentity(zenmind.ProjectorIdentity{
+    ChatID: chatID, AgentKey: agentKey,
+})
 
 for event := range events {
-    if err := writer.Append(ctx, event); err != nil {
-        return err
+    for _, projected := range projector.Project(event) {
+        data, err := json.Marshal(projected)
+        // data is a flat platform envelope: seq/type/payload fields/timestamp.
+        _ = data
+        _ = err
     }
 }
 ```
 
-Each line stores a `zenmind.chat_trace.v1` record with the mapped event type,
-source ZenForge event type, run id, sequence, timestamp, payload, and write time.
+The projector synthesizes `content.start/delta/end/snapshot`,
+`tool.start/args/end/snapshot/result`, and terminal run events. It closes open
+blocks before transitions and never emits `run.complete` after error or
+cancellation. Bookkeeping events without a lossless platform equivalent are
+ignored deliberately. `Mapper`/`MapEvent` preserve the historical one-to-one
+API but do not synthesize lifecycle events; they are not evidence of full wire
+compatibility by themselves.
+
+Golden lifecycles:
+
+- `adapters/zenmind/testdata/platform/lifecycle_content.jsonl`
+- `adapters/zenmind/testdata/platform/lifecycle_tool.jsonl`
+
+## Approval Wire
+
+The adapter has typed platform DTOs for `awaiting.ask`, `request.submit`, and
+`awaiting.answer`:
 
 ```go
-records, err := zenmind.ReadChatRecords(ctx, ".zenmind/chats", "run_123")
+ask, err := zenmind.AwaitingAskFromRequestContext(req, awaitingID,
+    zenmind.PlatformRequestContext{AgentKey: agentKey}, timeoutSeconds)
+decision, err := zenmind.DecisionFromRequestSubmit(ask, submit, time.Now())
+answer, err := zenmind.AwaitingAnswerFromDecision(ask, submit, decision)
 ```
 
-This is a read-model projection. It is not the checkpoint source of truth.
+Translation validates request/chat/run/awaiting/submit identity, exact approval
+IDs, decisions, scope, timeout, and terminal answer status. The roundtrip golden
+is `adapters/zenmind/testdata/platform/approval_roundtrip.jsonl`.
+
+`DecisionFromJSON` remains the older neutral submit helper. Core still does not
+own platform submit routes, WebSocket messages, or pending-awaiting storage.
+
+## Platform Event Lines
+
+`ChatJSONLWriter` accepts projected `StreamEvent` values and an explicit chat
+ID:
+
+```go
+writer := zenmind.NewChatJSONLWriter(".zenmind/chats")
+for event := range events {
+    for _, projected := range projector.Project(event) {
+        if err := writer.Append(ctx, chatID, projected); err != nil {
+            return err
+        }
+    }
+}
+lines, err := zenmind.ReadEventLines(ctx, ".zenmind/chats", chatID)
+```
+
+It appends to `root/chatId.jsonl`. Each `EventLine` has top-level `chatId`,
+`runId`, `updatedAt`, `liveSeq`, `event`, and `_type: "event"`; the nested flat
+event does not repeat replay cursors. Unsafe or mismatched chat/run identities,
+invalid timestamps/sequences, malformed trailing JSON, and atomic appends from
+multiple writer instances in one process are covered by tests. This writer does
+not claim cross-process `flock` durability. The byte-for-byte fixture is
+`adapters/zenmind/testdata/platform/chat_event_line.jsonl`.
+
+The deprecated `LegacyChatJSONLWriter` type, constructed with
+`NewLegacyChatJSONLWriter(root, mapper)`, writes `root/runId/chat.jsonl` records
+in the old `zenmind.chat_trace.v1` format, read by deprecated
+`ReadChatRecords`. It exists only for earlier callers. The new event-line writer
+is still an event-only projection: it is not the checkpoint source of truth and
+does not implement complete Chat Storage V3.1.
+
+## Contract Evidence
+
+Run the adapter contract suite with:
+
+```bash
+env GOTOOLCHAIN=local go test ./adapters/zenmind
+```
+
+The golden metadata records source files and full commit
+`1893edb51b8dc691ae974cea2719a835e0e21de4`. Passing these tests proves the
+repository-local wire contract only. It does not prove a deployed
+`agent-platform` engine bridge, feature-flag rollout, SSE/WS transport,
+fallback path, full Chat Storage V3.1, or real Container Hub connectivity.

@@ -3,10 +3,15 @@
 This document maps the MVP acceptance checklist to current evidence in the
 repository. The validation commands are:
 
+Status: the repository-scoped MVP acceptance items below are implemented and
+covered by named tests. Provider-backed examples, a deployed `agent-platform`
+integration, and a real Container Hub service require external acceptance and
+are not implied by this status.
+
 ```bash
-env GOCACHE=/private/tmp/agent-platform-go-build-cache go test ./...
+env GOTOOLCHAIN=local go test ./...
 go test ./examples/...
-rg -n "agent-platform|ZenMind" --glob "*.go" .
+rg -n '"[^"[:space:]]*agent-platform[^"[:space:]]*"' --glob "*.go" .
 ```
 
 `go test ./...` includes `docs.TestMarkdownLinksResolve`, which verifies local
@@ -23,6 +28,8 @@ Markdown document links.
 | final no-tool turns reject provider tool calls | `TestAgentMaxStepsRejectsToolCallsFromFinalNoToolTurn`, `TestAgentPlanExecuteRejectsToolCallsFromSummaryTurn` |
 | cancellation persists a cancelled terminal state before model/tool execution | `TestAgentCancellationBeforeModelPersistsCancelledTerminalState`, `TestAgentCancellationBeforeToolPreservesPendingCall`, `TestAgentModelCancellationIsNotReportedAsFailure` |
 | synchronous Run returns cancellation as a Go context error | `TestAgentRunReturnsCancellation` |
+| production checkpoint payloads and terminal replay use one durable shape | `TestAgentCheckpointCreatedPayloadMatchesAcrossProductionPaths`, `TestAgentResumeAfterTerminalEventAppendFailureReplaysTerminalWithoutWork`, `TestAgentResumeAfterTerminalCheckpointEventFailureReplaysTerminalWithoutWork` |
+| recorder preserves low-level checkpoint-before-event ordering without owning Agent lifecycle | `recorder.TestRecorderSavesCheckpointBeforeCheckpointEvent`, `recorder.TestRecorderCompleteWritesTerminalEventAfterCheckpointEvent`, `recorder.TestRecorderCompletePersistsCancelledTerminalWithCancelledContext` |
 | plan/execute persists a terminal summary with monotonic SQLite checkpoints | `TestAgentPlanExecutePersistsTerminalSummaryInSQLite` |
 | checkpoint write failures stop before unsafe progress or false completion | `TestAgentStopsBeforeModelWhenCheckpointSaveFails`, `TestAgentDoesNotCompleteWhenPostModelCheckpointFails` |
 | event-log failures stop execution before unrecorded progress | `TestAgentStopsBeforeModelWhenInitialEventAppendFails`, `TestAgentStopsWhenModelDeltaEventAppendFails`, `TestAgentDoesNotRetryEventStoreWhenCheckpointEventAppendFails` |
@@ -51,6 +58,9 @@ Markdown document links.
 | closed sandbox sessions clear checkpoint state and close is best-effort | `tools/shell.TestShellRoutesCommandToSandboxBackend`, `tools/shell.TestShellSandboxCloseIsBestEffort`, `TestApplySandboxResultStateClearsClosedSession` |
 | sandbox shell failures expose structured error codes | `tools/shell.TestShellSandboxUnavailableDoesNotFallback`, `tools/shell.TestShellSandboxTimeoutIncludesStructuredErrorCode` |
 | Container Hub failures, deadlines, and cancellation map predictably | `sandbox/containerhub.TestClientMapsHTTPFailuresToSandboxCodes`, `sandbox/containerhub.TestClientMapsTransportCancellationAndTimeout` |
+| Container Hub response bodies are bounded | `sandbox/containerhub.TestClientRejectsOversizedSuccessResponses` |
+| JSONL checkpoint saves recover pending transactions and reject unsafe run IDs | `checkpoint/jsonl.TestStoreLoadRecoversPendingCheckpointWithoutRetryingSave`, `checkpoint/jsonl.TestStoreRejectsUnsafeRunIDs` |
+| JSONL checkpoint/event writers serialize across processes | `checkpoint/jsonl.TestStoresAcrossProcessesSerializeCheckpointSequences`, `eventlog/jsonl.TestStoresAcrossProcessesSerializeAppends` |
 | repeated SQLite durable runs work | `TestSQLiteDurableRunSoak` |
 | benchmark entrypoint exists | `BenchmarkAgentRunStaticModel` |
 
@@ -62,6 +72,7 @@ Markdown document links.
 | tool retry requires an explicit transient marker | `tool.TestRetryOnlyRetriesMarkedTransientErrors`, `tool.TestRetrySkipsContextCancellation` |
 | tool call budgets are isolated per run | `tool.TestMaxCallsIsScopedPerRun` |
 | tool output caps preserve valid UTF-8 | `tool.TestMaxOutputBytesPreservesUTF8` |
+| shell output capture remains bounded while the process runs | `tools/shell.TestShellOutputCapIsBoundedAndUTF8Safe` |
 | audit and durable tool arguments redact nested configured keys | `tool.TestRedactArgumentsHidesNestedAuditValuesButPreservesToolInput`, `TestAgentRedactsDurableToolCallArguments` |
 | workspace read/list/grep works | `tools/workspace.TestWorkspaceToolsReadListGrepWrite` |
 | workspace binary and device files fail closed | `workspace.TestPlatformFileTypeClassification`, `workspace/local.TestLocalWorkspaceBlocksKnownBinaryExtensionsWithoutNULBytes`, `workspace/local.TestLocalWorkspaceGrepSkipsKnownBinaryExtensionsBeforeContentScan`, `workspace/local.TestLocalWorkspaceBlocksPlatformDeviceFiles` |
@@ -150,24 +161,29 @@ Markdown document links.
 | limitations section | `docs/limitations.md` |
 | provider guide | `docs/provider-guide.md` |
 | adapter guides | `docs/zenmind-adapter-guide.md`, `docs/mcp-adapter-guide.md`, `docs/memory-adapter-guide.md` |
-| ZenMind catalog/session adapter | `adapters/zenmind.TestBuildRunMapsCatalogSessionToConfigAndTask` |
-| ZenMind chat JSONL read model | `adapters/zenmind.TestChatJSONLWriterProjectsMappedEvents` |
-| ZenMind feature flag routing | `adapters/zenmind.TestRouterRoutesBySessionThenAgent`, `adapters/zenmind.TestRouterRoutesByMetadataFlag` |
+| platform catalog/session DTOs and model resolution | `adapters/zenmind.TestBuildRunMapsCatalogSessionToConfigAndTask`, `adapters/zenmind.TestBuildRunRejectsUnknownModelAndMode`; fixtures `adapters/zenmind/testdata/platform/catalog_agent.json`, `adapters/zenmind/testdata/platform/query_session.json` |
+| fail-closed AgentKey/ChatID/RunID routing | `adapters/zenmind.TestRouterFailsClosed`, `adapters/zenmind.TestRouterRoutesOnlyExplicitInitializedZenForge`, `adapters/zenmind.TestRouterTargetsAgentChatAndRunIDs` |
+| stateful content/tool wire projection and flat envelope | `adapters/zenmind.TestProjectorContentLifecycleGolden`, `adapters/zenmind.TestProjectorToolLifecycleGolden`, `adapters/zenmind.TestMapperMarshalUsesFlatWireEnvelope`; fixtures `adapters/zenmind/testdata/platform/lifecycle_content.jsonl`, `adapters/zenmind/testdata/platform/lifecycle_tool.jsonl` |
+| platform approval ask/submit/answer roundtrip | `adapters/zenmind.TestApprovalRoundTripGolden`, `adapters/zenmind.TestRequestSubmitRequiresIdentityAndExactApprovalIDs`; fixture `adapters/zenmind/testdata/platform/approval_roundtrip.jsonl` |
+| platform event-line JSONL wire and flat chat path | `adapters/zenmind.TestChatJSONLWriterMatchesPlatformGolden`, `adapters/zenmind.TestChatJSONLWriterFlatPathAppendAndRead`, `adapters/zenmind.TestChatJSONLWriterRejectsUnsafeOrMismatchedIdentity`; fixture `adapters/zenmind/testdata/platform/chat_event_line.jsonl` |
 | failure-mode guide | `docs/failure-modes.md` |
 | docs links resolve | `docs.TestMarkdownLinksResolve` |
 | SDK embedded example runs without API key | `examples.TestSDKEmbeddedAgentRunsWithoutAPIKey` |
 
 ## Platform Boundary
 
-Core implementation must not import `agent-platform` or ZenMind server/chat
-packages. Automated evidence: `docs.TestGoSourceKeepsPlatformBoundary`.
-Validate manually with:
+Non-adapter Go source must remain free of `agent-platform` and ZenMind brand
+coupling. `adapters/zenmind` may preserve protocol provenance, but its imports
+are parsed to reject the platform module and every `internal` package. This is
+enforced by `docs.TestGoSourceKeepsPlatformBoundary` and
+`docs.TestPlatformBoundaryAllowlist`. A supplementary import-string check is:
 
 ```bash
-rg -n "agent-platform|ZenMind" --glob "*.go" .
+rg -n '"[^"[:space:]]*agent-platform[^"[:space:]]*"' --glob "*.go" .
 ```
 
-The expected result is no matches in Go source files.
+The expected result is no platform module import strings. Protocol comments and
+fixture provenance under `adapters/zenmind` may name the external repository.
 
 ## CI Evidence
 
@@ -179,3 +195,14 @@ gh run list --limit 1 --json headSha,status,conclusion,workflowName,createdAt
 
 The expected result is the latest `CI` run for the pushed commit with
 `status=completed` and `conclusion=success`.
+
+## External Acceptance
+
+Repository tests validate adapter contracts with fake/local HTTP servers. They
+also validate platform wire DTOs and byte-level goldens captured from
+`agent-platform@1893edb5`. They do not prove that an external platform engine
+can run an agent through ZenForge, that feature-flag routing and legacy fallback
+work E2E, that SSE/WS transports deliver these envelopes, that complete Chat
+Storage V3.1 is implemented, or that a real Container Hub service accepts the
+current transport and session lifecycle. Those remain external integration
+acceptance items and must not be marked complete from the tests above.

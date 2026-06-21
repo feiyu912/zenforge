@@ -15,7 +15,10 @@ long-running, tool-using, observable, and recoverable agents.
 - Server helpers for HTTP runs, resume, event replay, and SSE streaming.
 - Trace sinks for JSONL/stdout/memory and OpenTelemetry spans.
 - Container Hub sandbox adapter beta plus local/fake sandbox backends.
-- ZenMind compatibility adapter for event mapping and approval submit payloads.
+- ZenMind adapter with platform catalog/session DTOs and model resolution,
+  fail-closed rollout routing, stateful flat-wire projection, approval protocol
+  translation, and event-line JSONL output. Wire goldens are pinned to
+  `agent-platform@1893edb5`.
 
 ## Safety Defaults
 
@@ -38,19 +41,23 @@ See [limitations.md](./limitations.md). Important V0.1 limitations:
 - CLI config is JSON, not YAML.
 - Nested sub-agents are blocked by default.
 - Container Hub remains optional/beta.
+- External `agent-platform` engine/feature-flag/SSE/WS/fallback integration,
+  complete Chat Storage V3.1, and real Container Hub acceptance are not covered
+  by repository-local adapter goldens.
 
 ## Verification
 
 Run before tagging:
 
 ```bash
-env GOCACHE=/private/tmp/agent-platform-go-build-cache go test ./...
-go test ./examples/...
-rg -n "agent-platform|ZenMind" --glob "*.go" .
+env GOTOOLCHAIN=local go test ./...
+env GOTOOLCHAIN=local go test ./docs/... ./cli ./adapters/zenmind
+env GOTOOLCHAIN=local go test ./examples/...
+rg -n '"[^"[:space:]]*agent-platform[^"[:space:]]*"' --glob "*.go" .
 ```
 
 Expected:
 
 - all packages pass, including docs link checks;
 - examples compile;
-- platform-boundary search returns no Go-source matches.
+- platform-boundary search returns no platform module import strings.

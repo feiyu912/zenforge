@@ -114,9 +114,11 @@ zenforge init
 Creates:
 
 ```text
-zenforge.yml
+zenforge.json
 .zenforge/
 ```
+
+The generated config is JSON. YAML config files are not accepted.
 
 ## Rendering
 

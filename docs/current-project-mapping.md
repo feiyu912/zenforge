@@ -47,7 +47,7 @@ agw-cli/
 | Event stream | `internal/stream` | Core; preserve `stream.EventData` wire shape and narrow core names |
 | Active run manager | `internal/contracts/run_control.go` | Core run control; preserve `RunLoopState` names |
 | Live observers | `internal/stream/event_bus.go` | Core |
-| Chat JSONL trace | `internal/chat` | Adapter; not the core checkpoint format |
+| Chat event JSONL | `internal/chat` | `adapters/zenmind.ChatJSONLWriter` emits the event-only `root/chatId.jsonl` wire; complete Chat Storage V3.1 remains external and this is not the core checkpoint format |
 | Memory | `internal/memory` | Adapter after MVP |
 | MCP tools | `internal/mcp` | Adapter after core tool API stabilizes |
 | Catalog agents | `internal/catalog` | Platform adapter |

@@ -117,7 +117,7 @@ zenforge run "Analyze this repository"
 Options:
 
 ```text
---config zenforge.yml
+--config zenforge.json
 --workspace .
 --model gpt-4.1
 --max-steps 20
@@ -151,44 +151,35 @@ Prints event log.
 
 ## Config File
 
-```yaml
-model:
-  provider: openai
-  name: gpt-4.1
-  apiKeyEnv: OPENAI_API_KEY
-
-agent:
-  instructions: |
-    You are a senior Go backend engineer.
-  maxSteps: 20
-  planning: true
-
-workspace:
-  root: .
-  read:
-    - .
-  write:
-    - ./tmp
-  maxReadBytes: 1000000
-  maxWriteBytes: 1000000
-
-shell:
-  enabled: true
-  workingDir: .
-  allow:
-    - go test ./...
-    - go vet ./...
-    - grep
-    - find
-  timeout: 30s
-  maxOutputBytes: 256000
-
-approval:
-  mode: prompt
-
-checkpoint:
-  type: jsonl
-  path: ./.zenforge/runs
+```json
+{
+  "model": {
+    "provider": "openai",
+    "name": "gpt-4.1",
+    "apiKeyEnv": "OPENAI_API_KEY"
+  },
+  "agent": {
+    "instructions": "You are a senior Go backend engineer.",
+    "maxSteps": 20,
+    "mode": "plan_execute"
+  },
+  "workspace": {
+    "root": ".",
+    "readRoots": ["."],
+    "writeRoots": ["./tmp"],
+    "maxReadBytes": 1000000,
+    "maxWriteBytes": 1000000
+  },
+  "shell": {
+    "enabled": true,
+    "workingDir": ".",
+    "allow": ["go test ./...", "go vet ./...", "grep", "find"],
+    "timeout": "30s",
+    "maxOutputBytes": 256000
+  },
+  "approval": {"mode": "prompt"},
+  "checkpoint": {"type": "jsonl", "path": "./.zenforge/runs"}
+}
 ```
 
 ## MVP Examples

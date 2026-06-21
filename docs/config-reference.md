@@ -107,6 +107,5 @@ Flags override values loaded from the config file.
 
 ## Current Limitations
 
-The MVP CLI config loader accepts JSON. The design docs use YAML as the target
-shape, but YAML support is intentionally left for a later pass to avoid adding a
-dependency before the public config surface settles.
+The CLI accepts JSON config only. `zenforge init` creates `zenforge.json`;
+YAML config files are not part of the current interface.

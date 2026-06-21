@@ -69,10 +69,14 @@ result, err := agent.Run(ctx, zenforge.Task{Input: "Review this package and summ
 ## Install
 
 ```bash
-go get github.com/feiyu912/zenforge@v0.1.0
+go get github.com/feiyu912/zenforge@main
+go install github.com/feiyu912/zenforge/cmd/zenforge@main
 ```
 
-Go 1.26. The project targets the Go 1.26 language and toolchain baseline only. The core uses OpenTelemetry SDK, pure-Go SQLite via `modernc.org/sqlite` (no cgo), and `mvdan.cc/sh/v3` for structural shell safety analysis.
+Go 1.26 only. Both local development and CI require a Go 1.26.x toolchain;
+CI sets `GOTOOLCHAIN=local` and rejects other versions. The core uses the
+OpenTelemetry SDK, pure-Go SQLite via `modernc.org/sqlite` (no cgo), and
+`mvdan.cc/sh/v3` for structural shell safety analysis.
 
 ## CLI
 
@@ -82,11 +86,22 @@ export OPENAI_API_KEY=...
 go run ./cmd/zenforge run --config zenforge.json "Analyze this repo"
 go run ./cmd/zenforge code --config zenforge.json ./repo "Review and improve this codebase"
 go run ./cmd/zenforge run --checkpoint-type sqlite --checkpoint-dir .zenforge/runs.db "..."
-go run ./cmd/zenforge resume run_123
-go run ./cmd/zenforge runs
+go run ./cmd/zenforge resume --config zenforge.json run_123
+go run ./cmd/zenforge events --config zenforge.json run_123
+go run ./cmd/zenforge runs --config zenforge.json
 ```
 
-Config is JSON. See [`docs/config-reference.md`](docs/config-reference.md) and [`docs/cli-design.md`](docs/cli-design.md).
+`run` executes a task in the configured workspace. `code <repo> <task>` binds
+workspace and shell execution to the resolved repository. `resume <runID>`
+continues a supported durable checkpoint, `events <runID>` prints its event
+history (`--json` for JSON), and `runs` lists durable run summaries (`--json`
+for JSON). Config is JSON and `init` creates `zenforge.json`; flags override
+the file. See [`docs/config-reference.md`](docs/config-reference.md) and
+[`docs/cli-design.md`](docs/cli-design.md).
+
+CLI failures use stable exit codes: `1` runtime error, `2` invalid config or
+usage, `3` cancellation, `4` approval rejection, and `5` unsupported resume
+state (`0` is success).
 
 ## Highlights
 
@@ -99,7 +114,11 @@ Config is JSON. See [`docs/config-reference.md`](docs/config-reference.md) and [
 - Broker-free approval requests pause durably instead of allowing the model to continue past a risky tool.
 - Run and rule approval scopes are durable grants matched by exact fingerprint or rule key.
 - Durable event log and checkpoint stores: memory, JSONL, SQLite.
+- JSONL stores reject path-like run IDs and serialize writers across processes
+  with advisory `flock`; checkpoint saves recover through a pending journal.
 - Sub-agent runtime tool with checkpoint-aware child resume; nested sub-agents blocked by default.
+- S7 child progress is forwarded into the parent stream as real-time
+  `subtask.event` records, while terminal child results retain stable task order.
 - Host-owned sub-agent limits drive the advertised task schema and cannot be widened by model requests.
 - Sub-agent tools are available independently of planner/todo configuration.
 - Nested delegation remains off by default and requires explicit host opt-in plus a finite maximum depth.
@@ -119,6 +138,8 @@ Config is JSON. See [`docs/config-reference.md`](docs/config-reference.md) and [
 - Shell policy uses the complete platform Bash AST and security classifiers. It hard-blocks dangerous or ambiguous forms, routes output redirections and complex structures to approval, and requires every parsed command in a chain or substitution to satisfy the allowlist.
 - Memory augmenter that hydrates normalized tasks from a store.
 - Explicit transient-error retry, per-run call budgets, UTF-8-safe output caps, and recursive audit argument redaction.
+- Shell capture is bounded while commands run, and Container Hub response
+  bodies are rejected when they exceed the adapter limit.
 
 **HTTP / SSE edge** — `server/harnesshttp`
 - `POST /run`, `POST /resume`, `GET /events` (replay with `afterSeq`), `GET /live` (live fanout).
@@ -135,9 +156,42 @@ Config is JSON. See [`docs/config-reference.md`](docs/config-reference.md) and [
 - Redaction helpers for common secret-bearing keys.
 
 **Platform adapters**
-- `adapters/zenmind` — run config mapping, chat JSONL projection, feature flag router.
+- `adapters/zenmind` — platform catalog/session DTOs with `ModelResolver`,
+  fail-closed AgentKey/ChatID/RunID routing, stateful content/tool projection,
+  approval wire translation, and platform event-line JSONL output.
 - `adapters/mcp` — MCP tool bridge (resources/prompts/sampling/OAuth stay with the host).
 - `adapters/memory` — scoped memory augmentation into normalized tasks.
+
+The ZenMind wire contract is checked against fixtures captured from
+`agent-platform@1893edb5` under
+[`adapters/zenmind/testdata/platform`](adapters/zenmind/testdata/platform).
+These goldens cover catalog/session input, flat stream envelopes, content/tool
+lifecycles, approval ask/submit/answer, and chat event lines. They do not prove
+that the external platform engine, feature flag, SSE/WS paths, or fallback E2E
+are wired.
+
+For the platform event-line read model, project events first, then append each
+`StreamEvent` with an explicit chat ID:
+
+```go
+projector := zenmind.NewProjectorWithIdentity(zenmind.ProjectorIdentity{
+    ChatID: chatID, AgentKey: agentKey,
+})
+writer := zenmind.NewChatJSONLWriter(root)
+for _, projected := range projector.Project(event) {
+    if err := writer.Append(ctx, chatID, projected); err != nil {
+        return err
+    }
+}
+lines, err := zenmind.ReadEventLines(ctx, root, chatID)
+```
+
+`ChatJSONLWriter` writes `root/chatId.jsonl` platform `EventLine` records with
+top-level `chatId`, `runId`, `updatedAt`, `liveSeq`, `event`, and `_type`. The deprecated
+`LegacyChatJSONLWriter` type, constructed with
+`NewLegacyChatJSONLWriter(root, mapper)`, and `ReadChatRecords` retain the old
+`root/runId/chat.jsonl` `zenmind.chat_trace.v1` format only for existing callers.
+Neither writer implements complete Chat Storage V3.1.
 
 **Sandbox**
 - Local, fake, and Container Hub (beta) backends.
@@ -187,7 +241,8 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - `server/harnesshttp` access control hook for auth and tenancy injection.
 - `eventlog.Bus` and `eventlog.FanoutStore` for live multi-subscriber event fanout.
 - `approval.PendingBroker` for run-scoped pending approvals, exposed via `GET /approvals` and `POST /approval`.
-- `adapters/zenmind`: run configuration mapping, chat JSONL projection, feature flag router.
+- `adapters/zenmind`: run configuration mapping, chat JSONL projection, and a
+  fail-closed routing helper for a host-owned feature flag.
 - `adapters/memory`: scoped memory augmentation.
 - Sub-agent resume reuses terminal children and continues existing child checkpoints.
 - Child checkpoint backend failures stop before model execution, while missing checkpoints alone start fresh child runs.
@@ -208,7 +263,9 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - The code review example README documents its approval prompt and effective read-only workspace posture.
 - The code review example safety wiring is checked in the examples test suite.
 - MVP validation evidence is checked against existing test and benchmark names.
-- Go source platform-boundary terms are checked in the docs test suite.
+- The docs test suite rejects platform brand coupling outside
+  `adapters/zenmind` and rejects platform-module or `internal` imports inside
+  that adapter.
 - The SDK embedded example is run in tests without an API key.
 - MVP scope now reflects the current CLI, adapter, resume, and example surface.
 - Product roadmap MVP scope now reflects the current MCP, memory, sub-agent, and CLI inspection surface.
@@ -277,19 +334,29 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - Sandbox checkpoint state binds sessions to the exact run/subtask scope.
 - Sandbox close is best-effort and cannot replace a successful command result.
 - Container Hub transport deadlines map to stable `sandbox_timeout` errors.
+- JSONL event/checkpoint stores use cross-process file locks, reject unsafe
+  run IDs, and recover interrupted checkpoint saves from a pending journal.
+- Shell output capture and Container Hub response reads are bounded in memory.
 - Tool retries require `tool.MarkRetryable`; permanent and policy errors run once.
 - `ToolArgumentRedaction` removes configured nested keys from durable `tool.call` events without changing tool input.
 - Tool call budgets are isolated by run, and output truncation preserves valid UTF-8.
 - Trace metadata enrichment.
 - A hardening test suite and a failure-mode guide.
 - The root Agent loop is now an adapter around `harness.Runner`; runner-level tests cover text completion, tool continuation, and oneshot finalization directly.
+- Production Agent checkpoint creation and `checkpoint.created` payloads are
+  shared across normal, planner, terminal, and cancellation paths; `recorder`
+  remains a low-level ordered-write helper rather than the Agent lifecycle.
+- ZenMind adapter wire goldens are pinned to `agent-platform@1893edb5`, while
+  external engine/feature-flag/SSE/WS/fallback integration remains unverified.
 
 Verification before each release:
 
 ```bash
-go test ./...
-go test ./examples/...
-grep -R -n -E 'agent-platform|ZenMind' --include='*.go' .   # must return nothing
+env GOTOOLCHAIN=local go test ./...
+env GOTOOLCHAIN=local go test ./examples/...
+env GOTOOLCHAIN=local go test ./docs/...
+rg -n 'zenforge\.ya?ml|```ya?ml' README.md docs             # must return nothing
+git diff --check
 ```
 
 **Not in MVP** — see [`docs/limitations.md`](docs/limitations.md) for the full list:
@@ -299,6 +366,9 @@ grep -R -n -E 'agent-platform|ZenMind' --include='*.go' .   # must return nothin
 - MCP covers tools only; resources, prompts, sampling, discovery, and OAuth stay with the host platform.
 - OpenTelemetry exporter setup stays in host services.
 - CLI config is JSON only.
+- Core event/checkpoint JSONL durability uses Unix advisory file locks and
+  therefore requires a filesystem with working `flock` semantics for
+  multi-process writers.
 - Nested sub-agents are blocked by default.
 - Container Hub sandbox is optional and beta.
 
@@ -333,7 +403,11 @@ zenforge/
 
 ## Contributing
 
-Issues and pull requests are welcome. The CI workflow runs `go test ./...`, builds the examples, and fails the build if any Go file references `agent-platform` or ZenMind platform packages — that boundary is the point of the project.
+Issues and pull requests are welcome. The CI workflow runs `go test ./...` and
+builds the examples. Core and other non-adapter Go packages must not couple to
+`agent-platform` or ZenMind branding. `adapters/zenmind` may document protocol
+provenance, but its imports are AST-checked to reject the platform module and
+all `internal` packages.
 
 Before opening a PR, run:
 

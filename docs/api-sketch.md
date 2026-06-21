@@ -155,7 +155,9 @@ rec := recorder.Recorder{
 
 The checkpoint schema version is `zenforge.checkpoint.v1`. The checkpoint
 store is the resumable execution source of truth, while the event log is the
-observable run history.
+observable run history. `recorder.Recorder` is a low-level ordered-write helper;
+production `zenforge.Agent` lifecycle and resume behavior do not run through
+this helper.
 
 ## Define A Typed Tool
 
@@ -233,34 +235,29 @@ zenforge resume run_123
 
 ## Config File
 
-```yaml
-model:
-  provider: openai
-  name: gpt-4.1
-
-agent:
-  instructions: |
-    You are a senior Go backend engineer.
-  planning: true
-  subagents: true
-
-tools:
-  filesystem:
-    root: .
-    read:
-      - .
-    write:
-      - ./tmp
-  shell:
-    workingDir: .
-    allow:
-      - go test ./...
-      - go vet ./...
-      - grep
-      - find
-    timeout: 30s
-
-checkpoint:
-  type: jsonl
-  path: ./.zenforge/runs
+```json
+{
+  "model": {
+    "provider": "openai",
+    "name": "gpt-4.1"
+  },
+  "agent": {
+    "instructions": "You are a senior Go backend engineer.",
+    "mode": "plan_execute"
+  },
+  "workspace": {
+    "root": ".",
+    "readRoots": ["."],
+    "writeRoots": ["./tmp"]
+  },
+  "shell": {
+    "workingDir": ".",
+    "allow": ["go test ./...", "go vet ./...", "grep", "find"],
+    "timeout": "30s"
+  },
+  "checkpoint": {
+    "type": "jsonl",
+    "path": "./.zenforge/runs"
+  }
+}
 ```

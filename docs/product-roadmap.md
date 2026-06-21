@@ -58,6 +58,21 @@ V0.1 First usable product
 V0.2 Production hardening
 ```
 
+### Current Status
+
+| Stage | Status and repository evidence |
+| --- | --- |
+| S0-S6 | Implemented and covered by the package tests mapped in `docs/mvp-validation.md`. |
+| S7 | Implemented for runtime subtask streaming, bounded parallel execution, child checkpoint resume, and default-denied nesting; see the named sub-agent tests in `docs/mvp-validation.md`. |
+| S8 | Local/fake backends and the Container Hub beta adapter are contract-tested with local HTTP servers. A real Container Hub service has not been exercised and remains external acceptance. |
+| MVP | Repository-scoped acceptance is implemented and test-mapped. Provider-backed examples and deployment integration remain environment-dependent smoke tests. |
+| V0.1 | `v0.1.0` was tagged. Repository wire goldens now cover the ZenMind DTO/projector/approval/event-line boundary at `agent-platform@1893edb5`; the external engine/feature-flag/SSE/WS/fallback spike is still open. |
+| V0.2 | Partially implemented hardening, including SQLite soak coverage, Go 1.26-only CI, JSONL crash/concurrency safety, typed tools, and bounded shell/Hub responses. This roadmap stage is not declared complete. |
+
+Completion in this table means repository code plus automated test evidence. It
+does not claim production acceptance by external `agent-platform` or Container
+Hub deployments.
+
 ## S0: Project Foundation
 
 Goal:
@@ -484,16 +499,23 @@ After ZenForge MVP, integrate back into `agent-platform` through adapters.
 Recommended path:
 
 1. Keep current `agent-platform` runtime working.
-2. Add ZenForge behind a feature flag (`adapters/zenmind.Router`).
+2. Add ZenForge behind a host feature flag using fail-closed
+   AgentKey/ChatID/RunID routing (`adapters/zenmind.Router`).
 3. Map ZenMind catalog/session into ZenForge `RunConfig`
    (`adapters/zenmind.BuildRun`).
-4. Map ZenForge events into existing frontend events
-   (`adapters/zenmind.MapEvent`).
-5. Keep chat JSONL as UI read model (`zenmind.NewChatJSONLWriter`).
+4. Project ZenForge events into stateful content/tool platform lifecycles
+   (`adapters/zenmind.Projector`).
+5. Keep the event-only platform JSONL wire as a read model
+   (`zenmind.NewChatJSONLWriter`), without claiming complete Chat Storage V3.1.
 6. Gradually replace current internal loop for selected agents while
    `RouteLegacy` stays available.
 
 Do not big-bang replace the platform runtime.
+
+Repository fixtures under `adapters/zenmind/testdata/platform` provide golden
+wire evidence from `agent-platform@1893edb5`. The engine bridge, actual rollout
+flag, SSE/WS delivery, and fallback E2E still require changes and tests in the
+external platform repository.
 
 ## Final Initial Product Vision
 

@@ -125,7 +125,15 @@ S1 keeps durable runtime state in two separate streams:
   event JSON shape extracted from `agent-platform/internal/stream`; this is the
   observable history for users, CLI, trace adapters, and tests.
 
-The `recorder` package coordinates the write order between those streams.
+The production `zenforge.Agent` does not instantiate `recorder.Recorder`. Its
+production checkpoint helpers build one canonical checkpoint shape and one
+canonical `checkpoint.created` payload across normal, planner, terminal, and
+cancellation paths. Writes fail closed: state is saved before the checkpoint
+event, and terminal state is durable before terminal success is reported. The
+`recorder` package is a separately tested low-level helper with the same
+checkpoint-before-event ordering, terminal phase/event validation, and
+cancelled-context persistence. It does not own Agent lifecycle, resume, live
+streaming, or tracing.
 When a server needs live observers, `eventlog.FanoutStore` can wrap any durable
 `eventlog.Store` and publish appended events to `eventlog.Bus`; replay and
 resume still come from the durable stores.
@@ -213,5 +221,7 @@ subtask.done
 checkpoint.created
 ```
 
-The existing `agent-platform/internal/stream` events can be mapped to these
-public names by an adapter while the old UI keeps using its current payloads.
+The adapter now has stateful content/tool lifecycle projection and flat-wire
+goldens captured from `agent-platform@1893edb5`; compatibility evidence is no
+longer limited to similar event names. This still does not connect the external
+engine, feature flag, SSE/WS delivery, or fallback path.

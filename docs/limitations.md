@@ -49,3 +49,11 @@ what is experimental, and what remains adapter territory.
 ZenForge should not import `agent-platform` or ZenMind server/chat packages.
 Those systems can adapt to ZenForge through public model, tool, workspace,
 approval, sandbox, event log, checkpoint, and trace interfaces.
+
+`adapters/zenmind` has repository-local golden coverage for the
+`agent-platform@1893edb5` catalog/session DTO subset, stream wire envelopes,
+content/tool projection, approval roundtrip, and event-only chat JSONL lines.
+It does not implement complete Chat Storage V3.1, nor does this repository wire
+the external engine bridge, rollout feature flag, SSE/WS delivery, or legacy
+fallback E2E. A real Container Hub deployment also remains an environment
+acceptance item.
