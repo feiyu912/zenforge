@@ -1,6 +1,6 @@
 # ADR 0020: No Silent Sandbox Fallback
 
-Status: proposed
+Status: accepted
 
 ## Context
 
@@ -16,4 +16,3 @@ No silent fallback from sandbox to local execution is allowed.
 ## Consequences
 
 This may interrupt some runs, but it prevents surprising host execution.
-

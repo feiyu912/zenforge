@@ -1,6 +1,6 @@
 # ADR 0011: Harness Receives Normalized Input
 
-Status: proposed
+Status: accepted
 
 ## Context
 
@@ -35,4 +35,3 @@ Costs:
 
 - platform adapters must do explicit translation;
 - prompt assembly is not magically inherited from ZenMind.
-

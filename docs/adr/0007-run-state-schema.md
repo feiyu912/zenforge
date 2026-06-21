@@ -1,6 +1,6 @@
 # ADR 0007: Run State Schema
 
-Status: proposed
+Status: accepted
 
 ## Context
 

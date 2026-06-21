@@ -1,6 +1,6 @@
 # ADR 0008: Tool Result Contract
 
-Status: proposed
+Status: accepted
 
 ## Context
 
@@ -40,4 +40,3 @@ type Result struct {
 
 This avoids forcing every tool into either raw text or arbitrary JSON. It also
 matches the current platform's proven shape while removing platform DTOs.
-

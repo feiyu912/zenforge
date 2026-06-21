@@ -1,6 +1,6 @@
 # ADR 0018: Nested Sub-Agents Disabled By Default
 
-Status: proposed
+Status: accepted
 
 ## Context
 

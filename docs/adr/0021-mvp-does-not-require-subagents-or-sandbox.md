@@ -1,6 +1,9 @@
 # ADR 0021: MVP Does Not Require Sub-Agents Or Sandbox
 
-Status: proposed
+Status: accepted
+
+Amendment: sub-agent support and optional sandbox adapters now ship, but they
+remain optional capabilities and are not required to use the core harness.
 
 ## Context
 
@@ -32,4 +35,3 @@ They can ship as experimental features or in V0.1.
 
 This gives the project a smaller first finish line while keeping the roadmap
 honest.
-

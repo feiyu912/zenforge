@@ -64,7 +64,7 @@ V0.2 Production hardening
 | --- | --- |
 | S0-S6 | Implemented and covered by the package tests mapped in `docs/mvp-validation.md`. |
 | S7 | Implemented for runtime subtask streaming, bounded parallel execution, child checkpoint resume, and default-denied nesting; see the named sub-agent tests in `docs/mvp-validation.md`. |
-| S8 | Local/fake backends and the Container Hub beta adapter are contract-tested with local HTTP servers. A real Container Hub service has not been exercised and remains external acceptance. |
+| S8 | The direct local shell path, fake sandbox backend, and Container Hub beta adapter are contract-tested; Hub transport tests use local HTTP servers. A real Container Hub service has not been exercised and remains external acceptance. |
 | MVP | Repository-scoped acceptance is implemented and test-mapped. Provider-backed examples and deployment integration remain environment-dependent smoke tests. |
 | V0.1 | `v0.1.0` was tagged. Repository wire goldens now cover the ZenMind DTO/projector/approval/event-line boundary at `agent-platform@1893edb5`; the external engine/feature-flag/SSE/WS/fallback spike is still open. |
 | V0.2 | Partially implemented hardening, including SQLite soak coverage, Go 1.26-only CI, JSONL crash/concurrency safety, typed tools, and bounded shell/Hub responses. This roadmap stage is not declared complete. |

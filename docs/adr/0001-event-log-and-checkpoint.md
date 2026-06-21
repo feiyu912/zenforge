@@ -1,6 +1,6 @@
 # ADR 0001: Event Log And Checkpoint Are Separate
 
-Status: proposed
+Status: accepted
 
 ## Context
 

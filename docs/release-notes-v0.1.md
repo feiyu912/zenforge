@@ -14,7 +14,9 @@ long-running, tool-using, observable, and recoverable agents.
 - Human-in-the-loop approval broker and CLI approval modes.
 - Server helpers for HTTP runs, resume, event replay, and SSE streaming.
 - Trace sinks for JSONL/stdout/memory and OpenTelemetry spans.
-- Container Hub sandbox adapter beta plus local/fake sandbox backends.
+- Direct local shell execution, fake sandbox test helpers, and the optional
+  Container Hub sandbox adapter beta. Local execution is not a
+  `sandbox.Sandbox` backend.
 - ZenMind adapter with platform catalog/session DTOs and model resolution,
   fail-closed rollout routing, stateful flat-wire projection, approval protocol
   translation, and event-line JSONL output. Wire goldens are pinned to

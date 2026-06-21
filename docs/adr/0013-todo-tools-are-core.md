@@ -1,6 +1,6 @@
 # ADR 0013: Todo Tools Are Core
 
-Status: proposed
+Status: accepted
 
 ## Context
 
@@ -33,4 +33,3 @@ Costs:
 
 - core includes a small opinionated planner primitive;
 - users who want no planning must disable it.
-

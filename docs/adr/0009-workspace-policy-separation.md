@@ -1,6 +1,6 @@
 # ADR 0009: Workspace And Policy Are Separate
 
-Status: proposed
+Status: accepted
 
 ## Context
 
@@ -37,4 +37,3 @@ Costs:
 
 - more interfaces;
 - local workspace still needs careful path jail logic.
-

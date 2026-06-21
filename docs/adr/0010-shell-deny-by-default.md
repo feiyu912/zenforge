@@ -1,6 +1,6 @@
 # ADR 0010: Shell Is Deny-By-Default
 
-Status: proposed
+Status: accepted
 
 ## Context
 
@@ -33,4 +33,3 @@ For local CLI MVP:
 
 This makes first use slightly less magical, but it prevents ZenForge from
 shipping an unsafe shell agent by default.
-

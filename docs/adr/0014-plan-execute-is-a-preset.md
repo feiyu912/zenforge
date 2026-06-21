@@ -1,6 +1,6 @@
 # ADR 0014: Plan/Execute Is A Preset
 
-Status: proposed
+Status: accepted
 
 ## Context
 
@@ -26,4 +26,3 @@ Costs:
 
 - planner must maintain stage-specific prompts and tool restrictions;
 - more tests are needed around stage transitions.
-

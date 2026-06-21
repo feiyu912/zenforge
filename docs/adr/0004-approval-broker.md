@@ -1,6 +1,6 @@
 # ADR 0004: Approval Broker
 
-Status: proposed
+Status: accepted
 
 ## Context
 
@@ -82,4 +82,3 @@ ZenMind adapter can map:
 - core `approval.resolved` to `awaiting.answer`.
 
 Core should not know about submit routes or chat pending awaiting records.
-

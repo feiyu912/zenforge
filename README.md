@@ -15,7 +15,9 @@ Most agent frameworks target notebooks. ZenForge targets services:
 - **Durable runs** — checkpoints at every boundary, resume after crashes.
 - **Observable execution** — typed event stream + JSONL/SQLite/OTel sinks, with fail-closed event-log writes.
 - **Replaceable parts** — swap models, stores, transports, even the planner, without rewriting the loop.
-- **Small public surface** — five functions, one `Config` struct, one `Task` type. Everything else is an interface.
+- **Small public surface** — a focused root package for agent construction,
+  normalized tasks, run results, and events, with replaceable interfaces in
+  focused subpackages.
 
 ## Quick Look
 
@@ -194,7 +196,10 @@ top-level `chatId`, `runId`, `updatedAt`, `liveSeq`, `event`, and `_type`. The d
 Neither writer implements complete Chat Storage V3.1.
 
 **Sandbox**
-- Local, fake, and Container Hub (beta) backends.
+- Local shell tools execute directly in the configured workspace; they are not
+  a `sandbox.Sandbox` backend.
+- `sandbox/fake` provides a test backend, and `sandbox/containerhub` provides an
+  optional beta Container Hub backend.
 - Scoped `sandbox.State` helpers for same-run/subtask session continuity.
 - Closed or cross-scope sessions are never written back as reusable checkpoint state.
 
@@ -387,7 +392,7 @@ zenforge/
   tools/                # workspace, shell, todo, task
   subagent/             # sub-agent runtime
   planner/              # todo manager + plan/execute preset
-  sandbox/              # local, fake, containerhub + State helpers
+  sandbox/              # interface, fake/containerhub backends + State helpers
   workspace/            # workspace interface + local impl
   policy/               # shell/workspace policy types
   trace/                # sinks: memory, stdout, jsonl, otel

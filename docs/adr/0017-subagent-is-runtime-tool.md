@@ -1,6 +1,6 @@
 # ADR 0017: Sub-Agent Is A Runtime Tool
 
-Status: proposed
+Status: accepted
 
 ## Context
 
@@ -26,4 +26,3 @@ Costs:
 
 - harness must know about runtime tools;
 - task tool is more privileged than ordinary tools.
-

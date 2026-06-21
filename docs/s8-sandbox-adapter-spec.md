@@ -137,14 +137,17 @@ assembly should not call Container Hub directly.
 
 ## Session Identity
 
-Session keys:
+Session keys are produced by `sandbox.SessionKey`. Each trimmed, non-empty
+component is encoded as its Base64URL length, a hyphen, and its unpadded
+Base64URL value:
 
 ```text
-main run:       run-{runID}
-child subtask:  run-{runID}-{subtaskID}
+sandbox.SessionKey("run_1", "")       = "run-7-cnVuXzE"
+sandbox.SessionKey("run_1", "task_1") = "run-7-cnVuXzE-8-dGFza18x"
 ```
 
-This mirrors the useful isolation pattern in `agent-platform`.
+Call `sandbox.SessionKey` rather than assembling an ID manually. The length
+prefixes make run/subtask component boundaries unambiguous and collision-safe.
 
 Rules:
 

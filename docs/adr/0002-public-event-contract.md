@@ -1,6 +1,6 @@
 # ADR 0002: Public Event Contract
 
-Status: proposed
+Status: accepted
 
 ## Context
 

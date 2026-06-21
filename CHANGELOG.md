@@ -13,7 +13,9 @@ Initial usable ZenForge release candidate.
 - HITL approval brokers and CLI approval modes.
 - HTTP/SSE server helpers and event replay.
 - JSON/stdout/memory trace sinks plus OpenTelemetry span export.
-- Container Hub sandbox beta and fake/local sandbox helpers.
+- Fake sandbox test helpers and the optional Container Hub sandbox beta;
+  local shell execution remains a direct workspace execution path, not a
+  `sandbox.Sandbox` backend.
 - ZenMind compatibility event and approval adapter.
 - SDK, provider, adapter, safety, resume, and release documentation.
 

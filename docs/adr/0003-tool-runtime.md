@@ -1,6 +1,10 @@
 # ADR 0003: Tool Runtime And Middleware
 
-Status: proposed
+Status: accepted
+
+Amendment: the tool runtime and middleware decision is implemented. The `http`
+builtin listed below is deferred beyond the current MVP; it is not a core
+builtin in the present release.
 
 ## Context
 
@@ -72,10 +76,10 @@ MVP core builtins:
 - `workspace_list`
 - `workspace_grep`
 - `shell`
-- `http`
 
 Adapter or post-MVP:
 
+- `http`;
 - memory tools;
 - session search;
 - artifact publish;
@@ -129,4 +133,3 @@ Avoid leaking:
 - `contracts.ExecutionContext`;
 - ZenMind `QuerySession`;
 - memory/chat/gateway dependencies.
-

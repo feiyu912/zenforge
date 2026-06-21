@@ -1,6 +1,6 @@
 # ADR 0019: Sandbox Is An Adapter
 
-Status: proposed
+Status: accepted
 
 ## Context
 
@@ -26,4 +26,3 @@ Costs:
 
 - shell tools need backend routing;
 - some features require optional adapter config.
-

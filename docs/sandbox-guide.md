@@ -62,11 +62,15 @@ if err != nil {
 ## Session Scope
 
 ZenForge uses one sandbox session for the main run and separate sessions for
-child sub-agent tasks.
+child sub-agent tasks. Session IDs are created by `sandbox.SessionKey`, which
+trims both inputs and encodes each non-empty component as its Base64URL length,
+a hyphen, and the unpadded Base64URL value. Call the helper rather than
+constructing IDs manually; the length prefixes prevent component-boundary
+collisions.
 
 ```text
-main run:      run-{runID}
-child task:    run-{runID}-{subtaskID}
+sandbox.SessionKey("run_1", "")       = "run-7-cnVuXzE"
+sandbox.SessionKey("run_1", "task_1") = "run-7-cnVuXzE-8-dGFza18x"
 ```
 
 ## Resume Metadata

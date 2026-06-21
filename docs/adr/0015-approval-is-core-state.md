@@ -1,6 +1,6 @@
 # ADR 0015: Approval Is Core State
 
-Status: proposed
+Status: accepted
 
 ## Context
 
@@ -25,4 +25,3 @@ Costs:
 
 - core state model grows;
 - approval request schema must be generic enough for multiple UIs.
-

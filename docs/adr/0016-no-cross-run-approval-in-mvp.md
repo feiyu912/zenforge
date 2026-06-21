@@ -1,6 +1,6 @@
 # ADR 0016: No Cross-Run Approval In MVP
 
-Status: proposed
+Status: accepted
 
 ## Context
 
@@ -21,4 +21,3 @@ Cross-run approvals are post-MVP.
 
 This keeps the first approval system safe and simple. Applications that need
 global policy can implement a custom broker.
-

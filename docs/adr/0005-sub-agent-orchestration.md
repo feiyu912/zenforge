@@ -1,6 +1,6 @@
 # ADR 0005: Sub-Agent Orchestration
 
-Status: proposed
+Status: accepted
 
 ## Context
 
@@ -94,4 +94,3 @@ Do not directly copy:
 - chat store references;
 - proxy client logic;
 - server route coupling.
-

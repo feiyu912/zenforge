@@ -1,6 +1,6 @@
 # ADR 0012: Model Adapters Own Provider Protocol
 
-Status: proposed
+Status: accepted
 
 ## Context
 
@@ -34,4 +34,3 @@ Costs:
 
 - model adapter interface must be expressive enough for tool calls;
 - streaming tool-call accumulation lives in adapters.
-

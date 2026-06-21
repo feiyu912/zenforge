@@ -1,6 +1,10 @@
 # ADR 0006: Package Layout
 
-Status: proposed
+Status: accepted
+
+Amendment: the focused-package layout is implemented. The tree below records
+the proposed shape, not a promise that every illustrative package ships in the
+current release; notably `tools/http` and `workspace/memory` are deferred.
 
 ## Context
 
