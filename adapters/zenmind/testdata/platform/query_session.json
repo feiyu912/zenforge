@@ -1,0 +1,25 @@
+{
+  "_fixture": {
+    "commit": "1893edb51b8dc691ae974cea2719a835e0e21de4",
+    "source": "internal/api/types.go:QueryRequest + internal/contracts/interfaces.go:QuerySession"
+  },
+  "data": {
+    "requestId": "req-platform-1",
+    "chatId": "chat-platform-1",
+    "runId": "run-platform-1",
+    "agentKey": "checkpoint-reviewer",
+    "modelKey": "platform-primary",
+    "mode": "PLAN_EXECUTE",
+    "planningMode": true,
+    "accessLevel": "auto_approve",
+    "historyMessages": [
+      {"role": "user", "content": "Check the DTO boundary."},
+      {"role": "assistant", "content": "I will inspect it."}
+    ],
+    "workspaceRoot": "/workspace/zenforge",
+    "message": "Inspect the checkpoint DTO changes.",
+    "input": "legacy input must not win",
+    "conversationId": "legacy-chat-must-not-win",
+    "metadata": {"session": "metadata-value"}
+  }
+}

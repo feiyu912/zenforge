@@ -1,0 +1,45 @@
+{
+  "_fixture": {
+    "commit": "1893edb51b8dc691ae974cea2719a835e0e21de4",
+    "source": "internal/catalog/registry.go:AgentDefinition"
+  },
+  "data": {
+    "key": "checkpoint-reviewer",
+    "agentKey": "legacy-agent-must-not-win",
+    "name": "Checkpoint Reviewer",
+    "instructions": "Review carefully.",
+    "modelKey": "platform-primary",
+    "mode": "PLAN_EXECUTE",
+    "tools": ["echo"],
+    "toolNames": ["hidden"],
+    "skills": ["go-review", "checkpoint"],
+    "contextTags": ["system", "session"],
+    "budget": {
+      "timeout": 900,
+      "maxSteps": 42,
+      "tool": {"maxCalls": 84}
+    },
+    "stageSettings": {
+      "maxSteps": 12,
+      "maxWorkRoundsPerTask": 4,
+      "plan": {"modelKey": "platform-planner", "tools": ["echo"]},
+      "execute": {"modelKey": "platform-primary", "reasoningEffort": "HIGH"}
+    },
+    "toolOverrides": {
+      "echo": {"name": "echo", "description": "Platform echo override", "timeout": 30}
+    },
+    "runtime": {
+      "environmentId": "go-1.26",
+      "level": "agent",
+      "env": {"GOTOOLCHAIN": "local"}
+    },
+    "workspace": {"root": "/workspace/zenforge"},
+    "hostAccess": {
+      "readRoots": ["@workspace", "@agent"],
+      "writeRoots": ["@workspace"]
+    },
+    "reactMaxSteps": 9,
+    "maxSteps": 3,
+    "metadata": {"fixture": "catalog"}
+  }
+}
