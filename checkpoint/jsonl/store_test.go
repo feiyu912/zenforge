@@ -1,12 +1,19 @@
 package jsonl
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -170,6 +177,198 @@ func TestStoreRejectsNonIncreasingSeqWithoutChangingFiles(t *testing.T) {
 	}
 }
 
+func TestStoreRetryAfterLatestFailureDoesNotDuplicateHistory(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	store := New(root)
+	var calls atomic.Int32
+	store.writeLatest = func(runDir string, data []byte) error {
+		if calls.Add(1) == 1 {
+			return errors.New("injected latest failure")
+		}
+		return atomicWriteFile(runDir, latestFileName, data)
+	}
+	cp := testCheckpoint("run_1", 1)
+	if err := store.Save(ctx, cp); err == nil || !strings.Contains(err.Error(), "injected latest failure") {
+		t.Fatalf("first Save error = %v, want injected failure", err)
+	}
+	if err := store.Save(ctx, cp); err != nil {
+		t.Fatalf("retry Save returned error: %v", err)
+	}
+	loaded, err := store.Load(ctx, cp.RunID)
+	if err != nil || loaded.Seq != cp.Seq {
+		t.Fatalf("Load = %#v, %v", loaded, err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, cp.RunID, checkpointsFileName))
+	if err != nil {
+		t.Fatalf("ReadFile returned error: %v", err)
+	}
+	if got := len(strings.Split(strings.TrimSpace(string(data)), "\n")); got != 1 {
+		t.Fatalf("history entry count = %d, want 1", got)
+	}
+	if _, err := os.Stat(filepath.Join(root, cp.RunID, pendingFileName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("pending transaction remains: %v", err)
+	}
+}
+
+func TestStoreLoadRecoversPendingCheckpointWithoutRetryingSave(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	store := New(root)
+	if err := store.Save(ctx, testCheckpoint("run_1", 1)); err != nil {
+		t.Fatalf("Save seq 1 returned error: %v", err)
+	}
+	store.writeLatest = func(string, []byte) error {
+		return errors.New("injected latest failure")
+	}
+	if err := store.Save(ctx, testCheckpoint("run_1", 2)); err == nil || !strings.Contains(err.Error(), "injected latest failure") {
+		t.Fatalf("Save seq 2 error = %v, want injected failure", err)
+	}
+
+	loaded, err := New(root).Load(ctx, "run_1")
+	if err != nil {
+		t.Fatalf("Load from new Store returned error: %v", err)
+	}
+	if loaded.Seq != 2 {
+		t.Fatalf("loaded seq = %d, want 2", loaded.Seq)
+	}
+	assertCheckpointHistorySeqs(t, root, "run_1", 1, 2)
+	if _, err := os.Stat(filepath.Join(root, "run_1", pendingFileName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("pending transaction remains: %v", err)
+	}
+}
+
+func TestStoreListRecoversPendingCheckpoint(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	store := New(root)
+	if err := store.Save(ctx, testCheckpoint("run_1", 1)); err != nil {
+		t.Fatalf("Save seq 1 returned error: %v", err)
+	}
+	store.writeLatest = func(string, []byte) error {
+		return errors.New("injected latest failure")
+	}
+	if err := store.Save(ctx, testCheckpoint("run_1", 2)); err == nil {
+		t.Fatal("Save seq 2 unexpectedly succeeded")
+	}
+
+	summaries, err := New(root).List(ctx)
+	if err != nil {
+		t.Fatalf("List from new Store returned error: %v", err)
+	}
+	if len(summaries) != 1 || summaries[0].Seq != 2 {
+		t.Fatalf("summaries = %#v, want recovered seq 2", summaries)
+	}
+	assertCheckpointHistorySeqs(t, root, "run_1", 1, 2)
+}
+
+func TestStoreRejectsUnsafeRunIDs(t *testing.T) {
+	store := New(t.TempDir())
+	ctx := context.Background()
+	for _, runID := range []string{".", "..", "nested/run", `nested\run`, filepath.Join(string(filepath.Separator), "tmp", "run")} {
+		t.Run(fmt.Sprintf("%q", runID), func(t *testing.T) {
+			if err := store.Save(ctx, testCheckpoint(runID, 1)); err == nil {
+				t.Fatalf("Save accepted unsafe runID %q", runID)
+			}
+			if _, err := store.Load(ctx, runID); err == nil {
+				t.Fatalf("Load accepted unsafe runID %q", runID)
+			}
+			if err := store.Delete(ctx, runID); err == nil {
+				t.Fatalf("Delete accepted unsafe runID %q", runID)
+			}
+		})
+	}
+}
+
+func TestStoresAcrossProcessesSerializeCheckpointSequences(t *testing.T) {
+	root := t.TempDir()
+	const processes = 4
+	const perProcess = 8
+	type childProcess struct {
+		cmd    *exec.Cmd
+		output bytes.Buffer
+	}
+	commands := make([]*childProcess, 0, processes)
+	for i := 0; i < processes; i++ {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestCheckpointProcessHelper$")
+		cmd.Env = append(os.Environ(),
+			"ZENFORGE_CHECKPOINT_HELPER=1",
+			"ZENFORGE_JSONL_ROOT="+root,
+			"ZENFORGE_JSONL_COUNT="+strconv.Itoa(perProcess),
+		)
+		child := &childProcess{cmd: cmd}
+		cmd.Stdout = &child.output
+		cmd.Stderr = &child.output
+		if err := cmd.Start(); err != nil {
+			t.Fatalf("start child: %v", err)
+		}
+		commands = append(commands, child)
+	}
+	for _, child := range commands {
+		if err := child.cmd.Wait(); err != nil {
+			t.Fatalf("child failed: %v\n%s", err, child.output.Bytes())
+		}
+	}
+
+	want := processes * perProcess
+	loaded, err := New(root).Load(context.Background(), "run_1")
+	if err != nil || loaded.Seq != int64(want) {
+		t.Fatalf("latest = %#v, %v; want seq %d", loaded, err, want)
+	}
+	file, err := os.Open(filepath.Join(root, "run_1", checkpointsFileName))
+	if err != nil {
+		t.Fatalf("Open history: %v", err)
+	}
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+	var seq int64
+	for scanner.Scan() {
+		var cp checkpoint.Checkpoint
+		if err := json.Unmarshal(scanner.Bytes(), &cp); err != nil {
+			t.Fatalf("decode history: %v", err)
+		}
+		seq++
+		if cp.Seq != seq {
+			t.Fatalf("history seq = %d, want %d", cp.Seq, seq)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("scan history: %v", err)
+	}
+	if seq != int64(want) {
+		t.Fatalf("history entries = %d, want %d", seq, want)
+	}
+}
+
+func TestCheckpointProcessHelper(t *testing.T) {
+	if os.Getenv("ZENFORGE_CHECKPOINT_HELPER") != "1" {
+		t.Skip("subprocess helper")
+	}
+	count, err := strconv.Atoi(os.Getenv("ZENFORGE_JSONL_COUNT"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := New(os.Getenv("ZENFORGE_JSONL_ROOT"))
+	ctx := context.Background()
+	for accepted := 0; accepted < count; {
+		latest, err := store.Load(ctx, "run_1")
+		next := int64(1)
+		if err == nil {
+			next = latest.Seq + 1
+		} else if !errors.Is(err, checkpoint.ErrNotFound) {
+			t.Fatal(err)
+		}
+		err = store.Save(ctx, testCheckpoint("run_1", next))
+		if errors.Is(err, checkpoint.ErrStaleCheckpoint) {
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		accepted++
+	}
+}
+
 func TestStoreListSummaries(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -246,5 +445,34 @@ func testCheckpoint(runID string, seq int64) checkpoint.Checkpoint {
 			Control:   harness.RunControlState{Status: harness.RunStatusIdle},
 		},
 		SavedAt: now,
+	}
+}
+
+func assertCheckpointHistorySeqs(t *testing.T, root, runID string, want ...int64) {
+	t.Helper()
+	file, err := os.Open(filepath.Join(root, runID, checkpointsFileName))
+	if err != nil {
+		t.Fatalf("Open history: %v", err)
+	}
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+	var got []int64
+	for scanner.Scan() {
+		var cp checkpoint.Checkpoint
+		if err := json.Unmarshal(scanner.Bytes(), &cp); err != nil {
+			t.Fatalf("decode history: %v", err)
+		}
+		got = append(got, cp.Seq)
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("scan history: %v", err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("history seqs = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("history seqs = %v, want %v", got, want)
+		}
 	}
 }

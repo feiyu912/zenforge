@@ -2,6 +2,8 @@ package zenmind
 
 import (
 	"context"
+	"fmt"
+	"path/filepath"
 	"testing"
 
 	"github.com/feiyu912/zenforge"
@@ -47,5 +49,21 @@ func TestReadChatRecordsMissingRunReturnsEmpty(t *testing.T) {
 	}
 	if len(records) != 0 {
 		t.Fatalf("records = %#v, want empty", records)
+	}
+}
+
+func TestChatJSONLRejectsUnsafeRunIDs(t *testing.T) {
+	root := t.TempDir()
+	writer := NewChatJSONLWriter(root, NewMapper())
+	for _, runID := range []string{".", "..", "nested/run", `nested\run`, filepath.Join(string(filepath.Separator), "tmp", "run")} {
+		t.Run(fmt.Sprintf("%q", runID), func(t *testing.T) {
+			event := zenforge.NewEvent(zenforge.EventModelDelta, runID, nil)
+			if err := writer.Append(context.Background(), event); err == nil {
+				t.Fatalf("Append accepted unsafe runID %q", runID)
+			}
+			if _, err := ReadChatRecords(context.Background(), root, runID); err == nil {
+				t.Fatalf("ReadChatRecords accepted unsafe runID %q", runID)
+			}
+		})
 	}
 }

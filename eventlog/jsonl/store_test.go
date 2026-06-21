@@ -1,10 +1,14 @@
 package jsonl
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -113,6 +117,86 @@ func TestStoresSharingRootSerializeConcurrentAppends(t *testing.T) {
 	for i, event := range events {
 		if event.Seq != int64(i+1) {
 			t.Fatalf("event %d seq = %d, want %d", i, event.Seq, i+1)
+		}
+	}
+}
+
+func TestStoreRejectsUnsafeRunIDs(t *testing.T) {
+	store := New(t.TempDir())
+	ctx := context.Background()
+	for _, runID := range []string{".", "..", "nested/run", `nested\run`, filepath.Join(string(filepath.Separator), "tmp", "run")} {
+		t.Run(fmt.Sprintf("%q", runID), func(t *testing.T) {
+			event := zenforge.NewEvent(zenforge.EventModelDelta, runID, nil)
+			if err := store.Append(ctx, event); err == nil {
+				t.Fatalf("Append accepted unsafe runID %q", runID)
+			}
+			if _, err := store.Read(ctx, runID, 0, 0); err == nil {
+				t.Fatalf("Read accepted unsafe runID %q", runID)
+			}
+			if _, err := store.LatestSeq(ctx, runID); err == nil {
+				t.Fatalf("LatestSeq accepted unsafe runID %q", runID)
+			}
+		})
+	}
+}
+
+func TestStoresAcrossProcessesSerializeAppends(t *testing.T) {
+	root := t.TempDir()
+	const processes = 4
+	const perProcess = 12
+	type childProcess struct {
+		cmd    *exec.Cmd
+		output bytes.Buffer
+	}
+	commands := make([]*childProcess, 0, processes)
+	for i := 0; i < processes; i++ {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestEventlogProcessHelper$")
+		cmd.Env = append(os.Environ(),
+			"ZENFORGE_EVENTLOG_HELPER=1",
+			"ZENFORGE_JSONL_ROOT="+root,
+			"ZENFORGE_JSONL_COUNT="+strconv.Itoa(perProcess),
+		)
+		child := &childProcess{cmd: cmd}
+		cmd.Stdout = &child.output
+		cmd.Stderr = &child.output
+		if err := cmd.Start(); err != nil {
+			t.Fatalf("start child: %v", err)
+		}
+		commands = append(commands, child)
+	}
+	for _, child := range commands {
+		if err := child.cmd.Wait(); err != nil {
+			t.Fatalf("child failed: %v\n%s", err, child.output.Bytes())
+		}
+	}
+
+	want := processes * perProcess
+	events, err := New(root).Read(context.Background(), "run_1", 0, 0)
+	if err != nil {
+		t.Fatalf("Read returned error: %v", err)
+	}
+	if len(events) != want {
+		t.Fatalf("event count = %d, want %d", len(events), want)
+	}
+	for i, event := range events {
+		if event.Seq != int64(i+1) {
+			t.Fatalf("event %d seq = %d, want %d", i, event.Seq, i+1)
+		}
+	}
+}
+
+func TestEventlogProcessHelper(t *testing.T) {
+	if os.Getenv("ZENFORGE_EVENTLOG_HELPER") != "1" {
+		t.Skip("subprocess helper")
+	}
+	count, err := strconv.Atoi(os.Getenv("ZENFORGE_JSONL_COUNT"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := New(os.Getenv("ZENFORGE_JSONL_ROOT"))
+	for i := 0; i < count; i++ {
+		if err := store.Append(context.Background(), zenforge.NewEvent(zenforge.EventModelDelta, "run_1", nil)); err != nil {
+			t.Fatal(err)
 		}
 	}
 }

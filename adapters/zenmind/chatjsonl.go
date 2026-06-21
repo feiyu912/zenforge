@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -46,6 +47,9 @@ func (w *ChatJSONLWriter) Append(ctx context.Context, event zenforge.Event) erro
 	runID := event.RunID()
 	if runID == "" {
 		return fmt.Errorf("event runId is required")
+	}
+	if err := validateChatRunID(runID); err != nil {
+		return err
 	}
 	mapped := w.mapper.Map(event)
 	record := ChatRecord{
@@ -90,6 +94,9 @@ func ReadChatRecords(ctx context.Context, root, runID string) ([]ChatRecord, err
 	if runID == "" {
 		return nil, fmt.Errorf("runID is required")
 	}
+	if err := validateChatRunID(runID); err != nil {
+		return nil, err
+	}
 	file, err := os.Open(filepath.Join(root, runID, "chat.jsonl"))
 	if os.IsNotExist(err) {
 		return nil, nil
@@ -112,4 +119,11 @@ func ReadChatRecords(ctx context.Context, root, runID string) ([]ChatRecord, err
 		out = append(out, record)
 	}
 	return out, nil
+}
+
+func validateChatRunID(runID string) error {
+	if runID == "." || runID == ".." || filepath.IsAbs(runID) || strings.ContainsAny(runID, `/\\`) {
+		return fmt.Errorf("invalid runID %q", runID)
+	}
+	return nil
 }

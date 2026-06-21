@@ -8,12 +8,18 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/feiyu912/zenforge"
+	"golang.org/x/sys/unix"
 )
 
-const eventsFileName = "events.jsonl"
+const (
+	eventsFileName = "events.jsonl"
+	lockFileName   = ".eventlog.lock"
+)
 
 type Store struct {
 	root string
@@ -43,9 +49,17 @@ func (s *Store) Append(ctx context.Context, event zenforge.Event) error {
 		return err
 	}
 	runID := event.RunID()
+	if err := validateRunID(runID); err != nil {
+		return err
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	lock, err := s.lockRoot(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlockFile(lock)
 
 	latest, err := s.latestSeqLocked(ctx, runID)
 	if err != nil {
@@ -92,6 +106,9 @@ func (s *Store) Read(ctx context.Context, runID string, afterSeq int64, limit in
 	if runID == "" {
 		return nil, fmt.Errorf("runID is required")
 	}
+	if err := validateRunID(runID); err != nil {
+		return nil, err
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -119,6 +136,9 @@ func (s *Store) LatestSeq(ctx context.Context, runID string) (int64, error) {
 	}
 	if runID == "" {
 		return 0, fmt.Errorf("runID is required")
+	}
+	if err := validateRunID(runID); err != nil {
+		return 0, err
 	}
 
 	s.mu.Lock()
@@ -177,6 +197,44 @@ func (s *Store) scanLocked(ctx context.Context, runID string, visit func(zenforg
 		if !visit(event) {
 			return nil
 		}
+	}
+	return nil
+}
+
+func (s *Store) lockRoot(ctx context.Context) (*os.File, error) {
+	if err := os.MkdirAll(s.root, 0o755); err != nil {
+		return nil, err
+	}
+	file, err := os.OpenFile(filepath.Join(s.root, lockFileName), os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return nil, err
+	}
+	for {
+		err = unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB)
+		if err == nil {
+			return file, nil
+		}
+		if !errors.Is(err, unix.EWOULDBLOCK) && !errors.Is(err, unix.EAGAIN) {
+			file.Close()
+			return nil, err
+		}
+		select {
+		case <-ctx.Done():
+			file.Close()
+			return nil, ctx.Err()
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+func unlockFile(file *os.File) {
+	_ = unix.Flock(int(file.Fd()), unix.LOCK_UN)
+	_ = file.Close()
+}
+
+func validateRunID(runID string) error {
+	if runID == "." || runID == ".." || filepath.IsAbs(runID) || strings.ContainsAny(runID, `/\\`) {
+		return fmt.Errorf("invalid runID %q", runID)
 	}
 	return nil
 }
