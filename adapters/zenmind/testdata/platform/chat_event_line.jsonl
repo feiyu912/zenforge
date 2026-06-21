@@ -1,0 +1,1 @@
+{"chatId":"chat-1","runId":"run-1","updatedAt":42,"liveSeq":7,"event":{"contentId":"run-1_c_1","delta":"hello","timestamp":42,"type":"content.delta"},"_type":"event"}
