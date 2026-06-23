@@ -415,6 +415,8 @@ zenforge/
   approval/             # broker + run-scoped pending broker
   checkpoint/           # memory, jsonl, sqlite stores
   eventlog/             # bus + fanout + memory, jsonl, sqlite stores
+  cli/                  # command helpers and approval UX
+  tool/                 # core tool interfaces, middleware, budgets, redaction
   model/                # openai, anthropic adapters
   tools/                # workspace, shell, todo, task
   subagent/             # sub-agent runtime
@@ -424,7 +426,6 @@ zenforge/
   policy/               # shell/workspace policy types
   trace/                # sinks: memory, stdout, jsonl, otel
   recorder/             # event recorder helpers
-  eventlog/             # fanout + durable stores
   server/               # harnesshttp + sse helpers
   adapters/             # mcp, memory, zenmind
   harness/              # loop, state machine, resume
@@ -435,15 +436,15 @@ zenforge/
 
 ## Contributing
 
-Issues and pull requests are welcome. The CI workflow runs `go test ./...` and
-builds the examples. Core and other non-adapter Go packages must not couple to
-`agent-platform` or ZenMind branding. `adapters/zenmind` may document protocol
-provenance, but its imports are AST-checked to reject the platform module and
-all `internal` packages.
+Issues and pull requests are welcome. The CI workflow runs
+`env GOTOOLCHAIN=local go test ./...` and builds the examples. Core and other
+non-adapter Go packages must not couple to `agent-platform` or ZenMind
+branding. `adapters/zenmind` may document protocol provenance, but its imports
+are AST-checked to reject the platform module and all `internal` packages.
 
 Before opening a PR, run:
 
 ```bash
-go test ./...
-go test ./examples/...
+env GOTOOLCHAIN=local go test ./...
+env GOTOOLCHAIN=local go test ./examples/...
 ```

@@ -177,21 +177,21 @@ type Workspace interface {
 }
 ```
 
-### Checkpoint Store
+### checkpoint.Store
 
 ```go
-type CheckpointStore interface {
-    Save(ctx context.Context, checkpoint Checkpoint) error
-    Load(ctx context.Context, runID string) (*Checkpoint, error)
+type Store interface {
+    Save(ctx context.Context, checkpoint checkpoint.Checkpoint) error
+    Load(ctx context.Context, runID string) (*checkpoint.Checkpoint, error)
     Delete(ctx context.Context, runID string) error
 }
 ```
 
-### Trace Sink
+### trace.Sink
 
 ```go
-type TraceSink interface {
-    Emit(ctx context.Context, event Event) error
+type Sink interface {
+    Emit(ctx context.Context, event trace.Event) error
 }
 ```
 
@@ -204,6 +204,7 @@ run.started
 run.resumed
 run.done
 run.error
+run.cancelled
 step.started
 step.done
 model.started
@@ -216,8 +217,15 @@ todo.updated
 workspace.changed
 approval.requested
 approval.resolved
+approval.expired
 subtask.started
+subtask.event
 subtask.done
+subtask.error
+task.started
+task.done
+task.error
+task.cancelled
 checkpoint.created
 ```
 

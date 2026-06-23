@@ -10,12 +10,12 @@ are not implied by this status.
 
 ```bash
 env GOTOOLCHAIN=local go test ./...
-go test ./examples/...
+env GOTOOLCHAIN=local go test ./examples/...
 rg -n '"[^"[:space:]]*agent-platform[^"[:space:]]*"' --glob "*.go" .
 ```
 
-`go test ./...` includes `docs.TestMarkdownLinksResolve`, which verifies local
-Markdown document links.
+`env GOTOOLCHAIN=local go test ./...` includes
+`docs.TestMarkdownLinksResolve`, which verifies local Markdown document links.
 
 ## Runtime
 

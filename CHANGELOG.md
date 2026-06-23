@@ -6,7 +6,8 @@
 
 - `agent-platform` branch `codex/zenforge-engine-bridge` at `82ca4d3` now
   provides the downstream ZenForge engine bridge, feature-flag selector, and
-  HTTP sync/async, SSE, WebSocket, approval, and attach integration tests.
+  HTTP sync/async, SSE, WebSocket, approval, attach, and legacy fallback
+  integration tests.
 - The bridge remains on its integration branch and is not claimed as merged to
   `agent-platform` `main`. A smoke test against a real Container Hub service
   also remains external acceptance.

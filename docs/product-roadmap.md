@@ -74,6 +74,10 @@ the named downstream integration branch. It does not claim merge to
 `agent-platform` `main`, production deployment, or real Container Hub
 acceptance. All supported builds use Go 1.26.x only.
 
+The stage sections below are historical planning snapshots. Their wording is
+kept to preserve the original rollout plan; use Current Status above for the
+present implementation state and API names.
+
 ## S0: Project Foundation
 
 Goal:
@@ -104,7 +108,7 @@ Already started:
 
 Acceptance:
 
-- `go test ./...` passes;
+- `env GOTOOLCHAIN=local go test ./...` passes;
 - repo can be pushed independently;
 - team agrees not to copy large packages before S1/S2 boundaries are stable.
 
@@ -436,7 +440,7 @@ MVP excludes:
 
 MVP acceptance:
 
-- `go test ./...` passes;
+- `env GOTOOLCHAIN=local go test ./...` passes;
 - `zenforge run` works locally;
 - example repo analysis completes;
 - tool calls and todo updates stream visibly;
