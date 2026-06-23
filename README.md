@@ -117,6 +117,23 @@ CLI failures use stable exit codes: `1` runtime error, `2` invalid config or
 usage, `3` cancellation, `4` approval rejection, and `5` unsupported resume
 state (`0` is success).
 
+OpenAI-compatible providers use `--provider openai` plus `--base-url`. For
+MiniMax:
+
+```bash
+export MINIMAX_API_KEY=...
+go run ./cmd/zenforge run \
+  --provider openai \
+  --model MiniMax-M3 \
+  --api-key-env MINIMAX_API_KEY \
+  --base-url https://api.minimax.io/v1 \
+  "Analyze this repo"
+```
+
+SDK users can pass any application-owned `model.Model` to `zenforge.New`, so
+custom gateways and test models live outside the harness instead of becoming
+new core provider names.
+
 ## Highlights
 
 **Runtime**

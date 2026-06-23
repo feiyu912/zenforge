@@ -13,7 +13,9 @@ model := openai.New(openai.Config{
 ```
 
 The OpenAI-compatible adapter uses Chat Completions streaming and function
-tools.
+tools. Providers that expose an OpenAI-compatible Chat Completions API should
+use this adapter with their own `BaseURL`; they do not need a new ZenForge
+provider type.
 
 CLI config:
 
@@ -25,6 +27,24 @@ CLI config:
     "apiKeyEnv": "OPENAI_API_KEY"
   }
 }
+```
+
+MiniMax example, using its OpenAI-compatible endpoint:
+
+```json
+{
+  "model": {
+    "provider": "openai",
+    "name": "MiniMax-M3",
+    "apiKeyEnv": "MINIMAX_API_KEY",
+    "baseUrl": "https://api.minimax.io/v1"
+  }
+}
+```
+
+```bash
+export MINIMAX_API_KEY=...
+zenforge run --provider openai --model MiniMax-M3 --api-key-env MINIMAX_API_KEY --base-url https://api.minimax.io/v1 "Analyze this repo"
 ```
 
 ## Anthropic
@@ -61,4 +81,7 @@ zenforge run --provider anthropic --model claude-model --api-key-env ANTHROPIC_A
 ## Boundary
 
 Provider adapters own API-specific request/stream parsing. The harness should
-not parse provider chunks directly.
+not parse provider chunks directly. SDK users can bypass CLI providers entirely
+by constructing their own `model.Model` implementation and passing it to
+`zenforge.New`; this is the preferred extension point for custom gateways,
+test doubles, or application-owned model clients.
