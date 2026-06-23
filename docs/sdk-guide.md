@@ -226,7 +226,7 @@ emits normalized runtime events.
 
 ## Local Example
 
-The [SDK embedded agent example](../examples/sdk-embedded-agent) compiles and
+The [SDK embedded agent example](examples.md#sdk-embedded-agent) compiles and
 runs without an API key:
 
 ```bash

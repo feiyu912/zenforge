@@ -94,6 +94,9 @@ exclude_docs: |
   product-roadmap.md
   release-checklist.md
   vision.md
+  api-sketch.md
+  cli-design.md
+  README.md
   *_test.go
 
 nav:
@@ -129,7 +132,29 @@ nav:
       - HTTP server: server-http-guide.md
       - SSE server: server-sse-guide.md
   - Examples: examples.md
-  - ADRs: adr/
+  - ADRs:
+      - Overview: adr/index.md
+      - 0001 Event log and checkpoint: adr/0001-event-log-and-checkpoint.md
+      - 0002 Public event contract: adr/0002-public-event-contract.md
+      - 0003 Tool runtime: adr/0003-tool-runtime.md
+      - 0004 Approval broker: adr/0004-approval-broker.md
+      - 0005 Sub-agent orchestration: adr/0005-sub-agent-orchestration.md
+      - 0006 Package layout: adr/0006-package-layout.md
+      - 0007 Run state schema: adr/0007-run-state-schema.md
+      - 0008 Tool result contract: adr/0008-tool-result-contract.md
+      - 0009 Workspace policy separation: adr/0009-workspace-policy-separation.md
+      - 0010 Shell deny by default: adr/0010-shell-deny-by-default.md
+      - 0011 Harness receives normalized input: adr/0011-harness-receives-normalized-input.md
+      - 0012 Model adapters own provider protocol: adr/0012-model-adapters-own-provider-protocol.md
+      - 0013 Todo tools are core: adr/0013-todo-tools-are-core.md
+      - 0014 Plan-execute is a preset: adr/0014-plan-execute-is-a-preset.md
+      - 0015 Approval is core state: adr/0015-approval-is-core-state.md
+      - 0016 No cross-run approval in MVP: adr/0016-no-cross-run-approval-in-mvp.md
+      - 0017 Subagent is runtime tool: adr/0017-subagent-is-runtime-tool.md
+      - 0018 Nested subagents disabled by default: adr/0018-nested-subagents-disabled-by-default.md
+      - 0019 Sandbox is adapter: adr/0019-sandbox-is-adapter.md
+      - 0020 No silent sandbox fallback: adr/0020-no-silent-sandbox-fallback.md
+      - 0021 MVP does not require subagents or sandbox: adr/0021-mvp-does-not-require-subagents-or-sandbox.md
 
 extra:
   social:
