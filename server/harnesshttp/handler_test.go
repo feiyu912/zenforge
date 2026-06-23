@@ -729,3 +729,46 @@ func (a *fakeAgent) Resume(ctx context.Context, runID string) (<-chan zenforge.E
 	close(events)
 	return events, nil
 }
+
+// TestMergeMetaTrustedWins documents and locks in the precedence contract of
+// mergeMeta: when the same key is present in both the client-supplied meta
+// and the trusted AccessDecision meta, the trusted value must win. This
+// matters for security — hosts inject things like tenantId, sessionId, or
+// request-scoped capabilities into AccessDecision.Meta and rely on them
+// overriding any client attempt to spoof the same key.
+func TestMergeMetaTrustedWins(t *testing.T) {
+	client := map[string]any{
+		"tenantId": "client_tenant",
+		"source":   "client",
+		"question": "what is the weather",
+	}
+	trusted := map[string]any{
+		"tenantId": "trusted_tenant",
+		"traceId":  "abc-123",
+	}
+	got := mergeMeta(client, trusted)
+	if got["tenantId"] != "trusted_tenant" {
+		t.Fatalf("tenantId should be trusted, got %v", got["tenantId"])
+	}
+	if got["source"] != "client" {
+		t.Fatalf("client-only key lost: source=%v", got["source"])
+	}
+	if got["question"] != "what is the weather" {
+		t.Fatalf("client-only key lost: question=%v", got["question"])
+	}
+	if got["traceId"] != "abc-123" {
+		t.Fatalf("trusted-only key lost: traceId=%v", got["traceId"])
+	}
+}
+
+func TestMergeMetaNilInputs(t *testing.T) {
+	if got := mergeMeta(nil, nil); got != nil {
+		t.Fatalf("expected nil for two nil inputs, got %#v", got)
+	}
+	if got := mergeMeta(map[string]any{"a": 1}, nil); got["a"] != 1 {
+		t.Fatalf("expected client-only key preserved, got %#v", got)
+	}
+	if got := mergeMeta(nil, map[string]any{"b": 2}); got["b"] != 2 {
+		t.Fatalf("expected trusted-only key preserved, got %#v", got)
+	}
+}
