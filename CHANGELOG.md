@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Integration Status
+
+- `agent-platform` branch `codex/zenforge-engine-bridge` at `d9ebc9e` now
+  provides the downstream ZenForge engine bridge, feature-flag selector, and
+  HTTP sync/async, SSE, WebSocket, approval, and attach integration tests.
+- The bridge remains on its integration branch and is not claimed as merged to
+  `agent-platform` `main`. A smoke test against a real Container Hub service
+  also remains external acceptance.
+- ZenForge and the bridge require Go 1.26.x; older Go toolchains are unsupported.
+
 ## 0.1.0 - 2026-05-30
 
 Initial usable ZenForge release candidate.

@@ -46,9 +46,12 @@ See [limitations.md](./limitations.md). Important V0.1 limitations:
 - CLI config is JSON, not YAML.
 - Nested sub-agents are blocked by default.
 - Container Hub remains optional/beta.
-- External `agent-platform` engine/feature-flag/SSE/WS/fallback integration,
-  complete Chat Storage V3.1, and real Container Hub acceptance are not covered
-  by repository-local adapter goldens.
+- Downstream `agent-platform` engine/feature-flag/HTTP/SSE/WS/approval/attach
+  integration is implemented and tested on
+  `codex/zenforge-engine-bridge@d9ebc9e`, but is not merged to platform `main`.
+- Complete Chat Storage V3.1 and real Container Hub acceptance are not covered
+  by repository-local or integration-branch tests.
+- Go 1.26.x is the only supported toolchain.
 
 ## Verification
 

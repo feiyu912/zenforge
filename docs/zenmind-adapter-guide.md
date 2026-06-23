@@ -3,8 +3,10 @@
 ZenForge core emits neutral runtime events. `adapters/zenmind` provides a
 platform boundary without importing `agent-platform` packages. Its wire
 contracts are checked against fixtures captured from
-`agent-platform@1893edb5`; the external engine integration is not implemented
-by this repository.
+`agent-platform@1893edb5`. This repository owns the neutral harness and adapter
+contracts. The downstream engine integration is implemented and tested on
+`agent-platform` branch `codex/zenforge-engine-bridge` at `d9ebc9e`; it is not
+part of this repository and has not been merged to platform `main`.
 
 ## Catalog And Session Mapping
 
@@ -102,9 +104,13 @@ explicitly supported and `Initialize` succeeds. Missing identity/configuration,
 unknown values, or initialization failure return `RouteLegacy`. `Decide` and
 its legacy fields remain compatibility APIs.
 
-This is fail-closed routing logic, not an installed `agent-platform` feature
-flag or an engine bridge. External engine selection, SSE/WS delivery, and
-fallback E2E remain unverified.
+This remains the repository-local, fail-closed routing contract. The downstream
+platform implementation at `codex/zenforge-engine-bridge@d9ebc9e` installs the
+engine selector and holds the chosen engine across HTTP sync/async, SSE,
+WebSocket, approval submit, and attach/continuation paths. Its integration tests
+cover selector initialization errors and legacy fallback; no fallback occurs
+after a selected engine starts streaming. The branch is not yet platform
+`main`.
 
 ## Stateful Stream Projection
 
@@ -200,6 +206,8 @@ env GOTOOLCHAIN=local go test ./adapters/zenmind
 
 The golden metadata records source files and full commit
 `1893edb51b8dc691ae974cea2719a835e0e21de4`. Passing these tests proves the
-repository-local wire contract only. It does not prove a deployed
-`agent-platform` engine bridge, feature-flag rollout, SSE/WS transport,
-fallback path, full Chat Storage V3.1, or real Container Hub connectivity.
+repository-local wire contract only. Separate downstream tests at
+`agent-platform` branch `codex/zenforge-engine-bridge@d9ebc9e` cover the engine
+bridge, feature-flag selector, HTTP/SSE/WS delivery, approval, attach, and
+legacy fallback. They do not prove deployment from platform `main`, full Chat
+Storage V3.1, or real Container Hub connectivity.

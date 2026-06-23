@@ -200,11 +200,11 @@ The expected result is the latest `CI` run for the pushed commit with
 
 ## External Acceptance
 
-Repository tests validate adapter contracts with fake/local HTTP servers. They
-also validate platform wire DTOs and byte-level goldens captured from
-`agent-platform@1893edb5`. They do not prove that an external platform engine
-can run an agent through ZenForge, that feature-flag routing and legacy fallback
-work E2E, that SSE/WS transports deliver these envelopes, that complete Chat
-Storage V3.1 is implemented, or that a real Container Hub service accepts the
-current transport and session lifecycle. Those remain external integration
-acceptance items and must not be marked complete from the tests above.
+Repository tests validate adapter contracts with fake/local HTTP servers and
+platform wire goldens captured from `agent-platform@1893edb5`. Separately,
+`agent-platform` branch `codex/zenforge-engine-bridge@d9ebc9e` has automated
+coverage for the engine bridge and selector across HTTP sync/async, SSE,
+WebSocket, approval, attach, selector errors, and legacy fallback. This is
+integration-branch evidence, not proof of merge or deployment from platform
+`main`. Complete Chat Storage V3.1 and a smoke against a real Container Hub
+service also remain external acceptance. Both repositories are Go 1.26.x only.

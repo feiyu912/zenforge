@@ -33,9 +33,11 @@ ZenMind adapter evidence must include these pinned fixtures:
 
 They are exercised by `env GOTOOLCHAIN=local go test ./adapters/zenmind` and
 record provenance from
-`agent-platform@1893edb5`. Confirm separately that no release claim treats
-these repository goldens as external engine/SSE/WS/fallback, complete Chat
-Storage V3.1, or real Container Hub acceptance.
+`agent-platform@1893edb5`. Keep this repository evidence distinct from the
+downstream engine/selector/HTTP/SSE/WS/approval/attach/fallback tests on
+`agent-platform` branch `codex/zenforge-engine-bridge@d9ebc9e`. Confirm that no
+release claim treats the unmerged branch as platform `main`, or either suite as
+complete Chat Storage V3.1 or real Container Hub acceptance. Use Go 1.26.x only.
 
 ## CLI Smoke
 

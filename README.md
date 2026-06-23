@@ -181,9 +181,12 @@ The ZenMind wire contract is checked against fixtures captured from
 `agent-platform@1893edb5` under
 [`adapters/zenmind/testdata/platform`](adapters/zenmind/testdata/platform).
 These goldens cover catalog/session input, flat stream envelopes, content/tool
-lifecycles, approval ask/submit/answer, and chat event lines. They do not prove
-that the external platform engine, feature flag, SSE/WS paths, or fallback E2E
-are wired.
+lifecycles, approval ask/submit/answer, and chat event lines. Downstream
+integration is implemented and tested on `agent-platform` branch
+`codex/zenforge-engine-bridge` at `d9ebc9e`: it includes the engine bridge,
+feature-flag selector, HTTP sync/async, SSE, WebSocket, approval, attach, and
+legacy-fallback paths. That branch has not been merged to `agent-platform`
+`main`, and these repository goldens alone remain narrower evidence.
 
 `BuildRun` maps `Session.HistoryMessages` into `Task.InitialMessages`, including
 OpenAI `tool_calls` and snake/camel tool-call IDs, and rejects malformed history
@@ -373,7 +376,9 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
   shared across normal, planner, terminal, and cancellation paths; `recorder`
   remains a low-level ordered-write helper rather than the Agent lifecycle.
 - ZenMind adapter wire goldens are pinned to `agent-platform@1893edb5`, while
-  external engine/feature-flag/SSE/WS/fallback integration remains unverified.
+  downstream engine/feature-flag/HTTP/SSE/WS/approval/attach integration is
+  tested on `agent-platform` branch `codex/zenforge-engine-bridge@d9ebc9e`.
+  The branch is not yet merged to platform `main`.
 
 Verification before each release:
 
@@ -397,6 +402,7 @@ git diff --check
   multi-process writers.
 - Nested sub-agents are blocked by default.
 - Container Hub sandbox is optional and beta.
+- A real Container Hub deployment smoke test remains external acceptance.
 
 ## Repository Layout
 
