@@ -233,7 +233,13 @@ broker := approval.BrokerFunc(func(ctx context.Context, req approval.Request) (a
         }, nil
     }
     log.Printf("needs human review: %s", req.Title)
-    return approval.Decision{}, approval.NewAbortError("defer to operator")
+    return approval.Decision{
+        RequestID: req.ID,
+        Action:    approval.DecisionReject,
+        Scope:     approval.ScopeOnce,
+        Reason:    "defer to operator",
+        DecidedAt: time.Now().UTC(),
+    }, nil
 })
 ```
 
@@ -428,13 +434,10 @@ agent := zenforge.New(zenforge.Config{
     // Approval: a real broker (or approval.AlwaysAllow in tests).
     Approval: approval.NewPendingBroker(16),
 
-    // Sandbox: optional. Tools that need isolation use it.
-    Sandbox: containerhub.New(containerhub.Config{...}),
-
-    // Persistence trio: events (replay), checkpoints (resume), trace (OTel).
+    // Persistence trio: events (replay), checkpoints (resume), trace (sink).
     Events:      eventlogsqlite.Open(".zenforge/runs.db"),
     Checkpoints: checkpointsqlite.Open(".zenforge/runs.db"),
-    Trace:       trace.Redact(trace.OTLP("otel-collector:4317")),
+    Trace:       trace.Redact(trace.NewJSONSink(os.Stderr)),
 
     // Loop cap. 0 means use the harness default (8).
     MaxSteps: 8,
@@ -452,8 +455,9 @@ Each line maps to one of the concepts above:
   drain in another goroutine or from an HTTP handler; absent a broker, an
   approval-bearing tool call pauses durably and `Agent.Run` returns
   `approval.ErrRequired`.
-- `Sandbox` is the execution room. Tools that have a sandbox wired route
-  shell commands through it; tools that do not run in-process.
+- `Sandbox` is the execution room. Tools that have a sandbox wired
+  (typically the shell tool, via `shell.Config.Sandbox`) route commands
+  through it; tools that do not run in-process.
 - `Events` is the read model. Append-only, sequence-numbered, the source
   of truth for "what happened."
 - `Checkpoints` is the resume model. Versioned, replaced per run, the

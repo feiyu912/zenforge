@@ -90,7 +90,7 @@ func main() {
         fmt.Fprintln(os.Stderr, err)
         os.Exit(1)
     }
-    fmt.Println(out.FinalAnswer)
+    fmt.Println(out.Output)
 }
 ```
 

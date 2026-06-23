@@ -7,12 +7,11 @@ package has its own page.
 ## Root
 
 - [github.com/feiyu912/zenforge](https://pkg.go.dev/github.com/feiyu912/zenforge) —
-  `Agent`, `Task`, `Event`, `Config` — the public surface
+  `Agent`, `Task`, `Event`, `Config` — the public surface. The `Agent` type
+  and its method set (`Run`, `Stream`, `Resume`) live in the root package.
 
 ## Adapters
 
-- [github.com/feiyu912/zenforge/agent](https://pkg.go.dev/github.com/feiyu912/zenforge/agent) —
-  `Agent` type and its method set
 - [github.com/feiyu912/zenforge/model](https://pkg.go.dev/github.com/feiyu912/zenforge/model) —
   `Model` interface, request/response/event types
 - [github.com/feiyu912/zenforge/model/anthropic](https://pkg.go.dev/github.com/feiyu912/zenforge/model/anthropic) —
