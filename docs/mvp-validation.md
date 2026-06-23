@@ -202,7 +202,7 @@ The expected result is the latest `CI` run for the pushed commit with
 
 Repository tests validate adapter contracts with fake/local HTTP servers and
 platform wire goldens captured from `agent-platform@1893edb5`. Separately,
-`agent-platform` branch `codex/zenforge-engine-bridge@d9ebc9e` has automated
+`agent-platform` branch `codex/zenforge-engine-bridge@82ca4d3` has automated
 coverage for the engine bridge and selector across HTTP sync/async, SSE,
 WebSocket, approval, attach, selector errors, and legacy fallback. This is
 integration-branch evidence, not proof of merge or deployment from platform

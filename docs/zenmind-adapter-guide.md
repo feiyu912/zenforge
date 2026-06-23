@@ -5,7 +5,7 @@ platform boundary without importing `agent-platform` packages. Its wire
 contracts are checked against fixtures captured from
 `agent-platform@1893edb5`. This repository owns the neutral harness and adapter
 contracts. The downstream engine integration is implemented and tested on
-`agent-platform` branch `codex/zenforge-engine-bridge` at `d9ebc9e`; it is not
+`agent-platform` branch `codex/zenforge-engine-bridge` at `82ca4d3`; it is not
 part of this repository and has not been merged to platform `main`.
 
 ## Catalog And Session Mapping
@@ -105,7 +105,7 @@ unknown values, or initialization failure return `RouteLegacy`. `Decide` and
 its legacy fields remain compatibility APIs.
 
 This remains the repository-local, fail-closed routing contract. The downstream
-platform implementation at `codex/zenforge-engine-bridge@d9ebc9e` installs the
+platform implementation at `codex/zenforge-engine-bridge@82ca4d3` installs the
 engine selector and holds the chosen engine across HTTP sync/async, SSE,
 WebSocket, approval submit, and attach/continuation paths. Its integration tests
 cover selector initialization errors and legacy fallback; no fallback occurs
@@ -207,7 +207,7 @@ env GOTOOLCHAIN=local go test ./adapters/zenmind
 The golden metadata records source files and full commit
 `1893edb51b8dc691ae974cea2719a835e0e21de4`. Passing these tests proves the
 repository-local wire contract only. Separate downstream tests at
-`agent-platform` branch `codex/zenforge-engine-bridge@d9ebc9e` cover the engine
+`agent-platform` branch `codex/zenforge-engine-bridge@82ca4d3` cover the engine
 bridge, feature-flag selector, HTTP/SSE/WS delivery, approval, attach, and
 legacy fallback. They do not prove deployment from platform `main`, full Chat
 Storage V3.1, or real Container Hub connectivity.

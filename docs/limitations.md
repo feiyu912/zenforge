@@ -55,7 +55,7 @@ approval, sandbox, event log, checkpoint, and trace interfaces.
 content/tool projection, approval roundtrip, and event-only chat JSONL lines.
 This repository does not implement complete Chat Storage V3.1 or own platform
 server wiring. That downstream wiring is implemented and tested on
-`agent-platform` branch `codex/zenforge-engine-bridge@d9ebc9e`, including the
+`agent-platform` branch `codex/zenforge-engine-bridge@82ca4d3`, including the
 engine selector, HTTP/SSE/WS, approval, attach, and legacy fallback. It has not
 been merged to platform `main`. A real Container Hub deployment also remains an
 environment acceptance item.

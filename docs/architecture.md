@@ -224,7 +224,7 @@ checkpoint.created
 The adapter now has stateful content/tool lifecycle projection and flat-wire
 goldens captured from `agent-platform@1893edb5`; compatibility evidence is no
 longer limited to similar event names. Downstream connection is implemented and
-tested on `agent-platform` branch `codex/zenforge-engine-bridge@d9ebc9e`: the
+tested on `agent-platform` branch `codex/zenforge-engine-bridge@82ca4d3`: the
 selector fixes one engine per query across HTTP sync/async, SSE, WebSocket,
 approval, attach, and fallback behavior. This does not move platform ownership
 into ZenForge core, and the branch is not yet platform `main`.

@@ -66,7 +66,7 @@ V0.2 Production hardening
 | S7 | Implemented for runtime subtask streaming, bounded parallel execution, child checkpoint resume, and default-denied nesting; see the named sub-agent tests in `docs/mvp-validation.md`. |
 | S8 | The direct local shell path, fake sandbox backend, and Container Hub beta adapter are contract-tested; Hub transport tests use local HTTP servers. A real Container Hub service has not been exercised and remains external acceptance. |
 | MVP | Repository-scoped acceptance is implemented and test-mapped. Provider-backed examples and deployment integration remain environment-dependent smoke tests. |
-| V0.1 | `v0.1.0` was tagged. Repository wire goldens cover the ZenMind DTO/projector/approval/event-line boundary at `agent-platform@1893edb5`. The downstream engine bridge, feature-flag selector, HTTP/SSE/WS, approval, attach, and fallback integration is implemented and tested on `agent-platform` branch `codex/zenforge-engine-bridge@d9ebc9e`, but is not yet merged to platform `main`. |
+| V0.1 | `v0.1.0` was tagged. Repository wire goldens cover the ZenMind DTO/projector/approval/event-line boundary at `agent-platform@1893edb5`. The downstream engine bridge, feature-flag selector, HTTP/SSE/WS, approval, attach, and fallback integration is implemented and tested on `agent-platform` branch `codex/zenforge-engine-bridge@82ca4d3`, but is not yet merged to platform `main`. |
 | V0.2 | Partially implemented hardening, including SQLite soak coverage, Go 1.26-only CI, JSONL crash/concurrency safety, typed tools, and bounded shell/Hub responses. This roadmap stage is not declared complete. |
 
 Completion in this table distinguishes ZenForge repository tests from tests on
@@ -517,7 +517,7 @@ Repository fixtures under `adapters/zenmind/testdata/platform` provide golden
 wire evidence from `agent-platform@1893edb5`. The corresponding downstream
 engine bridge, selector, HTTP sync/async, SSE, WebSocket, approval, attach, and
 legacy-fallback paths are implemented and tested on `agent-platform` branch
-`codex/zenforge-engine-bridge@d9ebc9e`. That integration still requires review
+`codex/zenforge-engine-bridge@82ca4d3`. That integration still requires review
 and merge to platform `main`; a real Container Hub smoke remains external.
 
 ## Final Initial Product Vision

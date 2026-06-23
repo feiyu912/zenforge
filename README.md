@@ -183,7 +183,7 @@ The ZenMind wire contract is checked against fixtures captured from
 These goldens cover catalog/session input, flat stream envelopes, content/tool
 lifecycles, approval ask/submit/answer, and chat event lines. Downstream
 integration is implemented and tested on `agent-platform` branch
-`codex/zenforge-engine-bridge` at `d9ebc9e`: it includes the engine bridge,
+`codex/zenforge-engine-bridge` at `82ca4d3`: it includes the engine bridge,
 feature-flag selector, HTTP sync/async, SSE, WebSocket, approval, attach, and
 legacy-fallback paths. That branch has not been merged to `agent-platform`
 `main`, and these repository goldens alone remain narrower evidence.
@@ -377,7 +377,7 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
   remains a low-level ordered-write helper rather than the Agent lifecycle.
 - ZenMind adapter wire goldens are pinned to `agent-platform@1893edb5`, while
   downstream engine/feature-flag/HTTP/SSE/WS/approval/attach integration is
-  tested on `agent-platform` branch `codex/zenforge-engine-bridge@d9ebc9e`.
+  tested on `agent-platform` branch `codex/zenforge-engine-bridge@82ca4d3`.
   The branch is not yet merged to platform `main`.
 
 Verification before each release:

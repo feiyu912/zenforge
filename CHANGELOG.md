@@ -4,7 +4,7 @@
 
 ### Integration Status
 
-- `agent-platform` branch `codex/zenforge-engine-bridge` at `d9ebc9e` now
+- `agent-platform` branch `codex/zenforge-engine-bridge` at `82ca4d3` now
   provides the downstream ZenForge engine bridge, feature-flag selector, and
   HTTP sync/async, SSE, WebSocket, approval, and attach integration tests.
 - The bridge remains on its integration branch and is not claimed as merged to
