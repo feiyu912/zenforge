@@ -1,0 +1,139 @@
+site_name: ZenForge
+site_description: A Go framework for application-owned AI agents
+site_url: https://feiyu912.github.io/zenforge
+repo_url: https://github.com/feiyu912/zenforge
+repo_name: feiyu912/zenforge
+edit_uri: edit/main/docs/
+copyright: Copyright &copy; ZenForge contributors
+
+docs_dir: docs
+site_dir: site
+
+theme:
+  name: material
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - navigation.tracking
+    - navigation.footer
+    - search.suggest
+    - search.highlight
+    - search.share
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+    - content.action.edit
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  icon:
+    repo: fontawesome/brands/github
+    edit: material/pencil
+    view: material/eye
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+      toc_depth: 3
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.keys
+
+plugins:
+  - search
+
+exclude_docs: |
+  # Internal planning artifacts — must not be served publicly.
+  s0-*.md
+  s1-*.md
+  s2-*.md
+  s3-*.md
+  s4-*.md
+  s5-*.md
+  s6-*.md
+  s7-*.md
+  s8-*.md
+  s9-*.md
+  mvp-*.md
+  v0.1-release-plan.md
+  current-project-mapping.md
+  extraction-plan.md
+  preparation-plan.md
+  product-roadmap.md
+  release-checklist.md
+  vision.md
+  *_test.go
+
+nav:
+  - Home: index.md
+  - Get started:
+      - Tutorial: tutorial.md
+      - Quickstart: quickstart.md
+  - Concepts:
+      - Overview: concepts.md
+      - Architecture: architecture.md
+      - Failure Modes: failure-modes.md
+      - Harness State Machine: harness-state-machine.md
+  - How-to guides:
+      - Embed as a library: sdk-guide.md
+      - Write a tool: tool-authoring-guide.md
+      - Configure approvals: approval-guide.md
+      - Use a sandbox: sandbox-guide.md
+      - Resume from checkpoints: checkpoint-resume-guide.md
+      - Trace runs: trace-guide.md
+      - Spawn subagents: subagent-guide.md
+      - Plan then execute: planner-guide.md
+      - Harden against attacks: security-guide.md
+  - Reference:
+      - API: api.md
+      - Configuration: config-reference.md
+      - Release Notes: release-notes-v0.1.md
+      - Limitations: limitations.md
+  - Integrations:
+      - Model providers: provider-guide.md
+      - MCP: mcp-adapter-guide.md
+      - Memory: memory-adapter-guide.md
+      - ZenMind: zenmind-adapter-guide.md
+      - HTTP server: server-http-guide.md
+      - SSE server: server-sse-guide.md
+  - Examples: examples.md
+  - ADRs: adr/
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/feiyu912/zenforge
+      name: ZenForge on GitHub
+  generator: false

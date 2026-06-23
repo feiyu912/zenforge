@@ -117,16 +117,19 @@ CLI failures use stable exit codes: `1` runtime error, `2` invalid config or
 usage, `3` cancellation, `4` approval rejection, and `5` unsupported resume
 state (`0` is success).
 
-OpenAI-compatible providers use `--provider openai` plus `--base-url`. For
-MiniMax:
+Provider selection is protocol-shaped, not vendor-shaped: use
+`--provider openai` for OpenAI-compatible Chat Completions and
+`--provider anthropic` for Anthropic-compatible Messages. Other vendors stay as
+`--base-url` overrides instead of becoming new core provider names. For
+DeepAgents-style MiniMax:
 
 ```bash
-export MINIMAX_API_KEY=...
+export ANTHROPIC_API_KEY=...
 go run ./cmd/zenforge run \
-  --provider openai \
+  --provider anthropic \
   --model MiniMax-M3 \
-  --api-key-env MINIMAX_API_KEY \
-  --base-url https://api.minimax.io/v1 \
+  --api-key-env ANTHROPIC_API_KEY \
+  --base-url https://api.minimaxi.com/anthropic/v1 \
   "Analyze this repo"
 ```
 

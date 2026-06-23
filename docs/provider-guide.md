@@ -29,7 +29,7 @@ CLI config:
 }
 ```
 
-MiniMax example, using its OpenAI-compatible endpoint:
+OpenAI-compatible vendor example:
 
 ```json
 {
@@ -76,6 +76,26 @@ The CLI also accepts:
 
 ```bash
 zenforge run --provider anthropic --model claude-model --api-key-env ANTHROPIC_API_KEY "Analyze this repo"
+```
+
+MiniMax can also be used through its Anthropic-compatible endpoint, matching the
+DeepAgents-style environment:
+
+```json
+{
+  "model": {
+    "provider": "anthropic",
+    "name": "MiniMax-M3",
+    "apiKeyEnv": "ANTHROPIC_API_KEY",
+    "baseUrl": "https://api.minimaxi.com/anthropic/v1"
+  }
+}
+```
+
+```bash
+export ANTHROPIC_API_KEY=...
+export ANTHROPIC_BASE_URL=https://api.minimaxi.com/anthropic/v1
+zenforge run --provider anthropic --model MiniMax-M3 --api-key-env ANTHROPIC_API_KEY --base-url "$ANTHROPIC_BASE_URL" "Analyze this repo"
 ```
 
 ## Boundary

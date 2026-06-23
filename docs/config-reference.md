@@ -70,9 +70,11 @@ For SQLite local storage:
 - `model.provider`: `openai` or `anthropic`. Invalid values make config
   loading fail before API key lookup or runtime setup.
 - `model.apiKeyEnv`: environment variable containing the API key.
-- `model.baseUrl`: optional provider API base URL. For OpenAI-compatible
-  providers such as MiniMax, keep `model.provider` as `openai` and set
-  `model.baseUrl` to the provider's OpenAI-compatible `/v1` endpoint.
+- `model.baseUrl`: optional provider API base URL. Keep `model.provider` as
+  `openai` for OpenAI-compatible Chat Completions endpoints and `anthropic`
+  for Anthropic-compatible Messages endpoints. Vendor-specific endpoints such
+  as MiniMax should use the matching protocol adapter plus `model.baseUrl`
+  instead of a new provider name.
 - `agent.instructions`: system instructions for the harness.
 - `agent.maxSteps`: maximum model/tool loop steps. Negative values make config
   loading fail.
@@ -107,15 +109,15 @@ For SQLite local storage:
 
 Flags override values loaded from the config file.
 
-MiniMax config example:
+MiniMax Anthropic-compatible config example:
 
 ```json
 {
   "model": {
-    "provider": "openai",
+    "provider": "anthropic",
     "name": "MiniMax-M3",
-    "apiKeyEnv": "MINIMAX_API_KEY",
-    "baseUrl": "https://api.minimax.io/v1"
+    "apiKeyEnv": "ANTHROPIC_API_KEY",
+    "baseUrl": "https://api.minimaxi.com/anthropic/v1"
   }
 }
 ```
