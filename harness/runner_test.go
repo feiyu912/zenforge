@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/feiyu912/zenforge/model"
 )
@@ -128,6 +129,125 @@ func TestRunnerOneshotCapsAutoTurnsAndUsesFinalNoToolTurn(t *testing.T) {
 	want := []model.ToolChoice{model.ToolChoiceAuto, model.ToolChoiceAuto, model.ToolChoiceNone}
 	if !reflect.DeepEqual(choices, want) {
 		t.Fatalf("tool choices = %#v, want %#v", choices, want)
+	}
+}
+
+func TestRunnerResumeFinalizingReplacesAttemptWithNoToolChoice(t *testing.T) {
+	now := time.Now().UTC()
+	state := testRunState()
+	state.Step = 1
+	state.Phase = RunPhaseFinalizing
+	state.Control.Status = RunStatusModelStreaming
+	state.Messages = append(state.Messages, MessageState{
+		Role:    "user",
+		Content: "You have reached the tool-use limit. Provide the best final answer using the available context.",
+	})
+	state.Model.Active = &ModelAttempt{
+		ID: "attempt_old", LogicalStep: 1, Status: ModelAttemptStreaming,
+		TextDraft: "partial", StartedAt: now,
+	}
+	var choices []model.ToolChoice
+	var finalMessageCount int
+	runner := Runner{
+		MaxSteps: 1,
+		Checkpoint: func(_ context.Context, _ RunState) error {
+			return nil
+		},
+		DurableCallModel: func(_ context.Context, current *RunState, choice model.ToolChoice) (MessageState, model.Usage, error) {
+			choices = append(choices, choice)
+			for _, message := range current.Messages {
+				if message.Content == "You have reached the tool-use limit. Provide the best final answer using the available context." {
+					finalMessageCount++
+				}
+			}
+			if current.Model.Active == nil || current.Model.Active.Status != ModelAttemptSuperseded {
+				t.Fatalf("active attempt was not superseded: %#v", current.Model.Active)
+			}
+			current.Model.Attempts = append(current.Model.Attempts, *current.Model.Active)
+			current.Model.Active = &ModelAttempt{
+				ID: "attempt_new", LogicalStep: current.Step, Status: ModelAttemptStarted,
+				StartedAt: now.Add(time.Second), ReplacesID: "attempt_old",
+			}
+			return MessageState{Role: "assistant", Content: "final answer"}, model.Usage{}, nil
+		},
+	}
+
+	terminal := runner.Run(context.Background(), state, true)
+	if terminal.Type != RuntimeRunDone || terminal.Data["output"] != "final answer" {
+		t.Fatalf("unexpected terminal: %#v", terminal)
+	}
+	if len(choices) != 1 || choices[0] != model.ToolChoiceNone {
+		t.Fatalf("model choices = %v, want one no-tool call", choices)
+	}
+	if finalMessageCount != 1 {
+		t.Fatalf("final instruction count = %d, want 1", finalMessageCount)
+	}
+}
+
+func TestRunnerResumeInterruptedAttemptDoesNotSpendAnotherStep(t *testing.T) {
+	now := time.Now().UTC()
+	state := testRunState()
+	state.Step = 1
+	state.Phase = RunPhaseModel
+	state.Control.Status = RunStatusModelStreaming
+	state.Model.Active = &ModelAttempt{
+		ID: "attempt_old", LogicalStep: 1, Status: ModelAttemptInterrupted,
+		StartedAt: now, CompletedAt: &now,
+	}
+	var calledStep int
+	runner := Runner{
+		MaxSteps: 1,
+		Checkpoint: func(_ context.Context, _ RunState) error {
+			return nil
+		},
+		DurableCallModel: func(_ context.Context, current *RunState, choice model.ToolChoice) (MessageState, model.Usage, error) {
+			calledStep = current.Step
+			if choice != model.ToolChoiceAuto || current.Model.Active.Status != ModelAttemptSuperseded {
+				t.Fatalf("unexpected replacement call: choice=%q active=%#v", choice, current.Model.Active)
+			}
+			current.Model.Attempts = append(current.Model.Attempts, *current.Model.Active)
+			current.Model.Active = &ModelAttempt{
+				ID: "attempt_new", LogicalStep: current.Step, Status: ModelAttemptStarted,
+				StartedAt: now.Add(time.Second), ReplacesID: "attempt_old",
+			}
+			return MessageState{Role: "assistant", Content: "replacement"}, model.Usage{}, nil
+		},
+	}
+
+	terminal := runner.Run(context.Background(), state, true)
+	if terminal.Type != RuntimeRunDone || calledStep != 1 {
+		t.Fatalf("replacement spent another step: terminal=%#v calledStep=%d", terminal, calledStep)
+	}
+}
+
+func TestRunnerResumeCompletesCommittedTextBoundaryWithoutModelCall(t *testing.T) {
+	state := testRunState()
+	state.Step = 1
+	state.Phase = RunPhaseModel
+	state.Control.Status = RunStatusRunning
+	state.Messages = append(state.Messages, MessageState{Role: "assistant", Content: "already durable"})
+	modelCalls := 0
+	var checkpoint RunState
+	runner := Runner{
+		Checkpoint: func(_ context.Context, current RunState) error {
+			checkpoint = current
+			return nil
+		},
+		DurableCallModel: func(_ context.Context, _ *RunState, _ model.ToolChoice) (MessageState, model.Usage, error) {
+			modelCalls++
+			return MessageState{}, model.Usage{}, nil
+		},
+	}
+
+	terminal := runner.Run(context.Background(), state, true)
+	if terminal.Type != RuntimeRunDone || terminal.Data["output"] != "already durable" {
+		t.Fatalf("unexpected terminal: %#v", terminal)
+	}
+	if modelCalls != 0 {
+		t.Fatalf("model calls = %d, want 0", modelCalls)
+	}
+	if checkpoint.Phase != RunPhaseCompleted || checkpoint.Control.Status != RunStatusCompleted {
+		t.Fatalf("unexpected completion checkpoint: %#v", checkpoint)
 	}
 }
 

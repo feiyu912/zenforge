@@ -105,9 +105,20 @@ GET /live?runId=run_123
 ```
 
 Live streaming requires `handler.Bus = eventlog.NewBus()` or the bus from an
-`eventlog.FanoutStore`. `ServeLiveEvents` only streams events published after
-the client subscribes. Clients that reconnect should call `/events` with
-`afterSeq` first, then resubscribe to `/live`.
+`eventlog.FanoutStore`. Plain live mode only streams events published after the
+client subscribes.
+
+For one race-free replay-to-live stream, configure both `handler.Events` and
+`handler.Bus`:
+
+```text
+GET /live?runId=run_123&replay=true&afterSeq=42
+```
+
+The handler subscribes first, catches up from the durable store, de-duplicates
+by sequence, and then follows new appends. On reconnect it also accepts the SSE
+`Last-Event-ID` header when `afterSeq` is absent; an explicit query cursor takes
+precedence.
 
 Approval query request:
 

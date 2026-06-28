@@ -17,17 +17,25 @@ was already active follows the active-tool resume boundary below.
 
 ## Provider Stream Interrupted
 
-ZenForge checkpoints at model-call boundaries, not mid-token. If a provider
-stream fails while tokens are arriving, the run fails from the last checkpointed
-boundary. Resume retries from that boundary instead of replaying partial
-provider chunks.
+ZenForge checkpoints model drafts before publishing each accepted chunk. If the
+process disappears without recording a terminal outcome, resume supersedes the
+active attempt and starts a replacement from the committed prompt at the same
+logical step. Partial text, tool-call drafts, and observed usage are not
+committed or executed.
+
+If the provider adapter explicitly returns a stream error, ZenForge records a
+failed terminal checkpoint. Resume reports that failure and does not silently
+retry it. A stream that closes without an explicit done frame remains a
+successful legacy-provider completion.
 
 Design implication:
 
 - model providers should be idempotent enough for a retry from the last
   checkpointed prompt;
 - UI/read-model adapters should treat streamed deltas as observable history,
-  not authoritative resume state.
+  not authoritative resume state;
+- consumers can correlate replacement output using attempt IDs and the
+  `model.interrupted`, `model.superseded`, and `model.restarted` events.
 
 ## Final Answer Requests Tools
 
@@ -115,6 +123,11 @@ Checkpoint writes also fail closed: ZenForge stops before the next model/tool
 boundary or successful terminal event, emits `run.error`, and does not emit
 `checkpoint.created` for the failed write. The last successfully stored
 checkpoint remains the resume source of truth.
+
+If the checkpoint itself was stored but its `checkpoint.created` event failed,
+resume interprets the durable state rather than replaying completed work. In
+particular, a committed text-only model result advances directly to a terminal
+checkpoint without another provider call.
 
 Trace sinks are a best-effort observability projection. Exporter failures do
 not change execution or event-log durability; platforms should monitor and

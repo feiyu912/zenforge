@@ -10,7 +10,8 @@ Checkpoint records use schema version `zenforge.checkpoint.v1`. The embedded
 run state uses version `zenforge.run_state.v1`. Event records use the public
 flattened event contract documented in [ADR 0002](./adr/0002-public-event-contract.md).
 Checkpoint loads fail closed when the embedded run state has an unknown
-version, phase, or mode, before resume can dispatch model or tool work. Legacy
+version, phase, mode, or invalid model-attempt chain before resume can dispatch
+model or tool work. Legacy
 checkpoints with an empty run-state version or mode remain readable; phase is
 always required to be one of the supported runtime phases.
 
@@ -52,7 +53,10 @@ events, err := agent.Resume(ctx, "run_123")
 ZenForge resumes only from explicit runtime boundaries:
 
 - before a model call;
+- during a model stream, by superseding the checkpointed draft and replacing
+  the attempt at the same logical step;
 - after a model turn with pending tools;
+- after a committed text-only model turn whose terminal event was not written;
 - after a tool result has been injected into messages;
 - active tool boundary, by retrying the tool call from checkpointed arguments;
 - waiting approval, when an approval broker is configured;
@@ -67,7 +71,8 @@ fallback.
 Plan/execute uses one checkpoint sequence across plan, execute, and summary
 stages. The final summary is stored as a completed terminal checkpoint with the
 summary output and terminal todos. Resuming that checkpoint returns the stored
-summary without another model call.
+summary without another model call. Plan, execute, max-step finalization, and
+summary model calls all use the same durable attempt lifecycle.
 
 Failure and cancellation checkpoints use the same fail-closed rule. When a
 plan/execute terminal write fails, the previous checkpoint remains the resume
@@ -76,8 +81,19 @@ outcome.
 
 ## Limited Boundaries
 
-ZenForge does not resume a provider stream mid-token. It retries from the last
-checkpointed boundary.
+ZenForge checkpoints each accepted model chunk as an uncommitted draft before
+publishing its event. A hard process interruption marks that attempt
+`interrupted`, then `superseded`, and starts a replacement from the committed
+conversation boundary at the same logical step. Draft text, draft tool calls,
+and observed usage never enter committed messages, pending tools, or aggregate
+usage. The public lifecycle is visible through `model.interrupted`,
+`model.superseded`, and `model.restarted`.
+
+This is provider-neutral attempt replacement, not a provider-native mid-token
+cursor. An error explicitly returned by the model stream is a terminal run
+failure; a later `Resume` reports that durable failure rather than silently
+retrying it. Legacy custom model streams that close without a dedicated done
+frame remain successful for compatibility.
 
 Shell commands and external side effects should be configured with idempotency
 in mind. If a process crashes while a tool call was active, ZenForge retries the

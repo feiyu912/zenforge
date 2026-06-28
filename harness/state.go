@@ -6,7 +6,10 @@ import (
 	"time"
 )
 
-const RunStateVersion = "zenforge.run_state.v1"
+const (
+	RunStateVersion          = "zenforge.run_state.v1"
+	ModelAttemptHistoryLimit = 64
+)
 
 type RunPhase string
 
@@ -39,6 +42,109 @@ func ValidateRunState(state RunState) error {
 	case "", "react", "oneshot", "plan_execute":
 	default:
 		return fmt.Errorf("unsupported run mode %q", state.Mode)
+	}
+	attemptIDs := make(map[string]struct{}, len(state.Model.Attempts)+1)
+	for i := range state.Model.Attempts {
+		if err := validateModelAttempt(state.Model.Attempts[i], true, attemptIDs); err != nil {
+			return fmt.Errorf("invalid model attempt history at index %d: %w", i, err)
+		}
+		if state.Model.Attempts[i].LogicalStep > state.Step {
+			return fmt.Errorf("model attempt history at index %d is ahead of run step %d", i, state.Step)
+		}
+	}
+	if state.Model.Active != nil {
+		if err := validateModelAttempt(*state.Model.Active, false, attemptIDs); err != nil {
+			return fmt.Errorf("invalid active model attempt: %w", err)
+		}
+		if state.Model.Active.LogicalStep != state.Step {
+			return fmt.Errorf("active model attempt step %d does not match run step %d", state.Model.Active.LogicalStep, state.Step)
+		}
+	}
+	if len(state.Model.Attempts) > ModelAttemptHistoryLimit {
+		return fmt.Errorf("model attempt history exceeds limit %d", ModelAttemptHistoryLimit)
+	}
+	attemptsByID := make(map[string]ModelAttempt, len(state.Model.Attempts)+1)
+	for _, attempt := range state.Model.Attempts {
+		attemptsByID[attempt.ID] = attempt
+	}
+	if state.Model.Active != nil {
+		attemptsByID[state.Model.Active.ID] = *state.Model.Active
+	}
+	activeAttemptID := ""
+	if state.Model.Active != nil {
+		activeAttemptID = state.Model.Active.ID
+	}
+	for _, attempt := range attemptsByID {
+		if attempt.ReplacesID != "" {
+			replaced, ok := attemptsByID[attempt.ReplacesID]
+			if !ok {
+				return fmt.Errorf("model attempt %q replaces missing attempt %q", attempt.ID, attempt.ReplacesID)
+			}
+			if replaced.ReplacementID != attempt.ID {
+				return fmt.Errorf("model attempt %q has inconsistent replaces link", attempt.ID)
+			}
+		}
+		if attempt.ReplacementID != "" {
+			replacement, ok := attemptsByID[attempt.ReplacementID]
+			if !ok {
+				return fmt.Errorf("model attempt %q references missing replacement %q", attempt.ID, attempt.ReplacementID)
+			}
+			if replacement.ReplacesID != attempt.ID {
+				return fmt.Errorf("model attempt %q has inconsistent replacement link", attempt.ID)
+			}
+		}
+		if attempt.Status == ModelAttemptSuperseded && attempt.ID != activeAttemptID && attempt.ReplacementID == "" {
+			return fmt.Errorf("historical superseded model attempt %q has no replacement", attempt.ID)
+		}
+	}
+	return nil
+}
+
+func validateModelAttempt(attempt ModelAttempt, historical bool, ids map[string]struct{}) error {
+	if attempt.ID == "" {
+		return fmt.Errorf("id is required")
+	}
+	if _, exists := ids[attempt.ID]; exists {
+		return fmt.Errorf("duplicate id %q", attempt.ID)
+	}
+	ids[attempt.ID] = struct{}{}
+	if attempt.LogicalStep < 0 {
+		return fmt.Errorf("logical step must be non-negative")
+	}
+	if attempt.StartedAt.IsZero() {
+		return fmt.Errorf("startedAt is required")
+	}
+	switch attempt.Status {
+	case ModelAttemptStarted, ModelAttemptStreaming:
+		if historical {
+			return fmt.Errorf("history contains nonterminal status %q", attempt.Status)
+		}
+		if attempt.CompletedAt != nil {
+			return fmt.Errorf("status %q cannot have completedAt", attempt.Status)
+		}
+	case ModelAttemptInterrupted:
+		if historical {
+			return fmt.Errorf("history contains nonterminal status %q", attempt.Status)
+		}
+		if attempt.CompletedAt == nil {
+			return fmt.Errorf("status %q requires completedAt", attempt.Status)
+		}
+	case ModelAttemptCommitted:
+		if !historical {
+			return fmt.Errorf("active attempt cannot have status %q", attempt.Status)
+		}
+		if attempt.CompletedAt == nil {
+			return fmt.Errorf("status %q requires completedAt", attempt.Status)
+		}
+	case ModelAttemptSuperseded:
+		if attempt.CompletedAt == nil {
+			return fmt.Errorf("status %q requires completedAt", attempt.Status)
+		}
+	default:
+		return fmt.Errorf("unsupported status %q", attempt.Status)
+	}
+	if attempt.CompletedAt != nil && attempt.CompletedAt.Before(attempt.StartedAt) {
+		return fmt.Errorf("completedAt precedes startedAt")
 	}
 	return nil
 }
@@ -246,5 +352,42 @@ type ModelState struct {
 	Provider string         `json:"provider,omitempty"`
 	Name     string         `json:"name,omitempty"`
 	Request  map[string]any `json:"request,omitempty"`
+	Active   *ModelAttempt  `json:"active,omitempty"`
+	Attempts []ModelAttempt `json:"attempts,omitempty"`
 	Meta     map[string]any `json:"meta,omitempty"`
+}
+
+type ModelAttemptStatus string
+
+const (
+	ModelAttemptStarted     ModelAttemptStatus = "started"
+	ModelAttemptStreaming   ModelAttemptStatus = "streaming"
+	ModelAttemptCommitted   ModelAttemptStatus = "committed"
+	ModelAttemptInterrupted ModelAttemptStatus = "interrupted"
+	ModelAttemptSuperseded  ModelAttemptStatus = "superseded"
+)
+
+// ModelAttempt is durable observation state, not committed conversation state.
+type ModelAttempt struct {
+	ID             string             `json:"id"`
+	LogicalStep    int                `json:"logicalStep"`
+	Status         ModelAttemptStatus `json:"status"`
+	TextDraft      string             `json:"textDraft,omitempty"`
+	ToolCallsDraft []ToolCallSpec     `json:"toolCallsDraft,omitempty"`
+	ChunkSeq       int64              `json:"chunkSeq,omitempty"`
+	ObservedUsage  UsageState         `json:"observedUsage,omitempty"`
+	StartedAt      time.Time          `json:"startedAt"`
+	CompletedAt    *time.Time         `json:"completedAt,omitempty"`
+	ReplacesID     string             `json:"replacesId,omitempty"`
+	ReplacementID  string             `json:"replacementId,omitempty"`
+}
+
+// AppendAttempt retains a bounded, internally linked attempt history.
+func (s *ModelState) AppendAttempt(attempt ModelAttempt) {
+	s.Attempts = append(s.Attempts, attempt)
+	if len(s.Attempts) <= ModelAttemptHistoryLimit {
+		return
+	}
+	s.Attempts = append([]ModelAttempt(nil), s.Attempts[len(s.Attempts)-ModelAttemptHistoryLimit:]...)
+	s.Attempts[0].ReplacesID = ""
 }

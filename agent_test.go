@@ -468,7 +468,7 @@ func TestAgentStopsBeforeModelWhenInitialEventAppendFails(t *testing.T) {
 }
 
 func TestAgentStopsWhenModelDeltaEventAppendFails(t *testing.T) {
-	eventsStore := &failingEventStore{failAppendAt: 5}
+	eventsStore := &failingEventStore{failAppendAt: 7}
 	fakeModel := &scriptedModel{turns: []scriptedTurn{{events: []model.Event{{Delta: "partial"}}}}}
 	agent := New(Config{
 		Model:       fakeModel,
@@ -756,7 +756,7 @@ func TestAgentStopsBeforeModelWhenCheckpointSaveFails(t *testing.T) {
 }
 
 func TestAgentDoesNotCompleteWhenPostModelCheckpointFails(t *testing.T) {
-	checkpoints := &failingCheckpointStore{failAt: 2}
+	checkpoints := &failingCheckpointStore{failAt: 4}
 	fakeModel := &scriptedModel{turns: []scriptedTurn{{events: []model.Event{{Delta: "model output"}}}}}
 	agent := New(Config{
 		Model:       fakeModel,
@@ -775,7 +775,7 @@ func TestAgentDoesNotCompleteWhenPostModelCheckpointFails(t *testing.T) {
 	if len(fakeModel.requests) != 1 {
 		t.Fatalf("model calls = %d, want 1", len(fakeModel.requests))
 	}
-	if countEvent(types, EventCheckpointCreated) != 1 || countEvent(types, EventModelDone) != 0 || countEvent(types, EventRunDone) != 0 {
+	if countEvent(types, EventCheckpointCreated) != 3 || countEvent(types, EventModelDone) != 0 || countEvent(types, EventRunDone) != 0 {
 		t.Fatalf("unexpected events after checkpoint failure: %v", types)
 	}
 	if countEvent(types, EventRunError) != 1 {
@@ -785,8 +785,124 @@ func TestAgentDoesNotCompleteWhenPostModelCheckpointFails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load returned error: %v", err)
 	}
-	if cp.State.Phase != harness.RunPhaseModel || cp.State.Control.Status != harness.RunStatusModelStreaming || len(cp.State.Messages) != 1 {
-		t.Fatalf("last durable checkpoint is not the pre-model boundary: %#v", cp.State)
+	if cp.State.Phase != harness.RunPhaseModel || cp.State.Control.Status != harness.RunStatusModelStreaming || len(cp.State.Messages) != 1 ||
+		cp.State.Model.Active == nil || cp.State.Model.Active.TextDraft != "model output" {
+		t.Fatalf("last durable checkpoint is not the streamed draft boundary: %#v", cp.State)
+	}
+}
+
+func TestAgentResumeReplacesStreamingAttemptWithoutSpendingStep(t *testing.T) {
+	checkpoints := checkpointmemory.New()
+	eventsStore := &failingEventStore{failAppendAt: 7}
+	record := &recordingTool{}
+	fakeModel := &scriptedModel{turns: []scriptedTurn{
+		{events: []model.Event{{
+			Delta: "old draft",
+			ToolCalls: []model.ToolCallSpec{{
+				ID: "old_call", Name: "record", Arguments: json.RawMessage(`{}`),
+			}},
+			Usage: model.Usage{PromptTokens: 10, CompletionTokens: 4, TotalTokens: 14},
+		}}},
+		{events: []model.Event{{
+			Type:    model.EventDone,
+			Message: &model.Message{Role: "assistant", Content: "replacement answer"},
+			Usage:   model.Usage{PromptTokens: 3, CompletionTokens: 2, TotalTokens: 5},
+		}}},
+	}}
+	agent := New(Config{
+		Model: fakeModel, Tools: []Tool{record}, Events: eventsStore,
+		Checkpoints: checkpoints, MaxSteps: 1,
+	})
+
+	first := collectAgentEvents(t, agent, "run_attempt_replacement", "work")
+	if countTypedEvents(first, EventModelDelta) != 0 {
+		t.Fatalf("delta was emitted despite its persistence failure: %#v", first)
+	}
+	cp, err := checkpoints.Load(context.Background(), "run_attempt_replacement")
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cp.State.Model.Active == nil || cp.State.Model.Active.Status != harness.ModelAttemptStreaming ||
+		cp.State.Model.Active.TextDraft != "old draft" || cp.State.Model.Active.ChunkSeq != 1 ||
+		cp.State.Model.Active.ObservedUsage.TotalTokens != 14 || len(cp.State.Model.Active.ToolCallsDraft) != 1 {
+		t.Fatalf("stream draft was not checkpointed before event publication: %#v", cp.State.Model.Active)
+	}
+
+	eventsStore.failAppendAt = 0
+	resumed, err := agent.Resume(context.Background(), "run_attempt_replacement")
+	if err != nil {
+		t.Fatalf("Resume returned error: %v", err)
+	}
+	var resumeEvents []Event
+	for event := range resumed {
+		resumeEvents = append(resumeEvents, event)
+	}
+	if countTypedEvents(resumeEvents, EventModelInterrupted) != 1 ||
+		countTypedEvents(resumeEvents, EventModelSuperseded) != 1 ||
+		countTypedEvents(resumeEvents, EventModelRestarted) != 1 {
+		t.Fatalf("missing replacement lifecycle events: %#v", resumeEvents)
+	}
+	if record.calls != 0 {
+		t.Fatalf("interrupted tool draft executed %d time(s)", record.calls)
+	}
+	if len(fakeModel.requests) != 2 || len(fakeModel.requests[1].Messages) != 1 ||
+		strings.Contains(fakeModel.requests[1].Messages[0].Content, "old draft") {
+		t.Fatalf("replacement request included interrupted draft: %#v", fakeModel.requests)
+	}
+
+	cp, err = checkpoints.Load(context.Background(), "run_attempt_replacement")
+	if err != nil {
+		t.Fatalf("Load after resume returned error: %v", err)
+	}
+	if cp.State.Step != 1 || cp.State.Model.Active != nil || len(cp.State.Model.Attempts) != 2 ||
+		cp.State.Model.Attempts[0].Status != harness.ModelAttemptSuperseded ||
+		cp.State.Model.Attempts[1].Status != harness.ModelAttemptCommitted ||
+		cp.State.Model.Attempts[0].ReplacementID != cp.State.Model.Attempts[1].ID ||
+		cp.State.Model.Attempts[1].ReplacesID != cp.State.Model.Attempts[0].ID {
+		t.Fatalf("unexpected replacement attempt history: %#v", cp.State.Model)
+	}
+	if len(cp.State.Messages) != 2 || cp.State.Messages[1].Content != "replacement answer" ||
+		cp.State.Usage.TotalTokens != 5 {
+		t.Fatalf("replacement was not committed exactly once: %#v", cp.State)
+	}
+}
+
+func TestAgentModelStreamCompletionCompatibility(t *testing.T) {
+	tests := []struct {
+		name   string
+		events []model.Event
+		want   string
+	}{
+		{
+			name:   "silent close remains successful for legacy streams",
+			events: []model.Event{{Delta: "legacy answer"}},
+			want:   "legacy answer",
+		},
+		{
+			name: "done message is a strong completion payload",
+			events: []model.Event{{
+				Type: model.EventDone, Message: &model.Message{Role: "assistant", Content: "done answer"},
+			}},
+			want: "done answer",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			agent := New(Config{
+				Model:       &scriptedModel{turns: []scriptedTurn{{events: tt.events}}},
+				Checkpoints: checkpointmemory.New(),
+			})
+			events := collectAgentEvents(t, agent, "run_completion_"+strings.ReplaceAll(tt.name, " ", "_"), "work")
+			var got string
+			for _, event := range events {
+				if event.Type == EventRunDone {
+					got = stringValue(event.Payload["output"])
+				}
+			}
+			if got != tt.want {
+				t.Fatalf("output = %q, want %q; events=%#v", got, tt.want, events)
+			}
+		})
 	}
 }
 
@@ -3269,8 +3385,8 @@ func TestAgentPlanExecuteFailsClosedWhenTerminalCheckpointSaveFails(t *testing.T
 		}
 	}
 
-	if checkpoints.saves != 4 {
-		t.Fatalf("checkpoint saves = %d, want 4", checkpoints.saves)
+	if checkpoints.saves != 6 {
+		t.Fatalf("checkpoint saves = %d, want 6", checkpoints.saves)
 	}
 	if countEvent(types, EventRunError) != 1 || !strings.Contains(runError, "save checkpoint") {
 		t.Fatalf("unexpected terminal save failure: events=%v error=%q", types, runError)
@@ -3657,6 +3773,89 @@ func TestAgentPlanExecuteResumeSummarizesTerminalTodos(t *testing.T) {
 	}
 	if !contains(fakeModel.requests[0].Messages[0].Content, "First") || !contains(fakeModel.requests[0].Messages[0].Content, "Second") {
 		t.Fatalf("summary prompt missing terminal todos: %#v", fakeModel.requests[0].Messages)
+	}
+}
+
+func TestAgentPlanExecuteSummaryReplacesInterruptedAttempt(t *testing.T) {
+	checkpoints := checkpointmemory.New()
+	runID := "run_plan_execute_summary_replacement"
+	state := newRunState(runID, "do the work", planExecuteMeta(nil, "do the work", planExecuteStageExecute))
+	state.Mode = string(ModePlanExecute)
+	state.Todos = []harness.TodoState{{ID: "todo_1", Content: "First", Status: harness.TodoDone}}
+	now := time.Now().UTC()
+	if err := checkpoints.Save(context.Background(), checkpoint.Checkpoint{
+		Version: checkpoint.CheckpointVersion,
+		RunID:   runID,
+		Seq:     1,
+		State:   state,
+		SavedAt: now,
+	}); err != nil {
+		t.Fatalf("Save returned error: %v", err)
+	}
+	eventsStore := &failEventTypeOnceStore{failType: EventModelDelta}
+	fakeModel := &scriptedModel{turns: []scriptedTurn{
+		{events: []model.Event{{
+			Delta: "discarded summary",
+			Usage: model.Usage{PromptTokens: 9, CompletionTokens: 3, TotalTokens: 12},
+		}}},
+		{events: []model.Event{{
+			Type:    model.EventDone,
+			Message: &model.Message{Role: "assistant", Content: "durable summary"},
+			Usage:   model.Usage{PromptTokens: 4, CompletionTokens: 2, TotalTokens: 6},
+		}}},
+	}}
+	agent := New(Config{
+		Model: fakeModel, Planning: PlanningPlanExecute,
+		Checkpoints: checkpoints, Events: eventsStore,
+	})
+
+	first, err := agent.Resume(context.Background(), runID)
+	if err != nil {
+		t.Fatalf("first Resume returned error: %v", err)
+	}
+	for range first {
+	}
+	cp, err := checkpoints.Load(context.Background(), runID)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cp.State.Model.Active == nil || cp.State.Model.Active.Status != harness.ModelAttemptStreaming ||
+		cp.State.Model.Active.TextDraft != "discarded summary" {
+		t.Fatalf("summary draft was not durable: %#v", cp.State)
+	}
+
+	second, err := agent.Resume(context.Background(), runID)
+	if err != nil {
+		t.Fatalf("second Resume returned error: %v", err)
+	}
+	var output string
+	var types []EventType
+	for event := range second {
+		types = append(types, event.Type)
+		if event.Type == EventRunDone {
+			output = stringValue(event.Payload["output"])
+		}
+	}
+	if output != "durable summary" {
+		t.Fatalf("output = %q, want durable summary; events=%v", output, types)
+	}
+	if len(fakeModel.requests) != 2 ||
+		fakeModel.requests[0].ToolChoice != model.ToolChoiceNone ||
+		fakeModel.requests[1].ToolChoice != model.ToolChoiceNone {
+		t.Fatalf("summary requests = %#v", fakeModel.requests)
+	}
+	if countEvent(types, EventModelInterrupted) != 1 ||
+		countEvent(types, EventModelSuperseded) != 1 ||
+		countEvent(types, EventModelRestarted) != 1 {
+		t.Fatalf("missing summary replacement lifecycle: %v", types)
+	}
+	cp, err = checkpoints.Load(context.Background(), runID)
+	if err != nil {
+		t.Fatalf("Load after replacement returned error: %v", err)
+	}
+	if cp.State.Phase != harness.RunPhaseCompleted || cp.State.Usage.TotalTokens != 6 ||
+		lastAssistantContent(cp.State) != "durable summary" {
+		t.Fatalf("unexpected committed summary state: %#v", cp.State)
 	}
 }
 

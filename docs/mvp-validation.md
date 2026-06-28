@@ -33,6 +33,9 @@ rg -n '"[^"[:space:]]*agent-platform[^"[:space:]]*"' --glob "*.go" .
 | recorder preserves low-level checkpoint-before-event ordering without owning Agent lifecycle | `recorder.TestRecorderSavesCheckpointBeforeCheckpointEvent`, `recorder.TestRecorderCompleteWritesTerminalEventAfterCheckpointEvent`, `recorder.TestRecorderCompletePersistsCancelledTerminalWithCancelledContext` |
 | plan/execute persists a terminal summary with monotonic SQLite checkpoints | `TestAgentPlanExecutePersistsTerminalSummaryInSQLite` |
 | checkpoint write failures stop before unsafe progress or false completion | `TestAgentStopsBeforeModelWhenCheckpointSaveFails`, `TestAgentDoesNotCompleteWhenPostModelCheckpointFails` |
+| interrupted model drafts are replaced at the same logical step without committing draft tools or usage | `TestAgentResumeReplacesStreamingAttemptWithoutSpendingStep`, `TestAgentPlanExecuteSummaryReplacesInterruptedAttempt`, `harness.TestRunnerResumeInterruptedAttemptDoesNotSpendAnotherStep`, `harness.TestRunnerResumeFinalizingReplacesAttemptWithNoToolChoice` |
+| committed text boundaries resume without another model request | `harness.TestRunnerResumeCompletesCommittedTextBoundaryWithoutModelCall` |
+| model-attempt checkpoint state fails closed on invalid status, identity, timing, step, or links | `harness.TestValidateRunStateModelAttempts` |
 | checkpoint loads and resume reject unknown run-state version, phase, or mode while accepting legacy empty version/mode | `harness.TestValidateRunStateVersionPhaseAndMode`, `checkpoint.TestValidateRejectsUnsupportedRunStateDispatchFields`, `checkpoint.TestValidateAcceptsLegacyRunStateVersionAndMode`, `checkpoint_test.TestStoreLoadRejectsInvalidRunStateContract`, `TestAgentResumeRejectsInvalidCheckpointRunState` |
 | event-log failures stop execution before unrecorded progress | `TestAgentStopsBeforeModelWhenInitialEventAppendFails`, `TestAgentStopsWhenModelDeltaEventAppendFails`, `TestAgentDoesNotRetryEventStoreWhenCheckpointEventAppendFails` |
 | trace sink failures remain best-effort | `TestAgentTreatsTraceSinkFailureAsBestEffort` |
@@ -49,6 +52,7 @@ rg -n '"[^"[:space:]]*agent-platform[^"[:space:]]*"' --glob "*.go" .
 | HTTP approval submit rejects bad request bodies | `server/harnesshttp.TestServeApprovalRejectsInvalidJSONAndDecision` |
 | HTTP pending approval query filters by authorized run | `approval.TestPendingBrokerListsPendingForRun`, `server/harnesshttp.TestServeApprovalsListsPendingRequestsForRun`, `server/harnesshttp.TestServeApprovalsRejectsForbiddenRun` |
 | HTTP live event stream subscribes to authorized run fanout | `server/harnesshttp.TestServeLiveEventsStreamsBusEvents`, `server/harnesshttp.TestServeLiveEventsRejectsForbiddenRun` |
+| replay-to-live follows durable sequence without gaps or duplicates and recovers from overflow | `eventlog.TestFollowDoesNotMissAppendBetweenWatermarkAndReplay`, `eventlog.TestFollowRecoversFromLiveBufferOverflow`, `eventlog.TestFollowPollsDurableStoreAndHonorsAfterSeq`, `server/harnesshttp.TestServeLiveEventsReplayModeBridgesToLive` |
 | HTTP live event stream rejects invalid buffer configuration | `server/harnesshttp.TestServeLiveEventsRejectsInvalidBuffer` |
 | live event fanout stays separate from replay storage | `eventlog.TestFanoutStoreAppendsThenPublishesAssignedSeq`, `eventlog.TestFanoutStoreClosesRunOnTerminalEvent` |
 | OpenTelemetry trace sink works | `trace/otel.TestSinkEmitsSpanWithAttributes` |

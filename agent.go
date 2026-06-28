@@ -471,70 +471,19 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 	summaryState.Todos, _ = plannerTodos(todos)
 	summaryState.Phase = harness.RunPhaseFinalizing
 	summaryState.Control.Status = harness.RunStatusModelStreaming
-	saveSummaryState := func() error {
-		cp, err := a.saveCheckpointAfterLatest(ctx, summaryState)
-		if err != nil {
-			return err
-		}
-		if err := emit(EventCheckpointCreated, checkpointCreatedPayload(cp)); err != nil {
-			return err
-		}
-		return nil
+	if resumeState != nil && planExecuteStage(resumeState.Meta) == planExecuteStageSummary {
+		summaryState = *resumeState
+		resumeState = nil
 	}
-	failSummary := func(err error) {
-		if isEventPersistenceError(err) {
+	terminal := a.runInternalLoop(ctx, out, summaryState, true)
+	if terminal.Type == EventRunError || terminal.Type == EventRunCancelled {
+		if terminal.Err != nil {
 			return
 		}
-		if summaryState.Meta == nil {
-			summaryState.Meta = map[string]any{}
-		}
-		summaryState.Meta["error"] = err.Error()
-		summaryState.Meta[planExecuteTerminalKey] = true
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			summaryState.Phase = harness.RunPhaseCancelled
-			summaryState.Control.Status = harness.RunStatusCancelled
-			if saveErr := saveSummaryState(); saveErr != nil {
-				if !isEventPersistenceError(saveErr) {
-					_ = emit(EventRunError, map[string]any{"error": fmt.Sprintf("save checkpoint: %v", saveErr)})
-				}
-				return
-			}
-			_ = emit(EventRunCancelled, map[string]any{"error": err.Error()})
-			return
-		}
-		summaryState.Phase = harness.RunPhaseFailed
-		summaryState.Control.Status = harness.RunStatusFailed
-		if saveErr := saveSummaryState(); saveErr != nil {
-			if !isEventPersistenceError(saveErr) {
-				_ = emit(EventRunError, map[string]any{"error": fmt.Sprintf("save checkpoint: %v", saveErr)})
-			}
-			return
-		}
-		_ = emit(EventRunError, map[string]any{"error": err.Error()})
-	}
-	if err := saveSummaryState(); err != nil {
-		fail(planExecuteStageSummary, todos, err)
+		_ = emit(terminal.Type, terminal.Data)
 		return
 	}
-	assistant, usage, err := a.callModel(ctx, emit, summaryState, model.ToolChoiceNone)
-	if err != nil {
-		failSummary(err)
-		return
-	}
-	if err := validateNoToolAnswer(assistant); err != nil {
-		failSummary(err)
-		return
-	}
-	summaryState.Messages = append(summaryState.Messages, assistant)
-	applyUsage(&summaryState, usage)
-	summaryState.Meta[planExecuteTerminalKey] = true
-	summaryState.Phase = harness.RunPhaseCompleted
-	summaryState.Control.Status = harness.RunStatusCompleted
-	if err := saveSummaryState(); err != nil {
-		fail(planExecuteStageSummary, todos, err)
-		return
-	}
-	_ = emit(EventRunDone, map[string]any{"output": assistant.Content, "todos": todos})
+	_ = emit(EventRunDone, map[string]any{"output": stringValue(terminal.Data["output"]), "todos": todos})
 }
 
 func planExecuteTodos(ctx context.Context, manager planner.Manager, runID string, resumeState *harness.RunState) ([]planner.Todo, error) {
@@ -703,6 +652,9 @@ func (a *Agent) runHarnessLoop(ctx context.Context, out chan<- Event, state harn
 		Checkpoint: checkpointState,
 		CallModel: func(callCtx context.Context, current harness.RunState, choice model.ToolChoice) (harness.MessageState, model.Usage, error) {
 			return a.callModel(callCtx, emit, current, choice)
+		},
+		DurableCallModel: func(callCtx context.Context, current *harness.RunState, choice model.ToolChoice) (harness.MessageState, model.Usage, error) {
+			return a.callModelDurable(callCtx, emit, checkpointState, current, choice)
 		},
 		RunPendingTools: func(callCtx context.Context, current *harness.RunState) error {
 			return a.runPendingTools(callCtx, emit, func() error {
@@ -964,6 +916,128 @@ func (a *Agent) callModel(ctx context.Context, emit eventEmitter, state harness.
 		Content:   content.String(),
 		ToolCalls: modelToolCallsToHarness(calls),
 	}, usage, nil
+}
+
+func (a *Agent) callModelDurable(
+	ctx context.Context,
+	emit eventEmitter,
+	checkpointState func(context.Context, harness.RunState) error,
+	state *harness.RunState,
+	choice model.ToolChoice,
+) (harness.MessageState, model.Usage, error) {
+	attempt := &harness.ModelAttempt{
+		ID:          fmt.Sprintf("attempt_%d", time.Now().UnixNano()),
+		LogicalStep: state.Step,
+		Status:      harness.ModelAttemptStarted,
+		StartedAt:   time.Now().UTC(),
+	}
+	if state.Model.Active != nil && state.Model.Active.Status == harness.ModelAttemptSuperseded {
+		attempt.ReplacesID = state.Model.Active.ID
+		state.Model.Active.ReplacementID = attempt.ID
+		state.Model.AppendAttempt(*state.Model.Active)
+	}
+	state.Model.Active = attempt
+	if err := checkpointState(ctx, *state); err != nil {
+		return harness.MessageState{}, model.Usage{}, err
+	}
+	if err := emit(EventModelStarted, attemptEventData(attempt, 0)); err != nil {
+		return harness.MessageState{}, model.Usage{}, err
+	}
+	if attempt.ReplacesID != "" {
+		if err := emit(EventModelRestarted, attemptEventData(attempt, 0)); err != nil {
+			return harness.MessageState{}, model.Usage{}, err
+		}
+	}
+
+	stream, err := a.config.Model.Stream(ctx, model.Request{
+		Messages:   a.modelMessages(*state),
+		Tools:      a.toolSpecs(),
+		ToolChoice: choice,
+		Meta:       cloneMap(state.Meta),
+	})
+	if err != nil {
+		return harness.MessageState{}, model.Usage{}, err
+	}
+
+	for event := range stream {
+		if event.Error != nil {
+			return harness.MessageState{}, model.Usage{}, event.Error
+		}
+		if event.Delta == "" && event.Message == nil && len(event.ToolCalls) == 0 && !hasUsage(event.Usage) {
+			continue
+		}
+		offset := len(attempt.TextDraft)
+		attempt.ChunkSeq++
+		attempt.Status = harness.ModelAttemptStreaming
+		attempt.TextDraft += event.Delta
+		if len(event.ToolCalls) > 0 {
+			attempt.ToolCallsDraft = append(attempt.ToolCallsDraft, modelToolCallsToHarness(event.ToolCalls)...)
+		}
+		if hasUsage(event.Usage) {
+			attempt.ObservedUsage = usageState(event.Usage)
+		}
+		if event.Message != nil {
+			if event.Message.Content != "" {
+				attempt.TextDraft = event.Message.Content
+			}
+			if len(event.Message.ToolCalls) > 0 {
+				attempt.ToolCallsDraft = modelToolCallsToHarness(event.Message.ToolCalls)
+			}
+		}
+		if err := checkpointState(ctx, *state); err != nil {
+			return harness.MessageState{}, model.Usage{}, err
+		}
+		data := attemptEventData(attempt, offset)
+		if event.Delta != "" {
+			data["textDelta"] = event.Delta
+			if err := emit(EventModelDelta, data); err != nil {
+				return harness.MessageState{}, model.Usage{}, err
+			}
+		}
+		if hasUsage(event.Usage) {
+			data["usage"] = map[string]any{
+				"promptTokens": event.Usage.PromptTokens, "completionTokens": event.Usage.CompletionTokens,
+				"totalTokens": event.Usage.TotalTokens,
+			}
+			if err := emit(EventModelUsage, data); err != nil {
+				return harness.MessageState{}, model.Usage{}, err
+			}
+		}
+		if len(event.ToolCalls) > 0 || (event.Message != nil && len(event.Message.ToolCalls) > 0) {
+			data["toolCalls"] = append([]harness.ToolCallSpec(nil), attempt.ToolCallsDraft...)
+			if err := emit(EventModelToolCallDraft, data); err != nil {
+				return harness.MessageState{}, model.Usage{}, err
+			}
+		}
+	}
+
+	message := harness.MessageState{
+		Role:      "assistant",
+		Content:   attempt.TextDraft,
+		ToolCalls: append([]harness.ToolCallSpec(nil), attempt.ToolCallsDraft...),
+	}
+	return message, model.Usage{
+		PromptTokens:     attempt.ObservedUsage.InputTokens,
+		CompletionTokens: attempt.ObservedUsage.OutputTokens,
+		TotalTokens:      attempt.ObservedUsage.TotalTokens,
+	}, nil
+}
+
+func hasUsage(usage model.Usage) bool {
+	return usage.PromptTokens != 0 || usage.CompletionTokens != 0 || usage.TotalTokens != 0
+}
+
+func usageState(usage model.Usage) harness.UsageState {
+	return harness.UsageState{
+		InputTokens: usage.PromptTokens, OutputTokens: usage.CompletionTokens, TotalTokens: usage.TotalTokens,
+	}
+}
+
+func attemptEventData(attempt *harness.ModelAttempt, offset int) map[string]any {
+	return map[string]any{
+		"attemptId": attempt.ID, "step": attempt.LogicalStep,
+		"chunkSeq": attempt.ChunkSeq, "offset": offset,
+	}
 }
 
 func (a *Agent) runPendingTools(ctx context.Context, emit eventEmitter, checkpointState func() error, state *harness.RunState) error {

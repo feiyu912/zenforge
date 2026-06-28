@@ -102,6 +102,14 @@ func (b *Bus) CloseRun(runID string) {
 	delete(b.subscribers, runID)
 }
 
+// RunClosed reports whether CloseRun has permanently closed the run.
+func (b *Bus) RunClosed(runID string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	_, closed := b.closedRuns[runID]
+	return closed
+}
+
 func (b *Bus) unsubscribe(runID string, ch chan zenforge.Event) {
 	b.mu.Lock()
 	defer b.mu.Unlock()

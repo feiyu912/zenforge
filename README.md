@@ -142,6 +142,10 @@ new core provider names.
 **Runtime**
 - Single `zenforge.Agent` with `Stream`, `Run`, `Resume`.
 - Root Agent assembly delegates the durable model/tool state machine to the independently testable `harness.Runner`.
+- Model stream drafts are checkpointed before publication. A process crash
+  supersedes the interrupted attempt and restarts the same logical step without
+  committing partial text, tool calls, or usage twice; attempt history is
+  bounded and validated on load.
 - Platform-compatible `react`, `oneshot`, and `plan_execute` execution modes, persisted across resume.
 - Plan/execute preset with built-in todo manager.
 - Run-scoped pending approval broker (`approval.PendingBroker`).
@@ -179,13 +183,16 @@ new core provider names.
   bodies are rejected when they exceed the adapter limit.
 
 **HTTP / SSE edge** — `server/harnesshttp`
-- `POST /run`, `POST /resume`, `GET /events` (replay with `afterSeq`), `GET /live` (live fanout).
+- `POST /run`, `POST /resume`, `GET /events` (bounded replay), and `GET /live`
+  (live fanout or durable replay-to-live with `replay=true`).
 - `GET /approvals`, `POST /approval` for run-scoped pending approval flows.
 - Access control hook to enforce auth and inject trusted metadata; ZenForge does not own auth, tenancy, or catalog loading.
 
 **Live events**
 - `eventlog.Bus` and `eventlog.FanoutStore` for multiple live subscribers.
-- Replay (`/events`) and live (`/live`) are deliberately separate: replay is the read model, live is fanout.
+- `GET /live?replay=true&afterSeq=N` subscribes before replay, catches up from
+  the durable store, de-duplicates by sequence, and accepts `Last-Event-ID` on
+  reconnect. Plain `/live` remains ephemeral fanout.
 
 **Observability**
 - Trace sinks: memory, stdout, JSONL, OpenTelemetry spans.
@@ -423,7 +430,8 @@ git diff --check
 
 **Not in MVP** — see [`docs/limitations.md`](docs/limitations.md) for the full list:
 
-- Resume does not continue a partially streamed provider response.
+- Resume replaces an interrupted model attempt from its committed prompt
+  boundary; it does not use a provider-native mid-token cursor.
 - MCP covers tools only; resources, prompts, sampling, discovery, and OAuth stay with the host platform.
 - OpenTelemetry exporter setup stays in host services.
 - CLI config is JSON only.

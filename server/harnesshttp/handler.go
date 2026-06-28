@@ -210,12 +210,48 @@ func (h *Handler) ServeLiveEvents(w http.ResponseWriter, r *http.Request) {
 	if _, ok := h.authorize(w, r, Operation{Name: "liveEvents", RunID: runID}); !ok {
 		return
 	}
+	replay, err := boolQuery(r, "replay")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_replay", err.Error())
+		return
+	}
 	buffer := h.LiveBuffer
 	if buffer == 0 {
 		buffer = 128
 	}
 	if buffer < 0 {
 		writeError(w, http.StatusInternalServerError, "invalid_live_buffer", "live event buffer must be non-negative")
+		return
+	}
+	if replay {
+		if h.Events == nil {
+			writeError(w, http.StatusInternalServerError, "event_store_not_configured", "event store is not configured")
+			return
+		}
+		afterSeq, err := int64Query(r, "afterSeq")
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_after_seq", err.Error())
+			return
+		}
+		if _, present := r.URL.Query()["afterSeq"]; !present {
+			afterSeq, err = lastEventID(r)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "invalid_last_event_id", err.Error())
+				return
+			}
+		}
+		followCtx, cancel := context.WithCancel(r.Context())
+		events, errs, err := eventlog.Follow(followCtx, h.Events, h.Bus, runID, afterSeq, eventlog.FollowOptions{
+			LiveBuffer: buffer,
+		})
+		if err != nil {
+			cancel()
+			writeError(w, http.StatusBadRequest, "live_events_failed", err.Error())
+			return
+		}
+		_ = sse.StreamHTTP(r.Context(), w, events, h.SSE)
+		cancel()
+		<-errs
 		return
 	}
 	events, unsubscribe, err := h.Bus.Subscribe(r.Context(), runID, buffer)
@@ -379,6 +415,30 @@ func intQuery(r *http.Request, key string) (int, error) {
 		return 0, errors.New(key + " must be non-negative")
 	}
 	return value, nil
+}
+
+func boolQuery(r *http.Request, key string) (bool, error) {
+	value := strings.TrimSpace(r.URL.Query().Get(key))
+	if value == "" {
+		return false, nil
+	}
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return false, fmt.Errorf("%s must be a boolean", key)
+	}
+	return parsed, nil
+}
+
+func lastEventID(r *http.Request) (int64, error) {
+	value := strings.TrimSpace(r.Header.Get("Last-Event-ID"))
+	if value == "" {
+		return 0, nil
+	}
+	seq, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || seq < 0 {
+		return 0, fmt.Errorf("Last-Event-ID must be a non-negative integer")
+	}
+	return seq, nil
 }
 
 func sliceEvents(events []zenforge.Event) <-chan zenforge.Event {

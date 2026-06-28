@@ -66,8 +66,14 @@ If the host server uses `server/harnesshttp`, configure `handler.Bus` and mount
 
 ```go
 handler.Bus = bus
+handler.Events = durableEvents
 mux.HandleFunc("/live", handler.ServeLiveEvents)
 ```
+
+`GET /live?runId=run_123&replay=true&afterSeq=42` uses `eventlog.Follow` to
+bridge durable replay to live fanout without a subscribe gap. It polls the
+durable store as a backstop, recovers from live-buffer overflow, emits each
+sequence once, and accepts `Last-Event-ID` when the query cursor is absent.
 
 ZenMind or another host platform can map these SSE frames to its own frontend
 events, WebSocket protocol, or persisted chat trace. The harness remains

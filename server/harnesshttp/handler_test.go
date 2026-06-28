@@ -13,6 +13,7 @@ import (
 	"github.com/feiyu912/zenforge"
 	"github.com/feiyu912/zenforge/approval"
 	"github.com/feiyu912/zenforge/eventlog"
+	eventlogmemory "github.com/feiyu912/zenforge/eventlog/memory"
 	"github.com/feiyu912/zenforge/server/sse"
 )
 
@@ -362,6 +363,103 @@ func TestServeLiveEventsStreamsBusEvents(t *testing.T) {
 	body := rec.Body.String()
 	if !strings.Contains(body, "retry: 750\n\n") || !strings.Contains(body, "id: 3\n") || !strings.Contains(body, "event: run.done\n") {
 		t.Fatalf("unexpected SSE body: %q", body)
+	}
+}
+
+func TestServeLiveEventsReplayModeBridgesToLive(t *testing.T) {
+	ctx := context.Background()
+	durable := eventlogmemory.New()
+	bus := eventlog.NewBus()
+	store := eventlog.NewFanoutStore(durable, bus)
+	if err := store.Append(ctx, zenforge.NewEvent(zenforge.EventRunStarted, "run_http", nil)); err != nil {
+		t.Fatal(err)
+	}
+	handler := New(&fakeAgent{}, sse.Options{})
+	handler.Events = durable
+	handler.Bus = bus
+	handler.Access = AccessFunc(func(ctx context.Context, r *http.Request, operation Operation) (AccessDecision, error) {
+		if operation.Name != "liveEvents" || operation.RunID != "run_http" {
+			t.Fatalf("unexpected operation: %#v", operation)
+		}
+		return AccessDecision{}, nil
+	})
+	req := httptest.NewRequest(http.MethodGet, "/live?runId=run_http&replay=true&afterSeq=0", nil)
+	rec := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		handler.ServeLiveEvents(rec, req)
+		close(done)
+	}()
+
+	if err := store.Append(ctx, zenforge.NewEvent(zenforge.EventRunDone, "run_http", nil)); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for replay-to-live stream")
+	}
+	body := rec.Body.String()
+	if strings.Count(body, "id: 1\n") != 1 || strings.Count(body, "id: 2\n") != 1 {
+		t.Fatalf("replay-to-live SSE sequence mismatch: %q", body)
+	}
+}
+
+func TestServeLiveEventsReplayUsesLastEventID(t *testing.T) {
+	ctx := context.Background()
+	durable := eventlogmemory.New()
+	bus := eventlog.NewBus()
+	store := eventlog.NewFanoutStore(durable, bus)
+	if err := store.Append(ctx, zenforge.NewEvent(zenforge.EventRunStarted, "run_http", nil)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Append(ctx, zenforge.NewEvent(zenforge.EventRunDone, "run_http", nil)); err != nil {
+		t.Fatal(err)
+	}
+	handler := New(&fakeAgent{}, sse.Options{})
+	handler.Events = durable
+	handler.Bus = bus
+	req := httptest.NewRequest(http.MethodGet, "/live?runId=run_http&replay=true", nil)
+	req.Header.Set("Last-Event-ID", "1")
+	rec := httptest.NewRecorder()
+
+	handler.ServeLiveEvents(rec, req)
+
+	body := rec.Body.String()
+	if strings.Contains(body, "id: 1\n") || strings.Count(body, "id: 2\n") != 1 {
+		t.Fatalf("Last-Event-ID replay mismatch: %q", body)
+	}
+}
+
+func TestServeLiveEventsReplayModeValidatesConfigurationAndQuery(t *testing.T) {
+	handler := New(&fakeAgent{}, sse.Options{})
+	handler.Bus = eventlog.NewBus()
+
+	rec := httptest.NewRecorder()
+	handler.ServeLiveEvents(rec, httptest.NewRequest(http.MethodGet, "/live?runId=run_http&replay=true", nil))
+	if rec.Code != http.StatusInternalServerError || !strings.Contains(rec.Body.String(), "event_store_not_configured") {
+		t.Fatalf("unexpected missing-store response: status=%d body=%q", rec.Code, rec.Body.String())
+	}
+
+	handler.Events = &fakeEventStore{}
+	rec = httptest.NewRecorder()
+	handler.ServeLiveEvents(rec, httptest.NewRequest(http.MethodGet, "/live?runId=run_http&replay=perhaps", nil))
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "invalid_replay") {
+		t.Fatalf("unexpected invalid-replay response: status=%d body=%q", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	handler.ServeLiveEvents(rec, httptest.NewRequest(http.MethodGet, "/live?runId=run_http&replay=true&afterSeq=-1", nil))
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "invalid_after_seq") {
+		t.Fatalf("unexpected afterSeq response: status=%d body=%q", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/live?runId=run_http&replay=true", nil)
+	req.Header.Set("Last-Event-ID", "invalid")
+	handler.ServeLiveEvents(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "invalid_last_event_id") {
+		t.Fatalf("unexpected Last-Event-ID response: status=%d body=%q", rec.Code, rec.Body.String())
 	}
 }
 
