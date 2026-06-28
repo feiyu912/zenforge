@@ -2,6 +2,7 @@ package zenforge
 
 import (
 	"context"
+	"time"
 
 	"github.com/feiyu912/zenforge/approval"
 	"github.com/feiyu912/zenforge/checkpoint"
@@ -54,6 +55,9 @@ type Config struct {
 	ToolRuntime           []tool.Middleware
 	ToolArgumentRedaction []string
 	Approval              approval.Broker
+	ApprovalGrants        approval.GrantStore
+	ApprovalNamespace     approval.Namespace
+	ApprovalGrantTTL      time.Duration
 	Todos                 planner.Manager
 	SubAgentSpecs         []subagent.SubAgentSpec
 	SubAgentRegistry      subagent.Registry

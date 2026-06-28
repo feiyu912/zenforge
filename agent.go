@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -82,6 +83,9 @@ func (a *Agent) Stream(ctx context.Context, task Task) (<-chan Event, error) {
 	}
 	if a.config.Model == nil {
 		return a.streamNoop(ctx, runID, task.Input), nil
+	}
+	if grantStoreConfigured(a.config.ApprovalGrants) {
+		task.Meta = approvalNamespaceMeta(task.Meta, a.approvalNamespace(task.ApprovalNamespace))
 	}
 	mode := agentModeForConfig(a.config)
 	if mode == ModePlanExecute {
@@ -844,6 +848,9 @@ func (a *Agent) resumeWaitingApproval(ctx context.Context, emit eventEmitter, ch
 	if err := resolveApproval(state, req, decision); err != nil {
 		return err
 	}
+	if err := a.persistApprovalGrant(ctx, *state, req, decision); err != nil {
+		return err
+	}
 	if err := checkpointState(); err != nil {
 		return err
 	}
@@ -996,7 +1003,15 @@ func (a *Agent) runPendingTools(ctx context.Context, emit eventEmitter, checkpoi
 			if err := req.Validate(); err != nil {
 				return err
 			}
-			if decision, reused := reusedApprovalDecision(*state, req); reused {
+			decision, reused := reusedApprovalDecision(*state, req)
+			if !reused {
+				var lookupErr error
+				decision, reused, lookupErr = a.reusedPersistentApproval(ctx, *state, req)
+				if lookupErr != nil {
+					return lookupErr
+				}
+			}
+			if reused {
 				state.ResolveApproval(approvalDecisionState(decision))
 				if err := checkpointState(); err != nil {
 					return err
@@ -1046,6 +1061,9 @@ func (a *Agent) runPendingTools(ctx context.Context, emit eventEmitter, checkpoi
 				}
 				decision = normalizeApprovalDecision(decision)
 				if err := resolveApproval(state, req, decision); err != nil {
+					return err
+				}
+				if err := a.persistApprovalGrant(ctx, *state, req, decision); err != nil {
 					return err
 				}
 				if err := checkpointState(); err != nil {
@@ -1476,6 +1494,126 @@ func reusedApprovalDecision(state harness.RunState, req approval.Request) (appro
 		}
 	}
 	return approval.Decision{}, false
+}
+
+const (
+	approvalTenantStateKey  = "zenforge.approval.tenant"
+	approvalSubjectStateKey = "zenforge.approval.subject"
+)
+
+func (a *Agent) approvalNamespace(task approval.Namespace) approval.Namespace {
+	if task.Tenant != "" || task.Subject != "" {
+		return task
+	}
+	return a.config.ApprovalNamespace
+}
+
+func approvalNamespaceMeta(meta map[string]any, namespace approval.Namespace) map[string]any {
+	out := cloneMap(meta)
+	if out == nil {
+		out = map[string]any{}
+	}
+	delete(out, approvalTenantStateKey)
+	delete(out, approvalSubjectStateKey)
+	if namespace.Tenant != "" || namespace.Subject != "" {
+		out[approvalTenantStateKey] = namespace.Tenant
+		out[approvalSubjectStateKey] = namespace.Subject
+	}
+	return out
+}
+
+func approvalNamespaceFromState(state harness.RunState) approval.Namespace {
+	return approval.Namespace{
+		Tenant:  stringValue(state.Meta[approvalTenantStateKey]),
+		Subject: stringValue(state.Meta[approvalSubjectStateKey]),
+	}
+}
+
+func grantStoreConfigured(store approval.GrantStore) bool {
+	if store == nil {
+		return false
+	}
+	value := reflect.ValueOf(store)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return !value.IsNil()
+	default:
+		return true
+	}
+}
+
+func (a *Agent) reusedPersistentApproval(ctx context.Context, state harness.RunState, req approval.Request) (approval.Decision, bool, error) {
+	if !grantStoreConfigured(a.config.ApprovalGrants) {
+		return approval.Decision{}, false, nil
+	}
+	namespace := approvalNamespaceFromState(state)
+	if err := namespace.Validate(); err != nil {
+		return approval.Decision{}, false, err
+	}
+	ruleKey, ruleOK := approvalString(req.Payload, "ruleKey")
+	fingerprint, fingerprintOK := approvalString(req.Payload, "fingerprint")
+	if !ruleOK || !fingerprintOK {
+		return approval.Decision{}, false, nil
+	}
+	grant, err := a.config.ApprovalGrants.Get(ctx, namespace, ruleKey, fingerprint)
+	if errors.Is(err, approval.ErrGrantNotFound) {
+		return approval.Decision{}, false, nil
+	}
+	if err != nil {
+		return approval.Decision{}, false, fmt.Errorf("load persistent approval grant: %w", err)
+	}
+	if err := grant.Validate(); err != nil {
+		return approval.Decision{}, false, fmt.Errorf("invalid persistent approval grant: %w", err)
+	}
+	if grant.Namespace != namespace || grant.RuleKey != ruleKey || grant.Fingerprint != fingerprint ||
+		grant.Expired(time.Now().UTC()) || !approval.IsApprovedAction(grant.Action) {
+		return approval.Decision{}, false, nil
+	}
+	return approval.Decision{
+		RequestID: req.ID,
+		Action:    grant.Action,
+		Scope:     approval.ScopeRule,
+		Reason:    approval.ReasonReused,
+		DecidedAt: time.Now().UTC(),
+	}, true, nil
+}
+
+func (a *Agent) persistApprovalGrant(ctx context.Context, state harness.RunState, req approval.Request, decision approval.Decision) error {
+	if !grantStoreConfigured(a.config.ApprovalGrants) ||
+		decision.Scope != approval.ScopeRule || !approval.IsApprovedAction(decision.Action) ||
+		decision.Reason == approval.ReasonReused {
+		return nil
+	}
+	namespace := approvalNamespaceFromState(state)
+	if err := namespace.Validate(); err != nil {
+		return err
+	}
+	ruleKey, ruleOK := approvalString(req.Payload, "ruleKey")
+	fingerprint, fingerprintOK := approvalString(req.Payload, "fingerprint")
+	if !ruleOK || !fingerprintOK {
+		return fmt.Errorf("persistent approval rule scope requires exact ruleKey and fingerprint")
+	}
+	grant := approval.Grant{
+		Namespace:   namespace,
+		RuleKey:     ruleKey,
+		Fingerprint: fingerprint,
+		Action:      decision.Action,
+		RequestID:   decision.RequestID,
+		GrantedAt:   decision.DecidedAt,
+	}
+	if a.config.ApprovalGrantTTL > 0 {
+		expires := grant.GrantedAt.Add(a.config.ApprovalGrantTTL)
+		grant.ExpiresAt = &expires
+	}
+	if err := a.config.ApprovalGrants.Put(ctx, grant); err != nil {
+		return fmt.Errorf("persist approval grant: %w", err)
+	}
+	return nil
+}
+
+func approvalString(payload map[string]any, key string) (string, bool) {
+	value, ok := payload[key].(string)
+	return value, ok && strings.TrimSpace(value) != ""
 }
 
 func plannerTodos(value any) ([]harness.TodoState, bool) {

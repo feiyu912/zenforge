@@ -94,9 +94,13 @@ rg -n '"[^"[:space:]]*agent-platform[^"[:space:]]*"' --glob "*.go" .
 | approval abort persists a cancelled terminal run | `TestAgentApprovalAbortCancelsRun` |
 | run/rule approval scopes reuse only exact matching keys | `TestAgentReusesApprovalScopeWithinRun`, `TestAgentDoesNotReuseApprovalForDifferentScopeKey`, `approval.TestScopeKeyRequiresMatchingRequestIdentity` |
 | approval scope grants survive checkpoint resume | `TestAgentResumeReusesCheckpointedApprovalGrant`, `harness.TestApprovalGrantReplacesMatchingScopeKey` |
+| persistent rule grants reuse across runs only for the exact tenant/subject, rule key, and fingerprint | `TestAgentReusesPersistentRuleGrantAcrossRuns`, `TestAgentPersistentRuleGrantIsTenantIsolated`, `approval.TestMemoryGrantStoreIsolationExpiryAndRevoke` |
+| persistent grant TTL/revoke and SQLite durability are enforced | `approval.TestMemoryGrantStoreIsolationExpiryAndRevoke`, `approval/sqlite.TestStoreRoundTripAndRevoke`, `approval/sqlite.TestStoreConcurrentPutAndGet` |
+| absent grant stores preserve compatibility and configured or malformed stores fail closed | `TestAgentTypedNilApprovalGrantStoreKeepsCompatibility`, `TestAgentApprovalGrantStoreFailureFailsClosed`, `TestAgentMalformedPersistentGrantFailsClosed`, `approval/sqlite.TestStoreGetRejectsMalformedPersistedGrant` |
 | approval routing identity is harness-owned and decision IDs must match | `TestAgentNormalizesApprovalRuntimeIdentity`, `TestResolveApprovalRejectsMismatchedDecisionRequest` |
 | approval middleware binds decision identity and propagates abort cancellation | `tool/middleware.TestApprovalMiddlewareRejectsMismatchedDecisionIdentity`, `tool/middleware.TestApprovalMiddlewareAbortSignalsCancellation`, `approval.TestAbortErrorSignalsRunCancellation` |
 | MCP tools adapt into ZenForge tools | `adapters/mcp.TestToolsAdaptsMCPTool`, `adapters/mcp.TestJSONRPCClientListsAndCallsTools` |
+| MCP stdio uses a real helper process, captures configured stderr, reports closed calls, and closes concurrently without leaking the child | `adapters/mcp.TestStdioClientLifecycle`, `adapters/mcp.TestStdioClientContextCancellation`, `adapters/mcp.TestStdioClientConcurrentClose`, `adapters/mcp.TestStdioClientCloseUnblocksRPC`, `adapters/mcp.TestMCPStdioHelperProcess` |
 | memory entries augment normalized tasks | `adapters/memory.TestAugmentTaskAddsMemoryBlockAndMetadata` |
 | memory scope metadata filters cross-tenant entries | `adapters/memory.TestScopedStoreFiltersEntriesByQueryMetadata`, `adapters/memory.TestAugmentTaskUsesScopedStoreMetadata` |
 | sub-agent task tool delegates work | `TestAgentRunsSubAgentTaskTool`, `subagent.TestOrchestratorRunsTasksInStableOrder`, `tools/task.TestTaskToolSchemaAndAlias` |

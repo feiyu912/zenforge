@@ -15,6 +15,7 @@ The adapter keeps MCP at the edge:
 client, err := mcp.NewStdioClient(ctx, mcp.StdioConfig{
     Command: "my-mcp-server",
     Args:    []string{"--stdio"},
+    Stderr:  os.Stderr,
 })
 if err != nil {
     return err
@@ -52,7 +53,17 @@ result uses `ExitCode: 1` and the text output as `Error`.
 any `io.Reader` and `io.Writer`.
 
 `mcp.NewStdioClient` starts a local command and connects the JSON-RPC client to
-the process stdin/stdout.
+the process stdin/stdout. `StdioConfig.Stderr` optionally receives server
+diagnostics; it defaults to `io.Discard`, so hosts that need logs must provide
+an `io.Writer`.
+
+`StdioClient.Close` is safe to call repeatedly or concurrently. It closes the
+JSON-RPC client, unblocks outstanding RPC calls, closes stdin, allows a short
+graceful-exit window, then kills and reaps a process that has not exited.
+Calls after close, including calls unblocked by close, return an error matching
+`mcp.ErrClientClosed`. Normal process exit errors are returned by `Close`;
+forced shutdown and parent-context cancellation are treated as expected
+cleanup.
 
 ## Safety Boundary
 

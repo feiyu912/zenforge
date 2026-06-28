@@ -23,9 +23,11 @@ package has its own page.
 - [github.com/feiyu912/zenforge/tools](https://pkg.go.dev/github.com/feiyu912/zenforge/tools) —
   registry helpers (`Must`, `FromFunc`)
 - [github.com/feiyu912/zenforge/approval](https://pkg.go.dev/github.com/feiyu912/zenforge/approval) —
-  `Broker` interface, decisions, scopes
+  `Broker` and `GrantStore` interfaces, decisions, scopes, in-memory grants
 - [github.com/feiyu912/zenforge/approval/cli](https://pkg.go.dev/github.com/feiyu912/zenforge/approval/cli) —
   interactive CLI broker
+- [github.com/feiyu912/zenforge/approval/sqlite](https://pkg.go.dev/github.com/feiyu912/zenforge/approval/sqlite) —
+  SQLite-backed persistent rule grants
 - [github.com/feiyu912/zenforge/sandbox](https://pkg.go.dev/github.com/feiyu912/zenforge/sandbox) —
   `Sandbox` interface, sessions, mount types
 

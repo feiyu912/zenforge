@@ -2043,6 +2043,193 @@ func TestAgentDoesNotReuseApprovalForDifferentScopeKey(t *testing.T) {
 	}
 }
 
+func TestAgentReusesPersistentRuleGrantAcrossRuns(t *testing.T) {
+	store := approval.NewMemoryGrantStore()
+	fakeModel := &scriptedModel{turns: []scriptedTurn{
+		{events: []model.Event{{Message: &model.Message{ToolCalls: []model.ToolCallSpec{{
+			ID: "call_1", Name: "scoped_approval",
+			Arguments: json.RawMessage(`{"fingerprint":"fp","ruleKey":"rule"}`),
+		}}}}}},
+		{events: []model.Event{{Delta: "first done"}}},
+		{events: []model.Event{{Message: &model.Message{ToolCalls: []model.ToolCallSpec{{
+			ID: "call_2", Name: "scoped_approval",
+			Arguments: json.RawMessage(`{"fingerprint":"fp","ruleKey":"rule"}`),
+		}}}}}},
+		{events: []model.Event{{Delta: "second done"}}},
+	}}
+	brokerCalls := 0
+	agent := New(Config{
+		Model: fakeModel, Tools: []Tool{scopedApprovalTool{}},
+		ApprovalGrants:    store,
+		ApprovalNamespace: approval.Namespace{Tenant: "tenant", Subject: "subject"},
+		Approval: approval.BrokerFunc(func(_ context.Context, req approval.Request) (approval.Decision, error) {
+			brokerCalls++
+			return approval.Decision{RequestID: req.ID, Action: approval.DecisionApprove, Scope: approval.ScopeRule}, nil
+		}),
+	})
+	for _, runID := range []string{"persistent_run_1", "persistent_run_2"} {
+		events, err := agent.Stream(context.Background(), Task{RunID: runID, Input: "work"})
+		if err != nil {
+			t.Fatalf("Stream(%s) returned error: %v", runID, err)
+		}
+		for range events {
+		}
+	}
+	if brokerCalls != 1 {
+		t.Fatalf("broker calls = %d, want 1", brokerCalls)
+	}
+}
+
+func TestAgentPersistentRuleGrantIsTenantIsolated(t *testing.T) {
+	store := approval.NewMemoryGrantStore()
+	fakeModel := &scriptedModel{turns: []scriptedTurn{
+		{events: []model.Event{{Message: &model.Message{ToolCalls: []model.ToolCallSpec{{
+			ID: "call_a", Name: "scoped_approval", Arguments: json.RawMessage(`{"fingerprint":"fp","ruleKey":"rule"}`),
+		}}}}}},
+		{events: []model.Event{{Delta: "a done"}}},
+		{events: []model.Event{{Message: &model.Message{ToolCalls: []model.ToolCallSpec{{
+			ID: "call_b", Name: "scoped_approval", Arguments: json.RawMessage(`{"fingerprint":"fp","ruleKey":"rule"}`),
+		}}}}}},
+		{events: []model.Event{{Delta: "b done"}}},
+	}}
+	brokerCalls := 0
+	agent := New(Config{
+		Model: fakeModel, Tools: []Tool{scopedApprovalTool{}}, ApprovalGrants: store,
+		Approval: approval.BrokerFunc(func(_ context.Context, req approval.Request) (approval.Decision, error) {
+			brokerCalls++
+			return approval.Decision{RequestID: req.ID, Action: approval.DecisionApprove, Scope: approval.ScopeRule}, nil
+		}),
+	})
+	for i, tenant := range []string{"tenant-a", "tenant-b"} {
+		events, err := agent.Stream(context.Background(), Task{
+			RunID: fmt.Sprintf("tenant_run_%d", i), Input: "work",
+			ApprovalNamespace: approval.Namespace{Tenant: tenant, Subject: "subject"},
+		})
+		if err != nil {
+			t.Fatalf("Stream returned error: %v", err)
+		}
+		for range events {
+		}
+	}
+	if brokerCalls != 2 {
+		t.Fatalf("broker calls = %d, want 2", brokerCalls)
+	}
+}
+
+func TestAgentApprovalGrantStoreFailureFailsClosed(t *testing.T) {
+	tests := []struct {
+		name  string
+		store approval.GrantStore
+	}{
+		{name: "read", store: failingGrantStore{getErr: errors.New("read failed")}},
+		{name: "write", store: failingGrantStore{putErr: errors.New("write failed")}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fakeModel := &scriptedModel{turns: []scriptedTurn{{events: []model.Event{{Message: &model.Message{
+				ToolCalls: []model.ToolCallSpec{{
+					ID: "call", Name: "scoped_approval",
+					Arguments: json.RawMessage(`{"fingerprint":"fp","ruleKey":"rule"}`),
+				}},
+			}}}}}}
+			agent := New(Config{
+				Model: fakeModel, Tools: []Tool{scopedApprovalTool{}}, ApprovalGrants: test.store,
+				ApprovalNamespace: approval.Namespace{Tenant: "tenant", Subject: "subject"},
+				Approval: approval.BrokerFunc(func(_ context.Context, req approval.Request) (approval.Decision, error) {
+					return approval.Decision{RequestID: req.ID, Action: approval.DecisionApprove, Scope: approval.ScopeRule}, nil
+				}),
+			})
+			events, err := agent.Stream(context.Background(), Task{RunID: "failure_" + test.name, Input: "work"})
+			if err != nil {
+				t.Fatalf("Stream returned error: %v", err)
+			}
+			var runError bool
+			for event := range events {
+				runError = runError || event.Type == EventRunError
+			}
+			if !runError {
+				t.Fatal("expected store failure to terminate the run")
+			}
+		})
+	}
+}
+
+func TestAgentMalformedPersistentGrantFailsClosed(t *testing.T) {
+	fakeModel := &scriptedModel{turns: []scriptedTurn{{events: []model.Event{{Message: &model.Message{
+		ToolCalls: []model.ToolCallSpec{{
+			ID: "call", Name: "scoped_approval",
+			Arguments: json.RawMessage(`{"fingerprint":"fp","ruleKey":"rule"}`),
+		}},
+	}}}}}}
+	brokerCalls := 0
+	agent := New(Config{
+		Model: fakeModel, Tools: []Tool{scopedApprovalTool{}},
+		ApprovalGrants:    malformedGrantStore{},
+		ApprovalNamespace: approval.Namespace{Tenant: "tenant", Subject: "subject"},
+		Approval: approval.BrokerFunc(func(_ context.Context, req approval.Request) (approval.Decision, error) {
+			brokerCalls++
+			return approval.Decision{RequestID: req.ID, Action: approval.DecisionApprove}, nil
+		}),
+	})
+	events, err := agent.Stream(context.Background(), Task{RunID: "malformed_grant", Input: "work"})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	var runError string
+	for event := range events {
+		if event.Type == EventRunError {
+			runError = stringValue(event.Payload["error"])
+		}
+	}
+	if !strings.Contains(runError, "invalid persistent approval grant") ||
+		!strings.Contains(runError, "grantedAt is required") {
+		t.Fatalf("run error = %q", runError)
+	}
+	if brokerCalls != 0 {
+		t.Fatalf("broker calls = %d, want 0", brokerCalls)
+	}
+}
+
+type failingGrantStore struct {
+	getErr error
+	putErr error
+}
+
+func (s failingGrantStore) Get(context.Context, approval.Namespace, string, string) (approval.Grant, error) {
+	if s.getErr != nil {
+		return approval.Grant{}, s.getErr
+	}
+	return approval.Grant{}, approval.ErrGrantNotFound
+}
+
+func (s failingGrantStore) Put(context.Context, approval.Grant) error { return s.putErr }
+
+func (s failingGrantStore) Revoke(context.Context, approval.Namespace, string, string) error {
+	return nil
+}
+
+type malformedGrantStore struct{}
+
+func (malformedGrantStore) Get(_ context.Context, namespace approval.Namespace, ruleKey, fingerprint string) (approval.Grant, error) {
+	return approval.Grant{
+		Namespace: namespace, RuleKey: ruleKey, Fingerprint: fingerprint,
+		Action: approval.DecisionApprove,
+	}, nil
+}
+
+func (malformedGrantStore) Put(context.Context, approval.Grant) error { return nil }
+
+func (malformedGrantStore) Revoke(context.Context, approval.Namespace, string, string) error {
+	return nil
+}
+
+func TestAgentTypedNilApprovalGrantStoreKeepsCompatibility(t *testing.T) {
+	var store *approval.MemoryGrantStore
+	if grantStoreConfigured(store) {
+		t.Fatal("typed nil store must be treated as unconfigured")
+	}
+}
+
 func TestAgentNormalizesApprovalRuntimeIdentity(t *testing.T) {
 	fakeModel := &scriptedModel{turns: []scriptedTurn{
 		{events: []model.Event{{Message: &model.Message{ToolCalls: []model.ToolCallSpec{{

@@ -146,7 +146,10 @@ new core provider names.
 - Plan/execute preset with built-in todo manager.
 - Run-scoped pending approval broker (`approval.PendingBroker`).
 - Broker-free approval requests pause durably instead of allowing the model to continue past a risky tool.
-- Run and rule approval scopes are durable grants matched by exact fingerprint or rule key.
+- Run and rule approval scopes are checkpointed grants matched by exact
+  fingerprint or rule key. Optional `approval.GrantStore` persistence reuses
+  only `ScopeRule` across runs, isolated by tenant/subject and exact rule key
+  plus fingerprint, with TTL and revocation support.
 - Durable event log and checkpoint stores: memory, JSONL, SQLite.
 - JSONL stores reject path-like run IDs and serialize writers across processes
   with advisory `flock`; checkpoint saves recover through a pending journal.
@@ -288,6 +291,9 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - `server/harnesshttp` access control hook for auth and tenancy injection.
 - `eventlog.Bus` and `eventlog.FanoutStore` for live multi-subscriber event fanout.
 - `approval.PendingBroker` for run-scoped pending approvals, exposed via `GET /approvals` and `POST /approval`.
+- Optional cross-run rule authorization through memory or SQLite
+  `approval.GrantStore` implementations; no store preserves checkpoint-only
+  behavior, while configured store errors fail closed.
 - `adapters/zenmind`: run configuration mapping, chat JSONL projection, and a
   fail-closed routing helper for a host-owned feature flag.
 - Platform sessions can provide a fully resolved prompt and strict conversation
@@ -418,7 +424,6 @@ git diff --check
 **Not in MVP** — see [`docs/limitations.md`](docs/limitations.md) for the full list:
 
 - Resume does not continue a partially streamed provider response.
-- Cross-run persistent approvals are not included.
 - MCP covers tools only; resources, prompts, sampling, discovery, and OAuth stay with the host platform.
 - OpenTelemetry exporter setup stays in host services.
 - CLI config is JSON only.

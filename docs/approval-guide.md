@@ -102,7 +102,44 @@ pending `requestId`; mismatches fail closed without creating a grant.
 The standalone `tool/middleware.Approval` path enforces the same identity and
 scope-key checks before retrying its wrapped invoker.
 
-Cross-run persistent approvals are intentionally post-MVP.
+## Persistent Rule Grants
+
+Cross-run reuse is optional. Configure an `approval.GrantStore` and a
+host-owned namespace:
+
+```go
+grants := approval.NewMemoryGrantStore()
+agent := zenforge.New(zenforge.Config{
+    Approval:          broker,
+    ApprovalGrants:    grants,
+    ApprovalNamespace: approval.Namespace{
+        Tenant:  "tenant_1",
+        Subject: "user_42",
+    },
+    ApprovalGrantTTL: 24 * time.Hour,
+})
+```
+
+`Task.ApprovalNamespace` overrides the config namespace for that task. Both
+`Tenant` and `Subject` are required when a store is configured. These values
+must come from authenticated host identity, not model or tool input.
+
+Only an approved `ScopeRule` decision is persisted across runs. Persistent
+lookup requires an exact match on all four values: `tenant`, `subject`,
+`ruleKey`, and `fingerprint`. This is intentionally narrower than the
+checkpointed in-run rule scope, which matches its `ruleKey`. `ScopeOnce` and
+`ScopeRun` never enter the persistent store.
+
+`ApprovalGrantTTL > 0` sets `ExpiresAt`; zero leaves grants without automatic
+expiry. Expired grants behave as not found and are removed on lookup. Hosts can
+explicitly revoke the exact tuple with `GrantStore.Revoke`. ZenForge includes
+`approval.NewMemoryGrantStore()` for process-local reuse and
+`approval/sqlite.Open` for durable reuse.
+
+Leaving `ApprovalGrants` unset, including a typed nil store, preserves the
+previous checkpoint-only behavior. Once a store is configured, invalid
+namespaces and store read/write errors fail closed and terminate the run rather
+than silently asking again or bypassing persistence.
 
 ## Events
 

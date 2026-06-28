@@ -18,8 +18,10 @@ what is experimental, and what remains adapter territory.
 ## Tools And Safety
 
 - Shell is deny-by-default.
-- Shell command approval is scoped to the current request/run behavior; no
-  cross-run persistent approvals are included in MVP.
+- Cross-run approval reuse is opt-in and limited to approved `ScopeRule`
+  decisions. It requires a configured grant store, trusted tenant/subject
+  namespace, and exact `ruleKey` plus operation `fingerprint`; once/run scopes
+  remain checkpoint-only.
 - Workspace tools enforce local root boundaries, but they are not a replacement
   for OS sandboxing when running untrusted workloads.
 - Sandbox support is adapter-based. Core works without Container Hub.

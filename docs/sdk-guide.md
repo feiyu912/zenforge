@@ -98,6 +98,31 @@ agent := zenforge.New(zenforge.Config{
 })
 ```
 
+Cross-run rule approvals can use an optional grant store:
+
+```go
+grants, err := approvalsqlite.Open(ctx, ".zenforge/approval-grants.db")
+if err != nil {
+    return err
+}
+defer grants.Close()
+
+agent := zenforge.New(zenforge.Config{
+    Model:             model,
+    Approval:          broker,
+    ApprovalGrants:    grants,
+    ApprovalNamespace: approval.Namespace{Tenant: "tenant_1", Subject: "user_42"},
+    ApprovalGrantTTL:  24 * time.Hour,
+})
+```
+
+The in-memory alternative is `approval.NewMemoryGrantStore()`. Only
+`ScopeRule` decisions persist, and reuse requires the exact namespace,
+`ruleKey`, and `fingerprint`. `Task.ApprovalNamespace` can supply a per-task
+namespace. With no store, approval behavior remains checkpoint-only; configured
+store errors fail the run closed. Use `GrantStore.Revoke` for explicit
+revocation.
+
 Retrieved memory can be normalized into a task before execution. Platform
 metadata can be used as a final scope guard before injection:
 

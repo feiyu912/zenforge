@@ -67,7 +67,7 @@ V0.2 Production hardening
 | S8 | The direct local shell path, fake sandbox backend, and Container Hub beta adapter are contract-tested; Hub transport tests use local HTTP servers. A real Container Hub service has not been exercised and remains external acceptance. |
 | MVP | Repository-scoped acceptance is implemented and test-mapped. Provider-backed examples and deployment integration remain environment-dependent smoke tests. |
 | V0.1 | `v0.1.0` was tagged. Repository wire goldens cover the ZenMind DTO/projector/approval/event-line boundary at `agent-platform@1893edb5`. The downstream engine bridge, feature-flag selector, HTTP/SSE/WS, approval, attach, and fallback integration is implemented and tested on `agent-platform` branch `codex/zenforge-engine-bridge@82ca4d3`, but is not yet merged to platform `main`. |
-| V0.2 | Repository hardening is implemented for SQLite soak coverage, Go 1.26-only CI, JSONL crash/concurrency safety, typed tools, bounded shell/Hub responses, and fail-closed checkpoint/ZenMind adapter loading. Remaining work is partial model-stream resume, cross-run persistent authorization, and external acceptance. This roadmap stage is not declared complete. |
+| V0.2 | Repository hardening is implemented for SQLite soak coverage, Go 1.26-only CI, JSONL crash/concurrency safety, typed tools, bounded shell/Hub responses, fail-closed checkpoint/ZenMind adapter loading, and optional cross-run persistent rule authorization. Remaining work is partial model-stream resume and external acceptance. This roadmap stage is not declared complete. |
 
 Completion in this table distinguishes ZenForge repository tests from tests on
 the named downstream integration branch. It does not claim merge to
@@ -495,6 +495,8 @@ Completed in this repository:
   memory adapter, and server/SSE helpers;
 - typed tools, bounded shell/Hub responses, and fail-closed ZenMind model/tool
   initialization;
+- optional cross-run `ScopeRule` grants with tenant/subject isolation, exact
+  rule-key and fingerprint matching, TTL/revocation, and memory/SQLite stores;
 - benchmark and soak tests (`BenchmarkAgentRunStaticModel`,
   `TestSQLiteDurableRunSoak`);
 - failure-mode documentation (`docs/failure-modes.md`).
@@ -503,7 +505,6 @@ Remaining:
 
 - resume within a partially streamed model response rather than retrying from
   the last checkpoint boundary;
-- persistent authorization grants across runs;
 - external acceptance, including downstream platform merge/deployment and a
   smoke against a real Container Hub service.
 

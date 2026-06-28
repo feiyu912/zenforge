@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
@@ -12,11 +13,16 @@ import (
 	"sync"
 )
 
+var ErrClientClosed = errors.New("mcp jsonrpc client is closed")
+
 type JSONRPCClient struct {
 	reader *bufio.Reader
 	writer io.Writer
 	mu     sync.Mutex
 	nextID int64
+
+	stateMu sync.RWMutex
+	closed  bool
 }
 
 type InitializeParams struct {
@@ -84,8 +90,14 @@ func (c *JSONRPCClient) call(ctx context.Context, method string, params any, res
 	if c == nil || c.reader == nil || c.writer == nil {
 		return fmt.Errorf("mcp jsonrpc client is not open")
 	}
+	if c.isClosed() {
+		return ErrClientClosed
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.isClosed() {
+		return ErrClientClosed
+	}
 
 	c.nextID++
 	id := c.nextID
@@ -95,6 +107,9 @@ func (c *JSONRPCClient) call(ctx context.Context, method string, params any, res
 		Method:  method,
 		Params:  params,
 	}); err != nil {
+		if c.isClosed() {
+			return ErrClientClosed
+		}
 		return err
 	}
 
@@ -104,6 +119,9 @@ func (c *JSONRPCClient) call(ctx context.Context, method string, params any, res
 		}
 		var response response
 		if err := readFrame(c.reader, &response); err != nil {
+			if c.isClosed() {
+				return ErrClientClosed
+			}
 			return err
 		}
 		if response.ID == nil || *response.ID != id {
@@ -126,13 +144,41 @@ func (c *JSONRPCClient) notify(ctx context.Context, method string, params any) e
 	if c == nil || c.writer == nil {
 		return fmt.Errorf("mcp jsonrpc client is not open")
 	}
+	if c.isClosed() {
+		return ErrClientClosed
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return writeFrame(c.writer, request{
+	if c.isClosed() {
+		return ErrClientClosed
+	}
+	err := writeFrame(c.writer, request{
 		JSONRPC: "2.0",
 		Method:  method,
 		Params:  params,
 	})
+	if err != nil && c.isClosed() {
+		return ErrClientClosed
+	}
+	return err
+}
+
+func (c *JSONRPCClient) close() {
+	if c == nil {
+		return
+	}
+	c.stateMu.Lock()
+	c.closed = true
+	c.stateMu.Unlock()
+}
+
+func (c *JSONRPCClient) isClosed() bool {
+	if c == nil {
+		return true
+	}
+	c.stateMu.RLock()
+	defer c.stateMu.RUnlock()
+	return c.closed
 }
 
 type request struct {

@@ -109,6 +109,12 @@ For SQLite local storage:
 
 Flags override values loaded from the config file.
 
+Cross-run approval grant storage is currently a Go SDK configuration surface,
+not a CLI JSON field. Embedded hosts configure `Config.ApprovalGrants`,
+`Config.ApprovalNamespace`, and `Config.ApprovalGrantTTL`, or override the
+namespace per run with `Task.ApprovalNamespace`. See the Approval Guide for the
+exact-match and fail-closed semantics.
+
 MiniMax Anthropic-compatible config example:
 
 ```json
