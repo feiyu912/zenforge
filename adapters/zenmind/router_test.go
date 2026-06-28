@@ -20,6 +20,9 @@ func TestRouterFailsClosed(t *testing.T) {
 		{name: "missing feature", input: RouteInput{Engine: EngineZenForge}, router: initializedRouter()},
 		{name: "unknown engine", input: RouteInput{Engine: "other", Feature: FeatureEnabled}, router: initializedRouter()},
 		{name: "unknown feature", input: RouteInput{Engine: EngineZenForge, Feature: "preview"}, router: initializedRouter()},
+		{name: "missing agent identity", input: RouteInput{ChatID: "chat-1", RunID: "run-1", Engine: EngineZenForge, Feature: FeatureEnabled}, router: initializedRouter()},
+		{name: "missing chat identity", input: RouteInput{AgentKey: "agent-1", RunID: "run-1", Engine: EngineZenForge, Feature: FeatureEnabled}, router: initializedRouter()},
+		{name: "missing run identity", input: RouteInput{AgentKey: "agent-1", ChatID: "chat-1", Engine: EngineZenForge, Feature: FeatureEnabled}, router: initializedRouter()},
 		{name: "empty identity cannot match", router: Router{
 			AgentRoutes: map[string]RouteConfig{"": {Engine: EngineZenForge, Feature: FeatureEnabled}},
 			Initialize:  func(RouteInput) error { return nil },
@@ -64,7 +67,7 @@ func TestRouterRoutesOnlyExplicitInitializedZenForge(t *testing.T) {
 }
 
 func TestRouterFallsBackWhenBuildRunInitializationFails(t *testing.T) {
-	input := RouteInput{Engine: EngineZenForge, Feature: FeatureEnabled}
+	input := RouteInput{AgentKey: "agent-1", ChatID: "chat-1", RunID: "run-1", Engine: EngineZenForge, Feature: FeatureEnabled}
 	tests := []struct {
 		name    string
 		agent   CatalogAgent
@@ -100,7 +103,7 @@ func TestRouterRoutesBySessionThenAgent(t *testing.T) {
 		want RouteDecision
 	}{
 		{name: "input baseline", in: RouteInput{Engine: EngineLegacy, Feature: FeatureDisabled}, want: RouteLegacy},
-		{name: "agent over input", in: RouteInput{AgentKey: "agent-1", Engine: EngineLegacy, Feature: FeatureDisabled}, want: RouteZenForge},
+		{name: "agent over input lacks complete identity", in: RouteInput{AgentKey: "agent-1", Engine: EngineLegacy, Feature: FeatureDisabled}, want: RouteLegacy},
 		{name: "chat over agent", in: RouteInput{AgentKey: "agent-1", ChatID: "chat-1"}, want: RouteLegacy},
 		{name: "run over chat", in: RouteInput{AgentKey: "agent-1", ChatID: "chat-1", RunID: "run-1"}, want: RouteZenForge},
 	}
@@ -125,9 +128,9 @@ func TestRouterTargetsAgentChatAndRunIDs(t *testing.T) {
 		router Router
 		input  RouteInput
 	}{
-		{name: "agent", router: Router{AgentRoutes: map[string]RouteConfig{fixture.AgentKey: zenforge}}, input: RouteInput{AgentKey: fixture.AgentKey}},
-		{name: "chat", router: Router{ChatRoutes: map[string]RouteConfig{fixture.ChatID: zenforge}}, input: RouteInput{ChatID: fixture.ChatID}},
-		{name: "run", router: Router{RunRoutes: map[string]RouteConfig{fixture.RunID: zenforge}}, input: RouteInput{RunID: fixture.RunID}},
+		{name: "agent", router: Router{AgentRoutes: map[string]RouteConfig{fixture.AgentKey: zenforge}}, input: fixture},
+		{name: "chat", router: Router{ChatRoutes: map[string]RouteConfig{fixture.ChatID: zenforge}}, input: fixture},
+		{name: "run", router: Router{RunRoutes: map[string]RouteConfig{fixture.RunID: zenforge}}, input: fixture},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -142,13 +145,14 @@ func TestRouterTargetsAgentChatAndRunIDs(t *testing.T) {
 func TestRouterRoutesByMetadataFlag(t *testing.T) {
 	router := initializedRouter()
 	router.Agents = map[string]RouteDecision{"agent-a": RouteZenForge}
-	if got := router.Decide(CatalogAgent{Name: "agent-a"}, Session{}); got != RouteZenForge {
+	identity := Session{AgentKey: "agent-a", ChatID: "chat-a", RunID: "run-a"}
+	if got := router.Decide(CatalogAgent{Name: "agent-a"}, identity); got != RouteZenForge {
 		t.Fatalf("Decide() = %q, want %q", got, RouteZenForge)
 	}
 
 	router.Agents = nil
 	agent := CatalogAgent{Name: "agent-a", Metadata: map[string]any{"engine": EngineZenForge, "feature": FeatureEnabled}}
-	if got := router.Decide(agent, Session{}); got != RouteZenForge {
+	if got := router.Decide(agent, identity); got != RouteZenForge {
 		t.Fatalf("Decide() explicit metadata = %q, want %q", got, RouteZenForge)
 	}
 	agent.Metadata = map[string]any{"zenforge": true}
@@ -171,13 +175,14 @@ func TestRouterDecidePrefersPlatformAgentKey(t *testing.T) {
 	}
 
 	agent := CatalogAgent{Key: "platform-key", AgentKey: "request-key", Name: "legacy-name"}
-	if got := router.Decide(agent, Session{}); got != RouteZenForge {
+	session := Session{AgentKey: "platform-key", ChatID: "chat-1", RunID: "run-1"}
+	if got := router.Decide(agent, session); got != RouteZenForge {
 		t.Fatalf("Decide() = %q, want Key route %q", got, RouteZenForge)
 	}
 
 	router.AgentRoutes["platform-key"] = legacy
 	router.AgentRoutes["request-key"] = zenforge
-	if got := router.Decide(CatalogAgent{AgentKey: "request-key", Name: "legacy-name"}, Session{}); got != RouteZenForge {
+	if got := router.Decide(CatalogAgent{AgentKey: "request-key", Name: "legacy-name"}, Session{ChatID: "chat-1", RunID: "run-1"}); got != RouteZenForge {
 		t.Fatalf("Decide() = %q, want AgentKey fallback route %q", got, RouteZenForge)
 	}
 }
@@ -191,14 +196,46 @@ func TestRouterDecidePrefersPlatformChatID(t *testing.T) {
 		"legacy-chat":   legacy,
 	}
 
-	session := Session{ChatID: "platform-chat", ConversationID: "legacy-chat"}
-	if got := router.Decide(CatalogAgent{}, session); got != RouteZenForge {
+	session := Session{AgentKey: "agent-1", ChatID: "platform-chat", RunID: "run-1", ConversationID: "legacy-chat"}
+	agent := CatalogAgent{Key: "agent-1"}
+	if got := router.Decide(agent, session); got != RouteZenForge {
 		t.Fatalf("Decide() = %q, want ChatID route %q", got, RouteZenForge)
 	}
 
 	router.ChatRoutes["platform-chat"] = legacy
 	router.ChatRoutes["legacy-chat"] = zenforge
-	if got := router.Decide(CatalogAgent{}, Session{ConversationID: "legacy-chat"}); got != RouteZenForge {
+	if got := router.Decide(agent, Session{AgentKey: "agent-1", RunID: "run-1", ConversationID: "legacy-chat"}); got != RouteZenForge {
 		t.Fatalf("Decide() = %q, want ConversationID fallback route %q", got, RouteZenForge)
+	}
+}
+
+func TestRouterRejectsRequestCatalogIdentityConflictOnlyForZenForge(t *testing.T) {
+	initialized := 0
+	router := Router{
+		Initialize: func(RouteInput) error {
+			initialized++
+			return nil
+		},
+	}
+	session := Session{AgentKey: "request-agent", ChatID: "chat-1", RunID: "run-1"}
+	agent := CatalogAgent{Key: "catalog-agent"}
+
+	router.Default = RouteZenForge
+	if got := router.Decide(agent, session); got != RouteLegacy {
+		t.Fatalf("conflicting ZenForge Decide() = %q, want %q", got, RouteLegacy)
+	}
+	if initialized != 0 {
+		t.Fatal("initializer called for conflicting identity")
+	}
+
+	router.Default = RouteLegacy
+	router.AgentRoutes = map[string]RouteConfig{
+		"catalog-agent": {Engine: EngineZenForge, Feature: FeatureEnabled},
+	}
+	if got := router.Decide(agent, session); got != RouteLegacy {
+		t.Fatalf("conflicting override Decide() = %q, want %q", got, RouteLegacy)
+	}
+	if initialized != 0 {
+		t.Fatal("initializer called for conflicting override identity")
 	}
 }

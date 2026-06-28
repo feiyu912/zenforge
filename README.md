@@ -202,8 +202,8 @@ new core provider names.
 **Platform adapters**
 - `adapters/zenmind` — platform catalog/session DTOs with `ModelResolver`,
   strict history conversion, resolved-prompt precedence, fail-closed
-  AgentKey/ChatID/RunID routing, stateful content/tool projection, approval wire
-  translation, and platform event-line JSONL output.
+  AgentKey/ChatID/RunID routing, resumable content/tool projection, fully bound
+  approval wire translation, and monotonic platform event-line JSONL output.
 - `adapters/mcp` — MCP tool bridge (resources/prompts/sampling/OAuth stay with the host).
 - `adapters/memory` — scoped memory augmentation into normalized tasks.
 
@@ -211,7 +211,8 @@ The ZenMind wire contract is checked against fixtures captured from
 `agent-platform@1893edb5` under
 [`adapters/zenmind/testdata/platform`](adapters/zenmind/testdata/platform).
 These goldens cover catalog/session input, flat stream envelopes, content/tool
-lifecycles, approval ask/submit/answer, and chat event lines. Downstream
+lifecycles, approval ask/submit/answer, and chat event lines. A checked
+`manifest.json` pins every fixture's source files and SHA-256. Downstream
 integration is implemented and tested on `agent-platform` branch
 `codex/zenforge-engine-bridge` at `82ca4d3`: it includes the engine bridge,
 feature-flag selector, HTTP sync/async, SSE, WebSocket, approval, attach, and
@@ -240,8 +241,13 @@ for _, projected := range projector.Project(event) {
 lines, err := zenmind.ReadEventLines(ctx, root, chatID)
 ```
 
+Persist `projector.Snapshot()` beside the host's attach cursor and restore it
+with `zenmind.NewProjectorFromState`; open content/tool blocks and platform
+sequence numbers then continue without reused IDs.
+
 `ChatJSONLWriter` writes `root/chatId.jsonl` platform `EventLine` records with
-top-level `chatId`, `runId`, `updatedAt`, `liveSeq`, `event`, and `_type`. The deprecated
+top-level `chatId`, `runId`, `updatedAt`, `liveSeq`, `event`, and `_type`, and
+rejects duplicate or decreasing cursors for the same run. The deprecated
 `LegacyChatJSONLWriter` type, constructed with
 `NewLegacyChatJSONLWriter(root, mapper)`, and `ReadChatRecords` retain the old
 `root/runId/chat.jsonl` `zenmind.chat_trace.v1` format only for existing callers.

@@ -1,0 +1,37 @@
+{
+  "schema": "zenforge.zenmind_fixture_manifest.v1",
+  "sourceRepo": "agent-platform",
+  "sourceCommit": "1893edb51b8dc691ae974cea2719a835e0e21de4",
+  "fixtures": [
+    {
+      "path": "approval_roundtrip.jsonl",
+      "sha256": "d1bda69a63d793469c541e1dec135f96e0f2594a8e60c24dd56d10a0a18a9fbc",
+      "sourceFiles": ["internal/stream/input.go", "internal/stream/dispatcher_await_format.go", "internal/hitl/normalize.go"]
+    },
+    {
+      "path": "catalog_agent.json",
+      "sha256": "25c9cbd833accdc4d39fbcf4ac445725714ae732aaa78a2c19739c5fd417d7d3",
+      "sourceFiles": ["internal/catalog/registry.go"]
+    },
+    {
+      "path": "chat_event_line.jsonl",
+      "sha256": "c1848e24c8612b77124197ed1d8dfe2eaabd0c662d49eaddd825ab5440c40d35",
+      "sourceFiles": ["internal/chat/types.go", "internal/chat/events_writer.go"]
+    },
+    {
+      "path": "lifecycle_content.jsonl",
+      "sha256": "a0a9997f2f1b2c88aed461274bbadc4f2fe5b49ca04efe6e97332f628fe3b942",
+      "sourceFiles": ["internal/stream/assembler.go", "internal/stream/event.go", "internal/stream/dispatcher_content.go", "internal/stream/dispatcher_lifecycle.go"]
+    },
+    {
+      "path": "lifecycle_tool.jsonl",
+      "sha256": "bc17dfa131bf8618b567ecca91b1e8eed31637796ced3c5e539074c71bbdc39a",
+      "sourceFiles": ["internal/stream/assembler.go", "internal/stream/event.go", "internal/stream/dispatcher_tool.go", "internal/stream/dispatcher_lifecycle.go"]
+    },
+    {
+      "path": "query_session.json",
+      "sha256": "f5b0c57f4a98043a22026fc57d5e5dd9ad920516d39a8c4a4be9c5874db79073",
+      "sourceFiles": ["internal/api/types.go", "internal/contracts/interfaces.go"]
+    }
+  ]
+}

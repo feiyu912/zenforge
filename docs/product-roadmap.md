@@ -533,7 +533,10 @@ Recommended path:
 Do not big-bang replace the platform runtime.
 
 Repository fixtures under `adapters/zenmind/testdata/platform` provide golden
-wire evidence from `agent-platform@1893edb5`. The corresponding downstream
+wire evidence from `agent-platform@1893edb5`; their manifest pins source files
+and hashes. Repository contract tests now enforce complete route/run identity,
+approval request/chat/run/agent binding, resumable projector state, and
+monotonic event-line cursors. The corresponding downstream
 engine bridge, selector, HTTP sync/async, SSE, WebSocket, approval, attach, and
 legacy-fallback paths are implemented and tested on `agent-platform` branch
 `codex/zenforge-engine-bridge@82ca4d3`. That integration still requires review

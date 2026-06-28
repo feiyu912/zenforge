@@ -152,6 +152,21 @@ ignored deliberately. `Mapper`/`MapEvent` preserve the historical one-to-one
 API but do not synthesize lifecycle events; they are not evidence of full wire
 compatibility by themselves.
 
+For process restart or attach, persist the complete projector state:
+
+```go
+state := projector.Snapshot()
+encoded, err := json.Marshal(state)
+
+var restored zenmind.ProjectorState
+err = json.Unmarshal(encoded, &restored)
+projector, err = zenmind.NewProjectorFromState(restored)
+```
+
+Restore rejects negative cursors, inconsistent content IDs, conflicting tool
+IDs, and terminated states with open blocks. A valid restore continues
+`liveSeq`, content IDs, partial content text, and open tool arguments.
+
 Golden lifecycles:
 
 - `adapters/zenmind/testdata/platform/lifecycle_content.jsonl`
@@ -164,14 +179,22 @@ The adapter has typed platform DTOs for `awaiting.ask`, `request.submit`, and
 
 ```go
 ask, err := zenmind.AwaitingAskFromRequestContext(req, awaitingID,
-    zenmind.PlatformRequestContext{AgentKey: agentKey}, timeoutSeconds)
+    zenmind.PlatformRequestContext{
+        RequestID: requestID,
+        ChatID: chatID,
+        AgentKey: agentKey,
+    }, timeoutSeconds)
+// AgentKey is dispatcher-owned context and is not accepted from request.submit JSON.
+submit.AgentKey = agentKey
 decision, err := zenmind.DecisionFromRequestSubmit(ask, submit, time.Now())
 answer, err := zenmind.AwaitingAnswerFromDecision(ask, submit, decision)
 ```
 
-Translation validates request/chat/run/awaiting/submit identity, exact approval
-IDs, decisions, scope, timeout, and terminal answer status. The roundtrip golden
-is `adapters/zenmind/testdata/platform/approval_roundtrip.jsonl`.
+Translation binds and validates request/chat/run/agent/awaiting/submit identity,
+exact approval IDs, decisions, scope, timeout, and terminal answer status.
+Asks built through the compatibility constructor must be explicitly completed
+with `BindAwaitingAsk`; unbound asks fail closed. The roundtrip golden is
+`adapters/zenmind/testdata/platform/approval_roundtrip.jsonl`.
 
 `DecisionFromJSON` remains the older neutral submit helper. Core still does not
 own platform submit routes, WebSocket messages, or pending-awaiting storage.
@@ -197,7 +220,9 @@ It appends to `root/chatId.jsonl`. Each `EventLine` has top-level `chatId`,
 `runId`, `updatedAt`, `liveSeq`, `event`, and `_type: "event"`; the nested flat
 event does not repeat replay cursors. Unsafe or mismatched chat/run identities,
 invalid timestamps/sequences, malformed trailing JSON, and atomic appends from
-multiple writer instances in one process are covered by tests. This writer does
+multiple writer instances in one process are covered by tests. Duplicate or
+decreasing `liveSeq` values for the same chat/run are rejected against the
+durable file cursor. This writer does
 not claim cross-process `flock` durability. The byte-for-byte fixture is
 `adapters/zenmind/testdata/platform/chat_event_line.jsonl`.
 
@@ -216,8 +241,12 @@ Run the adapter contract suite with:
 env GOTOOLCHAIN=local go test ./adapters/zenmind
 ```
 
-The golden metadata records source files and full commit
-`1893edb51b8dc691ae974cea2719a835e0e21de4`. Passing these tests proves the
+`testdata/platform/manifest.json` records every fixture's source files,
+SHA-256, and full commit
+`1893edb51b8dc691ae974cea2719a835e0e21de4`. The end-to-end
+`TestPlatformContractBuildProjectPersistResumeAndApprove` covers route,
+run assembly, projection restore, event-line persistence, and approval binding.
+Passing these tests proves the
 repository-local wire contract only. Separate downstream tests at
 `agent-platform` branch `codex/zenforge-engine-bridge@82ca4d3` cover the engine
 bridge, feature-flag selector, HTTP/SSE/WS delivery, approval, attach, and

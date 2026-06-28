@@ -129,6 +129,9 @@ func BuildRun(ctx context.Context, agent CatalogAgent, session Session, runtime 
 	if err := ctx.Err(); err != nil {
 		return RunConfig{}, err
 	}
+	if err := validateRunIdentity(agent, session); err != nil {
+		return RunConfig{}, err
+	}
 	input := firstNonBlank(session.Message, session.Input)
 	if input == "" {
 		return RunConfig{}, fmt.Errorf("zenmind session input is required")
@@ -194,6 +197,28 @@ func BuildRun(ctx context.Context, agent CatalogAgent, session Session, runtime 
 		},
 		Task: task,
 	}, nil
+}
+
+func validateRunIdentity(agent CatalogAgent, session Session) error {
+	platformIdentity := strings.TrimSpace(agent.Key) != "" ||
+		strings.TrimSpace(session.RequestID) != "" ||
+		strings.TrimSpace(session.AgentKey) != "" ||
+		strings.TrimSpace(session.ChatID) != ""
+	if !platformIdentity {
+		return nil
+	}
+
+	agentKey := strings.TrimSpace(agent.Key)
+	requestAgentKey := strings.TrimSpace(session.AgentKey)
+	chatID := strings.TrimSpace(session.ChatID)
+	runID := strings.TrimSpace(session.RunID)
+	if agentKey == "" || requestAgentKey == "" || chatID == "" || runID == "" {
+		return fmt.Errorf("zenmind platform identity requires agentKey, chatId, and runId")
+	}
+	if agentKey != requestAgentKey {
+		return fmt.Errorf("zenmind session agentKey %q does not match catalog agent key %q", requestAgentKey, agentKey)
+	}
+	return nil
 }
 
 func historyMessages(raw []map[string]any) ([]model.Message, error) {

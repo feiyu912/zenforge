@@ -96,6 +96,13 @@ func (w *ChatJSONLWriter) Append(ctx context.Context, chatID string, event Strea
 	} else if err != nil && !os.IsNotExist(err) {
 		return err
 	}
+	lastSeq, err := lastEventLineSeq(path, chatID, event.RunID)
+	if err != nil {
+		return err
+	}
+	if event.Seq <= lastSeq {
+		return fmt.Errorf("platform event liveSeq %d must be greater than durable run cursor %d", event.Seq, lastSeq)
+	}
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
@@ -105,6 +112,37 @@ func (w *ChatJSONLWriter) Append(ctx context.Context, chatID string, event Strea
 		return err
 	}
 	return file.Sync()
+}
+
+func lastEventLineSeq(path, chatID, runID string) (int64, error) {
+	file, err := os.Open(path)
+	if os.IsNotExist(err) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	defer file.Close()
+
+	var last int64
+	decoder := json.NewDecoder(file)
+	for {
+		var line EventLine
+		if err := decoder.Decode(&line); err == io.EOF {
+			return last, nil
+		} else if err != nil {
+			return 0, fmt.Errorf("read durable platform event cursor: %w", err)
+		}
+		if line.Type != "event" || line.ChatID != chatID || line.RunID == "" || line.LiveSeq <= 0 {
+			return 0, fmt.Errorf("invalid durable platform event cursor")
+		}
+		if line.RunID == runID {
+			if line.LiveSeq <= last {
+				return 0, fmt.Errorf("durable platform event cursor is not strictly increasing for runId %q", runID)
+			}
+			last = line.LiveSeq
+		}
+	}
 }
 
 func ReadEventLines(ctx context.Context, root, chatID string) ([]EventLine, error) {

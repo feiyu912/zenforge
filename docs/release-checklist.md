@@ -30,9 +30,10 @@ ZenMind adapter evidence must include these pinned fixtures:
 - `adapters/zenmind/testdata/platform/lifecycle_tool.jsonl`
 - `adapters/zenmind/testdata/platform/approval_roundtrip.jsonl`
 - `adapters/zenmind/testdata/platform/chat_event_line.jsonl`
+- `adapters/zenmind/testdata/platform/manifest.json`
 
 They are exercised by `env GOTOOLCHAIN=local go test ./adapters/zenmind` and
-record provenance from
+the manifest verifies source files and SHA-256 hashes from
 `agent-platform@1893edb5`. Keep this repository evidence distinct from the
 downstream engine/selector/HTTP/SSE/WS/approval/attach/fallback tests on
 `agent-platform` branch `codex/zenforge-engine-bridge@82ca4d3`. Confirm that no

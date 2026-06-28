@@ -122,6 +122,9 @@ func (a *Agent) Resume(ctx context.Context, runID string) (<-chan Event, error) 
 	if err := checkpoint.ValidateForLoad(*cp); err != nil {
 		return nil, err
 	}
+	if cp.RunID != runID {
+		return nil, fmt.Errorf("checkpoint runId %q does not match requested runId %q", cp.RunID, runID)
+	}
 	events := make(chan Event, 32)
 	go func() {
 		defer close(events)

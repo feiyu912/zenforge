@@ -59,6 +59,12 @@ func (r Router) Route(input RouteInput) RouteDecision {
 	if config.Engine != EngineZenForge || config.Feature != FeatureEnabled || r.Initialize == nil {
 		return RouteLegacy
 	}
+	input.AgentKey = strings.TrimSpace(input.AgentKey)
+	input.ChatID = strings.TrimSpace(input.ChatID)
+	input.RunID = strings.TrimSpace(input.RunID)
+	if input.AgentKey == "" || input.ChatID == "" || input.RunID == "" {
+		return RouteLegacy
+	}
 	input.Engine = config.Engine
 	input.Feature = config.Feature
 	if err := r.Initialize(input); err != nil {
@@ -84,7 +90,16 @@ func (r Router) Decide(agent CatalogAgent, session Session) RouteDecision {
 		RunID:    session.RunID,
 	}
 	input.Engine, input.Feature = r.compatibilityConfig(agent, session, input.AgentKey)
+	if identityConflict(agent.Key, session.AgentKey) {
+		return RouteLegacy
+	}
 	return r.Route(input)
+}
+
+func identityConflict(authoritative, requested string) bool {
+	authoritative = strings.TrimSpace(authoritative)
+	requested = strings.TrimSpace(requested)
+	return authoritative != "" && requested != "" && authoritative != requested
 }
 
 func routeIdentity(values ...string) string {

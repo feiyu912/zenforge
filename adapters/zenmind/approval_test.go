@@ -26,13 +26,15 @@ func platformFixture(t *testing.T) (AwaitingAsk, RequestSubmit, approval.Decisio
 			{Action: approval.DecisionReject, Scope: approval.ScopeOnce, Label: "Reject"},
 		},
 	}
-	ask, err := AwaitingAskFromRequestContext(req, "await_tool_7", PlatformRequestContext{AgentKey: "agent_ops"}, 120)
+	ask, err := AwaitingAskFromRequestContext(req, "await_tool_7", PlatformRequestContext{
+		RequestID: "request_9", ChatID: "chat_3", AgentKey: "agent_ops",
+	}, 120)
 	if err != nil {
 		t.Fatalf("AwaitingAskFromRequestContext: %v", err)
 	}
 	submit := RequestSubmit{
 		Type: "request.submit", RequestID: "request_9", ChatID: "chat_3", RunID: req.RunID,
-		AwaitingID: ask.AwaitingID, SubmitID: "submit_11",
+		AgentKey: "agent_ops", AwaitingID: ask.AwaitingID, SubmitID: "submit_11",
 		Params: []ApprovalParam{{ID: req.ID, Decision: PlatformDecisionApproveRuleRun}},
 	}
 	decision, err := DecisionFromRequestSubmit(ask, submit, fixtureTime)
@@ -69,7 +71,17 @@ func TestAwaitingAskRequiresAgentKeyForCompletePlatformIdentity(t *testing.T) {
 		t.Fatalf("legacy payload should require completion before wire use, got %v", err)
 	}
 	if _, err := AwaitingAskFromRequestContext(req, "await_legacy", PlatformRequestContext{}, 0); err == nil {
-		t.Fatal("context-aware constructor accepted missing agentKey")
+		t.Fatal("context-aware constructor accepted missing binding")
+	}
+	bound, err := BindAwaitingAsk(legacy, ApprovalBinding{
+		RequestID: "request_legacy", ChatID: "chat_legacy", RunID: req.RunID,
+		AgentKey: "agent_legacy", AwaitingID: "await_legacy",
+	})
+	if err != nil {
+		t.Fatalf("BindAwaitingAsk: %v", err)
+	}
+	if err := bound.Validate(); err != nil {
+		t.Fatalf("bound compatibility ask: %v", err)
 	}
 }
 
@@ -137,7 +149,7 @@ func TestPlatformDecisionTranslationIsStrict(t *testing.T) {
 
 func TestRequestSubmitRequiresIdentityAndExactApprovalIDs(t *testing.T) {
 	ask, submit, _, _ := platformFixture(t)
-	identityFields := []string{"requestId", "chatId", "runId", "awaitingId", "submitId"}
+	identityFields := []string{"requestId", "chatId", "runId", "agentKey", "awaitingId", "submitId"}
 	for _, field := range identityFields {
 		t.Run(field, func(t *testing.T) {
 			bad := submit
@@ -148,6 +160,8 @@ func TestRequestSubmitRequiresIdentityAndExactApprovalIDs(t *testing.T) {
 				bad.ChatID = ""
 			case "runId":
 				bad.RunID = ""
+			case "agentKey":
+				bad.AgentKey = ""
 			case "awaitingId":
 				bad.AwaitingID = ""
 			case "submitId":
@@ -180,6 +194,28 @@ func TestRequestSubmitRequiresIdentityAndExactApprovalIDs(t *testing.T) {
 	badAwaiting.AwaitingID = "await_other"
 	if _, err := DecisionFromRequestSubmit(ask, badAwaiting, fixtureTime); err == nil {
 		t.Fatal("expected awaiting mismatch")
+	}
+	for name, mutate := range map[string]func(*RequestSubmit){
+		"request": func(s *RequestSubmit) { s.RequestID = "request_other" },
+		"chat":    func(s *RequestSubmit) { s.ChatID = "chat_other" },
+		"agent":   func(s *RequestSubmit) { s.AgentKey = "agent_other" },
+	} {
+		t.Run(name+"_mismatch", func(t *testing.T) {
+			bad := submit
+			mutate(&bad)
+			if _, err := DecisionFromRequestSubmit(ask, bad, fixtureTime); err == nil {
+				t.Fatalf("expected %s mismatch", name)
+			}
+		})
+	}
+}
+
+func TestSubmitRejectsUnboundCompatibilityAsk(t *testing.T) {
+	ask, submit, _, _ := platformFixture(t)
+	ask.Binding = ApprovalBinding{}
+	if _, err := DecisionFromRequestSubmit(ask, submit, fixtureTime); err == nil ||
+		!strings.Contains(err.Error(), "approval binding") {
+		t.Fatalf("expected unbound ask rejection, got %v", err)
 	}
 }
 

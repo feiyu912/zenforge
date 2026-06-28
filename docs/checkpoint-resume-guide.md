@@ -48,6 +48,10 @@ Resume from the latest checkpoint:
 events, err := agent.Resume(ctx, "run_123")
 ```
 
+The requested run ID is checked again against the loaded checkpoint identity.
+A custom store cannot redirect `Resume("run_a")` to an internally valid
+`run_b` checkpoint.
+
 ## Supported Boundaries
 
 ZenForge resumes only from explicit runtime boundaries:

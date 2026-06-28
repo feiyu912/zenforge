@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -172,7 +173,8 @@ func TestChatJSONLWriterMultipleInstancesAppendAtomically(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			event := StreamEvent{Seq: int64(i + 1), Type: "content.delta", RunID: "run-concurrent", Timestamp: int64(i), Payload: map[string]any{"contentId": "content-1", "delta": fmt.Sprint(i)}}
+			runID := fmt.Sprintf("run-concurrent-%d", i)
+			event := StreamEvent{Seq: 1, Type: "content.delta", RunID: runID, Timestamp: int64(i), Payload: map[string]any{"contentId": "content-1", "delta": fmt.Sprint(i)}}
 			errs <- writers[i%len(writers)].Append(context.Background(), "chat-concurrent", event)
 		}(i)
 	}
@@ -190,12 +192,34 @@ func TestChatJSONLWriterMultipleInstancesAppendAtomically(t *testing.T) {
 	if len(lines) != count {
 		t.Fatalf("line count = %d, want %d", len(lines), count)
 	}
-	seen := make(map[int64]bool, count)
+	seen := make(map[string]bool, count)
 	for _, line := range lines {
-		seen[line.LiveSeq] = true
+		seen[line.RunID] = true
 	}
 	if len(seen) != count {
-		t.Fatalf("unique liveSeq count = %d, want %d", len(seen), count)
+		t.Fatalf("unique run count = %d, want %d", len(seen), count)
+	}
+}
+
+func TestChatJSONLWriterRejectsDuplicateAndOutOfOrderRunCursor(t *testing.T) {
+	root := t.TempDir()
+	writer := NewChatJSONLWriter(root)
+	appendSeq := func(seq int64) error {
+		return writer.Append(context.Background(), "chat-cursor", StreamEvent{
+			Seq: seq, Type: "content.delta", RunID: "run-cursor", Timestamp: seq,
+			Payload: map[string]any{"contentId": "content-1", "delta": "x"},
+		})
+	}
+	if err := appendSeq(2); err != nil {
+		t.Fatalf("Append initial cursor: %v", err)
+	}
+	for _, seq := range []int64{2, 1} {
+		if err := appendSeq(seq); err == nil || !strings.Contains(err.Error(), "durable run cursor") {
+			t.Fatalf("Append seq %d error = %v, want cursor rejection", seq, err)
+		}
+	}
+	if err := appendSeq(3); err != nil {
+		t.Fatalf("Append next cursor: %v", err)
 	}
 }
 

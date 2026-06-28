@@ -231,6 +231,51 @@ func TestBuildRunRetainsLegacyAliases(t *testing.T) {
 	}
 }
 
+func TestBuildRunValidatesPlatformIdentityWithoutTighteningLegacyAliases(t *testing.T) {
+	tests := []struct {
+		name    string
+		agent   CatalogAgent
+		session Session
+		want    string
+	}{
+		{
+			name:    "missing chat",
+			agent:   CatalogAgent{Key: "agent-1"},
+			session: Session{AgentKey: "agent-1", RunID: "run-1", Message: "hello"},
+			want:    "platform identity requires agentKey, chatId, and runId",
+		},
+		{
+			name:    "missing run",
+			agent:   CatalogAgent{Key: "agent-1"},
+			session: Session{AgentKey: "agent-1", ChatID: "chat-1", Message: "hello"},
+			want:    "platform identity requires agentKey, chatId, and runId",
+		},
+		{
+			name:    "request catalog conflict",
+			agent:   CatalogAgent{Key: "catalog-agent"},
+			session: Session{AgentKey: "request-agent", ChatID: "chat-1", RunID: "run-1", Message: "hello"},
+			want:    `session agentKey "request-agent" does not match catalog agent key "catalog-agent"`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := BuildRun(context.Background(), tt.agent, tt.session, runtimeWithModel())
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want containing %q", err, tt.want)
+			}
+		})
+	}
+
+	_, err := BuildRun(context.Background(), CatalogAgent{Name: "legacy-agent"}, Session{
+		ConversationID: "legacy-chat",
+		RunID:          "legacy-run",
+		Input:          "hello",
+	}, runtimeWithModel())
+	if err != nil {
+		t.Fatalf("legacy alias-only BuildRun returned error: %v", err)
+	}
+}
+
 func TestBuildRunAcceptsPlatformYAMLIntegerBudget(t *testing.T) {
 	run, err := BuildRun(context.Background(), CatalogAgent{
 		Budget: map[string]any{"maxSteps": int64(23)},

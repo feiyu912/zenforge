@@ -3,6 +3,7 @@ package zenmind
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -213,11 +214,33 @@ type toolProjection struct {
 	arguments string
 }
 
+// ProjectorToolState is the serializable state of an unfinished tool block.
+type ProjectorToolState struct {
+	Name      string `json:"name,omitempty"`
+	Arguments string `json:"arguments,omitempty"`
+}
+
 // ProjectorIdentity supplies the request-scoped identity that is not present
 // on most ZenForge events but is required by the platform run.start wire event.
 type ProjectorIdentity struct {
-	ChatID   string
-	AgentKey string
+	ChatID   string `json:"chatId,omitempty"`
+	AgentKey string `json:"agentKey,omitempty"`
+}
+
+const ProjectorStateVersion = "zenforge.zenmind_projector_state.v1"
+
+// ProjectorState contains all state required to resume a platform projection.
+// It is safe to persist with encoding/json.
+type ProjectorState struct {
+	Version       string                        `json:"version"`
+	Identity      ProjectorIdentity             `json:"identity,omitempty"`
+	NextSeq       int64                         `json:"nextSeq"`
+	Terminated    bool                          `json:"terminated,omitempty"`
+	ContentSeq    map[string]int64              `json:"contentSeq,omitempty"`
+	ActiveContent string                        `json:"activeContent,omitempty"`
+	ContentRunID  string                        `json:"contentRunId,omitempty"`
+	ContentText   string                        `json:"contentText,omitempty"`
+	OpenTools     map[string]ProjectorToolState `json:"openTools,omitempty"`
 }
 
 // Projector turns one ZenForge run's durable events into the platform's live
@@ -243,6 +266,88 @@ func NewProjector() *Projector {
 
 func NewProjectorWithIdentity(identity ProjectorIdentity) *Projector {
 	return &Projector{identity: identity, contentSeq: map[string]int64{}, openTools: map[string]toolProjection{}}
+}
+
+// NewProjectorFromState restores a projector snapshot. Invalid or internally
+// inconsistent state is rejected instead of risking duplicate live IDs.
+func NewProjectorFromState(state ProjectorState) (*Projector, error) {
+	if err := validateProjectorState(state); err != nil {
+		return nil, err
+	}
+	projector := NewProjectorWithIdentity(state.Identity)
+	projector.nextSeq = state.NextSeq
+	projector.terminated = state.Terminated
+	for runID, seq := range state.ContentSeq {
+		projector.contentSeq[runID] = seq
+	}
+	projector.activeContent = state.ActiveContent
+	projector.contentRunID = state.ContentRunID
+	projector.contentText.WriteString(state.ContentText)
+	for toolID, tool := range state.OpenTools {
+		projector.openTools[toolID] = toolProjection{name: tool.Name, arguments: tool.Arguments}
+	}
+	return projector, nil
+}
+
+// Snapshot returns an isolated, serializable copy of the projector state.
+func (p *Projector) Snapshot() ProjectorState {
+	if p == nil {
+		return ProjectorState{}
+	}
+	state := ProjectorState{
+		Version:       ProjectorStateVersion,
+		Identity:      p.identity,
+		NextSeq:       p.nextSeq,
+		Terminated:    p.terminated,
+		ContentSeq:    make(map[string]int64, len(p.contentSeq)),
+		ActiveContent: p.activeContent,
+		ContentRunID:  p.contentRunID,
+		ContentText:   p.contentText.String(),
+		OpenTools:     make(map[string]ProjectorToolState, len(p.openTools)),
+	}
+	for runID, seq := range p.contentSeq {
+		state.ContentSeq[runID] = seq
+	}
+	for toolID, tool := range p.openTools {
+		state.OpenTools[toolID] = ProjectorToolState{Name: tool.name, Arguments: tool.arguments}
+	}
+	return state
+}
+
+func validateProjectorState(state ProjectorState) error {
+	if state.Version != ProjectorStateVersion {
+		return fmt.Errorf("unsupported projector state version %q", state.Version)
+	}
+	if state.NextSeq < 0 {
+		return errors.New("invalid projector state: nextSeq must not be negative")
+	}
+	for runID, seq := range state.ContentSeq {
+		if strings.TrimSpace(runID) == "" || seq <= 0 {
+			return errors.New("invalid projector state: content sequence must have a run ID and be positive")
+		}
+	}
+	hasActiveContent := state.ActiveContent != ""
+	if hasActiveContent != (state.ContentRunID != "") {
+		return errors.New("invalid projector state: incomplete active content")
+	}
+	if !hasActiveContent && state.ContentText != "" {
+		return errors.New("invalid projector state: content text has no active content")
+	}
+	if hasActiveContent {
+		seq := state.ContentSeq[state.ContentRunID]
+		if seq <= 0 || state.ActiveContent != fmt.Sprintf("%s_c_%d", state.ContentRunID, seq) {
+			return errors.New("invalid projector state: active content ID does not match its sequence")
+		}
+	}
+	for toolID := range state.OpenTools {
+		if strings.TrimSpace(toolID) == "" || toolID == state.ActiveContent {
+			return errors.New("invalid projector state: invalid or conflicting tool ID")
+		}
+	}
+	if state.Terminated && (hasActiveContent || len(state.OpenTools) != 0) {
+		return errors.New("invalid projector state: terminated projector has open blocks")
+	}
+	return nil
 }
 
 func (p *Projector) Project(event zenforge.Event) []StreamEvent {

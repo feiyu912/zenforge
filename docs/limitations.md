@@ -5,7 +5,8 @@ what is experimental, and what remains adapter territory.
 
 ## Runtime
 
-- Resume does not continue a partially streamed model response.
+- Resume replaces an interrupted model attempt from the committed prompt
+  boundary; it does not continue through a provider-native mid-token cursor.
 - Tool argument event redaction does not remove original arguments from durable
   checkpoints because resume needs them.
 - Resume does not assume an OS command completed if the process crashed while
@@ -55,6 +56,8 @@ approval, sandbox, event log, checkpoint, and trace interfaces.
 `adapters/zenmind` has repository-local golden coverage for the
 `agent-platform@1893edb5` catalog/session DTO subset, stream wire envelopes,
 content/tool projection, approval roundtrip, and event-only chat JSONL lines.
+Projector cursor state is serializable for attach/resume, but the host still
+owns where that state is stored alongside its transport cursor.
 This repository does not implement complete Chat Storage V3.1 or own platform
 server wiring. That downstream wiring is implemented and tested on
 `agent-platform` branch `codex/zenforge-engine-bridge@82ca4d3`, including the

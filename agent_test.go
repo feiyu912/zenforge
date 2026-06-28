@@ -68,6 +68,44 @@ func TestAgentResumeRejectsNilCheckpointFromStore(t *testing.T) {
 	}
 }
 
+func TestAgentResumeRejectsCheckpointForDifferentRun(t *testing.T) {
+	const requestedRunID = "run_requested"
+	state := newRunState("run_other", "use record", nil)
+	state.Step = 1
+	state.Phase = harness.RunPhaseTool
+	state.Control.Status = harness.RunStatusToolExecuting
+	now := time.Now().UTC()
+	state.Tool.Active = &harness.ToolCallState{
+		ID:        "call_1",
+		Name:      "record",
+		Arguments: json.RawMessage(`{}`),
+		Status:    harness.ToolCallRunning,
+		StartedAt: &now,
+	}
+	cp := newCheckpoint(state, 1)
+	model := &scriptedModel{turns: []scriptedTurn{{events: []model.Event{{Delta: "done"}}}}}
+	record := &recordingTool{}
+	agent := New(Config{
+		Model:       model,
+		Tools:       []Tool{record},
+		Checkpoints: mismatchedCheckpointStore{checkpoint: cp},
+	})
+
+	events, err := agent.Resume(context.Background(), requestedRunID)
+	if err == nil || !strings.Contains(err.Error(), `checkpoint runId "run_other" does not match requested runId "run_requested"`) {
+		t.Fatalf("Resume() events = %v, error = %v, want runId mismatch error", events, err)
+	}
+	if events != nil {
+		t.Fatalf("Resume() returned an event stream for a mismatched checkpoint")
+	}
+	if len(model.requests) != 0 {
+		t.Fatalf("model calls = %d, want 0", len(model.requests))
+	}
+	if record.calls != 0 {
+		t.Fatalf("tool calls = %d, want 0", record.calls)
+	}
+}
+
 type nilCheckpointStore struct{}
 
 func (nilCheckpointStore) Save(context.Context, checkpoint.Checkpoint) error {
@@ -79,6 +117,23 @@ func (nilCheckpointStore) Load(context.Context, string) (*checkpoint.Checkpoint,
 }
 
 func (nilCheckpointStore) Delete(context.Context, string) error {
+	return nil
+}
+
+type mismatchedCheckpointStore struct {
+	checkpoint checkpoint.Checkpoint
+}
+
+func (mismatchedCheckpointStore) Save(context.Context, checkpoint.Checkpoint) error {
+	return nil
+}
+
+func (s mismatchedCheckpointStore) Load(context.Context, string) (*checkpoint.Checkpoint, error) {
+	cp := s.checkpoint
+	return &cp, nil
+}
+
+func (mismatchedCheckpointStore) Delete(context.Context, string) error {
 	return nil
 }
 

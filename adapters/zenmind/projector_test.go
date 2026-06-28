@@ -114,6 +114,98 @@ func TestProjectorContentIDsAreDeterministicPerRun(t *testing.T) {
 	}
 }
 
+func TestProjectorSnapshotResumePreservesContentAndLiveSequences(t *testing.T) {
+	projector := NewProjectorWithIdentity(ProjectorIdentity{ChatID: "chat_resume", AgentKey: "zenmind"})
+	projector.Project(testEvent(zenforge.EventRunStarted, 1, "run_resume", nil))
+	before := projector.Project(testEvent(zenforge.EventModelDelta, 2, "run_resume", map[string]any{"textDelta": "hello"}))
+
+	data, err := json.Marshal(projector.Snapshot())
+	if err != nil {
+		t.Fatalf("Marshal snapshot: %v", err)
+	}
+	var state ProjectorState
+	if err := json.Unmarshal(data, &state); err != nil {
+		t.Fatalf("Unmarshal snapshot: %v", err)
+	}
+	resumed, err := NewProjectorFromState(state)
+	if err != nil {
+		t.Fatalf("NewProjectorFromState: %v", err)
+	}
+	continued := resumed.Project(testEvent(zenforge.EventModelDelta, 3, "run_resume", map[string]any{"textDelta": " world"}))
+	closed := resumed.Project(testEvent(zenforge.EventModelDone, 4, "run_resume", nil))
+	next := resumed.Project(testEvent(zenforge.EventModelDelta, 5, "run_resume", map[string]any{"textDelta": "again"}))
+
+	if before[0].Payload["contentId"] != "run_resume_c_1" || continued[0].Payload["contentId"] != "run_resume_c_1" {
+		t.Fatalf("resumed content ID changed: before=%#v continued=%#v", before, continued)
+	}
+	if continued[0].Seq != 4 || closed[0].Seq != 5 || closed[1].Seq != 6 || next[0].Seq != 7 || next[1].Seq != 8 {
+		t.Fatalf("resumed live sequence is not monotonic: continued=%#v closed=%#v next=%#v", continued, closed, next)
+	}
+	if closed[1].Payload["text"] != "hello world" || next[0].Payload["contentId"] != "run_resume_c_2" {
+		t.Fatalf("resumed content state = closed %#v, next %#v", closed, next)
+	}
+}
+
+func TestProjectorSnapshotResumePreservesOpenTool(t *testing.T) {
+	projector := NewProjector()
+	first := projector.Project(testEvent(zenforge.EventToolCall, 1, "run_tool_resume", map[string]any{
+		"toolCallId": "call_1", "toolName": "shell", "arguments": map[string]any{"command": "pwd"},
+	}))
+	state := projector.Snapshot()
+	state.OpenTools["call_1"] = ProjectorToolState{Name: "mutated"}
+
+	resumed, err := NewProjectorFromState(projector.Snapshot())
+	if err != nil {
+		t.Fatalf("NewProjectorFromState: %v", err)
+	}
+	second := resumed.Project(testEvent(zenforge.EventToolCall, 2, "run_tool_resume", map[string]any{
+		"toolCallId": "call_1",
+	}))
+	result := resumed.Project(testEvent(zenforge.EventToolResult, 3, "run_tool_resume", map[string]any{
+		"toolCallId": "call_1", "output": "/tmp",
+	}))
+
+	if len(first) != 2 || len(second) != 1 || second[0].Type != "tool.args" || second[0].Seq != 3 {
+		t.Fatalf("resumed tool projection: first=%#v second=%#v", first, second)
+	}
+	if len(result) != 3 || result[0].Seq != 4 || result[1].Payload["toolId"] != "call_1" ||
+		result[1].Payload["toolName"] != "shell" || result[1].Payload["arguments"] != `{"command":"pwd"}` || result[2].Seq != 6 {
+		t.Fatalf("resumed tool close = %#v", result)
+	}
+}
+
+func TestNewProjectorFromStateFailsClosed(t *testing.T) {
+	tests := map[string]ProjectorState{
+		"missing-version": {},
+		"future-version":  {Version: "zenforge.zenmind_projector_state.v2"},
+		"negative-live-seq": {
+			Version: ProjectorStateVersion, NextSeq: -1,
+		},
+		"negative-content-seq": {
+			Version: ProjectorStateVersion, ContentSeq: map[string]int64{"run": -1},
+		},
+		"orphaned-content-text": {Version: ProjectorStateVersion, ContentText: "partial"},
+		"mismatched-content-id": {
+			Version: ProjectorStateVersion, ContentSeq: map[string]int64{"run": 2}, ActiveContent: "run_c_1", ContentRunID: "run", ContentText: "partial",
+		},
+		"conflicting-tool-id": {
+			Version: ProjectorStateVersion, ContentSeq: map[string]int64{"run": 1}, ActiveContent: "run_c_1", ContentRunID: "run",
+			OpenTools: map[string]ProjectorToolState{"run_c_1": {}},
+		},
+		"terminated-with-open-tool": {
+			Version: ProjectorStateVersion, Terminated: true, OpenTools: map[string]ProjectorToolState{"call_1": {}},
+		},
+	}
+	for name, state := range tests {
+		t.Run(name, func(t *testing.T) {
+			projector, err := NewProjectorFromState(state)
+			if err == nil || projector != nil {
+				t.Fatalf("invalid state restored: projector=%#v err=%v", projector, err)
+			}
+		})
+	}
+}
+
 func TestMapperMarshalUsesFlatWireEnvelope(t *testing.T) {
 	source := testEvent(zenforge.EventModelDelta, 42, "run_compat", map[string]any{"textDelta": "hello"}).WithSeq(3)
 	data, err := json.Marshal(MapEvent(source))

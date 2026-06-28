@@ -25,15 +25,16 @@ const (
 
 // AwaitingAsk is the platform awaiting.ask wire payload for approval mode.
 type AwaitingAsk struct {
-	Type         string        `json:"type"`
-	AwaitingID   string        `json:"awaitingId"`
-	Mode         string        `json:"mode"`
-	Timeout      int64         `json:"timeout"`
-	RunID        string        `json:"runId"`
-	AgentKey     string        `json:"agentKey,omitempty"`
-	ViewportType string        `json:"viewportType,omitempty"`
-	ViewportKey  string        `json:"viewportKey,omitempty"`
-	Approvals    []ApprovalAsk `json:"approvals"`
+	Type         string          `json:"type"`
+	AwaitingID   string          `json:"awaitingId"`
+	Mode         string          `json:"mode"`
+	Timeout      int64           `json:"timeout"`
+	RunID        string          `json:"runId"`
+	AgentKey     string          `json:"agentKey,omitempty"`
+	ViewportType string          `json:"viewportType,omitempty"`
+	ViewportKey  string          `json:"viewportKey,omitempty"`
+	Approvals    []ApprovalAsk   `json:"approvals"`
+	Binding      ApprovalBinding `json:"-"`
 }
 
 type ApprovalAsk struct {
@@ -59,6 +60,8 @@ type RequestSubmit struct {
 	AwaitingID string          `json:"awaitingId"`
 	SubmitID   string          `json:"submitId"`
 	Params     []ApprovalParam `json:"params"`
+	// AgentKey is trusted dispatcher context and is never decoded from wire JSON.
+	AgentKey string `json:"-"`
 }
 
 type ApprovalParam struct {
@@ -86,7 +89,19 @@ type AwaitingError struct {
 // PlatformRequestContext carries identity supplied by the platform stream
 // dispatcher rather than by an individual AwaitAsk input.
 type PlatformRequestContext struct {
-	AgentKey string
+	RequestID string
+	ChatID    string
+	AgentKey  string
+}
+
+// ApprovalBinding is local correlation state and is never serialized onto the
+// platform wire. It binds a submit to the exact request that produced its ask.
+type ApprovalBinding struct {
+	RequestID  string
+	ChatID     string
+	RunID      string
+	AgentKey   string
+	AwaitingID string
 }
 
 // AwaitingAskFromRequest is retained for callers that do not yet have platform
@@ -127,9 +142,29 @@ func awaitingAskFromRequest(req approval.Request, awaitingID string, context Pla
 		}},
 	}
 	if requireContext {
+		ask.Binding = ApprovalBinding{
+			RequestID:  strings.TrimSpace(context.RequestID),
+			ChatID:     strings.TrimSpace(context.ChatID),
+			RunID:      req.RunID,
+			AgentKey:   strings.TrimSpace(context.AgentKey),
+			AwaitingID: strings.TrimSpace(awaitingID),
+		}
 		return ask, ask.Validate()
 	}
 	return ask, ask.validate(false)
+}
+
+// BindAwaitingAsk is the explicit compatibility path for asks constructed
+// without dispatcher context.
+func BindAwaitingAsk(ask AwaitingAsk, binding ApprovalBinding) (AwaitingAsk, error) {
+	ask.Binding = binding
+	if strings.TrimSpace(ask.AgentKey) == "" {
+		ask.AgentKey = strings.TrimSpace(binding.AgentKey)
+	}
+	if err := ask.Validate(); err != nil {
+		return AwaitingAsk{}, err
+	}
+	return ask, nil
 }
 
 func (a AwaitingAsk) Validate() error {
@@ -145,6 +180,14 @@ func (a AwaitingAsk) validate(requireAgentKey bool) error {
 	}
 	if requireAgentKey && strings.TrimSpace(a.AgentKey) == "" {
 		return fmt.Errorf("agentKey is required")
+	}
+	if requireAgentKey {
+		if err := a.Binding.validate(); err != nil {
+			return err
+		}
+		if a.Binding.RunID != a.RunID || a.Binding.AgentKey != a.AgentKey || a.Binding.AwaitingID != a.AwaitingID {
+			return fmt.Errorf("approval binding does not match awaiting ask")
+		}
 	}
 	if a.Timeout < 0 {
 		return fmt.Errorf("timeout must be zero or greater")
@@ -250,14 +293,37 @@ func validateSubmitIdentity(ask AwaitingAsk, submit RequestSubmit) error {
 	}
 	if strings.TrimSpace(submit.RequestID) == "" || strings.TrimSpace(submit.ChatID) == "" ||
 		strings.TrimSpace(submit.RunID) == "" || strings.TrimSpace(submit.AwaitingID) == "" ||
-		strings.TrimSpace(submit.SubmitID) == "" {
-		return fmt.Errorf("requestId, chatId, runId, awaitingId, and submitId are required")
+		strings.TrimSpace(submit.AgentKey) == "" || strings.TrimSpace(submit.SubmitID) == "" {
+		return fmt.Errorf("requestId, chatId, runId, agentKey, awaitingId, and submitId are required")
 	}
-	if submit.RunID != ask.RunID {
-		return fmt.Errorf("submit runId %q does not match ask runId %q", submit.RunID, ask.RunID)
+	submitBinding := ApprovalBinding{
+		RequestID: submit.RequestID, ChatID: submit.ChatID, RunID: submit.RunID,
+		AgentKey: submit.AgentKey, AwaitingID: submit.AwaitingID,
 	}
-	if submit.AwaitingID != ask.AwaitingID {
-		return fmt.Errorf("submit awaitingId %q does not match ask awaitingId %q", submit.AwaitingID, ask.AwaitingID)
+	checks := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"requestId", submitBinding.RequestID, ask.Binding.RequestID},
+		{"chatId", submitBinding.ChatID, ask.Binding.ChatID},
+		{"runId", submitBinding.RunID, ask.Binding.RunID},
+		{"agentKey", submitBinding.AgentKey, ask.Binding.AgentKey},
+		{"awaitingId", submitBinding.AwaitingID, ask.Binding.AwaitingID},
+	}
+	for _, check := range checks {
+		if check.got != check.want {
+			return fmt.Errorf("submit %s %q does not match ask %s %q", check.name, check.got, check.name, check.want)
+		}
+	}
+	return nil
+}
+
+func (b ApprovalBinding) validate() error {
+	if strings.TrimSpace(b.RequestID) == "" || strings.TrimSpace(b.ChatID) == "" ||
+		strings.TrimSpace(b.RunID) == "" || strings.TrimSpace(b.AgentKey) == "" ||
+		strings.TrimSpace(b.AwaitingID) == "" {
+		return fmt.Errorf("approval binding requires requestId, chatId, runId, agentKey, and awaitingId")
 	}
 	return nil
 }
