@@ -28,6 +28,60 @@ import (
 	workspacelocal "github.com/feiyu912/zenforge/workspace/local"
 )
 
+func TestAgentResumeRejectsInvalidCheckpointRunState(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*checkpoint.Checkpoint)
+		want   string
+	}{
+		{name: "unknown version", mutate: func(cp *checkpoint.Checkpoint) { cp.State.Version = "zenforge.run_state.v2" }, want: "unsupported run state version"},
+		{name: "invalid phase", mutate: func(cp *checkpoint.Checkpoint) { cp.State.Phase = "future" }, want: "unsupported run phase"},
+		{name: "invalid mode", mutate: func(cp *checkpoint.Checkpoint) { cp.State.Mode = "future" }, want: "unsupported run mode"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runID := "run_invalid_resume"
+			cp := newCheckpoint(newRunState(runID, "work", nil), 1)
+			test.mutate(&cp)
+
+			store := &failingCheckpointStore{latest: &cp}
+			agent := New(Config{Checkpoints: store})
+			events, err := agent.Resume(context.Background(), runID)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Resume() events = %v, error = %v, want containing %q", events, err, test.want)
+			}
+			if events != nil {
+				t.Fatalf("Resume() returned an event stream for invalid state")
+			}
+		})
+	}
+}
+
+func TestAgentResumeRejectsNilCheckpointFromStore(t *testing.T) {
+	agent := New(Config{Checkpoints: nilCheckpointStore{}})
+	events, err := agent.Resume(context.Background(), "run_nil_checkpoint")
+	if err == nil || !strings.Contains(err.Error(), "checkpoint store returned nil checkpoint") {
+		t.Fatalf("Resume() events = %v, error = %v, want nil checkpoint error", events, err)
+	}
+	if events != nil {
+		t.Fatalf("Resume() returned an event stream for nil checkpoint")
+	}
+}
+
+type nilCheckpointStore struct{}
+
+func (nilCheckpointStore) Save(context.Context, checkpoint.Checkpoint) error {
+	return nil
+}
+
+func (nilCheckpointStore) Load(context.Context, string) (*checkpoint.Checkpoint, error) {
+	return nil, nil
+}
+
+func (nilCheckpointStore) Delete(context.Context, string) error {
+	return nil
+}
+
 func TestAgentStreamEmitsLifecycleEvents(t *testing.T) {
 	agent := New(Config{})
 	events, err := agent.Stream(context.Background(), Task{Input: "hello"})

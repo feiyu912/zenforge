@@ -2,6 +2,7 @@ package harness
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -81,5 +82,36 @@ func TestRunStateZeroValueIsJSONSafe(t *testing.T) {
 	var got RunState
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatalf("Unmarshal returned error: %v", err)
+	}
+}
+
+func TestValidateRunStateVersionPhaseAndMode(t *testing.T) {
+	valid := RunState{Version: RunStateVersion, Phase: RunPhaseModel, Mode: "react"}
+	if err := ValidateRunState(valid); err != nil {
+		t.Fatalf("ValidateRunState(valid) returned error: %v", err)
+	}
+
+	legacy := RunState{Phase: RunPhaseCreated}
+	if err := ValidateRunState(legacy); err != nil {
+		t.Fatalf("ValidateRunState(legacy) returned error: %v", err)
+	}
+
+	tests := []struct {
+		name  string
+		state RunState
+		want  string
+	}{
+		{name: "version", state: RunState{Version: "zenforge.run_state.v2", Phase: RunPhaseModel}, want: "unsupported run state version"},
+		{name: "phase", state: RunState{Version: RunStateVersion, Phase: "future"}, want: "unsupported run phase"},
+		{name: "empty phase", state: RunState{Version: RunStateVersion}, want: "unsupported run phase"},
+		{name: "mode", state: RunState{Version: RunStateVersion, Phase: RunPhaseModel, Mode: "future"}, want: "unsupported run mode"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := ValidateRunState(test.state)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("ValidateRunState() error = %v, want containing %q", err, test.want)
+			}
+		})
 	}
 }

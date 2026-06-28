@@ -67,7 +67,7 @@ V0.2 Production hardening
 | S8 | The direct local shell path, fake sandbox backend, and Container Hub beta adapter are contract-tested; Hub transport tests use local HTTP servers. A real Container Hub service has not been exercised and remains external acceptance. |
 | MVP | Repository-scoped acceptance is implemented and test-mapped. Provider-backed examples and deployment integration remain environment-dependent smoke tests. |
 | V0.1 | `v0.1.0` was tagged. Repository wire goldens cover the ZenMind DTO/projector/approval/event-line boundary at `agent-platform@1893edb5`. The downstream engine bridge, feature-flag selector, HTTP/SSE/WS, approval, attach, and fallback integration is implemented and tested on `agent-platform` branch `codex/zenforge-engine-bridge@82ca4d3`, but is not yet merged to platform `main`. |
-| V0.2 | Partially implemented hardening, including SQLite soak coverage, Go 1.26-only CI, JSONL crash/concurrency safety, typed tools, and bounded shell/Hub responses. This roadmap stage is not declared complete. |
+| V0.2 | Repository hardening is implemented for SQLite soak coverage, Go 1.26-only CI, JSONL crash/concurrency safety, typed tools, bounded shell/Hub responses, and fail-closed checkpoint/ZenMind adapter loading. Remaining work is partial model-stream resume, cross-run persistent authorization, and external acceptance. This roadmap stage is not declared complete. |
 
 Completion in this table distinguishes ZenForge repository tests from tests on
 the named downstream integration branch. It does not claim merge to
@@ -486,16 +486,26 @@ V0.1 acceptance:
 
 Focus:
 
-- stronger resume semantics;
-- SQLite checkpoint store;
-- OpenTelemetry trace sink;
-- Container Hub adapter;
-- MCP adapter;
-- memory adapter;
-- server/SSE helper package;
+Completed in this repository:
+
+- checkpoint-boundary resume, with unknown run-state version/phase/mode rejected
+  on load and legacy empty version/mode retained;
+- SQLite checkpoint store and JSONL crash/concurrency hardening;
+- OpenTelemetry trace sink, Container Hub beta adapter, MCP tool adapter,
+  memory adapter, and server/SSE helpers;
+- typed tools, bounded shell/Hub responses, and fail-closed ZenMind model/tool
+  initialization;
 - benchmark and soak tests (`BenchmarkAgentRunStaticModel`,
   `TestSQLiteDurableRunSoak`);
 - failure-mode documentation (`docs/failure-modes.md`).
+
+Remaining:
+
+- resume within a partially streamed model response rather than retrying from
+  the last checkpoint boundary;
+- persistent authorization grants across runs;
+- external acceptance, including downstream platform merge/deployment and a
+  smoke against a real Container Hub service.
 
 ## First ZenMind Integration
 

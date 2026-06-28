@@ -236,7 +236,7 @@ func decodeCheckpoint(raw []byte) (*checkpoint.Checkpoint, error) {
 	if err := json.Unmarshal(raw, &cp); err != nil {
 		return nil, err
 	}
-	if err := checkpoint.Validate(cp); err != nil {
+	if err := checkpoint.ValidateForLoad(cp); err != nil {
 		return nil, err
 	}
 	return &cp, nil

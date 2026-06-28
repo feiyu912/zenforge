@@ -341,6 +341,8 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - Planner update failures are surfaced and checkpointed instead of emitting a false todo/task transition.
 - Core checkpoint writes fail closed before model/tool progress or successful terminal events.
 - Resume, failure-mode, and MVP docs map checkpoint fail-closed behavior to concrete tests.
+- Checkpoint loads and resume fail closed on unknown run-state version, phase,
+  or mode while retaining legacy empty version/mode compatibility.
 - Event-log sequence and append failures stop execution and surface a live `run.error` instead of publishing unrecorded progress.
 - Trace exporters remain best-effort platform observability and cannot change the harness result.
 - Architecture package layout is aligned with the current repository.
@@ -399,6 +401,9 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
   downstream engine/feature-flag/HTTP/SSE/WS/approval/attach integration is
   tested on `agent-platform` branch `codex/zenforge-engine-bridge@82ca4d3`.
   The branch is not yet merged to platform `main`.
+- ZenMind run assembly rejects missing or typed-nil models and explicitly
+  declared unavailable tools, while preserving undeclared, explicitly empty,
+  and legacy tool-list semantics.
 
 Verification before each release:
 

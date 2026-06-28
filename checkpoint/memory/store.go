@@ -58,6 +58,9 @@ func (s *Store) Load(ctx context.Context, runID string) (*checkpoint.Checkpoint,
 	if err != nil {
 		return nil, err
 	}
+	if err := checkpoint.ValidateForLoad(cloned); err != nil {
+		return nil, err
+	}
 	return &cloned, nil
 }
 

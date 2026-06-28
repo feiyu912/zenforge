@@ -1,6 +1,7 @@
 package zenmind
 
 import (
+	"context"
 	"errors"
 	"testing"
 )
@@ -59,6 +60,29 @@ func TestRouterRoutesOnlyExplicitInitializedZenForge(t *testing.T) {
 	}
 	if seen != input {
 		t.Fatalf("initializer input = %#v, want %#v", seen, input)
+	}
+}
+
+func TestRouterFallsBackWhenBuildRunInitializationFails(t *testing.T) {
+	input := RouteInput{Engine: EngineZenForge, Feature: FeatureEnabled}
+	tests := []struct {
+		name    string
+		agent   CatalogAgent
+		runtime Runtime
+	}{
+		{name: "missing model"},
+		{name: "missing catalog tool", agent: CatalogAgent{Tools: []string{"catalog-only"}}, runtime: runtimeWithModel()},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			router := Router{Initialize: func(RouteInput) error {
+				_, err := BuildRun(context.Background(), tt.agent, Session{Message: "hello"}, tt.runtime)
+				return err
+			}}
+			if got := router.Route(input); got != RouteLegacy {
+				t.Fatalf("Route() = %q, want fallback %q", got, RouteLegacy)
+			}
+		})
 	}
 }
 

@@ -270,7 +270,7 @@ func (s *Store) loadLocked(ctx context.Context, runID string) (*checkpoint.Check
 	if err := json.Unmarshal(data, &cp); err != nil {
 		return nil, err
 	}
-	if err := checkpoint.Validate(cp); err != nil {
+	if err := checkpoint.ValidateForLoad(cp); err != nil {
 		return nil, err
 	}
 	return &cp, nil
@@ -292,7 +292,7 @@ func (s *Store) recoverPending(ctx context.Context, runID string) (*checkpoint.C
 	if txn.Checkpoint.RunID != runID || txn.HistoryOffset < 0 {
 		return nil, fmt.Errorf("invalid pending checkpoint for runId %q", runID)
 	}
-	if err := checkpoint.Validate(txn.Checkpoint); err != nil {
+	if err := checkpoint.ValidateForLoad(txn.Checkpoint); err != nil {
 		return nil, err
 	}
 	encoded, err := json.Marshal(txn.Checkpoint)

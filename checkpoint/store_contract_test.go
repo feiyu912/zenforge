@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -62,6 +63,53 @@ func TestStoreSequenceContract(t *testing.T) {
 				t.Fatalf("latest seq = %d, want 3", loaded.Seq)
 			}
 		})
+	}
+}
+
+func TestStoreLoadRejectsInvalidRunStateContract(t *testing.T) {
+	stores := []struct {
+		name string
+		open func(*testing.T) checkpoint.Store
+	}{
+		{name: "memory", open: func(*testing.T) checkpoint.Store { return checkpointmemory.New() }},
+		{name: "jsonl", open: func(t *testing.T) checkpoint.Store { return checkpointjsonl.New(t.TempDir()) }},
+		{name: "sqlite", open: func(t *testing.T) checkpoint.Store {
+			store, err := checkpointsqlite.Open(context.Background(), filepath.Join(t.TempDir(), "checkpoints.db"))
+			if err != nil {
+				t.Fatalf("Open sqlite: %v", err)
+			}
+			t.Cleanup(func() { _ = store.Close() })
+			return store
+		}},
+	}
+	invalidStates := []struct {
+		name   string
+		mutate func(*harness.RunState)
+		want   string
+	}{
+		{name: "version", mutate: func(state *harness.RunState) { state.Version = "zenforge.run_state.v2" }, want: "unsupported run state version"},
+		{name: "phase", mutate: func(state *harness.RunState) { state.Phase = "future" }, want: "unsupported run phase"},
+		{name: "mode", mutate: func(state *harness.RunState) { state.Mode = "future" }, want: "unsupported run mode"},
+	}
+
+	for _, storeTest := range stores {
+		for _, stateTest := range invalidStates {
+			t.Run(storeTest.name+"/"+stateTest.name, func(t *testing.T) {
+				store := storeTest.open(t)
+				cp := contractCheckpoint("run_invalid", 1)
+				stateTest.mutate(&cp.State)
+				if err := store.Save(context.Background(), cp); err != nil {
+					t.Fatalf("Save fixture: %v", err)
+				}
+				loaded, err := store.Load(context.Background(), cp.RunID)
+				if err == nil || !strings.Contains(err.Error(), stateTest.want) {
+					t.Fatalf("Load() = %#v, %v, want error containing %q", loaded, err, stateTest.want)
+				}
+				if loaded != nil {
+					t.Fatalf("Load returned invalid checkpoint: %#v", loaded)
+				}
+			})
+		}
 	}
 }
 

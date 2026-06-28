@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 
 	"github.com/feiyu912/zenforge"
@@ -147,6 +148,10 @@ func BuildRun(ctx context.Context, agent CatalogAgent, session Session, runtime 
 	if err != nil {
 		return RunConfig{}, err
 	}
+	selectedTools, err := selectTools(runtime.Tools, preferredStrings(agent.Tools, agent.ToolNames))
+	if err != nil {
+		return RunConfig{}, err
+	}
 
 	task := zenforge.Task{
 		RunID:           session.RunID,
@@ -169,7 +174,7 @@ func BuildRun(ctx context.Context, agent CatalogAgent, session Session, runtime 
 		Config: zenforge.Config{
 			Model:                resolvedModel,
 			Instructions:         firstNonBlank(session.ResolvedPrompt, agent.Instructions),
-			Tools:                filterTools(runtime.Tools, preferredStrings(agent.Tools, agent.ToolNames)),
+			Tools:                selectedTools,
 			ToolInvoker:          runtime.ToolInvoker,
 			ToolRuntime:          runtime.ToolRuntime,
 			Approval:             runtime.Approval,
@@ -298,6 +303,9 @@ func historyToolCallID(values map[string]any) (string, bool, error) {
 
 func resolveModel(ctx context.Context, key string, runtime Runtime) (model.Model, error) {
 	if key == "" {
+		if isNilInterface(runtime.Model) {
+			return nil, fmt.Errorf("zenmind model is required")
+		}
 		return runtime.Model, nil
 	}
 	if runtime.ModelResolver == nil {
@@ -307,7 +315,7 @@ func resolveModel(ctx context.Context, key string, runtime Runtime) (model.Model
 	if err != nil {
 		return nil, fmt.Errorf("resolve zenmind model %q: %w", key, err)
 	}
-	if resolved == nil {
+	if isNilInterface(resolved) {
 		return nil, fmt.Errorf("unknown zenmind model %q", key)
 	}
 	return resolved, nil
@@ -356,21 +364,55 @@ func taskMeta(agent CatalogAgent, session Session, modelKey, mode string) map[st
 	return meta
 }
 
-func filterTools(tools []tool.Tool, names []string) []tool.Tool {
-	if len(names) == 0 {
-		return append([]tool.Tool(nil), tools...)
+func selectTools(tools []tool.Tool, names []string) ([]tool.Tool, error) {
+	if names == nil {
+		return append([]tool.Tool(nil), tools...), nil
 	}
-	allowed := map[string]bool{}
+	if len(names) == 0 {
+		return []tool.Tool{}, nil
+	}
+	requested := make(map[string]struct{}, len(names))
 	for _, name := range names {
-		allowed[name] = true
+		requested[name] = struct{}{}
 	}
 	out := make([]tool.Tool, 0, len(tools))
 	for _, current := range tools {
-		if current != nil && allowed[current.Name()] {
+		if isNilTool(current) {
+			continue
+		}
+		name := current.Name()
+		if _, ok := requested[name]; ok {
 			out = append(out, current)
+			delete(requested, name)
 		}
 	}
-	return out
+	if len(requested) != 0 {
+		missing := make([]string, 0, len(requested))
+		for _, name := range names {
+			if _, ok := requested[name]; ok {
+				missing = append(missing, name)
+				delete(requested, name)
+			}
+		}
+		return nil, fmt.Errorf("zenmind catalog tools unavailable: %q", missing)
+	}
+	return out, nil
+}
+
+func isNilTool(value tool.Tool) bool {
+	return isNilInterface(value)
+}
+
+func isNilInterface(value any) bool {
+	if value == nil {
+		return true
+	}
+	switch reflect.ValueOf(value).Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return reflect.ValueOf(value).IsNil()
+	default:
+		return false
+	}
 }
 
 func agentMode(value string) (zenforge.AgentMode, error) {

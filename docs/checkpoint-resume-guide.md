@@ -9,6 +9,10 @@ event log:
 Checkpoint records use schema version `zenforge.checkpoint.v1`. The embedded
 run state uses version `zenforge.run_state.v1`. Event records use the public
 flattened event contract documented in [ADR 0002](./adr/0002-public-event-contract.md).
+Checkpoint loads fail closed when the embedded run state has an unknown
+version, phase, or mode, before resume can dispatch model or tool work. Legacy
+checkpoints with an empty run-state version or mode remain readable; phase is
+always required to be one of the supported runtime phases.
 
 Every model, tool, approval, sub-agent, and terminal boundary checks the
 checkpoint write result before advancing. A failed write stops the run and

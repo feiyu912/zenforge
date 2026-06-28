@@ -108,21 +108,27 @@ func (a *Agent) Resume(ctx context.Context, runID string) (<-chan Event, error) 
 	if a.config.Checkpoints == nil {
 		return nil, fmt.Errorf("checkpoint store is not configured")
 	}
-	checkpoint, err := a.config.Checkpoints.Load(ctx, runID)
+	cp, err := a.config.Checkpoints.Load(ctx, runID)
 	if err != nil {
+		return nil, err
+	}
+	if cp == nil {
+		return nil, fmt.Errorf("checkpoint store returned nil checkpoint for runId %q", runID)
+	}
+	if err := checkpoint.ValidateForLoad(*cp); err != nil {
 		return nil, err
 	}
 	events := make(chan Event, 32)
 	go func() {
 		defer close(events)
-		if AgentMode(checkpoint.State.Mode) == ModePlanExecute || isPlanExecuteState(checkpoint.State) {
+		if AgentMode(cp.State.Mode) == ModePlanExecute || isPlanExecuteState(cp.State) {
 			a.runPlanExecute(ctx, events, runID, Task{
-				Input: planExecuteOriginalInput(checkpoint.State),
-				Meta:  planExecuteUserMeta(checkpoint.State.Meta),
-			}, &checkpoint.State)
+				Input: planExecuteOriginalInput(cp.State),
+				Meta:  planExecuteUserMeta(cp.State.Meta),
+			}, &cp.State)
 			return
 		}
-		a.runLoop(ctx, events, checkpoint.State, true)
+		a.runLoop(ctx, events, cp.State, true)
 	}()
 	return events, nil
 }

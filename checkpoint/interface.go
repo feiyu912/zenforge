@@ -54,3 +54,14 @@ func Validate(checkpoint Checkpoint) error {
 	}
 	return nil
 }
+
+// ValidateForLoad validates a checkpoint before its state is returned to a caller.
+func ValidateForLoad(checkpoint Checkpoint) error {
+	if err := Validate(checkpoint); err != nil {
+		return err
+	}
+	if err := harness.ValidateRunState(checkpoint.State); err != nil {
+		return fmt.Errorf("unsupported checkpoint version/state: %w", err)
+	}
+	return nil
+}

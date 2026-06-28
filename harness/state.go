@@ -2,6 +2,7 @@ package harness
 
 import (
 	"encoding/json"
+	"fmt"
 	"time"
 )
 
@@ -20,6 +21,27 @@ const (
 	RunPhaseFailed     RunPhase = "failed"
 	RunPhaseCancelled  RunPhase = "cancelled"
 )
+
+// ValidateRunState validates the versioned fields used to dispatch a resumed run.
+// Empty version and mode values are accepted for legacy checkpoints.
+func ValidateRunState(state RunState) error {
+	if state.Version != "" && state.Version != RunStateVersion {
+		return fmt.Errorf("unsupported run state version %q", state.Version)
+	}
+	switch state.Phase {
+	case RunPhaseCreated, RunPhaseModel, RunPhaseTool, RunPhaseApproval,
+		RunPhaseSubtask, RunPhaseFinalizing, RunPhaseCompleted, RunPhaseFailed,
+		RunPhaseCancelled:
+	default:
+		return fmt.Errorf("unsupported run phase %q", state.Phase)
+	}
+	switch state.Mode {
+	case "", "react", "oneshot", "plan_execute":
+	default:
+		return fmt.Errorf("unsupported run mode %q", state.Mode)
+	}
+	return nil
+}
 
 type RunState struct {
 	Version     string          `json:"version"`

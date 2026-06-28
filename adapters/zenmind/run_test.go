@@ -24,6 +24,10 @@ type stubModel struct{ key string }
 func (*stubModel) Generate(context.Context, model.Request) (*model.Response, error)  { return nil, nil }
 func (*stubModel) Stream(context.Context, model.Request) (<-chan model.Event, error) { return nil, nil }
 
+func runtimeWithModel() Runtime {
+	return Runtime{Model: &stubModel{key: "test"}}
+}
+
 func readFixture[T any](t *testing.T, name string) fixture[T] {
 	t.Helper()
 	data, err := os.ReadFile("testdata/platform/" + name)
@@ -125,7 +129,7 @@ func TestBuildRunPrefersResolvedPromptAndStrictlyConvertsHistory(t *testing.T) {
 			{"role": "tool", "content": "result", "name": "lookup", "toolCallId": "call_1", "ts": 123, "_msgId": "ignored"},
 			{"role": "tool", "content": "second result", "tool_call_id": "call_2"},
 		},
-	}, Runtime{})
+	}, runtimeWithModel())
 	if err != nil {
 		t.Fatalf("BuildRun returned error: %v", err)
 	}
@@ -165,7 +169,7 @@ func TestBuildRunRejectsMalformedHistoryWithIndex(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := BuildRun(context.Background(), CatalogAgent{}, Session{Message: "current", HistoryMessages: []map[string]any{{"role": "user", "content": "valid"}, tt.message}}, Runtime{})
+			_, err := BuildRun(context.Background(), CatalogAgent{}, Session{Message: "current", HistoryMessages: []map[string]any{{"role": "user", "content": "valid"}, tt.message}}, runtimeWithModel())
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("error = %v, want containing %q", err, tt.want)
 			}
@@ -179,7 +183,7 @@ func TestBuildRunPreservesToolCallIdentityWhitespaceAfterValidation(t *testing.T
 		HistoryMessages: []map[string]any{{
 			"role": "tool", "content": "result", "tool_call_id": " call_1 ",
 		}},
-	}, Runtime{})
+	}, runtimeWithModel())
 	if err != nil {
 		t.Fatalf("BuildRun returned error: %v", err)
 	}
@@ -200,6 +204,9 @@ func countTaskInput(messages []model.Message, input string) int {
 
 func TestBuildRunRetainsLegacyAliases(t *testing.T) {
 	legacyModel := &stubModel{key: "legacy"}
+	echo := tools.Must("echo", "Echo.", func(context.Context, struct{}) (string, error) {
+		return "echo", nil
+	})
 	run, err := BuildRun(context.Background(), CatalogAgent{
 		Name:      "reviewer",
 		Model:     ModelRef{Provider: "openai", Name: "gpt-test"},
@@ -211,7 +218,7 @@ func TestBuildRunRetainsLegacyAliases(t *testing.T) {
 		RunID:          "run_1",
 		Input:          "What next?",
 		ConversationID: "chat_1",
-	}, Runtime{Model: legacyModel})
+	}, Runtime{Model: legacyModel, Tools: []zenforge.Tool{echo}})
 	if err != nil {
 		t.Fatalf("BuildRun returned error: %v", err)
 	}
@@ -227,7 +234,7 @@ func TestBuildRunRetainsLegacyAliases(t *testing.T) {
 func TestBuildRunAcceptsPlatformYAMLIntegerBudget(t *testing.T) {
 	run, err := BuildRun(context.Background(), CatalogAgent{
 		Budget: map[string]any{"maxSteps": int64(23)},
-	}, Session{Message: "hello"}, Runtime{})
+	}, Session{Message: "hello"}, runtimeWithModel())
 	if err != nil {
 		t.Fatalf("BuildRun returned error: %v", err)
 	}
@@ -237,6 +244,19 @@ func TestBuildRunAcceptsPlatformYAMLIntegerBudget(t *testing.T) {
 }
 
 func TestBuildRunRejectsUnknownModelAndMode(t *testing.T) {
+	t.Run("missing model", func(t *testing.T) {
+		_, err := BuildRun(context.Background(), CatalogAgent{}, Session{Message: "hello"}, Runtime{})
+		if err == nil || !strings.Contains(err.Error(), "zenmind model is required") {
+			t.Fatalf("expected required model error, got %v", err)
+		}
+	})
+	t.Run("typed nil model", func(t *testing.T) {
+		var missing *stubModel
+		_, err := BuildRun(context.Background(), CatalogAgent{}, Session{Message: "hello"}, Runtime{Model: missing})
+		if err == nil || !strings.Contains(err.Error(), "zenmind model is required") {
+			t.Fatalf("expected required model error, got %v", err)
+		}
+	})
 	t.Run("missing resolver", func(t *testing.T) {
 		_, err := BuildRun(context.Background(), CatalogAgent{ModelKey: "missing"}, Session{Message: "hello"}, Runtime{})
 		if err == nil || !strings.Contains(err.Error(), "requires a ModelResolver") {
@@ -251,6 +271,17 @@ func TestBuildRunRejectsUnknownModelAndMode(t *testing.T) {
 			t.Fatalf("expected unknown model error, got %v", err)
 		}
 	})
+	t.Run("typed nil resolved model", func(t *testing.T) {
+		_, err := BuildRun(context.Background(), CatalogAgent{ModelKey: "missing"}, Session{Message: "hello"}, Runtime{
+			ModelResolver: ModelResolverFunc(func(context.Context, string) (model.Model, error) {
+				var missing *stubModel
+				return missing, nil
+			}),
+		})
+		if err == nil || !strings.Contains(err.Error(), `unknown zenmind model "missing"`) {
+			t.Fatalf("expected typed nil model error, got %v", err)
+		}
+	})
 	t.Run("resolver error", func(t *testing.T) {
 		_, err := BuildRun(context.Background(), CatalogAgent{ModelKey: "broken"}, Session{Message: "hello"}, Runtime{
 			ModelResolver: ModelResolverFunc(func(context.Context, string) (model.Model, error) { return nil, errors.New("offline") }),
@@ -263,6 +294,64 @@ func TestBuildRunRejectsUnknownModelAndMode(t *testing.T) {
 		_, err := BuildRun(context.Background(), CatalogAgent{Mode: "PROXY"}, Session{Message: "hello"}, Runtime{})
 		if err == nil || !strings.Contains(err.Error(), `unknown zenmind agent mode "PROXY"`) {
 			t.Fatalf("expected unknown mode error, got %v", err)
+		}
+	})
+}
+
+func TestBuildRunValidatesCatalogTools(t *testing.T) {
+	echo := tools.Must("echo", "Echo.", func(context.Context, struct{}) (string, error) {
+		return "echo", nil
+	})
+	hidden := tools.Must("hidden", "Hidden.", func(context.Context, struct{}) (string, error) {
+		return "hidden", nil
+	})
+
+	t.Run("missing", func(t *testing.T) {
+		_, err := BuildRun(context.Background(), CatalogAgent{Tools: []string{"missing"}}, Session{Message: "hello"}, runtimeWithModel())
+		if err == nil || !strings.Contains(err.Error(), `catalog tools unavailable: ["missing"]`) {
+			t.Fatalf("expected missing tool diagnostic, got %v", err)
+		}
+	})
+	t.Run("nil registry entry", func(t *testing.T) {
+		var unavailable *tools.TypedTool
+		runtime := runtimeWithModel()
+		runtime.Tools = []zenforge.Tool{unavailable}
+		_, err := BuildRun(context.Background(), CatalogAgent{Tools: []string{"echo"}}, Session{Message: "hello"}, runtime)
+		if err == nil || !strings.Contains(err.Error(), `catalog tools unavailable: ["echo"]`) {
+			t.Fatalf("expected nil tool diagnostic, got %v", err)
+		}
+	})
+	t.Run("duplicate declaration selects once", func(t *testing.T) {
+		runtime := runtimeWithModel()
+		runtime.Tools = []zenforge.Tool{echo, hidden}
+		run, err := BuildRun(context.Background(), CatalogAgent{Tools: []string{"echo", "echo"}}, Session{Message: "hello"}, runtime)
+		if err != nil {
+			t.Fatalf("BuildRun returned error: %v", err)
+		}
+		if len(run.Config.Tools) != 1 || run.Config.Tools[0] != echo {
+			t.Fatalf("selected tools = %#v, want echo once", run.Config.Tools)
+		}
+	})
+	t.Run("legacy alias", func(t *testing.T) {
+		runtime := runtimeWithModel()
+		runtime.Tools = []zenforge.Tool{echo, hidden}
+		run, err := BuildRun(context.Background(), CatalogAgent{ToolNames: []string{"hidden"}}, Session{Message: "hello"}, runtime)
+		if err != nil {
+			t.Fatalf("BuildRun returned error: %v", err)
+		}
+		if len(run.Config.Tools) != 1 || run.Config.Tools[0] != hidden {
+			t.Fatalf("selected tools = %#v, want alias-selected hidden", run.Config.Tools)
+		}
+	})
+	t.Run("explicit empty primary overrides alias", func(t *testing.T) {
+		runtime := runtimeWithModel()
+		runtime.Tools = []zenforge.Tool{echo, hidden}
+		run, err := BuildRun(context.Background(), CatalogAgent{Tools: []string{}, ToolNames: []string{"hidden"}}, Session{Message: "hello"}, runtime)
+		if err != nil {
+			t.Fatalf("BuildRun returned error: %v", err)
+		}
+		if run.Config.Tools == nil || len(run.Config.Tools) != 0 {
+			t.Fatalf("selected tools = %#v, want explicit empty list", run.Config.Tools)
 		}
 	})
 }

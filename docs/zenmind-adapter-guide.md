@@ -35,7 +35,19 @@ The adapter maps platform `key`, `modelKey`, `mode`, tools, skills, context
 tags, budget, stage settings, tool overrides, workspace/host access, request,
 chat/run identity, history, resolved prompt, and access level into
 `zenforge.Config`, `Task`, and namespaced task metadata. Unknown model keys and
-modes fail closed. Deprecated DTO aliases remain for earlier adapter callers.
+modes fail closed. A missing model, including a typed-nil model returned
+directly or by `ModelResolver`, also fails before a run is built. Deprecated DTO
+aliases remain for earlier adapter callers.
+
+Catalog tool selection preserves the platform list semantics:
+
+- an undeclared tool list exposes the runtime-provided tools;
+- an explicitly empty primary `tools` list exposes no tools and overrides the
+  legacy `toolNames` alias;
+- a non-empty declaration selects those tools once, and fails closed if any
+  declared tool is absent or a matching registry entry is nil/typed-nil;
+- `toolNames` remains a fallback only when the primary `tools` field is
+  undeclared.
 
 `Session.ResolvedPrompt` is the host-resolved execution prompt and takes
 precedence over the legacy `CatalogAgent.Instructions` fallback. The host is
