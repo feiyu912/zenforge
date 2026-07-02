@@ -32,6 +32,43 @@ Sandbox shell:
 
 ## Configuration Sketch
 
+For local Docker:
+
+```go
+sbox, err := docker.New(docker.Config{DefaultImage: "alpine:3.20"})
+if err != nil {
+    return err
+}
+root, err := filepath.Abs("./repo")
+if err != nil {
+    return err
+}
+shellTool, err := shell.New(shell.Config{
+    Policy: policy.ShellPolicy{
+        WorkingDir:      root,
+        RequireApproval: true,
+        MaxTimeout:      30 * time.Second,
+        MaxOutputBytes:  256_000,
+    },
+    Backend:       shell.ShellBackendSandbox,
+    Sandbox:       sbox,
+    EnvironmentID: "alpine:3.20",
+    Mounts: []sandbox.Mount{{
+        Source: root, Destination: "/workspace", Mode: "ro",
+    }},
+})
+```
+
+`Policy.WorkingDir` is a host path because shell policy validation happens
+before the backend call. The Docker adapter maps it through the configured
+mount to `/workspace`.
+
+The Docker defaults disable networking, use a read-only root filesystem, drop
+capabilities, enable `no-new-privileges`, and bound process count and output.
+They never fall back to host execution.
+
+For a remote Container Hub:
+
 ```go
 sbox, err := containerhub.New(containerhub.Config{
     BaseURL: "http://127.0.0.1:11960",

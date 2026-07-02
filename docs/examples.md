@@ -13,9 +13,28 @@ sandbox, through durable runs and event streaming, up to a flagship plan /
 execute / summary workflow with approval gating.
 
 !!! tip "Picking a starting point"
-    If you are new to ZenForge, read the examples in this order: `simple`,
-    `sdk-embedded`, `code-review`, then `repo-refactor`. Each one adds roughly
-    one new framework concern on top of the last.
+    To test the complete user-owned harness first, start with `harness-agent`.
+    For individual concepts, read `simple`, `sdk-embedded`, `code-review`,
+    then `repo-refactor`.
+
+---
+
+## harness-agent
+
+The full external-application shape: `provider.FromEnv()`, a typed local skill,
+numbered CLI approval, and a Docker-backed shell with a read-only workspace
+mount.
+
+```bash
+export ZENFORGE_PROVIDER=anthropic
+export ZENFORGE_MODEL=MiniMax-M3
+export ZENFORGE_API_KEY=...
+export ZENFORGE_BASE_URL=https://api.minimaxi.com/anthropic/v1
+go run ./examples/harness-agent -question "Inspect this project"
+```
+
+MiniMax is configured as an Anthropic- or OpenAI-compatible BaseURL, not as a
+third provider protocol. The credential must match the chosen endpoint.
 
 ---
 

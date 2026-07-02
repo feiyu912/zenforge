@@ -18,6 +18,8 @@ package has its own page.
   Anthropic Messages API adapter
 - [github.com/feiyu912/zenforge/model/openai](https://pkg.go.dev/github.com/feiyu912/zenforge/model/openai) —
   OpenAI Chat Completions adapter
+- [github.com/feiyu912/zenforge/model/provider](https://pkg.go.dev/github.com/feiyu912/zenforge/model/provider) —
+  strict OpenAI/Anthropic adapter construction from config or environment
 - [github.com/feiyu912/zenforge/tool](https://pkg.go.dev/github.com/feiyu912/zenforge/tool) —
   `Tool` interface, `Invoker`, middleware
 - [github.com/feiyu912/zenforge/tools](https://pkg.go.dev/github.com/feiyu912/zenforge/tools) —
@@ -30,6 +32,8 @@ package has its own page.
   SQLite-backed persistent rule grants
 - [github.com/feiyu912/zenforge/sandbox](https://pkg.go.dev/github.com/feiyu912/zenforge/sandbox) —
   `Sandbox` interface, sessions, mount types
+- [github.com/feiyu912/zenforge/sandbox/docker](https://pkg.go.dev/github.com/feiyu912/zenforge/sandbox/docker) —
+  local Docker CLI sandbox with conservative isolation defaults
 
 ## Runtime
 

@@ -24,13 +24,12 @@ Most agent frameworks target notebooks. ZenForge targets services:
 ```go
 import (
     "context"
-    "os"
 
     "github.com/feiyu912/zenforge"
     checkpointsqlite "github.com/feiyu912/zenforge/checkpoint/sqlite"
     eventlogsqlite "github.com/feiyu912/zenforge/eventlog/sqlite"
     "github.com/feiyu912/zenforge/model"
-    "github.com/feiyu912/zenforge/model/openai"
+    "github.com/feiyu912/zenforge/model/provider"
     "github.com/feiyu912/zenforge/tools"
     "github.com/feiyu912/zenforge/trace"
 )
@@ -43,6 +42,10 @@ lookup := tools.Must("lookup", "Look up internal facts.",
     })
 
 ctx := context.Background()
+modelClient, err := provider.FromEnv()
+if err != nil {
+    return err
+}
 events, err := eventlogsqlite.Open(ctx, ".zenforge/runs.db")
 if err != nil {
     return err
@@ -55,7 +58,7 @@ if err != nil {
 defer checkpoints.Close()
 
 agent := zenforge.New(zenforge.Config{
-    Model:        openai.New(openai.Config{APIKey: os.Getenv("OPENAI_API_KEY"), Model: "gpt-4.1"}),
+    Model:        modelClient,
     Instructions: "Use tools when useful and answer briefly.",
     Tools:        []zenforge.Tool{lookup},
     Events:       events,
@@ -91,6 +94,27 @@ Go 1.26 only. Both local development and CI require a Go 1.26.x toolchain;
 CI sets `GOTOOLCHAIN=local` and rejects other versions. The core uses the
 OpenTelemetry SDK, pure-Go SQLite via `modernc.org/sqlite` (no cgo), and
 `mvdan.cc/sh/v3` for structural shell safety analysis.
+
+## Run The Complete Harness Example
+
+The application owns the selected model, tools, approval broker, and sandbox.
+ZenForge supplies public adapters so the assembly stays small:
+
+```bash
+export ZENFORGE_PROVIDER=anthropic
+export ZENFORGE_MODEL=MiniMax-M3
+export ZENFORGE_API_KEY=...
+export ZENFORGE_BASE_URL=https://api.minimaxi.com/anthropic/v1
+
+go run ./examples/harness-agent -question \
+  "Use the local tool, inspect this project, and prove the shell runs in Docker."
+```
+
+Choose `openai` or `anthropic` according to the endpoint protocol. MiniMax and
+other compatible vendors are BaseURL configurations, not additional ZenForge
+provider types. The key must belong to the selected endpoint. This example uses
+a typed local tool, numbered HITL approval, and the built-in Docker sandbox
+with a read-only workspace mount.
 
 ## CLI
 
@@ -168,6 +192,8 @@ new core provider names.
 
 **Models**
 - OpenAI-compatible and Anthropic adapters.
+- Environment factory for `ZENFORGE_*`, `OPENAI_*`, or `ANTHROPIC_*`
+  configuration.
 - Streaming text and tool calls.
 
 **Tools**
@@ -256,8 +282,10 @@ Neither writer implements complete Chat Storage V3.1.
 **Sandbox**
 - Local shell tools execute directly in the configured workspace; they are not
   a `sandbox.Sandbox` backend.
-- `sandbox/fake` provides a test backend, and `sandbox/containerhub` provides an
-  optional beta Container Hub backend.
+- `sandbox/docker` provides a local Docker backend with a read-only root
+  filesystem, no network by default, bounded output, and no host fallback.
+- `sandbox/fake` provides a test backend, and `sandbox/containerhub` provides
+  an optional beta Container Hub backend.
 - Scoped `sandbox.State` helpers for same-run/subtask session continuity.
 - Closed or cross-scope sessions are never written back as reusable checkpoint state.
 
@@ -270,6 +298,7 @@ embedded example runs locally without an API key; provider-backed examples need
 | Example | What it shows |
 | --- | --- |
 | [`sdk-embedded-agent`](examples/sdk-embedded-agent) | Embed ZenForge in a Go service; runs without an API key. |
+| [`harness-agent`](examples/harness-agent) | Env provider + typed skill + HITL + Docker sandbox. |
 | [`simple-tool-agent`](examples/simple-tool-agent) | Minimal model + tool loop. |
 | [`code-review-agent`](examples/code-review-agent) | Workspace + shell with approval. |
 | [`repo-refactor-agent`](examples/repo-refactor-agent) | Long task with checkpoints and resume. |

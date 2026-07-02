@@ -3,6 +3,38 @@
 ZenForge keeps provider protocol handling inside model adapters. The harness
 uses the provider-neutral `model.Model` interface.
 
+## Environment Factory
+
+For an application-owned model selected entirely through environment variables:
+
+```bash
+export ZENFORGE_PROVIDER=openai # or anthropic
+export ZENFORGE_MODEL=your-model
+export ZENFORGE_API_KEY=...
+export ZENFORGE_BASE_URL=https://provider.example/v1
+```
+
+```go
+modelClient, err := provider.FromEnv()
+```
+
+Only `openai` and `anthropic` are valid protocols. Compatible vendors such as
+MiniMax use one of those protocols plus `ZENFORGE_BASE_URL`; the key must match
+that endpoint.
+
+Applications that already choose a protocol can use its native variables:
+
+```go
+modelClient, err := provider.FromEnv(provider.Config{
+    Protocol: provider.Anthropic,
+})
+```
+
+This reads `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, and
+`ANTHROPIC_BASE_URL`. The OpenAI equivalent reads `OPENAI_*`. Explicit config
+values, custom environment names, and a custom environment prefix are also
+supported.
+
 ## OpenAI-Compatible
 
 ```go

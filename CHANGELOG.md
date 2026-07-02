@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Added
+
+- Environment-based application model construction through `model/provider`,
+  limited to OpenAI and Anthropic protocols with compatible custom base URLs.
+- A built-in Docker sandbox with bounded execution, secure defaults, mounted
+  workspace path mapping, and checkpoint-safe session restoration.
+- A complete `examples/harness-agent` app and an independent consumer module
+  covering typed tools, HITL approval, and Docker-backed shell execution.
+- CI gates for race detection, vet, the independent consumer module, and a
+  real Docker integration test.
+
 ### Integration Status
 
 - `agent-platform` branch `codex/zenforge-engine-bridge` at `82ca4d3` now

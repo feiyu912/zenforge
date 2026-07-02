@@ -23,8 +23,7 @@ import (
 	eventlogsqlite "github.com/feiyu912/zenforge/eventlog/sqlite"
 	"github.com/feiyu912/zenforge/harness"
 	"github.com/feiyu912/zenforge/model"
-	"github.com/feiyu912/zenforge/model/anthropic"
-	"github.com/feiyu912/zenforge/model/openai"
+	"github.com/feiyu912/zenforge/model/provider"
 	"github.com/feiyu912/zenforge/policy"
 	"github.com/feiyu912/zenforge/tool"
 	shelltool "github.com/feiyu912/zenforge/tools/shell"
@@ -569,26 +568,12 @@ func workspaceFilePolicy(opts options) policy.FilePolicy {
 }
 
 func buildModel(opts options) (model.Model, error) {
-	apiKey := os.Getenv(opts.apiKeyEnv)
-	if apiKey == "" {
-		return nil, fmt.Errorf("%s is not set", opts.apiKeyEnv)
-	}
-	switch strings.ToLower(opts.provider) {
-	case "", "openai":
-		return openai.New(openai.Config{
-			APIKey:  apiKey,
-			Model:   opts.model,
-			BaseURL: opts.baseURL,
-		}), nil
-	case "anthropic":
-		return anthropic.New(anthropic.Config{
-			APIKey:  apiKey,
-			Model:   opts.model,
-			BaseURL: opts.baseURL,
-		}), nil
-	default:
-		return nil, fmt.Errorf("unknown model provider: %s", opts.provider)
-	}
+	return provider.FromEnv(provider.Config{
+		Protocol:  opts.provider,
+		Model:     opts.model,
+		BaseURL:   opts.baseURL,
+		APIKeyEnv: opts.apiKeyEnv,
+	})
 }
 
 type runSummary struct {

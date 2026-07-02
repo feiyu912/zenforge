@@ -33,10 +33,67 @@ jobs:
           esac
 
       - name: Run all tests
-        run: go test ./...
+        run: go test -race ./...
+
+      - name: Run vet
+        run: go vet ./...
 
       - name: Verify examples compile
         run: go test ./examples/...
 
       - name: Verify platform boundary
         run: go test ./docs/...
+
+  consumer:
+    name: External module
+    runs-on: ubuntu-latest
+    env:
+      GOTOOLCHAIN: local
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go 1.26
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.26.x
+          cache-dependency-path: integration/consumer/go.sum
+
+      - name: Verify external module is tidy
+        working-directory: integration/consumer
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
+      - name: Test external module
+        working-directory: integration/consumer
+        run: go test -race ./...
+
+      - name: Vet external module
+        working-directory: integration/consumer
+        run: go vet ./...
+
+  docker:
+    name: Docker integration
+    runs-on: ubuntu-latest
+    env:
+      GOTOOLCHAIN: local
+      ZENFORGE_DOCKER_INTEGRATION: "1"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go 1.26
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.26.x
+          cache-dependency-path: integration/consumer/go.sum
+
+      - name: Prepare Docker
+        run: |
+          docker info
+          docker pull alpine:3.20
+
+      - name: Run Docker consumer integration
+        working-directory: integration/consumer
+        run: go test -run '^TestDockerAdapterRunsInsideContainerWithWorkspaceMount$' -v

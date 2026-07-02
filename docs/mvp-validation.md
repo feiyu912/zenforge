@@ -11,6 +11,12 @@ are not implied by this status.
 ```bash
 env GOTOOLCHAIN=local go test ./...
 env GOTOOLCHAIN=local go test ./examples/...
+(cd integration/consumer && env GOTOOLCHAIN=local go test -race ./...)
+(
+  cd integration/consumer &&
+  ZENFORGE_DOCKER_INTEGRATION=1 env GOTOOLCHAIN=local \
+    go test -run '^TestDockerAdapterRunsInsideContainerWithWorkspaceMount$' -v
+)
 rg -n '"[^"[:space:]]*agent-platform[^"[:space:]]*"' --glob "*.go" .
 ```
 
@@ -41,6 +47,7 @@ rg -n '"[^"[:space:]]*agent-platform[^"[:space:]]*"' --glob "*.go" .
 | trace sink failures remain best-effort | `TestAgentTreatsTraceSinkFailureAsBestEffort` |
 | OpenAI-compatible model can stream text | `model/openai.TestClientStreamsTextAndSendsChatRequest` |
 | Anthropic model can stream text and tool calls | `model/anthropic.TestClientStreamsTextAndSendsMessagesRequest`, `model/anthropic.TestClientStreamsToolUse` |
+| applications can construct either supported protocol from environment variables | `model/provider` tests, `TestOpenAIEnvProviderRunsTypedAndApprovedSandboxTools`, and `TestAnthropicEnvProviderFactory` |
 | Model tool calls invoke tools | `TestAgentStreamRunsToolAndContinuesModelLoop` |
 | Checkpoints written at boundaries | `TestAgentStreamRunsToolAndContinuesModelLoop`, `checkpoint.TestCheckpointJSONRoundTripAndValidate`, memory/JSONL/SQLite `TestStoreSaveLoadDelete` |
 | Resume works for supported boundaries | `TestAgentResumeCompletedDoesNotCallModelAgain`, `TestAgentResumeActiveToolRetriesTool`, `TestAgentResumeActiveToolFromJSONLCheckpoint`, `TestAgentResumeWaitingApprovalUsesBroker` |
@@ -63,6 +70,9 @@ rg -n '"[^"[:space:]]*agent-platform[^"[:space:]]*"' --glob "*.go" .
 | sandbox sessions cannot restore across run/subtask scope | `sandbox.TestSessionFromStateRejectsDifferentRunOrSubtask`, `tools/shell.TestShellDoesNotRestoreSandboxSessionAcrossRunScope` |
 | closed sandbox sessions clear checkpoint state and close is best-effort | `tools/shell.TestShellRoutesCommandToSandboxBackend`, `tools/shell.TestShellSandboxCloseIsBestEffort`, `TestApplySandboxResultStateClearsClosedSession` |
 | sandbox shell failures expose structured error codes | `tools/shell.TestShellSandboxUnavailableDoesNotFallback`, `tools/shell.TestShellSandboxTimeoutIncludesStructuredErrorCode` |
+| built-in Docker sandbox isolates commands, maps mounted host paths, bounds output, and restores labeled sessions | `sandbox/docker` package tests |
+| a separate Go module can run the harness with a typed tool, HITL, and a sandbox-backed shell | `TestOpenAIEnvProviderRunsTypedAndApprovedSandboxTools` under `integration/consumer` |
+| the built-in Docker adapter runs in a real Linux container with a read-only workspace mount | `TestDockerAdapterRunsInsideContainerWithWorkspaceMount` under `integration/consumer` when `ZENFORGE_DOCKER_INTEGRATION=1` |
 | Container Hub failures, deadlines, and cancellation map predictably | `sandbox/containerhub.TestClientMapsHTTPFailuresToSandboxCodes`, `sandbox/containerhub.TestClientMapsTransportCancellationAndTimeout` |
 | Container Hub response bodies are bounded | `sandbox/containerhub.TestClientRejectsOversizedSuccessResponses` |
 | JSONL checkpoint saves recover pending transactions and reject unsafe run IDs | `checkpoint/jsonl.TestStoreLoadRecoversPendingCheckpointWithoutRetryingSave`, `checkpoint/jsonl.TestStoreRejectsUnsafeRunIDs` |

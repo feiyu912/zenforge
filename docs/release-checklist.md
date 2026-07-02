@@ -8,6 +8,8 @@ Use this checklist before tagging an MVP or V0.1 release.
 env GOTOOLCHAIN=local go test ./...
 env GOTOOLCHAIN=local go test ./docs/... ./cli ./adapters/zenmind
 env GOTOOLCHAIN=local go test ./examples/...
+(cd integration/consumer && env GOTOOLCHAIN=local go test -race ./... && env GOTOOLCHAIN=local go vet ./...)
+(cd integration/consumer && ZENFORGE_DOCKER_INTEGRATION=1 env GOTOOLCHAIN=local go test -run '^TestDockerAdapterRunsInsideContainerWithWorkspaceMount$' -v)
 rg -n '"[^"[:space:]]*agent-platform[^"[:space:]]*"' --glob "*.go" .
 ```
 
@@ -15,6 +17,9 @@ Expected results:
 
 - all tests pass;
 - examples compile;
+- the independent consumer module passes its model/tool/HITL/sandbox contract;
+- the gated Docker test proves commands execute in Linux with the mounted
+  workspace;
 - local Markdown doc links resolve through `docs.TestMarkdownLinksResolve`;
 - platform-boundary search returns no platform module import strings;
   `adapters/zenmind` comments and fixtures may retain protocol provenance.

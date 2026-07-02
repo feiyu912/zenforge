@@ -64,10 +64,10 @@ V0.2 Production hardening
 | --- | --- |
 | S0-S6 | Implemented and covered by the package tests mapped in `docs/mvp-validation.md`. |
 | S7 | Implemented for runtime subtask streaming, bounded parallel execution, child checkpoint resume, and default-denied nesting; see the named sub-agent tests in `docs/mvp-validation.md`. |
-| S8 | The direct local shell path, fake sandbox backend, and Container Hub beta adapter are contract-tested; Hub transport tests use local HTTP servers. A real Container Hub service has not been exercised and remains external acceptance. |
-| MVP | Repository-scoped acceptance is implemented and test-mapped. Provider-backed examples and deployment integration remain environment-dependent smoke tests. |
+| S8 | The built-in Docker sandbox, fake sandbox backend, and Container Hub beta adapter are contract-tested. A gated real-Docker consumer test verifies Linux execution and a read-only workspace mount; a real Container Hub service remains external acceptance. |
+| MVP | Repository-scoped acceptance is implemented and test-mapped. The complete `examples/harness-agent` app and independent `integration/consumer` module cover environment-owned models, typed tools, HITL, and Docker-backed shell execution. Live provider credentials remain an application-owned smoke test. |
 | V0.1 | `v0.1.0` was tagged. Repository wire goldens cover the ZenMind DTO/projector/approval/event-line boundary at `agent-platform@1893edb5`. The downstream engine bridge, feature-flag selector, HTTP/SSE/WS, approval, attach, and fallback integration is implemented and tested on `agent-platform` branch `codex/zenforge-engine-bridge@82ca4d3`, but is not yet merged to platform `main`. |
-| V0.2 | Repository hardening is implemented for SQLite soak coverage, Go 1.26-only CI, JSONL crash/concurrency safety, typed tools, bounded shell/Hub responses, fail-closed checkpoint/ZenMind adapter loading, optional cross-run persistent rule authorization, durable model-attempt replacement, and replay-to-live SSE. Remaining work is external acceptance. This roadmap stage is not declared complete. |
+| V0.2 | Repository hardening is implemented for SQLite soak coverage, Go 1.26-only CI, JSONL crash/concurrency safety, typed tools, bounded shell/Hub/Docker responses, fail-closed checkpoint/ZenMind adapter loading, optional cross-run persistent rule authorization, durable model-attempt replacement, replay-to-live SSE, and independent consumer CI. Remaining work is external acceptance. This roadmap stage is not declared complete. |
 
 Completion in this table distinguishes ZenForge repository tests from tests on
 the named downstream integration branch. It does not claim merge to

@@ -228,9 +228,8 @@ sandbox. The app owns all four pieces; the harness owns the loop.
 
 | File | Purpose |
 |---|---|
-| `main.go` | CLI flags, env loader, agent assembly, scripted model |
+| `main.go` | CLI flags, env loader, agent assembly, tools, and built-in Docker adapter wiring |
 | `env.go` | Minimal `.env` parser |
-| `docker_sandbox.go` | `DockerSandbox` adapter that shells out to `docker run` |
 | `main_test.go` | One end-to-end test of the scripted agent |
 | `go.mod` / `go.sum` | Module declaration, depends on `github.com/feiyu912/zenforge` |
 | `.env.example` | Template; copy to `.env` and fill in your key |
@@ -391,33 +390,24 @@ for reference implementations.
 
 ### 7.1 What the broker does
 
-Every tool call routes through `approval.Broker.Resolve(...)`. The broker
-returns an `approval.Decision` of one of:
-
-- `allow` — proceed.
-- `deny` — refuse and surface the reason to the model.
-- `prompt` — block until a human answers, then `allow` or `deny`.
+Tool calls that produce an approval plan route through
+`approval.Broker.Request(...)`. The broker returns an
+`approval.Decision` whose action is `approve`, `reject`, or `abort`.
+The broker itself may block while a human decides; `prompt` is not a decision
+action.
 
 ### 7.2 `auto` mode
 
-`approval.AlwaysAllow()` returns `allow` for every request. This is the
-default and is appropriate for trusted code, CI, and offline scripted
-runs.
+`approval.AlwaysAllow()` returns an `approve` decision for every valid request.
+Applications must opt into this behavior explicitly. It is appropriate for
+trusted code, CI, and offline scripted runs.
 
 ### 7.3 `prompt` mode
 
-`approvalcli.New(os.Stdin, os.Stderr)` reads a one-line `y/n` from the
-terminal and writes a brief audit log. It **requires a real TTY** — if
-stdin is not a character device, the app prints a warning and falls back
-to `auto` for that run. The detection lives in `stdinInteractive`.
-
-```go
-info, err := os.Stdin.Stat()
-return err == nil && (info.Mode()&os.ModeCharDevice) != 0
-```
-
-This is the right behavior for CI: never hang waiting for a human in a
-non-interactive shell.
+`approvalcli.New(os.Stdin, os.Stderr)` prints the request's numbered decision
+options and reads one number from stdin. The broker does not detect TTYs and
+does not silently approve when input is non-interactive. A CLI application may
+choose a different broker for CI, but that policy belongs to the application.
 
 ### 7.4 Where the policy comes from
 
@@ -433,10 +423,11 @@ policy.ShellPolicy{
 }
 ```
 
-`AllowCommands` is a whitelist, `RequireApproval` makes every invocation
-go through the broker, and the timeouts are enforced inside the sandbox.
-You can change the whitelist to broaden or tighten the surface — for
-example, `[]string{"go version", "go test ./..."}` to allow tests.
+`AllowCommands` is a whitelist. Commands accepted by the whitelist can run
+without approval; other commands that the structural safety policy classifies
+as reviewable produce an approval request when `RequireApproval` is true.
+Commands classified as blocked cannot be approved through the broker.
+Timeouts are enforced by the shell tool and its selected backend.
 
 ---
 
@@ -455,7 +446,7 @@ mount, on a clean filesystem.
 shelltool.New(shelltool.Config{
     Policy:        p,
     Backend:       shelltool.ShellBackendSandbox,
-    Sandbox:       DockerSandbox{Image: opts.Image},
+    Sandbox:       dockerBackend,
     EnvironmentID: opts.Image,
     Mounts: []sandbox.Mount{
         {Source: mustAbs(opts.Workspace), Destination: "/workspace", Mode: "rw"},
@@ -463,46 +454,35 @@ shelltool.New(shelltool.Config{
 })
 ```
 
-The shell tool calls into the sandbox abstraction. `Sandbox` is an
-interface; `DockerSandbox` is one implementation. The same tool works
-against any other sandbox backend that implements the interface.
+Construct `dockerBackend` with `docker.New(docker.Config{DefaultImage:
+opts.Image})`. The shell tool calls the public `sandbox.Sandbox` interface, so
+the same tool also works with another backend.
 
-### 8.3 What `DockerSandbox` does
+### 8.3 What the Docker adapter does
 
-`Open` (`docker_sandbox.go:21`) returns a `*sandbox.Session` describing
-the image, working directory, and mount metadata. It does **not** start
-a container — that happens lazily on the first `Execute` call.
-
-`Execute` (`docker_sandbox.go:41`) builds a `docker run --rm` command:
+`Open` creates and starts a scoped container. By default the adapter disables
+networking, uses a read-only root filesystem and `/tmp` tmpfs, drops
+capabilities, enables `no-new-privileges`, and limits process count.
 
 ```bash
-docker run --rm \
-  -v <workspace>:/workspace:rw \
-  -w <container-cwd> \
-  <image> \
-  sh -lc <command>
+docker create --name <scoped-name> ... <image> tail -f /dev/null
+docker start <scoped-name>
+docker exec --workdir <container-cwd> <scoped-name> /bin/sh -lc <command>
 ```
 
-It honors the request's timeout via `context.WithTimeout`, captures
-stdout/stderr, and maps `context.DeadlineExceeded` to the sentinel
-`sandbox.ErrTimeout` with exit code 124 (the conventional `timeout(1)`
-code). The image is taken from the session's `EnvironmentID`, falling
-back to the configured `Image` field, and finally to `alpine:3.20`.
+`Execute` bounds captured output and maps timeouts to `sandbox.ErrTimeout`
+with exit code 124. `Close` removes the container. Checkpoint-restored sessions
+are verified against Docker ownership labels before reuse; an unavailable
+backend never falls back to host execution.
 
-`Close` is a no-op. Each `docker run --rm` is its own ephemeral
-container, so there is no long-lived process to terminate.
-
-### 8.4 `containerCWD` — mapping host paths to the container
+### 8.4 Mapping host paths to the container
 
 When the shell tool runs in a subdirectory of the mounted workspace, we
 need to translate the host path to the corresponding path inside the
-container. `containerCWD` walks the configured mounts in order, takes
+container. The adapter walks the configured mounts in order, takes
 the `filepath.Rel` of the host CWD against the mount source, and joins
 that relative path onto the mount destination. If no mount matches, it
-falls back to `/workspace`.
-
-`mustAbs` resolves symlinks via `filepath.EvalSymlinks` so the docker
-`-v` flag receives a real path.
+falls back to the session working directory.
 
 ### 8.5 Disabling the sandbox
 
@@ -774,7 +754,7 @@ Returns true iff stdin is a character device (a TTY), detected via
 
 Builds the shell tool. Always sets `RequireApproval: true` so the
 broker is exercised. With `opts.Docker == false`, uses the local
-backend. With `opts.Docker == true`, uses the `DockerSandbox` and
+backend. With `opts.Docker == true`, uses the built-in Docker adapter and
 mounts `opts.Workspace` at `/workspace`. `AllowCommands` is the
 sandbox policy's whitelist — keep it tight.
 
@@ -825,61 +805,13 @@ There is no support for `export FOO=bar`, multi-line values, or
 variable interpolation. That's intentional: keep it small enough to
 audit in a few seconds.
 
-### 11.3 `docker_sandbox.go`
+### 11.3 `sandbox/docker`
 
-#### `type DockerSandbox struct{ Image string }` — docker_sandbox.go:17
-
-The configured image. `Open` and `Execute` both fall back to
-`"alpine:3.20"` if `Image` is empty.
-
-#### `func (d DockerSandbox) Open(ctx, req) (*sandbox.Session, error)` — docker_sandbox.go:21
-
-Returns a session describing the environment. Does not start a
-container. The session ID is `sandbox.SessionKey(req.RunID,
-req.SubtaskID)`, the working directory is `/workspace`, and the
-mounts are serialized into `session.Metadata["mounts"]` for later
-reconstruction by `Execute`.
-
-#### `func (d DockerSandbox) Execute(ctx, session, req) (sandbox.ExecuteResult, error)` — docker_sandbox.go:41
-
-Builds and runs the `docker run --rm` command (see §8.3). Captures
-stdout and stderr separately. Maps `context.DeadlineExceeded` to
-`sandbox.ErrTimeout` with exit code 124. Returns the image name in
-`Metadata["image"]` for trace logging.
-
-#### `func (d DockerSandbox) Close(ctx, session) error` — docker_sandbox.go:98
-
-A no-op. `docker run --rm` removes the container on exit, so there is
-nothing to clean up.
-
-#### `func mountsState(mounts []sandbox.Mount) []map[string]string` — docker_sandbox.go:102
-
-Serializes a `[]sandbox.Mount` into a `[]map[string]string` suitable
-for storing in `session.Metadata`. Three keys per mount: `source`,
-`destination`, `mode`.
-
-#### `func mountsFromState(value any) []sandbox.Mount` — docker_sandbox.go:114
-
-Inverse of `mountsState`. Type-asserts via `value.([]map[string]string)`
-and rebuilds the `[]sandbox.Mount`. A type mismatch yields an empty
-slice — the error is intentionally swallowed because the only
-producer of this state is the same package.
-
-#### `func containerCWD(hostCWD string, mounts []sandbox.Mount) string` — docker_sandbox.go:127
-
-Maps a host CWD to a container CWD by walking the mounts in order and
-taking `filepath.Rel` against the mount source. The first mount whose
-relative path doesn't escape (`..` or `../*`) wins. Falls back to
-`/workspace` if no mount matches.
-
-#### `func mustAbs(path string) string` — docker_sandbox.go:142
-
-Returns an absolute, symlink-resolved path. Tries `EvalSymlinks` first
-(so paths inside a directory whose root is a symlink still resolve to
-the real path), then falls back to `filepath.Abs` if symlink
-resolution fails, and finally to the original `path` if `Stat` also
-fails. The `must` prefix is conventional for "this shouldn't fail, but
-if it does, here's a safe default" — there's no panic.
+`docker.New(docker.Config{...})` returns the built-in adapter. Its public
+configuration covers the Docker CLI path, default image and working directory,
+timeout, output bound, network mode, root filesystem mode, process limit, and
+an injectable runner for tests. Applications should use this package rather
+than copying a Docker wrapper into each project.
 
 ### 11.4 `main_test.go`
 
@@ -945,12 +877,12 @@ it only translates `Request`/`Response`/`Event`.
 ### 13.3 Add a new sandbox backend
 
 Implement `sandbox.Sandbox` with `Open`, `Execute`, `Close`. Swap
-`DockerSandbox` in `shellTool` for your type. The shell tool does the
+the `sandbox/docker` adapter in `shellTool` for your type. The shell tool does the
 rest.
 
 ### 13.4 Add a new approval policy
 
-Implement `approval.Broker.Resolve`. The shell tool's `RequireApproval`
+Implement `approval.Broker.Request`. The shell tool's `RequireApproval`
 setting determines whether the broker is called for a given tool call.
 
 ---
