@@ -22,7 +22,7 @@ func TestDockerAdapterRunsInsideContainerWithWorkspaceMount(t *testing.T) {
 	}
 
 	hostWorkspace := t.TempDir()
-	if err := os.WriteFile(filepath.Join(hostWorkspace, "consumer-marker.txt"), []byte("mounted-from-host\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(hostWorkspace, "consumer-marker.txt"), []byte("mounted-from-host\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	adapter, err := docker.New(docker.Config{
