@@ -25,17 +25,52 @@ import (
 
 // Agent is the high-level batteries-included runtime entrypoint.
 type Agent struct {
-	config Config
-	todos  planner.Manager
+	config             Config
+	todos              planner.Manager
+	skillCatalogPrompt string
+	configErr          error
 }
 
 // New creates an Agent with the provided runtime configuration.
 func New(config Config) *Agent {
+	config = cloneConfig(config)
+	var configErr error
+	var skillCatalogPrompt string
+	if config.Skills != nil {
+		loadSkill := config.Skills.LoadSkillTool()
+		if loadSkill == nil {
+			configErr = fmt.Errorf("configure skills: load_skill tool is nil")
+		} else {
+			for _, current := range config.Tools {
+				if current != nil && strings.EqualFold(strings.TrimSpace(current.Name()), strings.TrimSpace(loadSkill.Name())) {
+					configErr = fmt.Errorf("configure skills: tool name %q conflicts with the skill loader", loadSkill.Name())
+					break
+				}
+			}
+			if configErr == nil {
+				config.Tools = append(config.Tools, loadSkill)
+				skillCatalogPrompt = config.Skills.CatalogPrompt()
+			}
+		}
+	}
 	todos := config.Todos
 	if todos == nil && (config.Planning == PlanningEnabled || agentModeForConfig(config) == ModePlanExecute) {
 		todos = planner.NewMemoryManager(planner.MemoryConfig{})
 	}
-	return &Agent{config: config, todos: todos}
+	return &Agent{
+		config:             config,
+		todos:              todos,
+		skillCatalogPrompt: skillCatalogPrompt,
+		configErr:          configErr,
+	}
+}
+
+func cloneConfig(config Config) Config {
+	config.Tools = append([]tool.Tool(nil), config.Tools...)
+	config.ToolRuntime = append([]tool.Middleware(nil), config.ToolRuntime...)
+	config.ToolArgumentRedaction = append([]string(nil), config.ToolArgumentRedaction...)
+	config.SubAgentSpecs = append([]subagent.SubAgentSpec(nil), config.SubAgentSpecs...)
+	return config
 }
 
 // Run executes a task and returns the final result.
@@ -77,6 +112,9 @@ func (a *Agent) Run(ctx context.Context, task Task) (*Result, error) {
 
 // Stream executes a task and returns a stream of runtime events.
 func (a *Agent) Stream(ctx context.Context, task Task) (<-chan Event, error) {
+	if a.configErr != nil {
+		return nil, a.configErr
+	}
 	runID := task.RunID
 	if runID == "" {
 		runID = newRunID()
@@ -109,6 +147,9 @@ func (a *Agent) Stream(ctx context.Context, task Task) (<-chan Event, error) {
 
 // Resume resumes a run from the configured checkpoint store.
 func (a *Agent) Resume(ctx context.Context, runID string) (<-chan Event, error) {
+	if a.configErr != nil {
+		return nil, a.configErr
+	}
 	if a.config.Checkpoints == nil {
 		return nil, fmt.Errorf("checkpoint store is not configured")
 	}
@@ -124,6 +165,9 @@ func (a *Agent) Resume(ctx context.Context, runID string) (<-chan Event, error) 
 	}
 	if cp.RunID != runID {
 		return nil, fmt.Errorf("checkpoint runId %q does not match requested runId %q", cp.RunID, runID)
+	}
+	if err := a.validateCheckpointSkills(cp.State); err != nil {
+		return nil, err
 	}
 	events := make(chan Event, 32)
 	go func() {
@@ -638,7 +682,7 @@ func (a *Agent) runHarnessLoop(ctx context.Context, out chan<- Event, state harn
 		if checkpointCtx.Err() != nil {
 			saveCtx = context.WithoutCancel(checkpointCtx)
 		}
-		cp := newCheckpoint(current, checkpointSeq+1)
+		cp := a.newCheckpoint(current, checkpointSeq+1)
 		if err := a.saveCheckpoint(saveCtx, cp); err != nil {
 			return fmt.Errorf("save checkpoint: %w", err)
 		}
@@ -714,6 +758,40 @@ func newCheckpoint(state harness.RunState, seq int64) checkpoint.Checkpoint {
 	}
 }
 
+const skillFingerprintMetaKey = "zenforge.skills.fingerprint"
+
+func (a *Agent) newCheckpoint(state harness.RunState, seq int64) checkpoint.Checkpoint {
+	state.Meta = cloneMap(state.Meta)
+	if a.config.Skills != nil {
+		if state.Meta == nil {
+			state.Meta = map[string]any{}
+		}
+		state.Meta[skillFingerprintMetaKey] = a.config.Skills.Fingerprint()
+	} else {
+		delete(state.Meta, skillFingerprintMetaKey)
+	}
+	return newCheckpoint(state, seq)
+}
+
+func (a *Agent) validateCheckpointSkills(state harness.RunState) error {
+	rawFingerprint, checkpointHasSkills := state.Meta[skillFingerprintMetaKey]
+	checkpointFingerprint, validFingerprint := rawFingerprint.(string)
+	if checkpointHasSkills && (!validFingerprint || checkpointFingerprint == "") {
+		return fmt.Errorf("resume rejected: checkpoint skills bundle fingerprint is invalid")
+	}
+	currentHasSkills := a.config.Skills != nil
+	switch {
+	case checkpointHasSkills && !currentHasSkills:
+		return fmt.Errorf("resume rejected: checkpoint requires skills bundle %q, but Config.Skills is not configured", checkpointFingerprint)
+	case !checkpointHasSkills && currentHasSkills:
+		return fmt.Errorf("resume rejected: checkpoint has no skills bundle, but Config.Skills is configured with %q", a.config.Skills.Fingerprint())
+	case checkpointHasSkills && checkpointFingerprint != a.config.Skills.Fingerprint():
+		return fmt.Errorf("resume rejected: skills bundle fingerprint changed: checkpoint=%q current=%q", checkpointFingerprint, a.config.Skills.Fingerprint())
+	default:
+		return nil
+	}
+}
+
 func checkpointCreatedPayload(cp checkpoint.Checkpoint) map[string]any {
 	return map[string]any{
 		"checkpointSeq": cp.Seq,
@@ -742,7 +820,7 @@ func (a *Agent) saveCheckpointAfterLatest(ctx context.Context, state harness.Run
 	if err != nil {
 		return checkpoint.Checkpoint{}, err
 	}
-	cp := newCheckpoint(state, latest+1)
+	cp := a.newCheckpoint(state, latest+1)
 	if err := a.saveCheckpoint(saveCtx, cp); err != nil {
 		return checkpoint.Checkpoint{}, err
 	}
@@ -1211,7 +1289,7 @@ func (a *Agent) runPendingTools(ctx context.Context, emit eventEmitter, checkpoi
 		}
 		state.Messages = append(state.Messages, harness.MessageState{
 			Role:       "tool",
-			Content:    toolResultContent(result),
+			Content:    a.toolResultContent(call.Name, result),
 			ToolCallID: call.ID,
 			Name:       call.Name,
 		})
@@ -1798,6 +1876,7 @@ func (a *Agent) runChildSubAgent(ctx context.Context, spec subagent.SubAgentSpec
 		childMeta = mergeMetadata(childMeta, req.Context)
 	}
 	childMeta = mergeMetadata(childMeta, spec.Metadata)
+	delete(childMeta, skillFingerprintMetaKey)
 	if len(task.Files) > 0 {
 		childMeta["subagent.files"] = append([]string(nil), task.Files...)
 	}
@@ -2096,9 +2175,12 @@ func sandboxStateCleared(metadata map[string]any) bool {
 }
 
 func (a *Agent) modelMessages(state harness.RunState) []model.Message {
-	messages := make([]model.Message, 0, len(state.Messages)+1)
+	messages := make([]model.Message, 0, len(state.Messages)+2)
 	if a.config.Instructions != "" {
 		messages = append(messages, model.Message{Role: "system", Content: a.config.Instructions})
+	}
+	if a.skillCatalogPrompt != "" {
+		messages = append(messages, model.Message{Role: "system", Content: a.skillCatalogPrompt})
 	}
 	for _, message := range state.Messages {
 		messages = append(messages, model.Message{
@@ -2236,6 +2318,20 @@ func toolResultContent(result tool.Result) string {
 	data, err := json.Marshal(result.Structured)
 	if err != nil {
 		return ""
+	}
+	return string(data)
+}
+
+func (a *Agent) toolResultContent(toolName string, result tool.Result) string {
+	if a.config.Skills == nil || !strings.EqualFold(strings.TrimSpace(toolName), "load_skill") ||
+		result.Error != "" || result.Output == "" || len(result.Structured) == 0 {
+		return toolResultContent(result)
+	}
+	content := cloneMap(result.Structured)
+	content["instructions"] = result.Output
+	data, err := json.Marshal(content)
+	if err != nil {
+		return toolResultContent(result)
 	}
 	return string(data)
 }

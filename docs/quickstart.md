@@ -104,7 +104,8 @@ go run ./cmd/zenforge run --approve never "Run useful checks"
 ```bash
 go run ./examples/sdk-embedded-agent
 ZENFORGE_PROVIDER=openai ZENFORGE_MODEL=... ZENFORGE_API_KEY=... \
-  go run ./examples/harness-agent -question "Inspect this project"
+  go run ./examples/harness-agent -skill-root examples/harness-agent/skills \
+    -question "Inspect this project"
 OPENAI_API_KEY=... go run ./examples/simple-tool-agent
 OPENAI_API_KEY=... go run ./examples/repo-refactor-agent
 OPENAI_API_KEY=... go run ./examples/code-review-agent
@@ -112,7 +113,30 @@ OPENAI_API_KEY=... go run ./examples/code-review-agent
 
 The SDK embedded example uses a local scripted model and runs without an API
 key. `harness-agent` combines an environment-selected OpenAI- or
-Anthropic-compatible provider with a typed local tool, HITL, and Docker.
+Anthropic-compatible provider with a filesystem Agent Skill, an ordinary typed
+tool, HITL, and Docker. `ZENFORGE_SKILL_ROOT` can replace `-skill-root`.
+
+For an external Go application, the complete Agent Skills assembly is:
+
+```go
+catalog, err := skillfs.New("./skills", skillfs.Options{Source: "my-app"})
+if err != nil {
+    return err
+}
+bundle, err := skill.NewBundle(ctx, catalog, nil)
+if err != nil {
+    return err
+}
+agent := zenforge.New(zenforge.Config{
+    Model:  modelClient,
+    Skills: bundle,
+    Tools:  []zenforge.Tool{myTypedTool},
+})
+```
+
+The initial request advertises only each skill's name and description.
+`load_skill` discloses the matching `SKILL.md` body on demand. `myTypedTool`
+remains a normal callable tool; registering it does not create a skill.
 
 Examples honor:
 

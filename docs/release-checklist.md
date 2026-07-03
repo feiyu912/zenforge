@@ -18,6 +18,8 @@ Expected results:
 - all tests pass;
 - examples compile;
 - the independent consumer module passes its model/tool/HITL/sandbox contract;
+- the independent consumer proves descriptor-only first context, `load_skill`
+  body/digest/safe provenance, then typed tool/HITL/sandbox continuation;
 - the gated Docker test proves commands execute in Linux with the mounted
   workspace;
 - local Markdown doc links resolve through `docs.TestMarkdownLinksResolve`;
@@ -66,11 +68,16 @@ go run ./cmd/zenforge run --approve never "Run a useful shell check"
 ## Repository Checks
 
 - README quickstart is current.
+- `examples/harness-agent` ships a valid `SKILL.md` and documents
+  `-skill-root`/`ZENFORGE_SKILL_ROOT`.
 - `VERSION`, `cli.Version`, and release notes agree on the chosen version.
 - `docs/quickstart.md` is current.
 - `docs/config-reference.md` matches `zenforge init` output.
 - `docs/limitations.md` mentions known resume, shell, memory, MCP, tracing,
-  config, sub-agent, and sandbox limitations.
+  config, sub-agent, sandbox, and Agent Skills limitations.
+- Agent Skills claims stay limited to validated catalogs and progressive
+  disclosure; do not claim completed marketplace install/update, entitlement,
+  signatures, or platform UX/API work.
 - Checkpoint/run-state schema versions and the flattened event contract are
   documented.
 - `docs/mvp-validation.md` maps acceptance items to evidence.

@@ -9,7 +9,13 @@
 - A built-in Docker sandbox with bounded execution, secure defaults, mounted
   workspace path mapping, and checkpoint-safe session restoration.
 - A complete `examples/harness-agent` app and an independent consumer module
-  covering typed tools, HITL approval, and Docker-backed shell execution.
+  covering Agent Skill progressive disclosure, typed tools, HITL approval, and
+  Docker-backed shell execution. The example accepts `-skill-root` or
+  `ZENFORGE_SKILL_ROOT` and ships a real `SKILL.md`.
+- Validated filesystem Agent Skill catalogs and immutable bundles that expose
+  descriptors first, then return one body with digest and safe provenance via
+  `load_skill`. Marketplace installation, entitlement, and lifecycle remain
+  application/platform responsibilities.
 - CI gates for race detection, vet, the independent consumer module, and a
   real Docker integration test.
 

@@ -8,6 +8,7 @@ import (
 	"github.com/feiyu912/zenforge/checkpoint"
 	"github.com/feiyu912/zenforge/model"
 	"github.com/feiyu912/zenforge/planner"
+	"github.com/feiyu912/zenforge/skill"
 	"github.com/feiyu912/zenforge/subagent"
 	"github.com/feiyu912/zenforge/tool"
 	"github.com/feiyu912/zenforge/trace"
@@ -50,6 +51,7 @@ type EventStore interface {
 type Config struct {
 	Model                 model.Model
 	Instructions          string
+	Skills                *skill.Bundle
 	Tools                 []tool.Tool
 	ToolInvoker           tool.Invoker
 	ToolRuntime           []tool.Middleware

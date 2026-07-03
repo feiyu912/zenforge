@@ -1,8 +1,10 @@
 # Harness agent
 
 This is a small external-application-style agent that uses ZenForge's public
-provider factory, typed tools, CLI approval broker, and built-in Docker sandbox.
-The current directory is mounted read-only at `/workspace`.
+provider factory, Agent Skills, typed tools, CLI approval broker, and built-in
+Docker sandbox. The current directory is mounted read-only at `/workspace`.
+The bundled `skills/project-orientation/SKILL.md` is a real instruction package;
+`inspect_path` is a separate ordinary typed tool.
 
 Set the provider protocol and matching endpoint credentials:
 
@@ -14,6 +16,10 @@ export ZENFORGE_BASE_URL=https://your-endpoint.example/v1
 
 go run ./examples/harness-agent -question "What kind of project is this?"
 ```
+
+The default skill root is `examples/harness-agent/skills`. Override it with
+`-skill-root /path/to/skills` or `ZENFORGE_SKILL_ROOT=/path/to/skills`. The
+root may be one skill directory or a directory of skill subdirectories.
 
 Without `-question`, the first stdin line is the question. Later stdin lines
 remain available for CLI approval choices.

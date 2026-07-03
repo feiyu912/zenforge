@@ -51,7 +51,8 @@ Recommended reading order:
 47. [trace-guide.md](./trace-guide.md)
 48. [security-guide.md](./security-guide.md)
 49. [tool-authoring-guide.md](./tool-authoring-guide.md)
-50. [api-sketch.md](./api-sketch.md) historical draft
+50. [agent-skills-spec.md](./agent-skills-spec.md)
+51. [api-sketch.md](./api-sketch.md) historical draft
 
 ## Architecture Decision Records
 
@@ -76,6 +77,7 @@ Recommended reading order:
 - [ADR 0019: Sandbox Is An Adapter](./adr/0019-sandbox-is-adapter.md)
 - [ADR 0020: No Silent Sandbox Fallback](./adr/0020-no-silent-sandbox-fallback.md)
 - [ADR 0021: MVP Does Not Require Sub-Agents Or Sandbox](./adr/0021-mvp-does-not-require-subagents-or-sandbox.md)
+- [ADR 0022: Agent Skills Use Progressive Disclosure](./adr/0022-agent-skills-progressive-disclosure.md)
 
 ## Current Direction
 

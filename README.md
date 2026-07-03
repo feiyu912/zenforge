@@ -56,7 +56,6 @@ if err != nil {
     return err
 }
 defer checkpoints.Close()
-
 agent := zenforge.New(zenforge.Config{
     Model:        modelClient,
     Instructions: "Use tools when useful and answer briefly.",
@@ -107,14 +106,16 @@ export ZENFORGE_API_KEY=...
 export ZENFORGE_BASE_URL=https://api.minimaxi.com/anthropic/v1
 
 go run ./examples/harness-agent -question \
-  "Use the local tool, inspect this project, and prove the shell runs in Docker."
+  "Load the project skill, inspect this project, and prove the shell runs in Docker."
 ```
 
 Choose `openai` or `anthropic` according to the endpoint protocol. MiniMax and
 other compatible vendors are BaseURL configurations, not additional ZenForge
 provider types. The key must belong to the selected endpoint. This example uses
-a typed local tool, numbered HITL approval, and the built-in Docker sandbox
-with a read-only workspace mount.
+an Agent Skill catalog, a separate typed `inspect_path` tool, numbered HITL
+approval, and the built-in Docker sandbox with a read-only workspace mount.
+Override the bundled skill directory with `-skill-root` or
+`ZENFORGE_SKILL_ROOT`.
 
 ## CLI
 
@@ -203,6 +204,42 @@ new core provider names.
 - Workspace file policy supports read/write roots, approval requests, run-scoped read snapshots, and SHA256 stale-write detection.
 - Workspace reads and grep reuse the platform binary-extension/device denylist in addition to content-based NUL detection.
 - Shell policy uses the complete platform Bash AST and security classifiers. It hard-blocks dangerous or ambiguous forms, routes output redirections and complex structures to approval, and requires every parsed command in a chain or substitution to satisfy the allowlist.
+
+**Agent Skills**
+- Filesystem `SKILL.md` catalogs with bounded metadata/content validation.
+- Progressive disclosure through `Config.Skills`: the first model request sees
+  descriptors only, and `load_skill` returns one body with SHA-256 digest and
+  safe relative provenance.
+- Skills are instruction packages, not executable tools. Catalog ownership,
+  installation, trust, allowlists, and marketplace integration stay with the
+  embedding application or platform.
+
+Agent Skills are optional. An application that wants them owns the directory
+and passes an immutable bundle:
+
+```go
+catalog, err := skillfs.New("./skills", skillfs.Options{Source: "my-app"})
+if err != nil {
+    return err
+}
+skills, err := skill.NewBundle(ctx, catalog, nil)
+if err != nil {
+    return err
+}
+agent := zenforge.New(zenforge.Config{
+    Model:  modelClient,
+    Skills: skills,
+})
+```
+
+Each immediate child of `./skills` is one package:
+
+```text
+skills/
+  project-review/
+    SKILL.md
+```
+
 - Memory augmenter that hydrates normalized tasks from a store.
 - Explicit transient-error retry, per-run call budgets, UTF-8-safe output caps, and recursive audit argument redaction.
 - Shell capture is bounded while commands run, and Container Hub response
@@ -298,7 +335,7 @@ embedded example runs locally without an API key; provider-backed examples need
 | Example | What it shows |
 | --- | --- |
 | [`sdk-embedded-agent`](examples/sdk-embedded-agent) | Embed ZenForge in a Go service; runs without an API key. |
-| [`harness-agent`](examples/harness-agent) | Env provider + typed skill + HITL + Docker sandbox. |
+| [`harness-agent`](examples/harness-agent) | Env provider + Agent Skill catalog + typed tool + HITL + Docker sandbox. |
 | [`simple-tool-agent`](examples/simple-tool-agent) | Minimal model + tool loop. |
 | [`code-review-agent`](examples/code-review-agent) | Workspace + shell with approval. |
 | [`repo-refactor-agent`](examples/repo-refactor-agent) | Long task with checkpoints and resume. |
@@ -310,6 +347,7 @@ Start here:
 - [SDK Guide](docs/sdk-guide.md)
 - [Provider Guide](docs/provider-guide.md)
 - [Tool Authoring](docs/tool-authoring-guide.md)
+- [Agent Skills Spec](docs/agent-skills-spec.md)
 
 Server and edge:
 - [Server HTTP Guide](docs/server-http-guide.md) · [Server SSE Guide](docs/server-sse-guide.md)

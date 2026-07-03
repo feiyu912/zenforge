@@ -47,6 +47,20 @@ what is experimental, and what remains adapter territory.
 - YAML config is not included; the current CLI config format is JSON.
 - Container Hub is optional and lives behind `sandbox/containerhub`.
 
+## Agent Skills
+
+- Version 1 catalogs load one bounded `SKILL.md` body. Referenced auxiliary
+  files, dependency resolution, package installation, updates, signatures, and
+  remote fetching are not implemented by `load_skill`.
+- `skill/fs` accepts an explicit trusted root and rejects unsafe provenance and
+  symlink traversal. The application still owns source trust and allowlists.
+- Bundles are immutable startup snapshots. They do not provide live catalog
+  refresh or marketplace lifecycle management.
+- Skills do not grant tools, approval, workspace access, sandbox access, or
+  sub-agent authority. Those controls remain in their existing runtimes.
+- ZenMind marketplace entitlement, materialization, UI, and APIs are not
+  implemented in core; a platform adapter may supply trusted catalog inputs.
+
 ## Platform Boundary
 
 ZenForge should not import `agent-platform` or ZenMind server/chat packages.

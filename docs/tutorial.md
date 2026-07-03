@@ -33,7 +33,7 @@ for your own provider, tool, approval policy, or sandbox backend.
 6. [Model adapters](#6-model-adapters)
 7. [The approval flow](#7-the-approval-flow)
 8. [The Docker sandbox](#8-the-docker-sandbox)
-9. [The local skill tool](#9-the-local-skill-tool)
+9. [Agent Skills and ordinary tools](#9-agent-skills-and-ordinary-tools)
 10. [Walkthroughs](#10-walkthroughs)
 11. [Function reference](#11-function-reference)
 12. [Troubleshooting](#12-troubleshooting)
@@ -68,7 +68,8 @@ provides:
   API, MiniMax via OpenAI-compatible API);
 - two approval modes (auto-allow, interactive prompt);
 - two shell backends (local execution, Docker sandbox);
-- two tools (a local-skill lookup, a sandboxed shell).
+- two ordinary tools (the historically named `local_skill` lookup and a
+  sandboxed shell).
 
 It's a "smoke test" for the harness pattern: small enough to read in one
 sitting, rich enough to exercise every major ZenForge surface.
@@ -493,11 +494,14 @@ limits still apply.
 
 ---
 
-## 9. The local skill tool
+## 9. Agent Skills and ordinary tools
 
-`local_skill` is a stub for what would normally be a real tool backed by
-a vector store, a database, or a remote skill service. In the smoke app
-it returns a fixed string:
+Despite its historical name, `local_skill` is an ordinary typed tool backed by
+a fixed Go function. It is not an Agent Skill. Tools expose executable
+operations with JSON schemas and runtime policy; Agent Skills are `SKILL.md`
+instruction packages advertised by descriptor and loaded progressively.
+
+The smoke app's ordinary tool returns a fixed string:
 
 ```go
 return "local skill says: ZenForge is an application-owned Go harness; ..."
@@ -514,6 +518,29 @@ It's useful for two reasons:
 To replace it with a real tool, define a function with the same
 signature shape, register it with `tools.Must(...)`, and pass it to
 `zenforge.New` in the `Tools` slice of `zenforge.Config`.
+
+To add Agent Skills to an external application, assemble them separately:
+
+```go
+catalog, err := skillfs.New("./skills", skillfs.Options{Source: "my-app"})
+if err != nil {
+    return err
+}
+bundle, err := skill.NewBundle(ctx, catalog, nil)
+if err != nil {
+    return err
+}
+agent := zenforge.New(zenforge.Config{
+    Model:  modelClient,
+    Skills: bundle,
+    Tools:  []zenforge.Tool{localFact, shell},
+})
+```
+
+The initial model request contains only skill names and descriptions.
+`load_skill` returns a selected body, digest, and safe relative provenance.
+Installing packages, choosing trust policy, and integrating a marketplace are
+application or platform responsibilities.
 
 ---
 

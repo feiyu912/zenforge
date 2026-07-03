@@ -112,6 +112,7 @@ nav:
   - How-to guides:
       - Embed as a library: sdk-guide.md
       - Write a tool: tool-authoring-guide.md
+      - Add Agent Skills: agent-skills-spec.md
       - Configure approvals: approval-guide.md
       - Use a sandbox: sandbox-guide.md
       - Resume from checkpoints: checkpoint-resume-guide.md
@@ -155,6 +156,7 @@ nav:
       - 0019 Sandbox is adapter: adr/0019-sandbox-is-adapter.md
       - 0020 No silent sandbox fallback: adr/0020-no-silent-sandbox-fallback.md
       - 0021 MVP does not require subagents or sandbox: adr/0021-mvp-does-not-require-subagents-or-sandbox.md
+      - 0022 Agent Skills use progressive disclosure: adr/0022-agent-skills-progressive-disclosure.md
 
 extra:
   social:

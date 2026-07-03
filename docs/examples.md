@@ -21,9 +21,9 @@ execute / summary workflow with approval gating.
 
 ## harness-agent
 
-The full external-application shape: `provider.FromEnv()`, a typed local skill,
-numbered CLI approval, and a Docker-backed shell with a read-only workspace
-mount.
+The full external-application shape: `provider.FromEnv()`, a real filesystem
+Agent Skill catalog, a separate typed `inspect_path` tool, numbered CLI
+approval, and a Docker-backed shell with a read-only workspace mount.
 
 ```bash
 export ZENFORGE_PROVIDER=anthropic
@@ -35,6 +35,8 @@ go run ./examples/harness-agent -question "Inspect this project"
 
 MiniMax is configured as an Anthropic- or OpenAI-compatible BaseURL, not as a
 third provider protocol. The credential must match the chosen endpoint.
+The skill root defaults to `examples/harness-agent/skills`; use `-skill-root`
+or `ZENFORGE_SKILL_ROOT` to select an application-owned catalog.
 
 ---
 

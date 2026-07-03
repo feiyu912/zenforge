@@ -24,6 +24,10 @@ package has its own page.
   `Tool` interface, `Invoker`, middleware
 - [github.com/feiyu912/zenforge/tools](https://pkg.go.dev/github.com/feiyu912/zenforge/tools) —
   registry helpers (`Must`, `FromFunc`)
+- [github.com/feiyu912/zenforge/skill](https://pkg.go.dev/github.com/feiyu912/zenforge/skill) —
+  Agent Skill descriptors, catalogs, immutable `Bundle`, and `load_skill`
+- [github.com/feiyu912/zenforge/skill/fs](https://pkg.go.dev/github.com/feiyu912/zenforge/skill/fs) —
+  validated filesystem `SKILL.md` catalog
 - [github.com/feiyu912/zenforge/approval](https://pkg.go.dev/github.com/feiyu912/zenforge/approval) —
   `Broker` and `GrantStore` interfaces, decisions, scopes, in-memory grants
 - [github.com/feiyu912/zenforge/approval/cli](https://pkg.go.dev/github.com/feiyu912/zenforge/approval/cli) —
@@ -67,3 +71,24 @@ package has its own page.
   server adapters (HTTP, SSE)
 - [github.com/feiyu912/zenforge/adapters](https://pkg.go.dev/github.com/feiyu912/zenforge/adapters) —
   third-party adapters (MCP, memory, zenmind)
+
+## Agent Skills
+
+Applications create a catalog and snapshot it before constructing the agent:
+
+```go
+catalog, err := skillfs.New("./skills", skillfs.Options{Source: "my-app"})
+if err != nil {
+    return err
+}
+bundle, err := skill.NewBundle(ctx, catalog, nil)
+if err != nil {
+    return err
+}
+agent := zenforge.New(zenforge.Config{Model: modelClient, Skills: bundle})
+```
+
+`Config.Skills` adds descriptor-only system context and the `load_skill` tool.
+Ordinary `Config.Tools` remain callable operations and are not skills. A nil
+allowlist snapshots all discovered skills; pass an explicit list to restrict
+the bundle.

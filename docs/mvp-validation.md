@@ -192,6 +192,21 @@ rg -n '"[^"[:space:]]*agent-platform[^"[:space:]]*"' --glob "*.go" .
 | docs links resolve | `docs.TestMarkdownLinksResolve` |
 | SDK embedded example runs without API key | `examples.TestSDKEmbeddedAgentRunsWithoutAPIKey` |
 
+## Agent Skills
+
+| Requirement | Evidence |
+| --- | --- |
+| filesystem catalogs validate real `SKILL.md` packages | `skill/fs` package tests |
+| first request contains descriptors but not bodies | `TestAgentSkillsUseProgressiveDisclosure`, `integration/consumer.TestOpenAIEnvProviderRunsTypedAndApprovedSandboxTools` |
+| `load_skill` returns body, SHA-256 digest, and safe relative provenance | `skill` package tests, `integration/consumer.TestOpenAIEnvProviderRunsTypedAndApprovedSandboxTools` |
+| ordinary typed tools remain distinct and operational | `integration/consumer.TestOpenAIEnvProviderRunsTypedAndApprovedSandboxTools` |
+| skill loading does not bypass HITL or sandbox execution | `integration/consumer.TestOpenAIEnvProviderRunsTypedAndApprovedSandboxTools` |
+| runnable external assembly uses a real configurable catalog root | `examples/harness-agent`, `examples/harness-agent/skills/project-orientation/SKILL.md` |
+
+This evidence covers the local catalog and disclosure contract. It does not
+claim package installation, remote registry support, signatures, entitlement,
+or a completed ZenMind marketplace/platform integration.
+
 ## Platform Boundary
 
 Non-adapter Go source must remain free of `agent-platform` and ZenMind brand

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -17,6 +18,8 @@ import (
 	"github.com/feiyu912/zenforge/policy"
 	"github.com/feiyu912/zenforge/sandbox"
 	"github.com/feiyu912/zenforge/sandbox/fake"
+	"github.com/feiyu912/zenforge/skill"
+	skillfs "github.com/feiyu912/zenforge/skill/fs"
 	"github.com/feiyu912/zenforge/tools"
 	shelltool "github.com/feiyu912/zenforge/tools/shell"
 )
@@ -50,7 +53,15 @@ func TestOpenAIEnvProviderRunsTypedAndApprovedSandboxTools(t *testing.T) {
 		mu.Unlock()
 
 		w.Header().Set("Content-Type", "text/event-stream")
-		if turn == 1 {
+		switch turn {
+		case 1:
+			fmt.Fprint(w, strings.Join([]string{
+				`data: {"choices":[{"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"skill-1","type":"function","function":{"name":"load_skill","arguments":"{\"name\":\"consumer-workflow\"}"}}]},"finish_reason":"tool_calls"}]}`,
+				`data: [DONE]`,
+				``,
+			}, "\n\n"))
+			return
+		case 2:
 			fmt.Fprint(w, strings.Join([]string{
 				`data: {"choices":[{"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"lookup-1","type":"function","function":{"name":"lookup","arguments":"{\"key\":\"answer\"}"}},{"index":1,"id":"shell-1","type":"function","function":{"name":"shell","arguments":"{\"command\":\"uname -s\",\"description\":\"verify sandbox OS\"}"}}]},"finish_reason":"tool_calls"}]}`,
 				`data: [DONE]`,
@@ -74,6 +85,14 @@ func TestOpenAIEnvProviderRunsTypedAndApprovedSandboxTools(t *testing.T) {
 	modelClient, err := provider.FromEnv()
 	if err != nil {
 		t.Fatalf("provider.FromEnv: %v", err)
+	}
+	catalog, err := skillfs.New(filepath.Join("testdata", "skills"), skillfs.Options{Source: "consumer-test"})
+	if err != nil {
+		t.Fatalf("skillfs.New: %v", err)
+	}
+	skills, err := skill.NewBundle(context.Background(), catalog, nil)
+	if err != nil {
+		t.Fatalf("skill.NewBundle: %v", err)
 	}
 
 	typedCalls := 0
@@ -101,7 +120,7 @@ func TestOpenAIEnvProviderRunsTypedAndApprovedSandboxTools(t *testing.T) {
 	})
 
 	result, err := zenforge.New(zenforge.Config{
-		Model: modelClient, Tools: []zenforge.Tool{lookup, shell},
+		Model: modelClient, Skills: skills, Tools: []zenforge.Tool{lookup, shell},
 		Approval: broker, MaxSteps: 4,
 	}).Run(context.Background(), zenforge.Task{RunID: "consumer-run", Input: "run both tools"})
 	if err != nil {
@@ -118,10 +137,36 @@ func TestOpenAIEnvProviderRunsTypedAndApprovedSandboxTools(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(requests) != 2 {
+	if len(requests) != 3 {
 		t.Fatalf("provider requests = %d", len(requests))
 	}
-	messages, _ := requests[1]["messages"].([]any)
+	first, _ := json.Marshal(requests[0]["messages"])
+	for _, want := range []string{"Available skills:", "consumer-workflow", "Run the consumer lookup"} {
+		if !strings.Contains(string(first), want) {
+			t.Errorf("first request missing descriptor %q: %s", want, first)
+		}
+	}
+	for _, forbidden := range []string{"# Consumer workflow", "Call the typed"} {
+		if strings.Contains(string(first), forbidden) {
+			t.Errorf("first request leaked skill body %q: %s", forbidden, first)
+		}
+	}
+	second, _ := json.Marshal(requests[1]["messages"])
+	for _, want := range []string{
+		`"tool_call_id":"skill-1"`,
+		"# Consumer workflow",
+		`\"digest\":\"sha256:`,
+		`\"source\":\"consumer-test\"`,
+		`\"path\":\"consumer-workflow/SKILL.md\"`,
+	} {
+		if !strings.Contains(string(second), want) {
+			t.Errorf("second request missing skill disclosure %q: %s", want, second)
+		}
+	}
+	if strings.Contains(string(second), filepath.ToSlash(filepath.Join("testdata", "skills"))) {
+		t.Errorf("second request leaked catalog root: %s", second)
+	}
+	messages, _ := requests[2]["messages"].([]any)
 	encoded, _ := json.Marshal(messages)
 	for _, want := range []string{`"tool_call_id":"lookup-1"`, `\"value\":\"42\"`, `"tool_call_id":"shell-1"`, `Linux`} {
 		if !strings.Contains(string(encoded), want) {

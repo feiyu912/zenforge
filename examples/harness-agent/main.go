@@ -18,6 +18,8 @@ import (
 	"github.com/feiyu912/zenforge/policy"
 	"github.com/feiyu912/zenforge/sandbox"
 	"github.com/feiyu912/zenforge/sandbox/docker"
+	"github.com/feiyu912/zenforge/skill"
+	skillfs "github.com/feiyu912/zenforge/skill/fs"
 	"github.com/feiyu912/zenforge/tools"
 	shelltool "github.com/feiyu912/zenforge/tools/shell"
 )
@@ -34,8 +36,11 @@ type inspectOutput struct {
 func main() {
 	var question string
 	var image string
+	var skillRoot string
 	flag.StringVar(&question, "question", "", "task for the agent (defaults to one line from stdin)")
 	flag.StringVar(&image, "image", "alpine:3.20", "Docker image used by the shell tool")
+	flag.StringVar(&skillRoot, "skill-root", envOrDefault("ZENFORGE_SKILL_ROOT", "examples/harness-agent/skills"),
+		"directory containing Agent Skill packages")
 	flag.Parse()
 
 	input := bufio.NewReader(os.Stdin)
@@ -64,6 +69,14 @@ func main() {
 		fatal(err)
 	}
 	hostWorkspace, err = filepath.Abs(hostWorkspace)
+	if err != nil {
+		fatal(err)
+	}
+	catalog, err := skillfs.New(skillRoot, skillfs.Options{Source: "harness-agent"})
+	if err != nil {
+		fatal(err)
+	}
+	skills, err := skill.NewBundle(context.Background(), catalog, nil)
 	if err != nil {
 		fatal(err)
 	}
@@ -102,8 +115,10 @@ func main() {
 
 	agent := zenforge.New(zenforge.Config{
 		Model: modelClient,
-		Instructions: "Answer using evidence from the mounted workspace. Use inspect_path for local metadata " +
-			"and shell for containerized read-only inspection. Keep the final answer concise.",
+		Instructions: "Answer using evidence from the mounted workspace. Load an Agent Skill when its " +
+			"description matches the task. inspect_path remains an ordinary typed tool for local metadata; " +
+			"it is not a skill. Use shell for containerized read-only inspection. Keep the final answer concise.",
+		Skills:   skills,
 		Tools:    []zenforge.Tool{inspect, shell},
 		Approval: approvalcli.New(input, os.Stderr),
 		MaxSteps: 12,
@@ -113,6 +128,13 @@ func main() {
 		fatal(err)
 	}
 	fmt.Println(result.Output)
+}
+
+func envOrDefault(name, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+		return value
+	}
+	return fallback
 }
 
 func fatal(err error) {
