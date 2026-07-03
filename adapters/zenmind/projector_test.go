@@ -177,7 +177,7 @@ func TestProjectorSnapshotResumePreservesOpenTool(t *testing.T) {
 func TestNewProjectorFromStateFailsClosed(t *testing.T) {
 	tests := map[string]ProjectorState{
 		"missing-version": {},
-		"future-version":  {Version: "zenforge.zenmind_projector_state.v2"},
+		"future-version":  {Version: "zenforge.zenmind_projector_state.v3"},
 		"negative-live-seq": {
 			Version: ProjectorStateVersion, NextSeq: -1,
 		},

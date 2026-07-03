@@ -263,10 +263,10 @@ skills/
 - Redaction helpers for common secret-bearing keys.
 
 **Platform adapters**
-- `adapters/zenmind` — platform catalog/session DTOs with `ModelResolver`,
-  strict history conversion, resolved-prompt precedence, fail-closed
-  AgentKey/ChatID/RunID routing, resumable content/tool projection, fully bound
-  approval wire translation, and monotonic platform event-line JSONL output.
+- `adapters/zenmind` — platform catalog/session DTOs with host-owned
+  model/skill/tool/workspace resolution, strict history conversion,
+  fail-closed AgentKey/ChatID/RunID routing, run-scoped strict projection,
+  event-driven approval correlation, and platform event-line JSONL output.
 - `adapters/mcp` — MCP tool bridge (resources/prompts/sampling/OAuth stay with the host).
 - `adapters/memory` — scoped memory augmentation into normalized tasks.
 
@@ -287,16 +287,25 @@ OpenAI `tool_calls` and snake/camel tool-call IDs, and rejects malformed history
 with its message index. `Session.ResolvedPrompt` takes precedence over the
 legacy catalog instruction field. Raw tool arguments are copied into run-owned
 state so later caller mutation cannot alter model requests or checkpoints.
+Catalog skills, tools/overrides, and workspace root/host access are resolved by
+host callbacks. Declared `HostAccess` or `ToolOverrides` without the matching
+resolver fail closed. The complete runtime-owned tool, approval, planner,
+sub-agent, persistence, trace, mode, planning, and step configuration is
+propagated into `zenforge.Config`.
 
 For the platform event-line read model, project events first, then append each
 `StreamEvent` with an explicit chat ID:
 
 ```go
 projector := zenmind.NewProjectorWithIdentity(zenmind.ProjectorIdentity{
-    ChatID: chatID, AgentKey: agentKey,
+    RunID: runID, ChatID: chatID, AgentKey: agentKey,
 })
 writer := zenmind.NewChatJSONLWriter(root)
-for _, projected := range projector.Project(event) {
+projectedEvents, err := projector.ProjectStrict(event)
+if err != nil {
+    return err
+}
+for _, projected := range projectedEvents {
     if err := writer.Append(ctx, chatID, projected); err != nil {
         return err
     }
@@ -307,6 +316,8 @@ lines, err := zenmind.ReadEventLines(ctx, root, chatID)
 Persist `projector.Snapshot()` beside the host's attach cursor and restore it
 with `zenmind.NewProjectorFromState`; open content/tool blocks and platform
 sequence numbers then continue without reused IDs.
+Version 2 snapshots preserve the run binding. Version 1 snapshots remain
+readable as unbound compatibility state, but fail closed under `ProjectStrict`.
 
 `ChatJSONLWriter` writes `root/chatId.jsonl` platform `EventLine` records with
 top-level `chatId`, `runId`, `updatedAt`, `liveSeq`, `event`, and `_type`, and
@@ -490,6 +501,10 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - ZenMind run assembly rejects missing or typed-nil models and explicitly
   declared unavailable tools, while preserving undeclared, explicitly empty,
   and legacy tool-list semantics.
+- ZenMind host resolvers assemble skills, tool overrides, and workspace access;
+  approval events correlate to awaiting wire with snapshot recovery; and
+  `ProjectStrict` enforces one run with v2/v1 state compatibility. This remains
+  adapter behavior, not complete Chat Storage or platform wiring.
 
 Verification before each release:
 

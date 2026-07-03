@@ -19,9 +19,11 @@ run, err := zenmind.BuildRun(ctx, catalogAgent, session, zenmind.Runtime{
     ModelResolver: zenmind.ModelResolverFunc(func(ctx context.Context, key string) (model.Model, error) {
         return platformModels.Resolve(ctx, key)
     }),
-    Tools:       tools,
-    Events:      events,
-    Checkpoints: checkpoints,
+    SkillResolver:     platformSkills,
+    ToolResolver:      platformTools,
+    WorkspaceResolver: platformWorkspaces,
+    Events:            events,
+    Checkpoints:       checkpoints,
 })
 if err != nil {
     return err
@@ -38,6 +40,30 @@ chat/run identity, history, resolved prompt, and access level into
 modes fail closed. A missing model, including a typed-nil model returned
 directly or by `ModelResolver`, also fails before a run is built. Deprecated DTO
 aliases remain for earlier adapter callers.
+
+`BuildRun` delegates host-owned executable objects through three resolvers:
+
+- non-nil catalog `Skills` use `SkillResolver`; nil keeps `Runtime.Skills`,
+  while an explicitly empty list disables the runtime bundle;
+- `ToolResolver` receives cloned effective tool names and `ToolOverrides`;
+  without it, non-empty overrides fail closed and ordinary names are selected
+  from `Runtime.Tools`;
+- `WorkspaceResolver` receives the session workspace root (falling back to the
+  catalog root) plus cloned `HostAccess.ReadRoots` and `WriteRoots`. Any
+  declared root or host access without that resolver fails closed; with no
+  declaration, the legacy `Runtime.Workspace` remains valid.
+
+Resolver errors, unknown/nil results, and typed-nil resolvers or workspace
+results fail before execution. Mutable resolver inputs and runtime slices/maps
+are copied where needed so later caller mutation does not change the run.
+
+The returned `zenforge.Config` contains the resolved model, prompt, skills,
+tools, and workspace, and passes through `ToolInvoker`, `ToolRuntime`,
+`ToolArgumentRedaction`, `Approval`, `ApprovalGrants`, `ApprovalNamespace`,
+`ApprovalGrantTTL`, `Todos`, `SubAgentSpecs`, `SubAgentRegistry`,
+`SubAgentOrchestrator`, `SubAgentRunner`, `SubAgentOptions`, `Events`,
+`Checkpoints`, and `Trace`. It derives `MaxSteps`, `Mode`, `Planning`, and
+`SubAgents` from catalog/session values.
 
 Catalog tool selection preserves the platform list semantics:
 
@@ -131,11 +157,15 @@ content/tool block lifecycles and assigns platform-local sequence numbers:
 
 ```go
 projector := zenmind.NewProjectorWithIdentity(zenmind.ProjectorIdentity{
-    ChatID: chatID, AgentKey: agentKey,
+    RunID: runID, ChatID: chatID, AgentKey: agentKey,
 })
 
 for event := range events {
-    for _, projected := range projector.Project(event) {
+    projectedEvents, err := projector.ProjectStrict(event)
+    if err != nil {
+        return err
+    }
+    for _, projected := range projectedEvents {
         data, err := json.Marshal(projected)
         // data is a flat platform envelope: seq/type/payload fields/timestamp.
         _ = data
@@ -152,6 +182,13 @@ ignored deliberately. `Mapper`/`MapEvent` preserve the historical one-to-one
 API but do not synthesize lifecycle events; they are not evidence of full wire
 compatibility by themselves.
 
+`ProjectStrict` is the fail-closed integration path. It requires a non-blank
+`ProjectorIdentity.RunID`, rejects events with a missing or different run,
+requires `run.started` first, rejects duplicate starts, validates tool IDs and
+names across calls/results, and rejects every event after a terminal run event.
+Validation errors return before projector state changes. The older `Project`
+method remains permissive for compatibility.
+
 For process restart or attach, persist the complete projector state:
 
 ```go
@@ -166,6 +203,9 @@ projector, err = zenmind.NewProjectorFromState(restored)
 Restore rejects negative cursors, inconsistent content IDs, conflicting tool
 IDs, and terminated states with open blocks. A valid restore continues
 `liveSeq`, content IDs, partial content text, and open tool arguments.
+Current snapshots use `zenforge.zenmind_projector_state.v2` and persist
+`Identity.RunID`. Version 1 snapshots remain readable and are restored as
+unbound state; because they have no run binding, `ProjectStrict` rejects them.
 
 Golden lifecycles:
 
@@ -196,8 +236,23 @@ Asks built through the compatibility constructor must be explicitly completed
 with `BindAwaitingAsk`; unbound asks fail closed. The roundtrip golden is
 `adapters/zenmind/testdata/platform/approval_roundtrip.jsonl`.
 
-`DecisionFromJSON` remains the older neutral submit helper. Core still does not
-own platform submit routes, WebSocket messages, or pending-awaiting storage.
+For the real core event stream, `ApprovalEventBridge` consumes
+`approval.requested`, `approval.resolved`, and `approval.expired`. A request
+allocates an awaiting ID and emits a bound `AwaitingAsk`; a correlated
+resolution emits `AwaitingAnswer`; expiration emits a timeout error answer.
+`Snapshot` copies pending and completed correlations, and
+`NewApprovalEventBridgeFromSnapshot` restores them after the host supplies
+trusted platform context and the allocation policy again.
+
+A resumed request replays its existing ask only when identity and wire content
+still match. A resolution marked `reused` represents a core grant that never
+opened an awaiting request, so it records completion and emits no answer.
+Unknown fields, mismatched identity/tool/run values, uncorrelated or duplicate
+terminal events, duplicate awaiting IDs, and invalid snapshots fail closed.
+
+`DecisionFromJSON` remains the older neutral submit helper. The bridge owns
+correlation only: core does not own platform submit routes, WebSocket messages,
+transport delivery, bridge snapshot persistence, or pending-awaiting storage.
 
 ## Platform Event Lines
 
@@ -207,7 +262,11 @@ ID:
 ```go
 writer := zenmind.NewChatJSONLWriter(".zenmind/chats")
 for event := range events {
-    for _, projected := range projector.Project(event) {
+    projectedEvents, err := projector.ProjectStrict(event)
+    if err != nil {
+        return err
+    }
+    for _, projected := range projectedEvents {
         if err := writer.Append(ctx, chatID, projected); err != nil {
             return err
         }
@@ -246,6 +305,9 @@ SHA-256, and full commit
 `1893edb51b8dc691ae974cea2719a835e0e21de4`. The end-to-end
 `TestPlatformContractBuildProjectPersistResumeAndApprove` covers route,
 run assembly, projection restore, event-line persistence, and approval binding.
+Focused tests cover host resolver/config propagation, event-to-awaiting
+recovery and reused semantics, strict run binding, mutation-free rejection,
+and projector v2/v1 compatibility.
 Passing these tests proves the
 repository-local wire contract only. Separate downstream tests at
 `agent-platform` branch `codex/zenforge-engine-bridge@82ca4d3` cover the engine

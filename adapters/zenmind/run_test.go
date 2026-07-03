@@ -11,7 +11,9 @@ import (
 
 	"github.com/feiyu912/zenforge"
 	"github.com/feiyu912/zenforge/model"
+	"github.com/feiyu912/zenforge/skill"
 	"github.com/feiyu912/zenforge/tools"
+	"github.com/feiyu912/zenforge/workspace"
 )
 
 type fixture[T any] struct {
@@ -56,6 +58,8 @@ func TestBuildRunMapsCatalogSessionToConfigAndTask(t *testing.T) {
 		return "hidden", nil
 	})
 	wantModel := &stubModel{key: "platform-primary"}
+	wantSkills := &skill.Bundle{}
+	wantWorkspace := &stubWorkspace{id: "platform"}
 	var resolvedKey string
 
 	run, err := BuildRun(context.Background(), agent, session, Runtime{
@@ -67,6 +71,15 @@ func TestBuildRunMapsCatalogSessionToConfigAndTask(t *testing.T) {
 			}
 			return nil, nil
 		}),
+		SkillResolver: SkillResolverFunc(func(context.Context, []string) (*skill.Bundle, error) {
+			return wantSkills, nil
+		}),
+		ToolResolver: ToolResolverFunc(func(_ context.Context, request ToolResolution) ([]zenforge.Tool, error) {
+			return selectTools([]zenforge.Tool{echo, hidden}, request.Names)
+		}),
+		WorkspaceResolver: WorkspaceResolverFunc(func(context.Context, WorkspaceResolution) (workspace.Workspace, error) {
+			return wantWorkspace, nil
+		}),
 		Tools: []zenforge.Tool{echo, hidden},
 	})
 	if err != nil {
@@ -75,6 +88,9 @@ func TestBuildRunMapsCatalogSessionToConfigAndTask(t *testing.T) {
 
 	if resolvedKey != "platform-primary" || run.Config.Model != wantModel {
 		t.Fatalf("model was not resolved from modelKey: key=%q model=%#v", resolvedKey, run.Config.Model)
+	}
+	if run.Config.Skills != wantSkills || run.Config.Workspace != wantWorkspace {
+		t.Fatalf("skills/workspace were not resolved: %#v", run.Config)
 	}
 	if run.Config.Mode != zenforge.ModePlanExecute || run.Config.Planning != zenforge.PlanningPlanExecute {
 		t.Fatalf("unexpected modes: mode=%s planning=%s", run.Config.Mode, run.Config.Planning)

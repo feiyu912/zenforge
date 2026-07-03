@@ -71,6 +71,10 @@ package has its own page.
   server adapters (HTTP, SSE)
 - [github.com/feiyu912/zenforge/adapters](https://pkg.go.dev/github.com/feiyu912/zenforge/adapters) —
   third-party adapters (MCP, memory, zenmind)
+- [github.com/feiyu912/zenforge/adapters/zenmind](https://pkg.go.dev/github.com/feiyu912/zenforge/adapters/zenmind) —
+  `BuildRun` host resolvers, `ApprovalEventBridge` snapshot correlation,
+  run-bound `ProjectStrict`, and event-line projection. It does not implement
+  platform transport, pending-awaiting storage, or complete Chat Storage.
 
 ## Agent Skills
 

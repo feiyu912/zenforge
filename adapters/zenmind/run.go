@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"time"
 
 	"github.com/feiyu912/zenforge"
 	memoryadapter "github.com/feiyu912/zenforge/adapters/memory"
@@ -13,6 +14,7 @@ import (
 	"github.com/feiyu912/zenforge/checkpoint"
 	"github.com/feiyu912/zenforge/model"
 	"github.com/feiyu912/zenforge/planner"
+	"github.com/feiyu912/zenforge/skill"
 	"github.com/feiyu912/zenforge/subagent"
 	"github.com/feiyu912/zenforge/tool"
 	"github.com/feiyu912/zenforge/trace"
@@ -102,22 +104,77 @@ func (f ModelResolverFunc) ResolveModel(ctx context.Context, key string) (model.
 	return f(ctx, key)
 }
 
+// SkillResolver resolves catalog-owned skill names into a host-owned bundle.
+type SkillResolver interface {
+	ResolveSkills(context.Context, []string) (*skill.Bundle, error)
+}
+
+type SkillResolverFunc func(context.Context, []string) (*skill.Bundle, error)
+
+func (f SkillResolverFunc) ResolveSkills(ctx context.Context, names []string) (*skill.Bundle, error) {
+	return f(ctx, names)
+}
+
+type ToolResolution struct {
+	Names     []string
+	Overrides map[string]any
+}
+
+// ToolResolver applies host-owned catalog overrides while resolving the
+// executable tool set.
+type ToolResolver interface {
+	ResolveTools(context.Context, ToolResolution) ([]tool.Tool, error)
+}
+
+type ToolResolverFunc func(context.Context, ToolResolution) ([]tool.Tool, error)
+
+func (f ToolResolverFunc) ResolveTools(ctx context.Context, request ToolResolution) ([]tool.Tool, error) {
+	return f(ctx, request)
+}
+
+type WorkspaceResolution struct {
+	Root       string
+	ReadRoots  []string
+	WriteRoots []string
+}
+
+// WorkspaceResolver resolves a platform workspace root without coupling this
+// adapter to the host platform's workspace implementation.
+type WorkspaceResolver interface {
+	ResolveWorkspace(context.Context, WorkspaceResolution) (workspace.Workspace, error)
+}
+
+type WorkspaceResolverFunc func(context.Context, WorkspaceResolution) (workspace.Workspace, error)
+
+func (f WorkspaceResolverFunc) ResolveWorkspace(ctx context.Context, request WorkspaceResolution) (workspace.Workspace, error) {
+	return f(ctx, request)
+}
+
 type Runtime struct {
-	Model                zenforge.Model
-	ModelResolver        ModelResolver
-	Tools                []tool.Tool
-	ToolInvoker          tool.Invoker
-	ToolRuntime          []tool.Middleware
-	Approval             approval.Broker
-	Todos                planner.Manager
-	SubAgentSpecs        []subagent.SubAgentSpec
-	SubAgentRegistry     subagent.Registry
-	SubAgentOrchestrator subagent.Orchestrator
-	SubAgentRunner       subagent.Runner
-	Workspace            workspace.Workspace
-	Events               zenforge.EventStore
-	Checkpoints          checkpoint.Store
-	Trace                trace.Sink
+	Model                 zenforge.Model
+	ModelResolver         ModelResolver
+	Skills                *skill.Bundle
+	SkillResolver         SkillResolver
+	ToolResolver          ToolResolver
+	WorkspaceResolver     WorkspaceResolver
+	Tools                 []tool.Tool
+	ToolInvoker           tool.Invoker
+	ToolRuntime           []tool.Middleware
+	ToolArgumentRedaction []string
+	Approval              approval.Broker
+	ApprovalGrants        approval.GrantStore
+	ApprovalNamespace     approval.Namespace
+	ApprovalGrantTTL      time.Duration
+	Todos                 planner.Manager
+	SubAgentSpecs         []subagent.SubAgentSpec
+	SubAgentRegistry      subagent.Registry
+	SubAgentOrchestrator  subagent.Orchestrator
+	SubAgentRunner        subagent.Runner
+	SubAgentOptions       subagent.Options
+	Workspace             workspace.Workspace
+	Events                zenforge.EventStore
+	Checkpoints           checkpoint.Store
+	Trace                 trace.Sink
 }
 
 type RunConfig struct {
@@ -151,7 +208,20 @@ func BuildRun(ctx context.Context, agent CatalogAgent, session Session, runtime 
 	if err != nil {
 		return RunConfig{}, err
 	}
-	selectedTools, err := selectTools(runtime.Tools, preferredStrings(agent.Tools, agent.ToolNames))
+	selectedTools, err := resolveTools(
+		ctx, preferredStrings(agent.Tools, agent.ToolNames), agent.ToolOverrides, runtime)
+	if err != nil {
+		return RunConfig{}, err
+	}
+	resolvedSkills, err := resolveSkills(ctx, agent.Skills, runtime)
+	if err != nil {
+		return RunConfig{}, err
+	}
+	resolvedWorkspace, err := resolveWorkspace(ctx, WorkspaceResolution{
+		Root:       firstNonBlank(session.WorkspaceRoot, agent.Workspace.Root),
+		ReadRoots:  cloneStrings(agent.HostAccess.ReadRoots),
+		WriteRoots: cloneStrings(agent.HostAccess.WriteRoots),
+	}, runtime)
 	if err != nil {
 		return RunConfig{}, err
 	}
@@ -175,25 +245,31 @@ func BuildRun(ctx context.Context, agent CatalogAgent, session Session, runtime 
 
 	return RunConfig{
 		Config: zenforge.Config{
-			Model:                resolvedModel,
-			Instructions:         firstNonBlank(session.ResolvedPrompt, agent.Instructions),
-			Tools:                selectedTools,
-			ToolInvoker:          runtime.ToolInvoker,
-			ToolRuntime:          runtime.ToolRuntime,
-			Approval:             runtime.Approval,
-			Todos:                runtime.Todos,
-			SubAgentSpecs:        runtime.SubAgentSpecs,
-			SubAgentRegistry:     runtime.SubAgentRegistry,
-			SubAgentOrchestrator: runtime.SubAgentOrchestrator,
-			SubAgentRunner:       runtime.SubAgentRunner,
-			Workspace:            runtime.Workspace,
-			Events:               runtime.Events,
-			Checkpoints:          runtime.Checkpoints,
-			Trace:                runtime.Trace,
-			MaxSteps:             maxSteps(agent),
-			Mode:                 mode,
-			Planning:             effectivePlanning(agent, session, mode),
-			SubAgents:            subAgentMode(agent.SubAgents),
+			Model:                 resolvedModel,
+			Instructions:          firstNonBlank(session.ResolvedPrompt, agent.Instructions),
+			Skills:                resolvedSkills,
+			Tools:                 selectedTools,
+			ToolInvoker:           runtime.ToolInvoker,
+			ToolRuntime:           append([]tool.Middleware(nil), runtime.ToolRuntime...),
+			ToolArgumentRedaction: cloneStrings(runtime.ToolArgumentRedaction),
+			Approval:              runtime.Approval,
+			ApprovalGrants:        runtime.ApprovalGrants,
+			ApprovalNamespace:     runtime.ApprovalNamespace,
+			ApprovalGrantTTL:      runtime.ApprovalGrantTTL,
+			Todos:                 runtime.Todos,
+			SubAgentSpecs:         cloneSubAgentSpecs(runtime.SubAgentSpecs),
+			SubAgentRegistry:      runtime.SubAgentRegistry,
+			SubAgentOrchestrator:  runtime.SubAgentOrchestrator,
+			SubAgentRunner:        runtime.SubAgentRunner,
+			SubAgentOptions:       runtime.SubAgentOptions,
+			Workspace:             resolvedWorkspace,
+			Events:                runtime.Events,
+			Checkpoints:           runtime.Checkpoints,
+			Trace:                 runtime.Trace,
+			MaxSteps:              maxSteps(agent),
+			Mode:                  mode,
+			Planning:              effectivePlanning(agent, session, mode),
+			SubAgents:             subAgentMode(agent.SubAgents),
 		},
 		Task: task,
 	}, nil
@@ -333,7 +409,7 @@ func resolveModel(ctx context.Context, key string, runtime Runtime) (model.Model
 		}
 		return runtime.Model, nil
 	}
-	if runtime.ModelResolver == nil {
+	if isNilInterface(runtime.ModelResolver) {
 		return nil, fmt.Errorf("zenmind model %q requires a ModelResolver", key)
 	}
 	resolved, err := runtime.ModelResolver.ResolveModel(ctx, key)
@@ -342,6 +418,69 @@ func resolveModel(ctx context.Context, key string, runtime Runtime) (model.Model
 	}
 	if isNilInterface(resolved) {
 		return nil, fmt.Errorf("unknown zenmind model %q", key)
+	}
+	return resolved, nil
+}
+
+func resolveSkills(ctx context.Context, names []string, runtime Runtime) (*skill.Bundle, error) {
+	if names == nil {
+		return runtime.Skills, nil
+	}
+	if len(names) == 0 {
+		return nil, nil
+	}
+	if isNilInterface(runtime.SkillResolver) {
+		return nil, fmt.Errorf("zenmind catalog skills %q require a SkillResolver", names)
+	}
+	requested := cloneStrings(names)
+	resolved, err := runtime.SkillResolver.ResolveSkills(ctx, requested)
+	if err != nil {
+		return nil, fmt.Errorf("resolve zenmind catalog skills %q: %w", names, err)
+	}
+	if resolved == nil {
+		return nil, fmt.Errorf("unknown zenmind catalog skills %q", names)
+	}
+	return resolved, nil
+}
+
+func resolveTools(ctx context.Context, names []string, overrides map[string]any, runtime Runtime) ([]tool.Tool, error) {
+	if !isNilInterface(runtime.ToolResolver) {
+		request := ToolResolution{Names: cloneStrings(names), Overrides: cloneMap(overrides)}
+		resolved, err := runtime.ToolResolver.ResolveTools(ctx, request)
+		if err != nil {
+			return nil, fmt.Errorf("resolve zenmind catalog tools: %w", err)
+		}
+		if len(resolved) == 0 && (len(names) != 0 || len(overrides) != 0) {
+			return nil, fmt.Errorf("resolve zenmind catalog tools: requested tools are unavailable")
+		}
+		for i, current := range resolved {
+			if isNilTool(current) {
+				return nil, fmt.Errorf("resolve zenmind catalog tools: result %d is nil", i)
+			}
+		}
+		return append([]tool.Tool(nil), resolved...), nil
+	}
+	if len(overrides) != 0 {
+		return nil, fmt.Errorf("zenmind toolOverrides require a ToolResolver")
+	}
+	return selectTools(runtime.Tools, names)
+}
+
+func resolveWorkspace(ctx context.Context, request WorkspaceResolution, runtime Runtime) (workspace.Workspace, error) {
+	if request.Root == "" && len(request.ReadRoots) == 0 && len(request.WriteRoots) == 0 {
+		return runtime.Workspace, nil
+	}
+	if isNilInterface(runtime.WorkspaceResolver) {
+		return nil, fmt.Errorf("zenmind workspace policy requires a WorkspaceResolver")
+	}
+	request.ReadRoots = cloneStrings(request.ReadRoots)
+	request.WriteRoots = cloneStrings(request.WriteRoots)
+	resolved, err := runtime.WorkspaceResolver.ResolveWorkspace(ctx, request)
+	if err != nil {
+		return nil, fmt.Errorf("resolve zenmind workspace %q: %w", request.Root, err)
+	}
+	if isNilInterface(resolved) {
+		return nil, fmt.Errorf("unknown zenmind workspace %q", request.Root)
 	}
 	return resolved, nil
 }
@@ -550,6 +689,19 @@ func preferredStrings(primary, alias []string) []string {
 
 func cloneStrings(values []string) []string {
 	return append([]string(nil), values...)
+}
+
+func cloneSubAgentSpecs(values []subagent.SubAgentSpec) []subagent.SubAgentSpec {
+	if values == nil {
+		return nil
+	}
+	out := make([]subagent.SubAgentSpec, len(values))
+	for i, value := range values {
+		out[i] = value
+		out[i].Tools = append([]tool.Tool(nil), value.Tools...)
+		out[i].Metadata = cloneMap(value.Metadata)
+	}
+	return out
 }
 
 func cloneMaps(values []map[string]any) []map[string]any {

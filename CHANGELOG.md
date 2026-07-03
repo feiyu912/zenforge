@@ -4,6 +4,15 @@
 
 ### Added
 
+- ZenMind `BuildRun` host resolvers for catalog skills, tool overrides, and
+  workspace/host-access policy, with fail-closed policy declarations and
+  complete executable `zenforge.Config` propagation.
+- `ApprovalEventBridge` correlation from real approval lifecycle events to
+  awaiting wire values, including snapshot recovery, resumed replay, timeout
+  answers, and no-answer reused resolutions.
+- Run-bound `ProjectStrict` validation and projector state v2, retaining read
+  compatibility for unbound v1 snapshots. These additions do not provide
+  complete Chat Storage or platform transport/pending-awaiting wiring.
 - Environment-based application model construction through `model/provider`,
   limited to OpenAI and Anthropic protocols with compatible custom base URLs.
 - A built-in Docker sandbox with bounded execution, secure defaults, mounted

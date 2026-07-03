@@ -43,15 +43,20 @@ func TestPlatformContractBuildProjectPersistResumeAndApprove(t *testing.T) {
 	}
 
 	projector := NewProjectorWithIdentity(ProjectorIdentity{
-		ChatID: session.ChatID, AgentKey: session.AgentKey,
+		RunID: session.RunID, ChatID: session.ChatID, AgentKey: session.AgentKey,
 	})
 	var projected []StreamEvent
-	projected = append(projected, projector.Project(zenforge.NewEvent(
-		zenforge.EventRunStarted, session.RunID, nil,
-	))...)
-	projected = append(projected, projector.Project(zenforge.NewEvent(
-		zenforge.EventModelDelta, session.RunID, map[string]any{"textDelta": "hello"},
-	))...)
+	project := func(event zenforge.Event) {
+		t.Helper()
+		events, err := projector.ProjectStrict(event)
+		if err != nil {
+			t.Fatalf("ProjectStrict(%s): %v", event.Type, err)
+		}
+		projected = append(projected, events...)
+	}
+	project(zenforge.NewEvent(zenforge.EventRunStarted, session.RunID, nil))
+	project(zenforge.NewEvent(
+		zenforge.EventModelDelta, session.RunID, map[string]any{"textDelta": "hello"}))
 
 	stateJSON, err := json.Marshal(projector.Snapshot())
 	if err != nil {
@@ -65,15 +70,10 @@ func TestPlatformContractBuildProjectPersistResumeAndApprove(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewProjectorFromState: %v", err)
 	}
-	projected = append(projected, projector.Project(zenforge.NewEvent(
-		zenforge.EventModelDelta, session.RunID, map[string]any{"textDelta": " world"},
-	))...)
-	projected = append(projected, projector.Project(zenforge.NewEvent(
-		zenforge.EventModelDone, session.RunID, nil,
-	))...)
-	projected = append(projected, projector.Project(zenforge.NewEvent(
-		zenforge.EventRunDone, session.RunID, nil,
-	))...)
+	project(zenforge.NewEvent(
+		zenforge.EventModelDelta, session.RunID, map[string]any{"textDelta": " world"}))
+	project(zenforge.NewEvent(zenforge.EventModelDone, session.RunID, nil))
+	project(zenforge.NewEvent(zenforge.EventRunDone, session.RunID, nil))
 
 	root := t.TempDir()
 	writer := NewChatJSONLWriter(root)
@@ -101,17 +101,27 @@ func TestPlatformContractBuildProjectPersistResumeAndApprove(t *testing.T) {
 	now := time.Now().UTC()
 	request := approval.Request{
 		ID: "approval-contract", RunID: session.RunID, Operation: "shell.execute",
+		ToolCallID: "tool-contract", ToolName: "shell",
 		Title: "Run tests", Risk: approval.RiskMedium, CreatedAt: now,
 		Options: []approval.Option{{
 			Action: approval.DecisionApprove, Scope: approval.ScopeRun, Label: "Approve",
 		}},
 	}
-	ask, err := AwaitingAskFromRequestContext(request, "await-contract", PlatformRequestContext{
-		RequestID: session.RequestID, ChatID: session.ChatID, AgentKey: session.AgentKey,
-	}, 60)
+	bridge, err := NewApprovalEventBridge(
+		PlatformRequestContext{
+			RequestID: session.RequestID, ChatID: session.ChatID, AgentKey: session.AgentKey,
+		},
+		func(zenforge.Event, approval.Request) (string, error) { return "await-contract", nil },
+		60,
+	)
 	if err != nil {
-		t.Fatalf("AwaitingAskFromRequestContext: %v", err)
+		t.Fatalf("NewApprovalEventBridge: %v", err)
 	}
+	askValue, err := bridge.Handle(requestedApprovalEvent(request, now))
+	if err != nil {
+		t.Fatalf("project approval.requested: %v", err)
+	}
+	ask := askValue.(AwaitingAsk)
 	submit := RequestSubmit{
 		Type: "request.submit", RequestID: session.RequestID, ChatID: session.ChatID,
 		RunID: session.RunID, AgentKey: session.AgentKey, AwaitingID: ask.AwaitingID,
@@ -127,5 +137,18 @@ func TestPlatformContractBuildProjectPersistResumeAndApprove(t *testing.T) {
 	if decision.RequestID != request.ID || decision.Action != approval.DecisionApprove ||
 		decision.Scope != approval.ScopeRun {
 		t.Fatalf("approval decision = %#v", decision)
+	}
+	resolved := zenforge.NewEvent(zenforge.EventApprovalResolved, session.RunID, map[string]any{
+		"requestId": request.ID, "toolCallId": request.ToolCallID, "toolName": request.ToolName,
+		"action": string(decision.Action), "scope": string(decision.Scope), "reason": decision.Reason,
+	})
+	resolved.Timestamp = now.UnixMilli()
+	answerValue, err := bridge.Handle(resolved)
+	if err != nil {
+		t.Fatalf("project approval.resolved: %v", err)
+	}
+	answer := answerValue.(AwaitingAnswer)
+	if answer.AwaitingID != ask.AwaitingID || answer.Status != PlatformStatusAnswered {
+		t.Fatalf("approval answer = %#v", answer)
 	}
 }

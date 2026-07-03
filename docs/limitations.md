@@ -70,8 +70,18 @@ approval, sandbox, event log, checkpoint, and trace interfaces.
 `adapters/zenmind` has repository-local golden coverage for the
 `agent-platform@1893edb5` catalog/session DTO subset, stream wire envelopes,
 content/tool projection, approval roundtrip, and event-only chat JSONL lines.
-Projector cursor state is serializable for attach/resume, but the host still
-owns where that state is stored alongside its transport cursor.
+`BuildRun` resolves host-owned skills, tools/overrides, and workspace/host
+access and propagates executable runtime config, but does not load platform
+catalogs or construct host services. Declared `HostAccess` and `ToolOverrides`
+fail closed when their resolvers are absent.
+
+Projector state is serializable for attach/resume. Strict projection requires a
+v2 run binding; readable v1 snapshots remain unbound and cannot use
+`ProjectStrict`. `ApprovalEventBridge` snapshots pending/completed correlations
+and reconstructs awaiting wire values from real events, but the host owns
+snapshot persistence, awaiting ID allocation, submit routing, and delivery.
+Reused grant resolutions emit no answer because no awaiting request was opened.
+
 This repository does not implement complete Chat Storage V3.1 or own platform
 server wiring. That downstream wiring is implemented and tested on
 `agent-platform` branch `codex/zenforge-engine-bridge@82ca4d3`, including the

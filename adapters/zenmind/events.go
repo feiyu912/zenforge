@@ -223,11 +223,15 @@ type ProjectorToolState struct {
 // ProjectorIdentity supplies the request-scoped identity that is not present
 // on most ZenForge events but is required by the platform run.start wire event.
 type ProjectorIdentity struct {
+	RunID    string `json:"runId,omitempty"`
 	ChatID   string `json:"chatId,omitempty"`
 	AgentKey string `json:"agentKey,omitempty"`
 }
 
-const ProjectorStateVersion = "zenforge.zenmind_projector_state.v1"
+const (
+	ProjectorStateVersion       = "zenforge.zenmind_projector_state.v2"
+	projectorStateVersionLegacy = "zenforge.zenmind_projector_state.v1"
+)
 
 // ProjectorState contains all state required to resume a platform projection.
 // It is safe to persist with encoding/json.
@@ -235,6 +239,7 @@ type ProjectorState struct {
 	Version       string                        `json:"version"`
 	Identity      ProjectorIdentity             `json:"identity,omitempty"`
 	NextSeq       int64                         `json:"nextSeq"`
+	Started       bool                          `json:"started,omitempty"`
 	Terminated    bool                          `json:"terminated,omitempty"`
 	ContentSeq    map[string]int64              `json:"contentSeq,omitempty"`
 	ActiveContent string                        `json:"activeContent,omitempty"`
@@ -249,6 +254,7 @@ type ProjectorState struct {
 type Projector struct {
 	identity      ProjectorIdentity
 	nextSeq       int64
+	started       bool
 	terminated    bool
 	contentSeq    map[string]int64
 	activeContent string
@@ -276,6 +282,11 @@ func NewProjectorFromState(state ProjectorState) (*Projector, error) {
 	}
 	projector := NewProjectorWithIdentity(state.Identity)
 	projector.nextSeq = state.NextSeq
+	projector.started = state.Started
+	if state.Version == projectorStateVersionLegacy {
+		projector.started = state.NextSeq > 0 || state.Terminated ||
+			state.ActiveContent != "" || len(state.OpenTools) != 0
+	}
 	projector.terminated = state.Terminated
 	for runID, seq := range state.ContentSeq {
 		projector.contentSeq[runID] = seq
@@ -298,6 +309,7 @@ func (p *Projector) Snapshot() ProjectorState {
 		Version:       ProjectorStateVersion,
 		Identity:      p.identity,
 		NextSeq:       p.nextSeq,
+		Started:       p.started,
 		Terminated:    p.terminated,
 		ContentSeq:    make(map[string]int64, len(p.contentSeq)),
 		ActiveContent: p.activeContent,
@@ -315,15 +327,27 @@ func (p *Projector) Snapshot() ProjectorState {
 }
 
 func validateProjectorState(state ProjectorState) error {
-	if state.Version != ProjectorStateVersion {
+	if state.Version != ProjectorStateVersion && state.Version != projectorStateVersionLegacy {
 		return fmt.Errorf("unsupported projector state version %q", state.Version)
+	}
+	if state.Version == projectorStateVersionLegacy && state.Identity.RunID != "" {
+		return errors.New("invalid projector state: v1 identity cannot contain runId")
+	}
+	if hasSurroundingSpace(state.Identity.RunID) || hasSurroundingSpace(state.Identity.ChatID) || hasSurroundingSpace(state.Identity.AgentKey) {
+		return errors.New("invalid projector state: identity fields must not be blank or contain surrounding whitespace")
 	}
 	if state.NextSeq < 0 {
 		return errors.New("invalid projector state: nextSeq must not be negative")
 	}
+	if state.Version == ProjectorStateVersion && state.Terminated && !state.Started {
+		return errors.New("invalid projector state: terminated projector was never started")
+	}
 	for runID, seq := range state.ContentSeq {
 		if strings.TrimSpace(runID) == "" || seq <= 0 {
 			return errors.New("invalid projector state: content sequence must have a run ID and be positive")
+		}
+		if state.Identity.RunID != "" && runID != state.Identity.RunID {
+			return errors.New("invalid projector state: content sequence does not match identity runId")
 		}
 	}
 	hasActiveContent := state.ActiveContent != ""
@@ -334,6 +358,9 @@ func validateProjectorState(state ProjectorState) error {
 		return errors.New("invalid projector state: content text has no active content")
 	}
 	if hasActiveContent {
+		if state.Identity.RunID != "" && state.ContentRunID != state.Identity.RunID {
+			return errors.New("invalid projector state: active content does not match identity runId")
+		}
 		seq := state.ContentSeq[state.ContentRunID]
 		if seq <= 0 || state.ActiveContent != fmt.Sprintf("%s_c_%d", state.ContentRunID, seq) {
 			return errors.New("invalid projector state: active content ID does not match its sequence")
@@ -350,6 +377,66 @@ func validateProjectorState(state ProjectorState) error {
 	return nil
 }
 
+func hasSurroundingSpace(value string) bool {
+	return value != "" && (strings.TrimSpace(value) == "" || strings.TrimSpace(value) != value)
+}
+
+// ProjectStrict projects a single event under a run-scoped contract. Unlike
+// Project, validation failures are returned before projector state is changed.
+func (p *Projector) ProjectStrict(event zenforge.Event) ([]StreamEvent, error) {
+	if p == nil {
+		return nil, errors.New("strict projection: nil projector")
+	}
+	if err := event.Validate(); err != nil {
+		return nil, fmt.Errorf("strict projection: %w", err)
+	}
+	if hasSurroundingSpace(p.identity.RunID) || hasSurroundingSpace(p.identity.ChatID) ||
+		hasSurroundingSpace(p.identity.AgentKey) {
+		return nil, errors.New("strict projection: identity fields must not contain surrounding whitespace")
+	}
+	boundRunID := p.identity.RunID
+	if strings.TrimSpace(boundRunID) == "" {
+		return nil, errors.New("strict projection: projector identity requires runId")
+	}
+	runID := event.RunID()
+	if strings.TrimSpace(runID) == "" {
+		return nil, errors.New("strict projection: event requires runId")
+	}
+	if runID != boundRunID {
+		return nil, fmt.Errorf("strict projection: event runId %q does not match bound runId %q", runID, boundRunID)
+	}
+	if p.terminated {
+		return nil, errors.New("strict projection: event received after terminal event")
+	}
+	if !p.started && event.Type != zenforge.EventRunStarted {
+		return nil, errors.New("strict projection: first event must be run.started")
+	}
+	if p.started && event.Type == zenforge.EventRunStarted {
+		return nil, errors.New("strict projection: duplicate run.started event")
+	}
+	switch event.Type {
+	case zenforge.EventToolCall:
+		if strings.TrimSpace(stringValue(event.Payload["toolCallId"])) == "" ||
+			strings.TrimSpace(stringValue(event.Payload["toolName"])) == "" {
+			return nil, errors.New("strict projection: tool call requires toolCallId and toolName")
+		}
+	case zenforge.EventToolResult, zenforge.EventToolError:
+		toolID := stringValue(event.Payload["toolCallId"])
+		toolName := stringValue(event.Payload["toolName"])
+		if strings.TrimSpace(toolID) == "" || strings.TrimSpace(toolName) == "" {
+			return nil, errors.New("strict projection: tool result requires toolCallId and toolName")
+		}
+		open, ok := p.openTools[toolID]
+		if !ok {
+			return nil, fmt.Errorf("strict projection: tool result %q has no corresponding call", toolID)
+		}
+		if open.name != toolName {
+			return nil, fmt.Errorf("strict projection: tool result %q name %q does not match call %q", toolID, toolName, open.name)
+		}
+	}
+	return p.Project(event), nil
+}
+
 func (p *Projector) Project(event zenforge.Event) []StreamEvent {
 	if p == nil || p.terminated {
 		return nil
@@ -358,6 +445,7 @@ func (p *Projector) Project(event zenforge.Event) []StreamEvent {
 	var out []StreamEvent
 	switch event.Type {
 	case zenforge.EventRunStarted:
+		p.started = true
 		chatID := p.identity.ChatID
 		if chatID == "" {
 			chatID = stringValue(event.Payload["chatId"])
