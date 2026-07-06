@@ -2,6 +2,7 @@ package eventlog
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -148,6 +149,28 @@ func TestFollowStopsWhenRunBusClosesWithoutTerminalEvent(t *testing.T) {
 	assertFollowSeqs(t, events, nil)
 	if err := <-errs; err != nil {
 		t.Fatalf("closed run returned error: %v", err)
+	}
+}
+
+func TestFollowCancellationDuringResubscribeDoesNotPanic(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	live := make(chan zenforge.Event)
+	close(live)
+	out := make(chan zenforge.Event)
+
+	err := follow(
+		ctx,
+		eventlogmemory.New(),
+		NewBus(),
+		"run_follow",
+		0,
+		FollowOptions{LiveBuffer: 1, ReadBatch: 1, PollInterval: time.Hour},
+		live,
+		cancel,
+		out,
+	)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("follow error = %v, want context.Canceled", err)
 	}
 }
 

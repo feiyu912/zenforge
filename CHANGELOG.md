@@ -4,6 +4,12 @@
 
 ### Added
 
+- Canonical `server/harnesshttp.NewRuntime` assembly and a single-process
+  detached HTTP lifecycle with start, resume, status, replay-to-live attach,
+  explicit cancel, `Last-Event-ID` reconnects, disconnect-independent
+  execution, max-active admission, run timeout, terminal retention, and shared
+  `PendingBroker`/`FanoutStore` wiring. Applications still own provider/auth,
+  routes, durable storage, shutdown, and any distributed run claims.
 - ZenMind `BuildRun` host resolvers for catalog skills, tool overrides, and
   workspace/host-access policy, with fail-closed policy declarations and
   complete executable `zenforge.Config` propagation.

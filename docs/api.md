@@ -69,6 +69,9 @@ package has its own page.
   AST and shell safety checks
 - [github.com/feiyu912/zenforge/server](https://pkg.go.dev/github.com/feiyu912/zenforge/server) —
   server adapters (HTTP, SSE)
+- [github.com/feiyu912/zenforge/server/harnesshttp](https://pkg.go.dev/github.com/feiyu912/zenforge/server/harnesshttp) —
+  synchronous handlers plus canonical `NewRuntime` assembly and a
+  single-process detached `RunManager`
 - [github.com/feiyu912/zenforge/adapters](https://pkg.go.dev/github.com/feiyu912/zenforge/adapters) —
   third-party adapters (MCP, memory, zenmind)
 - [github.com/feiyu912/zenforge/adapters/zenmind](https://pkg.go.dev/github.com/feiyu912/zenforge/adapters/zenmind) —
@@ -96,3 +99,23 @@ agent := zenforge.New(zenforge.Config{Model: modelClient, Skills: bundle})
 Ordinary `Config.Tools` remain callable operations and are not skills. A nil
 allowlist snapshots all discovered skills; pass an explicit list to restrict
 the bundle.
+
+## HTTP Runtime
+
+`harnesshttp.NewRuntime(config, durableEvents, options)` preserves
+application-owned configuration while replacing `Config.Events` and
+`Config.Approval` with one shared `eventlog.FanoutStore` and
+`approval.PendingBroker` used by the agent, handler, and manager. The caller
+retains ownership of the durable event store.
+
+Existing synchronous handlers remain available. Detached handlers add start,
+resume, status, attach, and explicit cancel. Start/resume return `202`
+`RunInfo` JSON; attach replays from `afterSeq` or `Last-Event-ID` and follows
+live events. Attachment disconnect does not cancel managed execution.
+
+`RunManagerOptions` controls `MaxActive`, `RunTimeout`, `TerminalRetention`,
+follow buffering, and run ID generation. Manager status, bus, and pending
+approvals are process-local; this API makes no distributed run claim.
+Applications own model/provider construction (OpenAI or Anthropic protocol and
+compatible base URLs), auth, route paths, durable store selection/closure, and
+server/runtime shutdown.

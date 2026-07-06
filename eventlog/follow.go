@@ -106,7 +106,9 @@ func follow(
 	out chan<- zenforge.Event,
 ) error {
 	defer func() {
-		unsubscribe()
+		if unsubscribe != nil {
+			unsubscribe()
+		}
 	}()
 	last := afterSeq
 	ticker := time.NewTicker(opts.PollInterval)
@@ -137,10 +139,11 @@ func follow(
 				if bus.RunClosed(runID) {
 					return nil
 				}
-				live, unsubscribe, err = bus.Subscribe(ctx, runID, opts.LiveBuffer)
-				if err != nil {
-					return err
+				nextLive, nextUnsubscribe, subscribeErr := bus.Subscribe(ctx, runID, opts.LiveBuffer)
+				if subscribeErr != nil {
+					return subscribeErr
 				}
+				live, unsubscribe = nextLive, nextUnsubscribe
 				continue
 			}
 			if event.Seq <= last {

@@ -16,6 +16,22 @@ what is experimental, and what remains adapter territory.
 - Long-running command cancellation depends on the configured shell or sandbox
   backend.
 
+## HTTP Lifecycle
+
+- Detached `RunManager` ownership, status retention, duplicate exclusion,
+  active-run accounting, the event bus, and `PendingBroker` are in-memory and
+  single-process. The durable event check is not a distributed atomic claim.
+- Multi-replica deployments need an external run lease/claim, shared approval
+  routing, durable status coordination, and deliberate reconnect routing.
+- Attachment disconnect stops only replay/follow delivery. It does not cancel
+  detached execution; callers must use explicit cancel, a run timeout, or
+  runtime shutdown.
+- Terminal retention removes only manager status records. Durable events remain
+  caller-owned and may still be replayed after status expires.
+- The application owns OpenAI/Anthropic protocol and compatible base URL
+  selection, credentials, auth/tenancy, route paths, durable stores and their
+  closure, HTTP server shutdown, and `Runtime.Close`.
+
 ## Tools And Safety
 
 - Shell is deny-by-default.

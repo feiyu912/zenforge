@@ -26,6 +26,7 @@ type Agent interface {
 // configured agent.
 type Handler struct {
 	Agent      Agent
+	Manager    *RunManager
 	Events     zenforge.EventStore
 	Bus        *eventlog.Bus
 	Approvals  *approval.PendingBroker
@@ -152,6 +153,177 @@ func (h *Handler) ServeResume(w http.ResponseWriter, r *http.Request) {
 	if err := sse.StreamHTTP(r.Context(), w, events, h.SSE); err != nil && !errors.Is(err, context.Canceled) {
 		writeError(w, http.StatusInternalServerError, "stream_failed", err.Error())
 	}
+}
+
+// ServeDetachedStart starts a run whose lifetime is owned by the configured manager.
+func (h *Handler) ServeDetachedStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "detached start requires POST")
+		return
+	}
+	if h.Manager == nil {
+		writeError(w, http.StatusServiceUnavailable, "manager_not_configured", "run manager is not configured")
+		return
+	}
+	var req RunRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	req.RunID = strings.TrimSpace(req.RunID)
+	req.Input = strings.TrimSpace(req.Input)
+	if req.Input == "" {
+		writeError(w, http.StatusBadRequest, "input_required", "input is required")
+		return
+	}
+	decision, ok := h.authorize(w, r, Operation{Name: "detachedStart", RunID: req.RunID})
+	if !ok {
+		return
+	}
+	info, err := h.Manager.Start(r.Context(), zenforge.Task{
+		RunID: req.RunID,
+		Input: req.Input,
+		Meta:  mergeMeta(req.Meta, decision.Meta),
+	})
+	if err != nil {
+		writeManagerError(w, "detached_start_failed", err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, info)
+}
+
+// ServeDetachedResume resumes a durable run under the configured manager.
+func (h *Handler) ServeDetachedResume(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost && r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "detached resume requires GET or POST")
+		return
+	}
+	if h.Manager == nil {
+		writeError(w, http.StatusServiceUnavailable, "manager_not_configured", "run manager is not configured")
+		return
+	}
+	runID, err := resumeRunID(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	if runID == "" {
+		writeError(w, http.StatusBadRequest, "run_id_required", "runId is required")
+		return
+	}
+	if _, ok := h.authorize(w, r, Operation{Name: "detachedResume", RunID: runID}); !ok {
+		return
+	}
+	info, err := h.Manager.Resume(r.Context(), runID)
+	if err != nil {
+		writeManagerError(w, "detached_resume_failed", err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, info)
+}
+
+// ServeDetachedStatus returns the manager's current snapshot for a run.
+func (h *Handler) ServeDetachedStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "detached status requires GET")
+		return
+	}
+	if h.Manager == nil {
+		writeError(w, http.StatusServiceUnavailable, "manager_not_configured", "run manager is not configured")
+		return
+	}
+	runID := strings.TrimSpace(r.URL.Query().Get("runId"))
+	if runID == "" {
+		writeError(w, http.StatusBadRequest, "run_id_required", "runId is required")
+		return
+	}
+	if _, ok := h.authorize(w, r, Operation{Name: "detachedStatus", RunID: runID}); !ok {
+		return
+	}
+	info, err := h.Manager.Get(runID)
+	if err != nil {
+		writeManagerError(w, "detached_status_failed", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, info)
+}
+
+// ServeDetachedAttach replays durable events and follows the run until completion.
+func (h *Handler) ServeDetachedAttach(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "detached attach requires GET")
+		return
+	}
+	if h.Manager == nil {
+		writeError(w, http.StatusServiceUnavailable, "manager_not_configured", "run manager is not configured")
+		return
+	}
+	runID := strings.TrimSpace(r.URL.Query().Get("runId"))
+	if runID == "" {
+		writeError(w, http.StatusBadRequest, "run_id_required", "runId is required")
+		return
+	}
+	if _, ok := h.authorize(w, r, Operation{Name: "detachedAttach", RunID: runID}); !ok {
+		return
+	}
+	afterSeq, err := int64Query(r, "afterSeq")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_after_seq", err.Error())
+		return
+	}
+	if _, present := r.URL.Query()["afterSeq"]; !present {
+		afterSeq, err = lastEventID(r)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_last_event_id", err.Error())
+			return
+		}
+	}
+	attachCtx, cancel := context.WithCancel(r.Context())
+	events, errs, err := h.Manager.Attach(attachCtx, runID, afterSeq)
+	if err != nil {
+		cancel()
+		writeManagerError(w, "detached_attach_failed", err)
+		return
+	}
+	streamErr := sse.StreamHTTP(r.Context(), w, events, h.SSE)
+	cancel()
+	followErr := <-errs
+	if streamErr != nil && !errors.Is(streamErr, context.Canceled) {
+		writeError(w, http.StatusInternalServerError, "stream_failed", streamErr.Error())
+		return
+	}
+	if followErr != nil && !errors.Is(followErr, context.Canceled) {
+		writeError(w, http.StatusInternalServerError, "detached_attach_failed", followErr.Error())
+	}
+}
+
+// ServeDetachedCancel explicitly cancels an active detached run.
+func (h *Handler) ServeDetachedCancel(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost && r.Method != http.MethodDelete {
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "detached cancel requires POST or DELETE")
+		return
+	}
+	if h.Manager == nil {
+		writeError(w, http.StatusServiceUnavailable, "manager_not_configured", "run manager is not configured")
+		return
+	}
+	runID, err := cancelRunID(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	if runID == "" {
+		writeError(w, http.StatusBadRequest, "run_id_required", "runId is required")
+		return
+	}
+	if _, ok := h.authorize(w, r, Operation{Name: "detachedCancel", RunID: runID}); !ok {
+		return
+	}
+	if err := h.Manager.Cancel(runID); err != nil {
+		writeManagerError(w, "detached_cancel_failed", err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"runId": runID})
 }
 
 // ServeEvents replays persisted events for a run as Server-Sent Events.
@@ -387,6 +559,20 @@ func resumeRunID(r *http.Request) (string, error) {
 	return runID, nil
 }
 
+func cancelRunID(r *http.Request) (string, error) {
+	if runID := strings.TrimSpace(r.URL.Query().Get("runId")); runID != "" {
+		return runID, nil
+	}
+	if r.Method == http.MethodDelete {
+		return "", nil
+	}
+	var req ResumeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(req.RunID), nil
+}
+
 func int64Query(r *http.Request, key string) (int64, error) {
 	raw := strings.TrimSpace(r.URL.Query().Get(key))
 	if raw == "" {
@@ -462,6 +648,23 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 			"message": message,
 		},
 	})
+}
+
+func writeManagerError(w http.ResponseWriter, code string, err error) {
+	status := http.StatusServiceUnavailable
+	switch {
+	case errors.Is(err, ErrInvalidRunID):
+		status = http.StatusBadRequest
+	case errors.Is(err, ErrRunNotFound), errors.Is(err, ErrResumeNotFound):
+		status = http.StatusNotFound
+	case errors.Is(err, ErrRunExists), errors.Is(err, ErrRunTerminal), errors.Is(err, ErrRunActive):
+		status = http.StatusConflict
+	case errors.Is(err, ErrMaxActive):
+		status = http.StatusTooManyRequests
+	case errors.Is(err, ErrManagerClosed), errors.Is(err, ErrEventsRequired):
+		status = http.StatusServiceUnavailable
+	}
+	writeError(w, status, code, err.Error())
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {

@@ -180,6 +180,10 @@ new core provider names.
   only `ScopeRule` across runs, isolated by tenant/subject and exact rule key
   plus fingerprint, with TTL and revocation support.
 - Durable event log and checkpoint stores: memory, JSONL, SQLite.
+- Canonical `server/harnesshttp.NewRuntime` assembly for detached HTTP
+  start/resume/status/attach/cancel, durable SSE reconnect with
+  `Last-Event-ID`, explicit cancellation, active-run limits, timeout, and
+  terminal status retention.
 - JSONL stores reject path-like run IDs and serialize writers across processes
   with advisory `flock`; checkpoint saves recover through a pending journal.
 - Sub-agent runtime tool with checkpoint-aware child resume; nested sub-agents blocked by default.
@@ -249,7 +253,12 @@ skills/
 - `POST /run`, `POST /resume`, `GET /events` (bounded replay), and `GET /live`
   (live fanout or durable replay-to-live with `replay=true`).
 - `GET /approvals`, `POST /approval` for run-scoped pending approval flows.
-- Access control hook to enforce auth and inject trusted metadata; ZenForge does not own auth, tenancy, or catalog loading.
+- Canonical `NewRuntime` wiring for detached start, resume, status, attach, and
+  explicit cancel. It shares one fanout store, bus, and pending broker;
+  disconnecting an attachment does not cancel the run.
+- The manager is single-process. Applications own distributed claims, model
+  provider/protocol and compatible base URL configuration, auth, route paths,
+  durable stores, and lifecycle shutdown.
 
 **Live events**
 - `eventlog.Bus` and `eventlog.FanoutStore` for multiple live subscribers.

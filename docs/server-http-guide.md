@@ -3,9 +3,15 @@
 The `server/harnesshttp` package is a small adapter layer for host platforms
 that want to expose a ZenForge agent over HTTP.
 
-It deliberately does not configure models, tools, auth, tenancy, or routing.
-Those stay in the host server. The handler receives an already-configured
-agent and exposes:
+It deliberately does not configure models, providers, auth, tenancy, durable
+storage, or routing. Those stay in the host server. The application selects an
+OpenAI or Anthropic protocol adapter (and any compatible base URL), supplies
+credentials, and chooses route paths.
+
+For detached runs, `harnesshttp.NewRuntime` is the canonical assembly. It
+creates one shared `approval.PendingBroker`, `eventlog.Bus`, and
+`eventlog.FanoutStore`, then wires the agent, manager, and handler to those same
+instances. The package exposes:
 
 - `POST /run` style JSON input to `Agent.Stream`;
 - `GET /resume?runId=...` or `POST /resume` to `Agent.Resume`;
@@ -13,25 +19,105 @@ agent and exposes:
 - optional `GET /live?runId=...` style live event fanout from `eventlog.Bus`;
 - optional `GET /approvals?runId=...` style pending approval query;
 - optional `POST /approval` style approval submit to `approval.PendingBroker`;
+- detached start, resume, status, attach, and cancel handlers;
 - standard Server-Sent Events responses through `server/sse`.
 
 ```go
-agent := zenforge.New(config)
-approvalBroker := approval.NewPendingBroker(128)
-liveBus := eventlog.NewBus()
-handler := harnesshttp.New(agent, sse.Options{RetryMillis: 1500})
-handler.Events = eventStore
-handler.Bus = liveBus
-handler.Approvals = approvalBroker
+runtime, err := harnesshttp.NewRuntime(config, durableEvents, harnesshttp.RuntimeOptions{
+    Access: access,
+    SSE:    sse.Options{RetryMillis: 1500},
+    Manager: harnesshttp.RunManagerOptions{
+        MaxActive:         32,
+        RunTimeout:        30 * time.Minute,
+        TerminalRetention: 5 * time.Minute,
+    },
+    ApprovalBuffer: 128,
+    LiveBuffer:     128,
+})
+if err != nil {
+    return err
+}
+defer runtime.Close(shutdownContext)
 
 mux := http.NewServeMux()
-mux.HandleFunc("/run", handler.ServeRun)
-mux.HandleFunc("/resume", handler.ServeResume)
-mux.HandleFunc("/events", handler.ServeEvents)
-mux.HandleFunc("/live", handler.ServeLiveEvents)
-mux.HandleFunc("/approvals", handler.ServeApprovals)
-mux.HandleFunc("/approval", handler.ServeApproval)
+mux.HandleFunc("/run", runtime.Handler.ServeRun)
+mux.HandleFunc("/resume", runtime.Handler.ServeResume)
+mux.HandleFunc("/events", runtime.Handler.ServeEvents)
+mux.HandleFunc("/live", runtime.Handler.ServeLiveEvents)
+mux.HandleFunc("/approvals", runtime.Handler.ServeApprovals)
+mux.HandleFunc("/approval", runtime.Handler.ServeApproval)
+mux.HandleFunc("/runs/start", runtime.Handler.ServeDetachedStart)
+mux.HandleFunc("/runs/resume", runtime.Handler.ServeDetachedResume)
+mux.HandleFunc("/runs/status", runtime.Handler.ServeDetachedStatus)
+mux.HandleFunc("/runs/attach", runtime.Handler.ServeDetachedAttach)
+mux.HandleFunc("/runs/cancel", runtime.Handler.ServeDetachedCancel)
 ```
+
+These paths are examples, not framework-owned routes. `Runtime.Close` rejects
+new detached work, cancels active runs, and waits for their drainers; it does
+not close the caller-owned durable store. The application owns HTTP server
+shutdown and store closure.
+
+The original synchronous `ServeRun` and `ServeResume` handlers remain
+available. Their execution uses the request context, so disconnecting cancels
+the synchronous stream.
+
+## Detached Run Lifecycle
+
+Start accepts the synchronous run body:
+
+```http
+POST /runs/start
+Content-Type: application/json
+
+{"runId":"run_123","input":"Review this repository.","meta":{"sessionId":"s_1"}}
+```
+
+`runId` is optional for start. Success returns `202 Accepted`:
+
+```json
+{
+  "runId": "run_123",
+  "status": "starting",
+  "startedAt": "2026-07-07T08:00:00Z",
+  "updatedAt": "2026-07-07T08:00:00Z",
+  "finishedAt": "0001-01-01T00:00:00Z"
+}
+```
+
+Resume requires durable event history and accepts
+`GET /runs/resume?runId=run_123` or `POST` with `{"runId":"run_123"}`. It also
+returns `202` `RunInfo` JSON. `GET /runs/status?runId=run_123` returns `200`;
+statuses are `starting`, `running`, `waiting_approval`, `completed`, `failed`,
+and `cancelled`. Terminal snapshots may include `error` and `finishedAt`.
+
+Attach uses `GET /runs/attach?runId=run_123&afterSeq=42`. It replays durable
+events after the cursor, then follows live appends as SSE. If `afterSeq` is
+absent, a non-negative integer `Last-Event-ID` is used; explicit `afterSeq`
+takes precedence. Closing the connection or a response-writer failure stops
+only that follower. The detached run and pending approval continue.
+
+Cancellation is explicit:
+
+```text
+DELETE /runs/cancel?runId=run_123
+POST /runs/cancel  {"runId":"run_123"}
+```
+
+Success returns `202` with `{"runId":"run_123"}`. Cancelling an already
+cancelled run is idempotent; another terminal state conflicts. Manager shutdown
+and `RunTimeout` also stop execution, with timeout reported as `failed`.
+
+`MaxActive > 0` bounds active runs and overflow maps to HTTP `429`.
+`TerminalRetention` defaults to five minutes; a negative value retains status
+until `Forget` or the manager is discarded. Retention removes only in-memory
+status, never durable events. After expiry, attach can still replay durable
+history but status is unavailable from that manager.
+
+The manager, bus, status, and pending broker are in-memory single-process
+components. Duplicate reservation is atomic only within one manager. The
+durable event check is not a distributed claim; replicas need external atomic
+ownership/leases, shared approval routing, and durable status coordination.
 
 ## Access Control
 
@@ -56,10 +142,10 @@ handler.Access = harnesshttp.AccessFunc(func(ctx context.Context, r *http.Reques
 })
 ```
 
-For `ServeRun`, trusted access metadata is merged into `zenforge.Task.Meta` and
-wins over client-supplied metadata on key conflicts. For `ServeResume`,
-`ServeEvents`, and `ServeLiveEvents`, the same hook authorizes the target run
-id. For
+For `ServeRun` and `ServeDetachedStart`, trusted access metadata is merged into
+`zenforge.Task.Meta` and wins over client-supplied metadata on key conflicts.
+The same hook authorizes synchronous and detached resume, status, attach,
+cancel, event, and live-event operations by run id. For
 `ServeApproval`, the handler resolves the pending approval request first and
 authorizes the associated run id before submitting the decision.
 `ServeApprovals` authorizes the requested run id before returning pending
