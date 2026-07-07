@@ -53,6 +53,121 @@ func TestRunManagerConcurrentDuplicateAndDurableDuplicate(t *testing.T) {
 	}
 }
 
+func TestRunManagerRegistryClaimsAcrossManagersAndKeepsStatus(t *testing.T) {
+	durable := eventlogmemory.New()
+	bus1 := eventlog.NewBus()
+	bus2 := eventlog.NewBus()
+	store1 := eventlog.NewFanoutStore(durable, bus1)
+	store2 := eventlog.NewFanoutStore(durable, bus2)
+	registry := NewMemoryRunRegistry()
+	agent1 := newManagerTestAgent(store1)
+	agent2 := newManagerTestAgent(store2)
+	manager1 := NewRunManager(agent1, store1, bus1, RunManagerOptions{
+		Registry: registry, OwnerID: "owner_1", TerminalRetention: 10 * time.Millisecond,
+	})
+	manager2 := NewRunManager(agent2, store2, bus2, RunManagerOptions{
+		Registry: registry, OwnerID: "owner_2", TerminalRetention: -1,
+	})
+	defer closeManager(t, manager1)
+	defer closeManager(t, manager2)
+
+	info, err := manager1.Start(context.Background(), zenforge.Task{RunID: "claimed", Input: "hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.OwnerID != "owner_1" || info.LeaseUntil == nil {
+		t.Fatalf("claimed info = %+v", info)
+	}
+	if _, err := manager2.Start(context.Background(), zenforge.Task{RunID: "claimed", Input: "hi"}); !errors.Is(err, ErrRunClaimed) {
+		t.Fatalf("second Start = %v, want ErrRunClaimed", err)
+	}
+	agent1.send("claimed", zenforge.NewEvent(zenforge.EventApprovalRequested, "claimed", nil))
+	waitStatus(t, manager2, "claimed", RunWaitingApproval)
+	agent1.finish("claimed", zenforge.EventRunDone)
+	waitStatus(t, manager2, "claimed", RunCompleted)
+	time.Sleep(20 * time.Millisecond)
+	if _, err := manager1.Get("claimed"); err != nil {
+		t.Fatalf("manager1 Get after retention = %v", err)
+	}
+}
+
+func TestMemoryRunRegistryLeaseExpiryAllowsClaim(t *testing.T) {
+	now := time.Unix(100, 0).UTC()
+	registry := newMemoryRunRegistryWithClock(func() time.Time { return now })
+	lease, err := registry.Claim(context.Background(), RunClaim{
+		RunID: "run_expire", OwnerID: "owner_1", Status: RunStarting,
+		LeaseUntil: now.Add(time.Second), StartedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.Claim(context.Background(), RunClaim{
+		RunID: "run_expire", OwnerID: "owner_2", Status: RunStarting,
+		LeaseUntil: now.Add(time.Second), StartedAt: now, UpdatedAt: now,
+	}); !errors.Is(err, ErrRunClaimed) {
+		t.Fatalf("claim before expiry = %v", err)
+	}
+	now = now.Add(2 * time.Second)
+	lease2, err := registry.Claim(context.Background(), RunClaim{
+		RunID: "run_expire", OwnerID: "owner_2", Status: RunStarting,
+		LeaseUntil: now.Add(time.Second), StartedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Update(context.Background(), lease, RunInfo{
+		Status: RunRunning, LeaseUntil: timePtr(now.Add(time.Second)), UpdatedAt: now,
+	}); !errors.Is(err, ErrRunLeaseLost) {
+		t.Fatalf("stale update = %v, want ErrRunLeaseLost", err)
+	}
+	if err := registry.Update(context.Background(), lease2, RunInfo{
+		Status: RunRunning, LeaseUntil: timePtr(now.Add(time.Second)), UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("new lease update = %v", err)
+	}
+}
+
+func TestSQLiteRunRegistryClaimsAcrossConnections(t *testing.T) {
+	path := t.TempDir() + "/runs.db"
+	registry1, err := OpenSQLiteRunRegistry(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer registry1.Close()
+	registry2, err := OpenSQLiteRunRegistry(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer registry2.Close()
+	now := time.Now().UTC()
+	lease, err := registry1.Claim(context.Background(), RunClaim{
+		RunID: "sqlite_claim", OwnerID: "owner_1", Status: RunStarting,
+		LeaseUntil: now.Add(time.Minute), StartedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry2.Claim(context.Background(), RunClaim{
+		RunID: "sqlite_claim", OwnerID: "owner_2", Status: RunStarting,
+		LeaseUntil: now.Add(time.Minute), StartedAt: now, UpdatedAt: now,
+	}); !errors.Is(err, ErrRunClaimed) {
+		t.Fatalf("second sqlite claim = %v", err)
+	}
+	if err := registry1.Release(context.Background(), lease, RunInfo{
+		RunID: "sqlite_claim", OwnerID: "owner_1", Status: RunCompleted,
+		StartedAt: now, UpdatedAt: now, FinishedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	info, err := registry2.Get(context.Background(), "sqlite_claim")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Status != RunCompleted || info.LeaseUntil != nil {
+		t.Fatalf("sqlite info = %+v", info)
+	}
+}
+
 func TestRunManagerDrainsWithoutSubscribers(t *testing.T) {
 	manager, agent, _ := newTestRunManager(t, RunManagerOptions{TerminalRetention: -1})
 	defer closeManager(t, manager)
@@ -283,12 +398,16 @@ func newTestRunManager(t *testing.T, opts RunManagerOptions) (*RunManager, *mana
 	durable := eventlogmemory.New()
 	bus := eventlog.NewBus()
 	store := eventlog.NewFanoutStore(durable, bus)
-	agent := &managerTestAgent{
+	agent := newManagerTestAgent(store)
+	return NewRunManager(agent, store, bus, opts), agent, store
+}
+
+func newManagerTestAgent(store eventlog.Store) *managerTestAgent {
+	return &managerTestAgent{
 		streams: make(map[string]chan zenforge.Event),
 		ctxs:    make(map[string]context.Context),
 		store:   store,
 	}
-	return NewRunManager(agent, store, bus, opts), agent, store
 }
 
 func (a *managerTestAgent) Stream(ctx context.Context, task zenforge.Task) (<-chan zenforge.Event, error) {

@@ -71,7 +71,7 @@ package has its own page.
   server adapters (HTTP, SSE)
 - [github.com/feiyu912/zenforge/server/harnesshttp](https://pkg.go.dev/github.com/feiyu912/zenforge/server/harnesshttp) —
   synchronous handlers plus canonical `NewRuntime` assembly and a
-  single-process detached `RunManager`
+  detached `RunManager` with optional shared registry
 - [github.com/feiyu912/zenforge/adapters](https://pkg.go.dev/github.com/feiyu912/zenforge/adapters) —
   third-party adapters (MCP, memory, zenmind)
 - [github.com/feiyu912/zenforge/adapters/zenmind](https://pkg.go.dev/github.com/feiyu912/zenforge/adapters/zenmind) —
@@ -116,9 +116,10 @@ resume, status, attach, and explicit cancel. Start/resume return `202`
 live events. Attachment disconnect does not cancel managed execution.
 
 `RunManagerOptions` controls `MaxActive`, `RunTimeout`, `TerminalRetention`,
-follow buffering, and run ID generation. Manager status and bus are
-process-local; a durable approval inbox can be shared, but this API makes no
-distributed run claim.
+follow buffering, run ID generation, and the optional `RunRegistry`. Without a
+registry, manager status and duplicate exclusion are process-local. With a
+registry, detached start/resume uses shared leases and `Get` can read durable
+status after local retention expires. The live bus remains process-local.
 Applications own model/provider construction (OpenAI or Anthropic protocol and
 compatible base URLs), auth, route paths, durable store selection/closure, and
 server/runtime shutdown.

@@ -48,6 +48,9 @@ func NewRuntime(config zenforge.Config, durable eventlog.Store, opts RuntimeOpti
 	if opts.ApprovalInbox != nil && nilInterface(opts.ApprovalInbox) {
 		return nil, fmt.Errorf("approval inbox is nil")
 	}
+	if opts.Manager.Registry != nil && nilRunRegistry(opts.Manager.Registry) {
+		return nil, fmt.Errorf("run registry is nil")
+	}
 
 	bus := eventlog.NewBus()
 	events := eventlog.NewFanoutStore(durable, bus)

@@ -84,6 +84,28 @@ the agent uses it as `Config.Approval`. A submit response means the decision was
 committed to the inbox; it does not mean the run has already consumed the
 decision or reached a terminal event.
 
+For shared detached execution routing, pass a run registry:
+
+```go
+runRegistry, err := harnesshttp.OpenSQLiteRunRegistry(ctx, "./detached-runs.db")
+if err != nil {
+    return err
+}
+runtime, err := harnesshttp.NewRuntime(config, durableEvents, harnesshttp.RuntimeOptions{
+    Manager: harnesshttp.RunManagerOptions{
+        Registry:      runRegistry,
+        OwnerID:       "worker-a",
+        LeaseDuration: 30 * time.Second,
+    },
+})
+```
+
+The registry atomically claims start/resume work, refreshes an active lease,
+and preserves manager status for `GET /runs/status` after process-local
+retention expires. `harnesshttp.NewMemoryRunRegistry` is available for tests
+and embedded single-process deployments; `OpenSQLiteRunRegistry` is the durable
+local implementation.
+
 ## Detached Run Lifecycle
 
 Start accepts the synchronous run body:
@@ -131,16 +153,18 @@ cancelled run is idempotent; another terminal state conflicts. Manager shutdown
 and `RunTimeout` also stop execution, with timeout reported as `failed`.
 
 `MaxActive > 0` bounds active runs and overflow maps to HTTP `429`.
-`TerminalRetention` defaults to five minutes; a negative value retains status
-until `Forget` or the manager is discarded. Retention removes only in-memory
-status, never durable events. After expiry, attach can still replay durable
-history but status is unavailable from that manager.
+`TerminalRetention` defaults to five minutes; a negative value retains
+process-local status until `Forget` or the manager is discarded. Retention
+removes only the manager's in-memory status, never durable events or registry
+records. Without a registry, status after retention is unavailable from that
+manager. With a registry, `Get` and `ServeDetachedStatus` fall back to the
+durable registry record.
 
-The manager, bus, and status are in-memory single-process components. Duplicate
-reservation is atomic only within one manager. The durable event check is not a
-distributed claim; replicas need external atomic ownership/leases and durable
-status coordination. `ApprovalInbox` can make approval listing/submission
-shared, but it does not make detached execution itself distributed.
+By default, duplicate reservation is atomic only within one manager. With a
+registry, duplicate start/resume is fenced by the registry lease, and stale
+owners cannot refresh or release a stolen lease. The event bus remains
+process-local, and applications still own reconnect routing, model/tool
+side-effect idempotency, provider configuration, auth, and shutdown.
 
 ## Access Control
 

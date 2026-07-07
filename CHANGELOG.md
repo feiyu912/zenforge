@@ -4,12 +4,16 @@
 
 ### Added
 
+- Optional detached run registry for `server/harnesshttp.RunManager`, with
+  shared run claims, lease refresh, durable status lookup, in-memory and SQLite
+  registry implementations, and `NewRuntime` validation. The default remains
+  process-local unless an application supplies a registry.
 - Canonical `server/harnesshttp.NewRuntime` assembly and a single-process
   detached HTTP lifecycle with start, resume, status, replay-to-live attach,
   explicit cancel, `Last-Event-ID` reconnects, disconnect-independent
   execution, max-active admission, run timeout, terminal retention, and shared
-  approval/FanoutStore wiring. Applications still own provider/auth,
-  routes, durable storage, shutdown, and any distributed run claims.
+  approval/FanoutStore wiring. Applications still own provider/auth, routes,
+  durable storage, shutdown, and side-effect idempotency.
 - Durable approval inbox interfaces, memory and SQLite pending stores, and a
   polling `approval.StoreBroker`. Agents register approval requests after the
   waiting checkpoint and before `approval.requested`; HTTP approval submission

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -34,12 +35,15 @@ var (
 	ErrRunTerminal    = errors.New("run is already terminal")
 	ErrRunActive      = errors.New("run is still active")
 	ErrInvalidRunID   = errors.New("run ID is required")
+	ErrRunClaimed     = fmt.Errorf("%w: run is claimed by another owner", ErrRunExists)
+	ErrRunLeaseLost   = errors.New("run lease lost")
 	ErrEventsExist    = fmt.Errorf("%w: durable events already exist", ErrRunExists)
 	ErrResumeNotFound = fmt.Errorf("%w: no durable events exist", ErrRunNotFound)
 	ErrEventsRequired = errors.New("event store and bus are required")
 )
 
 const defaultTerminalRetention = 5 * time.Minute
+const defaultLeaseDuration = 30 * time.Second
 
 // RunManagerOptions controls detached execution. TerminalRetention defaults to
 // five minutes. A negative value retains terminal records until Forget or the
@@ -48,22 +52,57 @@ type RunManagerOptions struct {
 	MaxActive         int
 	RunTimeout        time.Duration
 	TerminalRetention time.Duration
+	Registry          RunRegistry
+	OwnerID           string
+	LeaseDuration     time.Duration
+	HeartbeatInterval time.Duration
 	Follow            eventlog.FollowOptions
 	NewRunID          func() string
 }
 
+// RunRegistry is an optional shared claim/status store for detached managers.
+//
+// A registry turns duplicate exclusion from a single-process map check into a
+// cross-manager lease. Implementations must atomically reject Claim while an
+// unexpired nonterminal claim for the same run exists.
+type RunRegistry interface {
+	Claim(ctx context.Context, claim RunClaim) (RunLease, error)
+	Update(ctx context.Context, lease RunLease, info RunInfo) error
+	Release(ctx context.Context, lease RunLease, info RunInfo) error
+	Get(ctx context.Context, runID string) (RunInfo, error)
+}
+
+type RunClaim struct {
+	RunID      string
+	OwnerID    string
+	Status     RunStatus
+	LeaseUntil time.Time
+	StartedAt  time.Time
+	UpdatedAt  time.Time
+	Resume     bool
+}
+
+type RunLease struct {
+	RunID   string
+	OwnerID string
+	Token   string
+}
+
 // RunInfo is an immutable snapshot of a managed run.
 type RunInfo struct {
-	RunID      string    `json:"runId"`
-	Status     RunStatus `json:"status"`
-	Error      string    `json:"error,omitempty"`
-	StartedAt  time.Time `json:"startedAt"`
-	UpdatedAt  time.Time `json:"updatedAt"`
-	FinishedAt time.Time `json:"finishedAt"`
+	RunID      string     `json:"runId"`
+	Status     RunStatus  `json:"status"`
+	Error      string     `json:"error,omitempty"`
+	OwnerID    string     `json:"ownerId,omitempty"`
+	LeaseUntil *time.Time `json:"leaseUntil,omitempty"`
+	StartedAt  time.Time  `json:"startedAt"`
+	UpdatedAt  time.Time  `json:"updatedAt"`
+	FinishedAt time.Time  `json:"finishedAt"`
 }
 
 type managedRun struct {
 	info   RunInfo
+	lease  RunLease
 	cancel context.CancelFunc
 	done   chan struct{}
 	timer  *time.Timer
@@ -71,9 +110,8 @@ type managedRun struct {
 
 // RunManager owns detached run contexts and their sole stream drainers.
 //
-// Duplicate exclusion is deliberately a single-process contract. The durable
-// event check prevents reuse of an existing run ID, but is not a distributed
-// claim; deployments with multiple managers need an external atomic claim.
+// Duplicate exclusion is single-process by default. Configure Registry to back
+// start/resume with a shared lease and durable status record.
 type RunManager struct {
 	agent  Agent
 	events eventlog.Store
@@ -95,8 +133,17 @@ func NewRunManager(agent Agent, events eventlog.Store, bus *eventlog.Bus, opts R
 	if opts.TerminalRetention == 0 {
 		opts.TerminalRetention = defaultTerminalRetention
 	}
+	if opts.LeaseDuration == 0 {
+		opts.LeaseDuration = defaultLeaseDuration
+	}
+	if opts.HeartbeatInterval == 0 && opts.LeaseDuration > 0 {
+		opts.HeartbeatInterval = opts.LeaseDuration / 3
+	}
 	if opts.NewRunID == nil {
 		opts.NewRunID = randomRunID
+	}
+	if strings.TrimSpace(opts.OwnerID) == "" {
+		opts.OwnerID = randomOwnerID()
 	}
 	return &RunManager{
 		agent: agent, events: events, bus: bus, opts: opts,
@@ -148,6 +195,15 @@ func (m *RunManager) start(
 	if m.events == nil || m.bus == nil {
 		return RunInfo{RunID: runID}, ErrEventsRequired
 	}
+	if m.opts.Registry != nil && nilRunRegistry(m.opts.Registry) {
+		return RunInfo{RunID: runID}, fmt.Errorf("run registry is nil")
+	}
+	if m.opts.Registry != nil && m.opts.LeaseDuration <= 0 {
+		return RunInfo{RunID: runID}, fmt.Errorf("run lease duration must be positive")
+	}
+	if m.opts.Registry != nil && m.opts.HeartbeatInterval < 0 {
+		return RunInfo{RunID: runID}, fmt.Errorf("run heartbeat interval must be non-negative")
+	}
 
 	m.mu.Lock()
 	if m.closed {
@@ -176,13 +232,36 @@ func (m *RunManager) start(
 		return RunInfo{RunID: runID}, ErrResumeNotFound
 	}
 
+	now := time.Now().UTC()
+	var lease RunLease
+	var leaseUntil *time.Time
+	if m.opts.Registry != nil {
+		until := now.Add(m.opts.LeaseDuration)
+		claimed, err := m.opts.Registry.Claim(ctx, RunClaim{
+			RunID: runID, OwnerID: m.opts.OwnerID, Status: RunStarting,
+			LeaseUntil: until, StartedAt: now, UpdatedAt: now, Resume: resume,
+		})
+		if err != nil {
+			m.mu.Unlock()
+			if errors.Is(err, ErrRunExists) || errors.Is(err, ErrRunClaimed) {
+				return RunInfo{RunID: runID}, ErrRunClaimed
+			}
+			return RunInfo{RunID: runID}, fmt.Errorf("claim run %q: %w", runID, err)
+		}
+		lease = claimed
+		leaseUntil = &until
+	}
+
 	runCtx, cancel := context.WithCancel(m.rootCtx)
 	if m.opts.RunTimeout > 0 {
 		runCtx, cancel = context.WithTimeout(m.rootCtx, m.opts.RunTimeout)
 	}
-	now := time.Now().UTC()
 	run := &managedRun{
-		info:   RunInfo{RunID: runID, Status: RunStarting, StartedAt: now, UpdatedAt: now},
+		info: RunInfo{
+			RunID: runID, Status: RunStarting, OwnerID: m.registryOwnerID(),
+			LeaseUntil: leaseUntil, StartedAt: now, UpdatedAt: now,
+		},
+		lease:  lease,
 		cancel: cancel, done: make(chan struct{}),
 	}
 	// Reservation happens before Agent.Stream so concurrent starts fail closed.
@@ -201,6 +280,7 @@ func (m *RunManager) start(
 		m.finishLocked(run, RunFailed, err)
 		info := run.info
 		m.mu.Unlock()
+		m.releaseRegistry(run)
 		m.wg.Done()
 		return info, err
 	}
@@ -212,8 +292,13 @@ func (m *RunManager) start(
 		m.finishLocked(run, RunFailed, err)
 		info := run.info
 		m.mu.Unlock()
+		m.releaseRegistry(run)
 		m.wg.Done()
 		return info, err
+	}
+	if m.opts.Registry != nil && m.opts.HeartbeatInterval > 0 {
+		m.wg.Add(1)
+		go m.heartbeat(run)
 	}
 	go m.drain(run, runCtx, events)
 	m.mu.Lock()
@@ -248,25 +333,35 @@ func (m *RunManager) drain(run *managedRun, ctx context.Context, events <-chan z
 
 	err = m.persistTerminal(runID, status, err)
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	m.finishLocked(run, status, err)
+	m.mu.Unlock()
+	m.releaseRegistry(run)
 }
 
 func (m *RunManager) observe(run *managedRun, event zenforge.Event) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if terminal(run.info.Status) {
+		m.mu.Unlock()
 		return
 	}
 	switch event.Type {
 	case zenforge.EventApprovalRequested:
 		m.setStatusLocked(run, RunWaitingApproval)
+		m.mu.Unlock()
+		m.updateRegistry(run)
 	case zenforge.EventApprovalResolved, zenforge.EventApprovalExpired:
 		m.setStatusLocked(run, RunRunning)
+		m.mu.Unlock()
+		m.updateRegistry(run)
 	case zenforge.EventRunDone:
 		m.finishLocked(run, RunCompleted, nil)
+		m.mu.Unlock()
+		m.releaseRegistry(run)
 	case zenforge.EventRunError:
-		m.finishLocked(run, RunFailed, eventError(event))
+		err := eventError(event)
+		m.finishLocked(run, RunFailed, err)
+		m.mu.Unlock()
+		m.releaseRegistry(run)
 	case zenforge.EventRunCancelled:
 		err := eventError(event)
 		status := RunCancelled
@@ -274,21 +369,32 @@ func (m *RunManager) observe(run *managedRun, event zenforge.Event) {
 			status = RunFailed
 		}
 		m.finishLocked(run, status, err)
+		m.mu.Unlock()
+		m.releaseRegistry(run)
 	default:
 		if run.info.Status == RunStarting {
 			m.setStatusLocked(run, RunRunning)
+			m.mu.Unlock()
+			m.updateRegistry(run)
+			return
 		}
+		m.mu.Unlock()
 	}
 }
 
 func (m *RunManager) Get(runID string) (RunInfo, error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	run, ok := m.runs[strings.TrimSpace(runID)]
-	if !ok {
-		return RunInfo{}, ErrRunNotFound
+	if ok {
+		info := run.info
+		m.mu.Unlock()
+		return info, nil
 	}
-	return run.info, nil
+	m.mu.Unlock()
+	if m.opts.Registry != nil && !nilRunRegistry(m.opts.Registry) {
+		return m.opts.Registry.Get(context.Background(), strings.TrimSpace(runID))
+	}
+	return RunInfo{}, ErrRunNotFound
 }
 
 // Attach replays durable events and then follows live appends. Cancelling the
@@ -412,6 +518,82 @@ func (m *RunManager) finishLocked(run *managedRun, status RunStatus, err error) 
 	}
 }
 
+func (m *RunManager) heartbeat(run *managedRun) {
+	defer m.wg.Done()
+	ticker := time.NewTicker(m.opts.HeartbeatInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-run.done:
+			return
+		case <-m.rootCtx.Done():
+			return
+		case <-ticker.C:
+			m.mu.Lock()
+			if terminal(run.info.Status) {
+				m.mu.Unlock()
+				return
+			}
+			until := time.Now().UTC().Add(m.opts.LeaseDuration)
+			run.info.LeaseUntil = &until
+			info := run.info
+			m.mu.Unlock()
+			if err := m.opts.Registry.Update(context.Background(), run.lease, info); err != nil {
+				m.mu.Lock()
+				if !terminal(run.info.Status) {
+					run.info.Error = err.Error()
+					run.cancel()
+				}
+				m.mu.Unlock()
+				return
+			}
+		}
+	}
+}
+
+func (m *RunManager) updateRegistry(run *managedRun) {
+	if m.opts.Registry == nil || nilRunRegistry(m.opts.Registry) {
+		return
+	}
+	m.mu.Lock()
+	info := run.info
+	lease := run.lease
+	m.mu.Unlock()
+	if err := m.opts.Registry.Update(context.Background(), lease, info); err != nil {
+		m.mu.Lock()
+		if !terminal(run.info.Status) {
+			run.info.Error = err.Error()
+			run.cancel()
+		}
+		m.mu.Unlock()
+	}
+}
+
+func (m *RunManager) releaseRegistry(run *managedRun) {
+	if m.opts.Registry == nil || nilRunRegistry(m.opts.Registry) {
+		return
+	}
+	m.mu.Lock()
+	info := run.info
+	m.mu.Unlock()
+	info.LeaseUntil = nil
+	if releaseErr := m.opts.Registry.Release(context.Background(), run.lease, info); releaseErr != nil {
+		m.mu.Lock()
+		if !terminal(run.info.Status) {
+			run.info.Error = releaseErr.Error()
+			run.cancel()
+		}
+		m.mu.Unlock()
+	}
+}
+
+func (m *RunManager) registryOwnerID() string {
+	if m.opts.Registry == nil || nilRunRegistry(m.opts.Registry) {
+		return ""
+	}
+	return m.opts.OwnerID
+}
+
 func terminal(status RunStatus) bool {
 	return status == RunCompleted || status == RunFailed || status == RunCancelled
 }
@@ -477,4 +659,33 @@ func randomRunID() string {
 		return fmt.Sprintf("run_%d", time.Now().UnixNano())
 	}
 	return "run_" + hex.EncodeToString(raw[:])
+}
+
+func randomOwnerID() string {
+	var raw [8]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return fmt.Sprintf("owner_%d", time.Now().UnixNano())
+	}
+	return "owner_" + hex.EncodeToString(raw[:])
+}
+
+func randomLeaseToken() string {
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return fmt.Sprintf("lease_%d", time.Now().UnixNano())
+	}
+	return "lease_" + hex.EncodeToString(raw[:])
+}
+
+func nilRunRegistry(registry RunRegistry) bool {
+	if registry == nil {
+		return true
+	}
+	reflected := reflect.ValueOf(registry)
+	switch reflected.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return reflected.IsNil()
+	default:
+		return false
+	}
 }

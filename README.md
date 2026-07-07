@@ -189,6 +189,9 @@ new core provider names.
   start/resume/status/attach/cancel, durable SSE reconnect with
   `Last-Event-ID`, explicit cancellation, active-run limits, timeout, and
   terminal status retention.
+- Optional detached run registry (`RunRegistry`) for shared start/resume
+  claims, lease refresh, and durable status lookup across managers, with
+  memory and SQLite implementations.
 - JSONL stores reject path-like run IDs and serialize writers across processes
   with advisory `flock`; checkpoint saves recover through a pending journal.
 - Sub-agent runtime tool with checkpoint-aware child resume; nested sub-agents blocked by default.
@@ -261,9 +264,12 @@ skills/
 - Canonical `NewRuntime` wiring for detached start, resume, status, attach, and
   explicit cancel. It shares one fanout store, bus, and approval inbox;
   disconnecting an attachment does not cancel the run.
-- The manager is single-process. Applications own distributed claims, model
-  provider/protocol and compatible base URL configuration, auth, route paths,
-  durable stores, and lifecycle shutdown.
+- The manager is single-process by default. Configure `RunManagerOptions.Registry`
+  with `NewMemoryRunRegistry` or `OpenSQLiteRunRegistry` to add shared run
+  claims, lease refresh, and durable status lookup. Applications still own
+  model provider/protocol and compatible base URL configuration, auth, route
+  paths, durable store closure, lifecycle shutdown, and idempotent external
+  side effects.
 
 **Live events**
 - `eventlog.Bus` and `eventlog.FanoutStore` for multiple live subscribers.

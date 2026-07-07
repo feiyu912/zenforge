@@ -67,7 +67,7 @@ V0.2 Production hardening
 | S8 | The built-in Docker sandbox, fake sandbox backend, and Container Hub beta adapter are contract-tested. A gated real-Docker consumer test verifies Linux execution and a read-only workspace mount; a real Container Hub service remains external acceptance. |
 | MVP | Repository-scoped acceptance is implemented and test-mapped. The complete `examples/harness-agent` app and independent `integration/consumer` module cover environment-owned models, Agent Skill progressive disclosure, typed tools, HITL, and Docker-backed shell execution. Live provider credentials remain an application-owned smoke test. |
 | V0.1 | `v0.1.0` was tagged. Repository wire goldens cover the ZenMind DTO/projector/approval/event-line boundary at `agent-platform@1893edb5`. The downstream engine bridge, feature-flag selector, HTTP/SSE/WS, approval, attach, and fallback integration is implemented and tested on `agent-platform` branch `codex/zenforge-engine-bridge@82ca4d3`, but is not yet merged to platform `main`. |
-| V0.2 | Repository hardening includes SQLite soak coverage, Go 1.26-only CI, JSONL crash/concurrency safety, typed tools, filesystem Agent Skill catalogs and progressive disclosure, bounded shell/Hub/Docker responses, fail-closed checkpoint/ZenMind adapter loading, host-resolved run assembly, approval correlation recovery, run-scoped strict projection with v2/v1 state compatibility, optional cross-run persistent rule authorization, durable model-attempt replacement, replay-to-live SSE, and a canonical single-process detached HTTP lifecycle with disconnect-safe attach, explicit cancel, admission/timeout/retention controls, and shared approval/event wiring. Independent consumer CI is also present. Marketplace lifecycle, distributed run ownership, and external acceptance remain incomplete. This roadmap stage is not declared complete. |
+| V0.2 | Repository hardening includes SQLite soak coverage, Go 1.26-only CI, JSONL crash/concurrency safety, typed tools, filesystem Agent Skill catalogs and progressive disclosure, bounded shell/Hub/Docker responses, fail-closed checkpoint/ZenMind adapter loading, host-resolved run assembly, approval correlation recovery, run-scoped strict projection with v2/v1 state compatibility, optional cross-run persistent rule authorization, durable model-attempt replacement, replay-to-live SSE, canonical detached HTTP lifecycle, and optional memory/SQLite run registries for shared claims and durable status. Independent consumer CI is also present. Marketplace lifecycle, full multi-replica operational acceptance, and external acceptance remain incomplete. This roadmap stage is not declared complete. |
 
 Completion in this table distinguishes ZenForge repository tests from tests on
 the named downstream integration branch. It does not claim merge to
@@ -502,6 +502,8 @@ Completed in this repository:
 - canonical single-process detached HTTP start/resume/status/attach/cancel,
   disconnect-independent execution, shared event/approval wiring, explicit
   cancel, and admission, timeout, and retention controls;
+- optional detached run registry with memory/SQLite implementations for shared
+  start/resume claims, lease refresh, and durable manager status lookup;
 - SQLite checkpoint store and JSONL crash/concurrency hardening;
 - OpenTelemetry trace sink, Container Hub beta adapter, MCP tool adapter,
   memory adapter, and server/SSE helpers;
@@ -522,9 +524,9 @@ Remaining:
   same-step attempt replacement from the committed prompt boundary;
 - external acceptance, including downstream platform merge/deployment and a
   smoke against a real Container Hub service.
-- distributed detached-run claims and durable manager status for multi-replica
-  deployments. Shared approval routing is implemented through durable inboxes,
-  but it does not imply distributed run ownership.
+- full multi-replica operational guidance and external acceptance. Registry
+  leases fence detached run ownership, but applications still own deployment
+  routing, provider/tool side-effect idempotency, and shutdown policy.
 
 ## First ZenMind Integration
 

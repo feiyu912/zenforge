@@ -119,6 +119,7 @@ func TestNewRuntimeUsesApplicationDurableApprovalInbox(t *testing.T) {
 
 func TestNewRuntimeRejectsInvalidInputs(t *testing.T) {
 	var typedNil *runtimeTestStore
+	var typedNilRegistry *MemoryRunRegistry
 	tests := []struct {
 		name    string
 		store   eventlog.Store
@@ -128,6 +129,7 @@ func TestNewRuntimeRejectsInvalidInputs(t *testing.T) {
 		{name: "typed nil durable store", store: typedNil},
 		{name: "negative approval buffer", store: eventlogmemory.New(), options: RuntimeOptions{ApprovalBuffer: -1}},
 		{name: "negative live buffer", store: eventlogmemory.New(), options: RuntimeOptions{LiveBuffer: -1}},
+		{name: "typed nil run registry", store: eventlogmemory.New(), options: RuntimeOptions{Manager: RunManagerOptions{Registry: typedNilRegistry}}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
