@@ -25,6 +25,7 @@ func TestDetachedHandlersRejectUnsupportedMethods(t *testing.T) {
 		{"start", http.MethodGet, handler.ServeDetachedStart},
 		{"resume", http.MethodPut, handler.ServeDetachedResume},
 		{"status", http.MethodPost, handler.ServeDetachedStatus},
+		{"runs", http.MethodPost, handler.ServeDetachedRuns},
 		{"attach", http.MethodPost, handler.ServeDetachedAttach},
 		{"cancel", http.MethodGet, handler.ServeDetachedCancel},
 	}
@@ -76,6 +77,42 @@ func TestDetachedStartAuthorizationMetaAndStatus(t *testing.T) {
 	}
 	agent.finish("run_http", zenforge.EventRunDone)
 	waitStatus(t, manager, "run_http", RunCompleted)
+}
+
+func TestDetachedRunsListsAuthorizedManagerSnapshots(t *testing.T) {
+	manager, agent, _ := newTestRunManager(t, RunManagerOptions{TerminalRetention: -1})
+	defer closeManager(t, manager)
+	var operation Operation
+	handler := &Handler{
+		Manager: manager,
+		Access: AccessFunc(func(_ context.Context, _ *http.Request, op Operation) (AccessDecision, error) {
+			operation = op
+			return AccessDecision{}, nil
+		}),
+	}
+	startDetached(t, handler, "list_a")
+	time.Sleep(time.Millisecond)
+	startDetached(t, handler, "list_b")
+	agent.send("list_a", zenforge.NewEvent(zenforge.EventApprovalRequested, "list_a", nil))
+	waitStatus(t, manager, "list_a", RunWaitingApproval)
+
+	rec := httptest.NewRecorder()
+	handler.ServeDetachedRuns(rec, httptest.NewRequest(http.MethodGet, "/detached/runs", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", rec.Code, rec.Body.String())
+	}
+	if operation != (Operation{Name: "detachedRuns"}) {
+		t.Fatalf("operation = %+v", operation)
+	}
+	var body struct {
+		Runs []RunInfo `json:"runs"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Runs) != 2 || body.Runs[0].RunID != "list_a" || body.Runs[0].Status != RunWaitingApproval {
+		t.Fatalf("runs = %+v", body.Runs)
+	}
 }
 
 func TestDetachedAuthorizationFailureDoesNotStart(t *testing.T) {

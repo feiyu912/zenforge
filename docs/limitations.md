@@ -22,12 +22,13 @@ what is experimental, and what remains adapter territory.
   active-run accounting are process-local unless `RunManagerOptions.Registry`
   is configured. `NewMemoryRunRegistry` and `OpenSQLiteRunRegistry` provide the
   supported registry implementations.
-- Registry leases fence start/resume ownership and preserve durable status, but
-  the live event bus is still process-local. Multi-replica deployments still
-  need deliberate reconnect routing, provider/tool side-effect idempotency, and
-  application-owned shutdown policy. Durable approval inboxes make approval
-  list/submit shareable; they do not by themselves move execution between
-  workers.
+- Registry leases fence start/resume ownership and preserve durable status/list
+  snapshots. Another manager can attach by replaying and polling the shared
+  event store, but the live event bus is still process-local. Multi-replica
+  deployments still need deliberate reconnect routing, provider/tool
+  side-effect idempotency, and application-owned shutdown policy. Durable
+  approval inboxes make approval list/submit shareable; they do not by
+  themselves move execution between workers.
 - Attachment disconnect stops only replay/follow delivery. It does not cancel
   detached execution; callers must use explicit cancel, a run timeout, or
   runtime shutdown.

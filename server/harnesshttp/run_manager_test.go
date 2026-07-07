@@ -89,6 +89,78 @@ func TestRunManagerRegistryClaimsAcrossManagersAndKeepsStatus(t *testing.T) {
 	if _, err := manager1.Get("claimed"); err != nil {
 		t.Fatalf("manager1 Get after retention = %v", err)
 	}
+	listed, err := manager2.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || listed[0].RunID != "claimed" || listed[0].Status != RunCompleted {
+		t.Fatalf("registry list = %+v", listed)
+	}
+}
+
+func TestRunManagerAttachAcrossManagersUsesDurableReplayAndPolling(t *testing.T) {
+	durable := eventlogmemory.New()
+	bus1 := eventlog.NewBus()
+	bus2 := eventlog.NewBus()
+	store1 := eventlog.NewFanoutStore(durable, bus1)
+	store2 := eventlog.NewFanoutStore(durable, bus2)
+	registry := NewMemoryRunRegistry()
+	agent1 := newManagerTestAgent(store1)
+	manager1 := NewRunManager(agent1, store1, bus1, RunManagerOptions{
+		Registry: registry, OwnerID: "owner_1", TerminalRetention: -1,
+	})
+	manager2 := NewRunManager(newManagerTestAgent(store2), store2, bus2, RunManagerOptions{
+		Registry: registry, OwnerID: "owner_2", TerminalRetention: -1,
+		Follow: eventlog.FollowOptions{PollInterval: time.Millisecond},
+	})
+	defer closeManager(t, manager1)
+	defer closeManager(t, manager2)
+
+	if _, err := manager1.Start(context.Background(), zenforge.Task{RunID: "cross_attach", Input: "hi"}); err != nil {
+		t.Fatal(err)
+	}
+	agent1.send("cross_attach", zenforge.NewEvent(zenforge.EventRunStarted, "cross_attach", nil))
+	waitLatest(t, store2, "cross_attach", 1)
+
+	events, errs, err := manager2.Attach(context.Background(), "cross_attach", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent1.send("cross_attach", zenforge.NewEvent(zenforge.EventModelDelta, "cross_attach", map[string]any{"text": "hello"}))
+	agent1.finish("cross_attach", zenforge.EventRunDone)
+
+	var got []zenforge.EventType
+	for event := range events {
+		got = append(got, event.Type)
+	}
+	if err := <-errs; err != nil {
+		t.Fatal(err)
+	}
+	want := []zenforge.EventType{zenforge.EventRunStarted, zenforge.EventModelDelta, zenforge.EventRunDone}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("cross-manager attach events = %v, want %v", got, want)
+	}
+}
+
+func TestRunManagerListLocalSnapshots(t *testing.T) {
+	manager, agent, _ := newTestRunManager(t, RunManagerOptions{TerminalRetention: -1})
+	defer closeManager(t, manager)
+	if _, err := manager.Start(context.Background(), zenforge.Task{RunID: "older", Input: "hi"}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(time.Millisecond)
+	if _, err := manager.Start(context.Background(), zenforge.Task{RunID: "newer", Input: "hi"}); err != nil {
+		t.Fatal(err)
+	}
+	agent.send("older", zenforge.NewEvent(zenforge.EventApprovalRequested, "older", nil))
+	waitStatus(t, manager, "older", RunWaitingApproval)
+	listed, err := manager.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 2 || listed[0].RunID != "older" || listed[0].Status != RunWaitingApproval {
+		t.Fatalf("local list = %+v", listed)
+	}
 }
 
 func TestMemoryRunRegistryLeaseExpiryAllowsClaim(t *testing.T) {
@@ -165,6 +237,13 @@ func TestSQLiteRunRegistryClaimsAcrossConnections(t *testing.T) {
 	}
 	if info.Status != RunCompleted || info.LeaseUntil != nil {
 		t.Fatalf("sqlite info = %+v", info)
+	}
+	listed, err := registry2.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || listed[0].RunID != "sqlite_claim" || listed[0].Status != RunCompleted {
+		t.Fatalf("sqlite list = %+v", listed)
 	}
 }
 

@@ -177,6 +177,39 @@ func (r *SQLiteRunRegistry) Get(ctx context.Context, runID string) (RunInfo, err
 	return info, nil
 }
 
+func (r *SQLiteRunRegistry) List(ctx context.Context) ([]RunInfo, error) {
+	if err := r.ready(); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	rows, err := r.db.QueryContext(ctx, `
+SELECT run_id, status, error, owner_id, lease_token, lease_until, started_at, updated_at, finished_at
+FROM detached_runs
+ORDER BY updated_at DESC, run_id ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []RunInfo
+	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		info, err := scanRunRegistryRecord(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, info)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (r *SQLiteRunRegistry) init(ctx context.Context) error {
 	if _, err := r.db.ExecContext(ctx, `PRAGMA busy_timeout = 5000`); err != nil {
 		return err
@@ -218,32 +251,52 @@ WHERE run_id = ?`, runID).
 	if err != nil {
 		return RunInfo{}, "", false, err
 	}
+	info, err := runInfoFromRegistryFields(runID, status, errorText, ownerID, leaseUntil, startedAt, updatedAt, finishedAt)
+	if err != nil {
+		return RunInfo{}, "", false, err
+	}
+	return info, token, true, nil
+}
+
+type runRegistryScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanRunRegistryRecord(scanner runRegistryScanner) (RunInfo, error) {
+	var runID, status, errorText, ownerID, token, leaseUntil, startedAt, updatedAt, finishedAt string
+	if err := scanner.Scan(&runID, &status, &errorText, &ownerID, &token, &leaseUntil, &startedAt, &updatedAt, &finishedAt); err != nil {
+		return RunInfo{}, err
+	}
+	return runInfoFromRegistryFields(runID, status, errorText, ownerID, leaseUntil, startedAt, updatedAt, finishedAt)
+}
+
+func runInfoFromRegistryFields(runID, status, errorText, ownerID, leaseUntil, startedAt, updatedAt, finishedAt string) (RunInfo, error) {
 	info := RunInfo{RunID: runID, Status: RunStatus(status), Error: errorText, OwnerID: ownerID}
 	if leaseUntil != "" {
 		parsed, err := time.Parse(time.RFC3339Nano, leaseUntil)
 		if err != nil {
-			return RunInfo{}, "", false, err
+			return RunInfo{}, err
 		}
 		info.LeaseUntil = &parsed
 	}
 	parsed, err := time.Parse(time.RFC3339Nano, startedAt)
 	if err != nil {
-		return RunInfo{}, "", false, err
+		return RunInfo{}, err
 	}
 	info.StartedAt = parsed
 	parsed, err = time.Parse(time.RFC3339Nano, updatedAt)
 	if err != nil {
-		return RunInfo{}, "", false, err
+		return RunInfo{}, err
 	}
 	info.UpdatedAt = parsed
 	if finishedAt != "" {
 		parsed, err = time.Parse(time.RFC3339Nano, finishedAt)
 		if err != nil {
-			return RunInfo{}, "", false, err
+			return RunInfo{}, err
 		}
 		info.FinishedAt = parsed
 	}
-	return info, token, true, nil
+	return info, nil
 }
 
 func validateRunLease(lease RunLease) error {
@@ -261,3 +314,4 @@ func formatTime(t time.Time) string {
 }
 
 var _ RunRegistry = (*SQLiteRunRegistry)(nil)
+var _ RunRegistryLister = (*SQLiteRunRegistry)(nil)

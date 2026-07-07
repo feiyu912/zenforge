@@ -3,7 +3,6 @@ package harnesshttp
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -141,12 +140,7 @@ func (r *MemoryRunRegistry) List(ctx context.Context) ([]RunInfo, error) {
 	for _, record := range r.records {
 		out = append(out, cloneRunInfo(record.info))
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].UpdatedAt.Equal(out[j].UpdatedAt) {
-			return out[i].RunID < out[j].RunID
-		}
-		return out[i].UpdatedAt.After(out[j].UpdatedAt)
-	})
+	sortRunInfos(out)
 	return out, nil
 }
 
@@ -212,3 +206,4 @@ func timePtr(t time.Time) *time.Time {
 }
 
 var _ RunRegistry = (*MemoryRunRegistry)(nil)
+var _ RunRegistryLister = (*MemoryRunRegistry)(nil)

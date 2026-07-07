@@ -19,7 +19,7 @@ exposes:
 - optional `GET /live?runId=...` style live event fanout from `eventlog.Bus`;
 - optional `GET /approvals?runId=...` style pending approval query;
 - optional `POST /approval` style approval submit to `approval.Inbox`;
-- detached start, resume, status, attach, and cancel handlers;
+- detached start, resume, status, list, attach, and cancel handlers;
 - standard Server-Sent Events responses through `server/sse`.
 
 ```go
@@ -49,6 +49,7 @@ mux.HandleFunc("/approval", runtime.Handler.ServeApproval)
 mux.HandleFunc("/runs/start", runtime.Handler.ServeDetachedStart)
 mux.HandleFunc("/runs/resume", runtime.Handler.ServeDetachedResume)
 mux.HandleFunc("/runs/status", runtime.Handler.ServeDetachedStatus)
+mux.HandleFunc("/runs", runtime.Handler.ServeDetachedRuns)
 mux.HandleFunc("/runs/attach", runtime.Handler.ServeDetachedAttach)
 mux.HandleFunc("/runs/cancel", runtime.Handler.ServeDetachedCancel)
 ```
@@ -101,10 +102,11 @@ runtime, err := harnesshttp.NewRuntime(config, durableEvents, harnesshttp.Runtim
 ```
 
 The registry atomically claims start/resume work, refreshes an active lease,
-and preserves manager status for `GET /runs/status` after process-local
-retention expires. `harnesshttp.NewMemoryRunRegistry` is available for tests
-and embedded single-process deployments; `OpenSQLiteRunRegistry` is the durable
-local implementation.
+preserves manager status for `GET /runs/status` after process-local retention
+expires, and backs `GET /runs` with a durable list of `RunInfo` snapshots.
+`harnesshttp.NewMemoryRunRegistry` is available for tests and embedded
+single-process deployments; `OpenSQLiteRunRegistry` is the durable local
+implementation.
 
 ## Detached Run Lifecycle
 
@@ -134,6 +136,8 @@ Resume requires durable event history and accepts
 returns `202` `RunInfo` JSON. `GET /runs/status?runId=run_123` returns `200`;
 statuses are `starting`, `running`, `waiting_approval`, `completed`, `failed`,
 and `cancelled`. Terminal snapshots may include `error` and `finishedAt`.
+`GET /runs` returns `{"runs":[...]}` ordered by newest status update, then
+run ID.
 
 Attach uses `GET /runs/attach?runId=run_123&afterSeq=42`. It replays durable
 events after the cursor, then follows live appends as SSE. If `afterSeq` is
@@ -162,9 +166,11 @@ durable registry record.
 
 By default, duplicate reservation is atomic only within one manager. With a
 registry, duplicate start/resume is fenced by the registry lease, and stale
-owners cannot refresh or release a stolen lease. The event bus remains
-process-local, and applications still own reconnect routing, model/tool
-side-effect idempotency, provider configuration, auth, and shutdown.
+owners cannot refresh or release a stolen lease. A second manager can read
+durable status and attach by replaying/polling the shared event store, even
+though the live event bus remains process-local. Applications still own
+reconnect routing, model/tool side-effect idempotency, provider configuration,
+auth, and shutdown.
 
 ## Access Control
 

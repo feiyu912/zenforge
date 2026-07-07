@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -70,6 +71,10 @@ type RunRegistry interface {
 	Update(ctx context.Context, lease RunLease, info RunInfo) error
 	Release(ctx context.Context, lease RunLease, info RunInfo) error
 	Get(ctx context.Context, runID string) (RunInfo, error)
+}
+
+type RunRegistryLister interface {
+	List(ctx context.Context) ([]RunInfo, error)
 }
 
 type RunClaim struct {
@@ -397,6 +402,32 @@ func (m *RunManager) Get(runID string) (RunInfo, error) {
 	return RunInfo{}, ErrRunNotFound
 }
 
+// List returns manager status snapshots newest first. With a registry that
+// implements RunRegistryLister, it returns the registry's durable view.
+func (m *RunManager) List(ctx context.Context) ([]RunInfo, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := contextErr(ctx); err != nil {
+		return nil, err
+	}
+	if m.opts.Registry != nil && !nilRunRegistry(m.opts.Registry) {
+		lister, ok := m.opts.Registry.(RunRegistryLister)
+		if !ok {
+			return nil, fmt.Errorf("run registry does not support listing")
+		}
+		return lister.List(ctx)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]RunInfo, 0, len(m.runs))
+	for _, run := range m.runs {
+		out = append(out, cloneRunInfo(run.info))
+	}
+	sortRunInfos(out)
+	return out, nil
+}
+
 // Attach replays durable events and then follows live appends. Cancelling the
 // attachment context only disconnects this follower, never the run.
 func (m *RunManager) Attach(ctx context.Context, runID string, afterSeq int64) (<-chan zenforge.Event, <-chan error, error) {
@@ -688,4 +719,13 @@ func nilRunRegistry(registry RunRegistry) bool {
 	default:
 		return false
 	}
+}
+
+func sortRunInfos(infos []RunInfo) {
+	sort.Slice(infos, func(i, j int) bool {
+		if infos[i].UpdatedAt.Equal(infos[j].UpdatedAt) {
+			return infos[i].RunID < infos[j].RunID
+		}
+		return infos[i].UpdatedAt.After(infos[j].UpdatedAt)
+	})
 }

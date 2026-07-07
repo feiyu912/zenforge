@@ -249,6 +249,27 @@ func (h *Handler) ServeDetachedStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, info)
 }
 
+// ServeDetachedRuns returns current detached run manager snapshots.
+func (h *Handler) ServeDetachedRuns(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "detached runs requires GET")
+		return
+	}
+	if h.Manager == nil {
+		writeError(w, http.StatusServiceUnavailable, "manager_not_configured", "run manager is not configured")
+		return
+	}
+	if _, ok := h.authorize(w, r, Operation{Name: "detachedRuns"}); !ok {
+		return
+	}
+	infos, err := h.Manager.List(r.Context())
+	if err != nil {
+		writeManagerError(w, "detached_runs_failed", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"runs": infos})
+}
+
 // ServeDetachedAttach replays durable events and follows the run until completion.
 func (h *Handler) ServeDetachedAttach(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {

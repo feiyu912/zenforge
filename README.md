@@ -186,11 +186,11 @@ new core provider names.
   plus fingerprint, with TTL and revocation support.
 - Durable event log and checkpoint stores: memory, JSONL, SQLite.
 - Canonical `server/harnesshttp.NewRuntime` assembly for detached HTTP
-  start/resume/status/attach/cancel, durable SSE reconnect with
+  start/resume/status/list/attach/cancel, durable SSE reconnect with
   `Last-Event-ID`, explicit cancellation, active-run limits, timeout, and
   terminal status retention.
 - Optional detached run registry (`RunRegistry`) for shared start/resume
-  claims, lease refresh, and durable status lookup across managers, with
+  claims, lease refresh, durable status lookup, and run listing across managers, with
   memory and SQLite implementations.
 - JSONL stores reject path-like run IDs and serialize writers across processes
   with advisory `flock`; checkpoint saves recover through a pending journal.
@@ -261,15 +261,15 @@ skills/
 - `POST /run`, `POST /resume`, `GET /events` (bounded replay), and `GET /live`
   (live fanout or durable replay-to-live with `replay=true`).
 - `GET /approvals`, `POST /approval` for run-scoped pending approval flows.
-- Canonical `NewRuntime` wiring for detached start, resume, status, attach, and
-  explicit cancel. It shares one fanout store, bus, and approval inbox;
+- Canonical `NewRuntime` wiring for detached start, resume, status, list,
+  attach, and explicit cancel. It shares one fanout store, bus, and approval inbox;
   disconnecting an attachment does not cancel the run.
 - The manager is single-process by default. Configure `RunManagerOptions.Registry`
   with `NewMemoryRunRegistry` or `OpenSQLiteRunRegistry` to add shared run
-  claims, lease refresh, and durable status lookup. Applications still own
-  model provider/protocol and compatible base URL configuration, auth, route
-  paths, durable store closure, lifecycle shutdown, and idempotent external
-  side effects.
+  claims, lease refresh, durable status/list lookup, and cross-manager durable
+  replay attachment. Applications still own model provider/protocol and
+  compatible base URL configuration, auth, route paths, durable store closure,
+  lifecycle shutdown, and idempotent external side effects.
 
 **Live events**
 - `eventlog.Bus` and `eventlog.FanoutStore` for multiple live subscribers.

@@ -111,7 +111,7 @@ that caller-owned `approval.Inbox`. The caller retains ownership of the durable
 event and approval stores.
 
 Existing synchronous handlers remain available. Detached handlers add start,
-resume, status, attach, and explicit cancel. Start/resume return `202`
+resume, status, list, attach, and explicit cancel. Start/resume return `202`
 `RunInfo` JSON; attach replays from `afterSeq` or `Last-Event-ID` and follows
 live events. Attachment disconnect does not cancel managed execution.
 
@@ -119,7 +119,9 @@ live events. Attachment disconnect does not cancel managed execution.
 follow buffering, run ID generation, and the optional `RunRegistry`. Without a
 registry, manager status and duplicate exclusion are process-local. With a
 registry, detached start/resume uses shared leases and `Get` can read durable
-status after local retention expires. The live bus remains process-local.
+status after local retention expires; registries that implement listing also
+back `RunManager.List` and `ServeDetachedRuns`. The live bus remains
+process-local.
 Applications own model/provider construction (OpenAI or Anthropic protocol and
 compatible base URLs), auth, route paths, durable store selection/closure, and
 server/runtime shutdown.
