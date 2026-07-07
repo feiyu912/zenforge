@@ -19,10 +19,11 @@ what is experimental, and what remains adapter territory.
 ## HTTP Lifecycle
 
 - Detached `RunManager` ownership, status retention, duplicate exclusion,
-  active-run accounting, the event bus, and `PendingBroker` are in-memory and
-  single-process. The durable event check is not a distributed atomic claim.
-- Multi-replica deployments need an external run lease/claim, shared approval
-  routing, durable status coordination, and deliberate reconnect routing.
+  active-run accounting, and the event bus are in-memory and single-process.
+  The durable event check is not a distributed atomic claim.
+- Multi-replica deployments need an external run lease/claim, durable status
+  coordination, and deliberate reconnect routing. Durable approval inboxes make
+  approval list/submit shareable, but they do not choose or fence the run owner.
 - Attachment disconnect stops only replay/follow delivery. It does not cancel
   detached execution; callers must use explicit cancel, a run timeout, or
   runtime shutdown.
@@ -39,6 +40,9 @@ what is experimental, and what remains adapter territory.
   decisions. It requires a configured grant store, trusted tenant/subject
   namespace, and exact `ruleKey` plus operation `fingerprint`; once/run scopes
   remain checkpoint-only.
+- Durable approval inboxes persist pending requests and committed decisions;
+  they do not make external tool side effects exactly-once and they do not
+  replace a distributed run lease.
 - Workspace tools enforce local root boundaries, but they are not a replacement
   for OS sandboxing when running untrusted workloads.
 - Sandbox support is adapter-based. Core works without Container Hub.

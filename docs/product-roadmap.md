@@ -509,6 +509,9 @@ Completed in this repository:
   initialization;
 - optional cross-run `ScopeRule` grants with tenant/subject isolation, exact
   rule-key and fingerprint matching, TTL/revocation, and memory/SQLite stores;
+- durable approval inboxes with memory/SQLite stores, polling broker, shared
+  HTTP approval list/submit, idempotent decision retries, conflict detection,
+  and resume consumption after waiter cancellation;
 - benchmark and soak tests (`BenchmarkAgentRunStaticModel`,
   `TestSQLiteDurableRunSoak`);
 - failure-mode documentation (`docs/failure-modes.md`).
@@ -519,8 +522,9 @@ Remaining:
   same-step attempt replacement from the committed prompt boundary;
 - external acceptance, including downstream platform merge/deployment and a
   smoke against a real Container Hub service.
-- distributed detached-run claims, durable manager status, and shared approval
-  routing for multi-replica deployments.
+- distributed detached-run claims and durable manager status for multi-replica
+  deployments. Shared approval routing is implemented through durable inboxes,
+  but it does not imply distributed run ownership.
 
 ## First ZenMind Integration
 

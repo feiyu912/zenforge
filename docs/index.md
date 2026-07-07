@@ -142,7 +142,8 @@ interface that you can satisfy, wrap, mock, or leave nil.
     ---
 
     `approval.AlwaysAllow` for tests, `approval/cli` for interactive prompts,
-    `PendingBroker` for HTTP gateways.
+    `PendingBroker` for simple HTTP gateways, and durable inboxes for shared
+    HTTP approval routing.
 
     [:octicons-arrow-right-24: Approval guide](approval-guide.md)
 

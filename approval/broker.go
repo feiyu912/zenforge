@@ -247,6 +247,27 @@ func (b *PendingBroker) Pending(requestID string) (Request, bool) {
 	return cloneRequest(waiting.req), ok
 }
 
+func (b *PendingBroker) Lookup(ctx context.Context, requestID string) (Request, error) {
+	if err := ctx.Err(); err != nil {
+		return Request{}, err
+	}
+	req, ok := b.Pending(requestID)
+	if !ok {
+		return Request{}, ErrRequestNotFound
+	}
+	return req, nil
+}
+
+func (b *PendingBroker) List(ctx context.Context, runID string) ([]Request, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if runID == "" {
+		return b.ListPending(), nil
+	}
+	return b.ListPendingForRun(runID), nil
+}
+
 func (b *PendingBroker) ListPending() []Request {
 	if b == nil {
 		return nil

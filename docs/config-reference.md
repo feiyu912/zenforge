@@ -115,6 +115,12 @@ not a CLI JSON field. Embedded hosts configure `Config.ApprovalGrants`,
 namespace per run with `Task.ApprovalNamespace`. See the Approval Guide for the
 exact-match and fail-closed semantics.
 
+Shared approval inboxes are also SDK/server configuration. Embedded hosts can
+use `approval.NewStoreBroker` with `approval/sqlite.OpenInbox` and pass the
+broker as `Config.Approval` or `harnesshttp.RuntimeOptions.ApprovalInbox`. The
+inbox store is caller-owned and must be closed by the host; it is not loaded
+from CLI JSON.
+
 MiniMax Anthropic-compatible config example:
 
 ```json

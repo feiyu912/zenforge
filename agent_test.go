@@ -2031,6 +2031,40 @@ func TestAgentApprovalAbortCancelsRun(t *testing.T) {
 	}
 }
 
+func TestAgentRegistersDurableApprovalBeforePublishingRequest(t *testing.T) {
+	checkpoints := checkpointmemory.New()
+	broker := &approvalOrderingBroker{checkpoints: checkpoints, runID: "run_approval_order"}
+	eventsStore := &approvalOrderingEventStore{broker: broker}
+	fakeModel := &scriptedModel{turns: []scriptedTurn{
+		{events: []model.Event{{Message: &model.Message{
+			ToolCalls: []model.ToolCallSpec{{
+				ID: "call_approval", Name: "needs_approval", Arguments: json.RawMessage(`{}`),
+			}},
+		}}}},
+		{events: []model.Event{{Delta: "done"}}},
+	}}
+	agent := New(Config{
+		Model:       fakeModel,
+		Tools:       []Tool{approvalTool{}},
+		Approval:    broker,
+		Checkpoints: checkpoints,
+		Events:      eventsStore,
+	})
+
+	stream, err := agent.Stream(context.Background(), Task{RunID: broker.runID, Input: "approve"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range stream {
+	}
+	if !broker.registered {
+		t.Fatal("approval request was not registered")
+	}
+	if eventsStore.orderErr != nil {
+		t.Fatal(eventsStore.orderErr)
+	}
+}
+
 func TestAgentReusesApprovalScopeWithinRun(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -4182,6 +4216,50 @@ func (approvalTool) Call(ctx context.Context, input json.RawMessage, call tool.C
 		CreatedAt:  time.Now().UTC(),
 	}
 	return approval.RequiredResult(req), approval.ErrRequired
+}
+
+type approvalOrderingBroker struct {
+	checkpoints checkpoint.Store
+	runID       string
+	registered  bool
+}
+
+func (b *approvalOrderingBroker) RegisterRequest(ctx context.Context, req approval.Request) error {
+	cp, err := b.checkpoints.Load(ctx, b.runID)
+	if err != nil {
+		return fmt.Errorf("load waiting checkpoint: %w", err)
+	}
+	if cp.State.Approval.Waiting == nil || cp.State.Approval.Waiting.ID != req.ID {
+		return fmt.Errorf("approval was registered before waiting checkpoint")
+	}
+	b.registered = true
+	return nil
+}
+
+func (b *approvalOrderingBroker) Request(context.Context, approval.Request) (approval.Decision, error) {
+	if !b.registered {
+		return approval.Decision{}, errors.New("approval request was not registered")
+	}
+	return approval.Decision{
+		RequestID: "approval_test",
+		Action:    approval.DecisionApprove,
+		Scope:     approval.ScopeOnce,
+		DecidedAt: time.Now().UTC(),
+	}, nil
+}
+
+type approvalOrderingEventStore struct {
+	testEventStore
+	broker   *approvalOrderingBroker
+	orderErr error
+}
+
+func (s *approvalOrderingEventStore) Append(ctx context.Context, event Event) error {
+	if event.Type == EventApprovalRequested && !s.broker.registered {
+		s.orderErr = errors.New("approval.requested was published before inbox registration")
+		return s.orderErr
+	}
+	return s.testEventStore.Append(ctx, event)
 }
 
 type scopedApprovalTool struct{}

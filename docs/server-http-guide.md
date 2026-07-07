@@ -9,16 +9,16 @@ OpenAI or Anthropic protocol adapter (and any compatible base URL), supplies
 credentials, and chooses route paths.
 
 For detached runs, `harnesshttp.NewRuntime` is the canonical assembly. It
-creates one shared `approval.PendingBroker`, `eventlog.Bus`, and
-`eventlog.FanoutStore`, then wires the agent, manager, and handler to those same
-instances. The package exposes:
+creates one shared approval inbox, `eventlog.Bus`, and `eventlog.FanoutStore`,
+then wires the agent, manager, and handler to those same instances. The package
+exposes:
 
 - `POST /run` style JSON input to `Agent.Stream`;
 - `GET /resume?runId=...` or `POST /resume` to `Agent.Resume`;
 - `GET /events?runId=...` to replay persisted event log entries;
 - optional `GET /live?runId=...` style live event fanout from `eventlog.Bus`;
 - optional `GET /approvals?runId=...` style pending approval query;
-- optional `POST /approval` style approval submit to `approval.PendingBroker`;
+- optional `POST /approval` style approval submit to `approval.Inbox`;
 - detached start, resume, status, attach, and cancel handlers;
 - standard Server-Sent Events responses through `server/sse`.
 
@@ -61,6 +61,28 @@ shutdown and store closure.
 The original synchronous `ServeRun` and `ServeResume` handlers remain
 available. Their execution uses the request context, so disconnecting cancels
 the synchronous stream.
+
+For shared approval routing, pass a durable inbox instead of using the default
+process-local `PendingBroker`:
+
+```go
+approvalStore, err := approvalsqlite.OpenInbox(ctx, "./approvals.db")
+if err != nil {
+    return err
+}
+approvalInbox, err := approval.NewStoreBroker(approvalStore, approval.StoreBrokerOptions{})
+if err != nil {
+    return err
+}
+runtime, err := harnesshttp.NewRuntime(config, durableEvents, harnesshttp.RuntimeOptions{
+    ApprovalInbox: approvalInbox,
+})
+```
+
+The handler uses that same inbox for `GET /approvals` and `POST /approval`, and
+the agent uses it as `Config.Approval`. A submit response means the decision was
+committed to the inbox; it does not mean the run has already consumed the
+decision or reached a terminal event.
 
 ## Detached Run Lifecycle
 
@@ -114,10 +136,11 @@ until `Forget` or the manager is discarded. Retention removes only in-memory
 status, never durable events. After expiry, attach can still replay durable
 history but status is unavailable from that manager.
 
-The manager, bus, status, and pending broker are in-memory single-process
-components. Duplicate reservation is atomic only within one manager. The
-durable event check is not a distributed claim; replicas need external atomic
-ownership/leases, shared approval routing, and durable status coordination.
+The manager, bus, and status are in-memory single-process components. Duplicate
+reservation is atomic only within one manager. The durable event check is not a
+distributed claim; replicas need external atomic ownership/leases and durable
+status coordination. `ApprovalInbox` can make approval listing/submission
+shared, but it does not make detached execution itself distributed.
 
 ## Access Control
 
@@ -231,10 +254,12 @@ Approval submit request:
 }
 ```
 
-Approval submit requires `handler.Approvals = approval.NewPendingBroker(...)`.
+Approval submit requires either `handler.ApprovalInbox = ...` or the compatible
+single-process `handler.Approvals = approval.NewPendingBroker(...)`.
 The host platform still owns the route path, auth, UI payload, and notification
-fanout; the handler only translates the neutral decision into the pending
-broker.
+fanout; the handler only translates the neutral decision into the approval
+inbox. Conflicting second decisions return `409`; identical retries are
+accepted by durable inboxes.
 
 ## Platform Boundary
 

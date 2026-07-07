@@ -25,14 +25,15 @@ type Agent interface {
 // Handler exposes run, resume, and event replay endpoints for an already
 // configured agent.
 type Handler struct {
-	Agent      Agent
-	Manager    *RunManager
-	Events     zenforge.EventStore
-	Bus        *eventlog.Bus
-	Approvals  *approval.PendingBroker
-	SSE        sse.Options
-	LiveBuffer int
-	Access     AccessController
+	Agent         Agent
+	Manager       *RunManager
+	Events        zenforge.EventStore
+	Bus           *eventlog.Bus
+	ApprovalInbox approval.Inbox
+	Approvals     *approval.PendingBroker
+	SSE           sse.Options
+	LiveBuffer    int
+	Access        AccessController
 }
 
 type Operation struct {
@@ -443,7 +444,8 @@ func (h *Handler) ServeApproval(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "approval requires POST")
 		return
 	}
-	if h.Approvals == nil {
+	inbox := h.approvalInbox()
+	if inbox == nil {
 		writeError(w, http.StatusInternalServerError, "approval_broker_not_configured", "approval broker is not configured")
 		return
 	}
@@ -469,17 +471,25 @@ func (h *Handler) ServeApproval(w http.ResponseWriter, r *http.Request) {
 	if decision.DecidedAt.IsZero() {
 		decision.DecidedAt = time.Now().UTC()
 	}
-	pending, ok := h.Approvals.Pending(decision.RequestID)
-	if !ok {
+	pending, err := inbox.Lookup(r.Context(), decision.RequestID)
+	if errors.Is(err, approval.ErrRequestNotFound) {
 		writeError(w, http.StatusNotFound, "approval_not_found", approval.ErrRequestNotFound.Error())
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "approval_lookup_failed", err.Error())
 		return
 	}
 	if _, ok := h.authorize(w, r, Operation{Name: "approval", RunID: pending.RunID}); !ok {
 		return
 	}
-	if err := h.Approvals.Submit(r.Context(), decision); err != nil {
+	if err := inbox.Submit(r.Context(), decision); err != nil {
 		if errors.Is(err, approval.ErrRequestNotFound) {
 			writeError(w, http.StatusNotFound, "approval_not_found", err.Error())
+			return
+		}
+		if errors.Is(err, approval.ErrDecisionConflict) || errors.Is(err, approval.ErrRequestExpired) {
+			writeError(w, http.StatusConflict, "approval_conflict", err.Error())
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "approval_failed", err.Error())
@@ -496,7 +506,8 @@ func (h *Handler) ServeApprovals(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "approvals requires GET")
 		return
 	}
-	if h.Approvals == nil {
+	inbox := h.approvalInbox()
+	if inbox == nil {
 		writeError(w, http.StatusInternalServerError, "approval_broker_not_configured", "approval broker is not configured")
 		return
 	}
@@ -508,9 +519,22 @@ func (h *Handler) ServeApprovals(w http.ResponseWriter, r *http.Request) {
 	if _, ok := h.authorize(w, r, Operation{Name: "approvals", RunID: runID}); !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"approvals": h.Approvals.ListPendingForRun(runID),
-	})
+	pending, err := inbox.List(r.Context(), runID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "approvals_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"approvals": pending})
+}
+
+func (h *Handler) approvalInbox() approval.Inbox {
+	if h.ApprovalInbox != nil && !nilInterface(h.ApprovalInbox) {
+		return h.ApprovalInbox
+	}
+	if h.Approvals != nil {
+		return h.Approvals
+	}
+	return nil
 }
 
 func (h *Handler) authorize(w http.ResponseWriter, r *http.Request, operation Operation) (AccessDecision, bool) {

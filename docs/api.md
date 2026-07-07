@@ -103,10 +103,12 @@ the bundle.
 ## HTTP Runtime
 
 `harnesshttp.NewRuntime(config, durableEvents, options)` preserves
-application-owned configuration while replacing `Config.Events` and
-`Config.Approval` with one shared `eventlog.FanoutStore` and
-`approval.PendingBroker` used by the agent, handler, and manager. The caller
-retains ownership of the durable event store.
+application-owned configuration while replacing `Config.Events` with one shared
+`eventlog.FanoutStore` and `Config.Approval` with one shared approval inbox.
+Without `RuntimeOptions.ApprovalInbox`, it creates a process-local
+`approval.PendingBroker`; with a custom inbox, the agent and HTTP handler share
+that caller-owned `approval.Inbox`. The caller retains ownership of the durable
+event and approval stores.
 
 Existing synchronous handlers remain available. Detached handlers add start,
 resume, status, attach, and explicit cancel. Start/resume return `202`
@@ -114,8 +116,23 @@ resume, status, attach, and explicit cancel. Start/resume return `202`
 live events. Attachment disconnect does not cancel managed execution.
 
 `RunManagerOptions` controls `MaxActive`, `RunTimeout`, `TerminalRetention`,
-follow buffering, and run ID generation. Manager status, bus, and pending
-approvals are process-local; this API makes no distributed run claim.
+follow buffering, and run ID generation. Manager status and bus are
+process-local; a durable approval inbox can be shared, but this API makes no
+distributed run claim.
 Applications own model/provider construction (OpenAI or Anthropic protocol and
 compatible base URLs), auth, route paths, durable store selection/closure, and
 server/runtime shutdown.
+
+## Approval Inbox
+
+`approval.Inbox` combines `approval.Broker` with lookup, list, and submit
+methods for HTTP edges. `approval.PendingBroker` remains the simple
+single-process implementation. `approval.StoreBroker` adapts an
+`approval.PendingStore`; `approval/memory.NewStore` and
+`approval/sqlite.OpenInbox` provide tested stores.
+
+`PendingStore.Resolve` is the durable decision commit point. It validates the
+decision against the stored request, accepts identical semantic retries, rejects
+conflicting second decisions, and rejects non-expiry decisions after request
+expiry. `StoreBroker` leaves pending records in place on context cancellation
+so a later resumed run can consume a committed decision.

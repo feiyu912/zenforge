@@ -859,6 +859,9 @@ func (a *Agent) resumeWaitingApproval(ctx context.Context, emit eventEmitter, ch
 	}
 	call := *state.Tool.Active
 	req := approvalRequestFromState(*state.Approval.Waiting, state.RunID, call)
+	if err := a.registerApprovalRequest(ctx, req); err != nil {
+		return err
+	}
 	if err := emit(EventApprovalRequested, map[string]any{
 		"requestId":  req.ID,
 		"toolCallId": call.ID,
@@ -947,6 +950,17 @@ func (a *Agent) resumeWaitingApproval(ctx context.Context, emit eventEmitter, ch
 		"resumed":    true,
 	}); err != nil {
 		return err
+	}
+	return nil
+}
+
+func (a *Agent) registerApprovalRequest(ctx context.Context, req approval.Request) error {
+	registrar, ok := a.config.Approval.(approval.RequestRegistrar)
+	if !ok {
+		return nil
+	}
+	if err := registrar.RegisterRequest(ctx, req); err != nil {
+		return fmt.Errorf("register approval request: %w", err)
 	}
 	return nil
 }
@@ -1195,6 +1209,9 @@ func (a *Agent) runPendingTools(ctx context.Context, emit eventEmitter, checkpoi
 			} else {
 				state.SetWaitingApproval(approvalRequestState(req, call))
 				if err := checkpointState(); err != nil {
+					return err
+				}
+				if err := a.registerApprovalRequest(ctx, req); err != nil {
 					return err
 				}
 				if err := emit(EventApprovalRequested, map[string]any{

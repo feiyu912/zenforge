@@ -13,6 +13,7 @@ import (
 
 	"github.com/feiyu912/zenforge"
 	"github.com/feiyu912/zenforge/approval"
+	approvalmemory "github.com/feiyu912/zenforge/approval/memory"
 	"github.com/feiyu912/zenforge/eventlog"
 	eventlogmemory "github.com/feiyu912/zenforge/eventlog/memory"
 	"github.com/feiyu912/zenforge/model"
@@ -50,6 +51,7 @@ func TestNewRuntimeWiresSharedComponentsAndOptions(t *testing.T) {
 		runtime.Handler.Manager != runtime.Manager ||
 		runtime.Handler.Events != runtime.Events ||
 		runtime.Handler.Bus != runtime.Bus ||
+		runtime.Handler.ApprovalInbox != runtime.ApprovalInbox ||
 		runtime.Handler.Approvals != runtime.Approvals {
 		t.Fatal("handler does not use the runtime's shared components")
 	}
@@ -80,6 +82,38 @@ func TestNewRuntimeWiresSharedComponentsAndOptions(t *testing.T) {
 	}
 	if len(events) == 0 || !runtime.Bus.RunClosed("wired") {
 		t.Fatal("agent events did not pass through the shared fanout store and bus")
+	}
+}
+
+func TestNewRuntimeUsesApplicationDurableApprovalInbox(t *testing.T) {
+	store := approvalmemory.NewStore()
+	inbox, err := approval.NewStoreBroker(store, approval.StoreBrokerOptions{PollInterval: time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := NewRuntime(
+		zenforge.Config{Model: runtimeTestModel{}},
+		eventlogmemory.New(),
+		RuntimeOptions{ApprovalInbox: inbox},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = runtime.Close(context.Background()) }()
+	if runtime.ApprovalInbox != inbox || runtime.Handler.ApprovalInbox != inbox {
+		t.Fatal("custom approval inbox was not shared with the handler")
+	}
+	if runtime.Approvals != nil || runtime.Handler.Approvals != nil {
+		t.Fatal("custom durable inbox was misreported as a PendingBroker")
+	}
+
+	var typedNil *approval.StoreBroker
+	if _, err := NewRuntime(
+		zenforge.Config{},
+		eventlogmemory.New(),
+		RuntimeOptions{ApprovalInbox: typedNil},
+	); err == nil {
+		t.Fatal("typed-nil approval inbox accepted")
 	}
 }
 

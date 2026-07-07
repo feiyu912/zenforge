@@ -173,8 +173,13 @@ new core provider names.
   bounded and validated on load.
 - Platform-compatible `react`, `oneshot`, and `plan_execute` execution modes, persisted across resume.
 - Plan/execute preset with built-in todo manager.
-- Run-scoped pending approval broker (`approval.PendingBroker`).
+- Run-scoped pending approval broker (`approval.PendingBroker`) plus optional
+  durable approval inboxes (`approval.Inbox`) backed by memory or SQLite.
 - Broker-free approval requests pause durably instead of allowing the model to continue past a risky tool.
+- When an approval inbox is configured, the waiting checkpoint is saved and the
+  request is registered durably before `approval.requested` is emitted.
+  HTTP approval submit commits the decision before returning success, and a
+  resumed waiter can consume a decision submitted by another process.
 - Run and rule approval scopes are checkpointed grants matched by exact
   fingerprint or rule key. Optional `approval.GrantStore` persistence reuses
   only `ScopeRule` across runs, isolated by tenant/subject and exact rule key
@@ -254,7 +259,7 @@ skills/
   (live fanout or durable replay-to-live with `replay=true`).
 - `GET /approvals`, `POST /approval` for run-scoped pending approval flows.
 - Canonical `NewRuntime` wiring for detached start, resume, status, attach, and
-  explicit cancel. It shares one fanout store, bus, and pending broker;
+  explicit cancel. It shares one fanout store, bus, and approval inbox;
   disconnecting an attachment does not cancel the run.
 - The manager is single-process. Applications own distributed claims, model
   provider/protocol and compatible base URL configuration, auth, route paths,
@@ -390,7 +395,9 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 
 - `server/harnesshttp` access control hook for auth and tenancy injection.
 - `eventlog.Bus` and `eventlog.FanoutStore` for live multi-subscriber event fanout.
-- `approval.PendingBroker` for run-scoped pending approvals, exposed via `GET /approvals` and `POST /approval`.
+- `approval.PendingBroker` for simple process-local pending approvals, or
+  `approval.StoreBroker` with `approval/memory` or `approval/sqlite.OpenInbox`
+  for shared approval listing/submission across processes.
 - Optional cross-run rule authorization through memory or SQLite
   `approval.GrantStore` implementations; no store preserves checkpoint-only
   behavior, while configured store errors fail closed.
@@ -547,7 +554,7 @@ zenforge/
   task.go               # normalized task model
   events.go             # public event contract
   config.go             # high-level Config
-  approval/             # broker + run-scoped pending broker
+  approval/             # brokers, durable inbox, grants
   checkpoint/           # memory, jsonl, sqlite stores
   eventlog/             # bus + fanout + memory, jsonl, sqlite stores
   cli/                  # command helpers and approval UX

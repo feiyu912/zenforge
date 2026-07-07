@@ -16,6 +16,7 @@ type RuntimeOptions struct {
 	Access         AccessController
 	SSE            sse.Options
 	Manager        RunManagerOptions
+	ApprovalInbox  approval.Inbox
 	ApprovalBuffer int
 	LiveBuffer     int
 }
@@ -23,12 +24,13 @@ type RuntimeOptions struct {
 // Runtime is the canonical assembly for serving a ZenForge agent with
 // detached-run support. The caller retains ownership of the durable store.
 type Runtime struct {
-	Agent     *zenforge.Agent
-	Manager   *RunManager
-	Handler   *Handler
-	Events    *eventlog.FanoutStore
-	Bus       *eventlog.Bus
-	Approvals *approval.PendingBroker
+	Agent         *zenforge.Agent
+	Manager       *RunManager
+	Handler       *Handler
+	Events        *eventlog.FanoutStore
+	Bus           *eventlog.Bus
+	ApprovalInbox approval.Inbox
+	Approvals     *approval.PendingBroker
 }
 
 // NewRuntime wires one event pipeline and approval broker through every
@@ -43,41 +45,51 @@ func NewRuntime(config zenforge.Config, durable eventlog.Store, opts RuntimeOpti
 	if opts.LiveBuffer < 0 {
 		return nil, fmt.Errorf("live buffer must be non-negative")
 	}
+	if opts.ApprovalInbox != nil && nilInterface(opts.ApprovalInbox) {
+		return nil, fmt.Errorf("approval inbox is nil")
+	}
 
 	bus := eventlog.NewBus()
 	events := eventlog.NewFanoutStore(durable, bus)
-	approvals := approval.NewPendingBroker(opts.ApprovalBuffer)
+	inbox := opts.ApprovalInbox
+	if inbox == nil {
+		inbox = approval.NewPendingBroker(opts.ApprovalBuffer)
+	}
+	approvals, _ := inbox.(*approval.PendingBroker)
 
 	config.Events = events
-	config.Approval = approvals
+	config.Approval = inbox
 	agent := zenforge.New(config)
 	manager := NewRunManager(agent, events, bus, opts.Manager)
 	handler := New(agent, opts.SSE)
 	handler.Manager = manager
 	handler.Events = events
 	handler.Bus = bus
+	handler.ApprovalInbox = inbox
 	handler.Approvals = approvals
 	handler.Access = opts.Access
 	handler.LiveBuffer = opts.LiveBuffer
 
 	return &Runtime{
-		Agent:     agent,
-		Manager:   manager,
-		Handler:   handler,
-		Events:    events,
-		Bus:       bus,
-		Approvals: approvals,
+		Agent:         agent,
+		Manager:       manager,
+		Handler:       handler,
+		Events:        events,
+		Bus:           bus,
+		ApprovalInbox: inbox,
+		Approvals:     approvals,
 	}, nil
 }
 
 func nilEventStore(store eventlog.Store) bool {
-	if store == nil {
-		return true
-	}
-	value := reflect.ValueOf(store)
-	switch value.Kind() {
+	return store == nil || nilInterface(store)
+}
+
+func nilInterface(value any) bool {
+	reflected := reflect.ValueOf(value)
+	switch reflected.Kind() {
 	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return value.IsNil()
+		return reflected.IsNil()
 	default:
 		return false
 	}

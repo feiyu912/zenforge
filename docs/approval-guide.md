@@ -35,7 +35,7 @@ agent := zenforge.New(zenforge.Config{
 ```
 
 Server applications can use `approval.PendingBroker` when approval requests are
-resolved by an HTTP, WebSocket, or queue submit route:
+resolved by an HTTP, WebSocket, or queue submit route in the same process:
 
 ```go
 broker := approval.NewPendingBroker(128)
@@ -70,6 +70,39 @@ When using `server/harnesshttp`, assign the same broker to
 The broker keeps pending requests addressable by `requestId`, so platform
 routes can inspect `Pending` or `ListPending` and submit the matching decision.
 Requests are removed when the waiting run context is canceled.
+
+For multi-process HTTP approval routing, configure a durable inbox:
+
+```go
+store, err := approvalsqlite.OpenInbox(ctx, "./approvals.db")
+if err != nil {
+    return err
+}
+broker, err := approval.NewStoreBroker(store, approval.StoreBrokerOptions{})
+if err != nil {
+    return err
+}
+agent := zenforge.New(zenforge.Config{Approval: broker})
+```
+
+`approval.StoreBrokerOptions{}` uses a 100 ms polling interval. The application
+owns closing the store. The memory inbox is useful for tests and single-process
+composition; `approval/sqlite.OpenInbox` lets separate processes list and
+submit the same pending requests when they share the same database.
+
+`StoreBroker` implements `approval.Inbox`. It registers a request in the
+pending store, then polls until a decision is committed. If the waiting context
+is canceled, the pending request remains durable; a later `Resume` with the
+same broker can consume a decision submitted while the original waiter was
+gone. The agent saves the waiting checkpoint and registers the request before
+emitting `approval.requested`, so a UI that sees the event can query or submit
+the request immediately.
+
+Decision submission is an atomic resolve operation. Replaying the same semantic
+decision is idempotent even if `decidedAt` differs; a different second decision
+returns `approval.ErrDecisionConflict`. A non-expiry decision after
+`ExpiresAt` returns `approval.ErrRequestExpired`; the broker itself resolves
+expired waits with the canonical rejected `approval_expired` decision.
 
 ## Decision Scopes
 

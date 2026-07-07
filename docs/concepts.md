@@ -400,7 +400,8 @@ Concretely: the application-owned harness principle means
 - the application picks `Config.Model` (could be OpenAI, Anthropic, a local
   stub, a custom gateway);
 - the application picks `Config.Approval` (could be `AlwaysAllow` in tests,
-  `approval/cli` in a CLI, `approval.PendingBroker` in an HTTP server);
+  `approval/cli` in a CLI, `approval.PendingBroker` in a simple HTTP server,
+  or `approval.StoreBroker` with a durable inbox for shared approval routing);
 - the application picks `Config.Checkpoints` and `Config.Events` (could be
   memory for tests, SQLite for production, JSONL for inspection);
 - the application picks the tools, the sandbox backend, the workspace, the
@@ -451,10 +452,11 @@ Each line maps to one of the concepts above:
 - `Tools` is the skill set. Names must be unique; schemas are inferred or
   provided; calls are dispatched through the configured invoker (or a
   default one built from the registry).
-- `Approval` is the brake. A `PendingBroker` exposes a channel you can
-  drain in another goroutine or from an HTTP handler; absent a broker, an
-  approval-bearing tool call pauses durably and `Agent.Run` returns
-  `approval.ErrRequired`.
+- `Approval` is the brake. A `PendingBroker` exposes a process-local channel
+  you can drain in another goroutine or from an HTTP handler; a `StoreBroker`
+  uses a durable inbox so another process can list or submit a decision.
+  Absent a broker, an approval-bearing tool call pauses durably and
+  `Agent.Run` returns `approval.ErrRequired`.
 - `Sandbox` is the execution room. Tools that have a sandbox wired
   (typically the shell tool, via `shell.Config.Sandbox`) route commands
   through it; tools that do not run in-process.

@@ -8,8 +8,13 @@
   detached HTTP lifecycle with start, resume, status, replay-to-live attach,
   explicit cancel, `Last-Event-ID` reconnects, disconnect-independent
   execution, max-active admission, run timeout, terminal retention, and shared
-  `PendingBroker`/`FanoutStore` wiring. Applications still own provider/auth,
+  approval/FanoutStore wiring. Applications still own provider/auth,
   routes, durable storage, shutdown, and any distributed run claims.
+- Durable approval inbox interfaces, memory and SQLite pending stores, and a
+  polling `approval.StoreBroker`. Agents register approval requests after the
+  waiting checkpoint and before `approval.requested`; HTTP approval submission
+  now targets `approval.Inbox`, commits before returning success, treats
+  identical decision retries as idempotent, and reports conflicting decisions.
 - ZenMind `BuildRun` host resolvers for catalog skills, tool overrides, and
   workspace/host-access policy, with fail-closed policy declarations and
   complete executable `zenforge.Config` propagation.
