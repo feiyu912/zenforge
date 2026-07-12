@@ -128,7 +128,10 @@ back `RunManager.List` and `ServeDetachedRuns`. The live bus remains
 process-local. Registries may additionally implement
 `RunCancellationRegistry`; then `RunManager.Cancel` persists a request for a
 remote lease owner to consume. The built-in memory and SQLite registries
-support listing and distributed cancellation.
+support listing and distributed cancellation. After claiming a run, a manager
+checks this signal before calling `Agent.Stream` or `Agent.Resume`, so a
+persisted cancellation inherited during recovery reaches the agent as an
+already-cancelled context.
 Applications own model/provider construction (OpenAI or Anthropic protocol and
 compatible base URLs), auth, route paths, durable store selection/closure, and
 server/runtime shutdown.

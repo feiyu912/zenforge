@@ -16,6 +16,7 @@ func TestDeploymentGuideLocksMultiReplicaContract(t *testing.T) {
 		"RunInfo.OwnerID",
 		"RunManager.Cancel",
 		"RunCancellationRegistry",
+		"before opening `Agent.Resume`",
 		"Last-Event-ID",
 		"RunRegistry.Claim",
 		"Runtime.Close",

@@ -61,7 +61,9 @@ internal routing data: authorize the run before lookup, do not accept an owner
 value supplied by the client, and do not use it as a tenancy decision. With the
 extension, `RunManager.Cancel` stores a remote request when it has no local run.
 HTTP acceptance means the request was stored; terminal status proves the owner
-consumed it.
+consumed it. A worker that claims a stale run checks an inherited cancellation
+before opening `Agent.Resume`, preventing model or tool work in the heartbeat
+window.
 
 Attach clients should persist the latest SSE sequence and reconnect with
 `Last-Event-ID` or `afterSeq`. A reconnect may use another replica. Replay and

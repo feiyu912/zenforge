@@ -271,7 +271,9 @@ skills/
   with `NewMemoryRunRegistry` or `OpenSQLiteRunRegistry` to add shared run
   claims, lease refresh, durable status/list lookup, and cross-manager durable
   replay attachment. Their optional `RunCancellationRegistry` extension also
-  lets any replica persist cancellation for the active owner. Applications
+  lets any replica persist cancellation for the active owner; a recovering
+  owner consumes a pending request before opening the resumed agent stream.
+  Applications
   still own model provider/protocol and
   compatible base URL configuration, auth, route paths, durable store closure,
   lifecycle shutdown, and idempotent external side effects.

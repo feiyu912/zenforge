@@ -284,6 +284,25 @@ func (m *RunManager) start(
 	m.wg.Add(1)
 	m.mu.Unlock()
 
+	if registry, ok := m.opts.Registry.(RunCancellationRegistry); ok && lease.Token != "" {
+		requested, err := registry.CancelRequested(context.Background(), lease)
+		if err != nil {
+			cancel()
+			err = fmt.Errorf("check cancellation for run %q: %w", runID, err)
+			err = m.persistTerminal(runID, RunFailed, err)
+			m.mu.Lock()
+			m.finishLocked(run, RunFailed, err)
+			info := run.info
+			m.mu.Unlock()
+			m.releaseRegistry(run)
+			m.wg.Done()
+			return info, err
+		}
+		if requested {
+			cancel()
+		}
+	}
+
 	events, err := open(runCtx)
 	if err != nil {
 		cancel()

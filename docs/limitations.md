@@ -34,7 +34,8 @@ what is experimental, and what remains adapter territory.
   registry implements `RunCancellationRegistry`; the built-in memory and
   SQLite registries do. Custom registries without that optional interface must
   route cancellation using trusted `RunInfo.OwnerID`. Lease expiry permits
-  explicit resume but does not automatically transfer execution.
+  explicit resume but does not automatically transfer execution. A resume
+  owner consumes an inherited cancellation before opening the agent stream.
 - Attachment disconnect stops only replay/follow delivery. It does not cancel
   detached execution; callers must use explicit cancel, a run timeout, or
   runtime shutdown.

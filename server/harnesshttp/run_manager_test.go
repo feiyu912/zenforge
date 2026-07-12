@@ -133,6 +133,44 @@ func TestRunManagerCancelsAcrossManagersThroughRegistry(t *testing.T) {
 	}
 }
 
+func TestRunManagerResumeConsumesPersistedCancellationBeforeOpeningAgent(t *testing.T) {
+	now := time.Now().UTC()
+	registry := newMemoryRunRegistryWithClock(func() time.Time { return now })
+	_, err := registry.Claim(context.Background(), RunClaim{
+		RunID: "cancel_before_resume", OwnerID: "dead_owner", Status: RunRunning,
+		LeaseUntil: now.Add(time.Second), StartedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.RequestCancel(context.Background(), "cancel_before_resume"); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(2 * time.Second)
+	durable := eventlogmemory.New()
+	if err := durable.Append(context.Background(), zenforge.NewEvent(
+		zenforge.EventRunStarted, "cancel_before_resume", nil,
+	)); err != nil {
+		t.Fatal(err)
+	}
+	bus := eventlog.NewBus()
+	store := eventlog.NewFanoutStore(durable, bus)
+	agent := newManagerTestAgent(store)
+	manager := NewRunManager(agent, store, bus, RunManagerOptions{
+		Registry: registry, OwnerID: "recovery_owner", TerminalRetention: -1,
+		LeaseDuration: time.Second, HeartbeatInterval: 100 * time.Millisecond,
+	})
+	defer closeManager(t, manager)
+
+	if _, err := manager.Resume(context.Background(), "cancel_before_resume"); err != nil {
+		t.Fatal(err)
+	}
+	if !agent.cancelled("cancel_before_resume") {
+		t.Fatal("Agent.Resume did not receive a pre-cancelled context")
+	}
+	waitStatus(t, manager, "cancel_before_resume", RunCancelled)
+}
+
 func TestMemoryRunRegistryCancellationIsLeaseFenced(t *testing.T) {
 	now := time.Now().UTC()
 	registry := NewMemoryRunRegistry()
