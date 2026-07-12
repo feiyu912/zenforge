@@ -273,10 +273,12 @@ skills/
   replay attachment. Their optional `RunCancellationRegistry` extension also
   lets any replica persist cancellation for the active owner; a recovering
   owner consumes a pending request before opening the resumed agent stream.
-  Applications
-  still own model provider/protocol and
-  compatible base URL configuration, auth, route paths, durable store closure,
-  lifecycle shutdown, and idempotent external side effects.
+  Applications still own model provider/protocol and compatible base URL
+  configuration, auth, route paths, durable store closure, lifecycle shutdown,
+  and idempotent external side effects.
+- Hosts can explicitly recover expired, nonterminal registry records with
+  `RunManager.RecoverStale`; normal resume claims keep concurrent recovery
+  workers fenced, and per-run outcomes remain visible to the caller.
 - The [deployment guide](docs/deployment-guide.md) defines supported
   single-process, shared-host, and multi-host topologies; per-operation routing;
   external side-effect idempotency; distributed cancellation; crash recovery;

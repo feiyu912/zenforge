@@ -160,6 +160,12 @@ reach any replica: the request is persisted and the lease owner consumes it on
 heartbeat. The built-in memory and SQLite registries implement this extension.
 Custom registries without it still require cancellation routing to `OwnerID`.
 
+Crash recovery remains host-triggered. After leases have expired, call
+`RunManager.RecoverStale` with a bounded `RecoveryOptions.Max` to scan a listing
+registry and attempt normal fenced resumes. This library method is not exposed
+as a framework-owned public route; a platform may invoke it from a trusted
+worker loop or administrative endpoint under its own auth and tenancy policy.
+
 `MaxActive > 0` bounds active runs and overflow maps to HTTP `429`.
 `TerminalRetention` defaults to five minutes; a negative value retains
 process-local status until `Forget` or the manager is discarded. Retention

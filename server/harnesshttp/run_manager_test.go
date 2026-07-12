@@ -287,6 +287,102 @@ func TestRunManagerListLocalSnapshots(t *testing.T) {
 	}
 }
 
+func TestRunManagerRecoverStaleResumesOnlyExpiredNonterminalRuns(t *testing.T) {
+	now := time.Now().UTC()
+	registry := NewMemoryRunRegistry()
+	for _, claim := range []RunClaim{
+		{RunID: "stale", OwnerID: "dead", Status: RunRunning, LeaseUntil: now.Add(-time.Second), StartedAt: now.Add(-time.Minute), UpdatedAt: now.Add(-time.Minute)},
+		{RunID: "active", OwnerID: "live", Status: RunRunning, LeaseUntil: now.Add(time.Minute), StartedAt: now, UpdatedAt: now},
+		{RunID: "terminal", OwnerID: "done", Status: RunRunning, LeaseUntil: now.Add(time.Minute), StartedAt: now, UpdatedAt: now},
+	} {
+		lease, err := registry.Claim(context.Background(), claim)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if claim.RunID == "terminal" {
+			if err := registry.Release(context.Background(), lease, RunInfo{
+				Status: RunCompleted, StartedAt: now, UpdatedAt: now, FinishedAt: now,
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	durable := eventlogmemory.New()
+	for _, runID := range []string{"stale", "active", "terminal"} {
+		if err := durable.Append(context.Background(), zenforge.NewEvent(zenforge.EventRunStarted, runID, nil)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bus := eventlog.NewBus()
+	store := eventlog.NewFanoutStore(durable, bus)
+	agent := newManagerTestAgent(store)
+	manager := NewRunManager(agent, store, bus, RunManagerOptions{
+		Registry: registry, OwnerID: "recovery", TerminalRetention: -1,
+	})
+	defer closeManager(t, manager)
+
+	recovered, err := manager.RecoverStale(context.Background(), RecoveryOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recovered) != 1 || recovered[0].RunID != "stale" || recovered[0].Info == nil || recovered[0].Error != "" {
+		t.Fatalf("recoveries = %+v", recovered)
+	}
+	agent.mu.Lock()
+	_, activeOpened := agent.streams["active"]
+	_, terminalOpened := agent.streams["terminal"]
+	agent.mu.Unlock()
+	if activeOpened {
+		t.Fatal("active leased run was resumed")
+	}
+	if terminalOpened {
+		t.Fatal("terminal run was resumed")
+	}
+	agent.finish("stale", zenforge.EventRunDone)
+	waitStatus(t, manager, "stale", RunCompleted)
+}
+
+func TestRunManagerRecoverStaleLimitAndPerRunErrors(t *testing.T) {
+	now := time.Now().UTC()
+	registry := NewMemoryRunRegistry()
+	for _, runID := range []string{"newer-stale", "older-stale"} {
+		_, err := registry.Claim(context.Background(), RunClaim{
+			RunID: runID, OwnerID: "dead", Status: RunRunning,
+			LeaseUntil: now.Add(-time.Second), StartedAt: now.Add(-time.Minute), UpdatedAt: now,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		now = now.Add(-time.Second)
+	}
+	durable := eventlogmemory.New()
+	if err := durable.Append(context.Background(), zenforge.NewEvent(zenforge.EventRunStarted, "older-stale", nil)); err != nil {
+		t.Fatal(err)
+	}
+	bus := eventlog.NewBus()
+	store := eventlog.NewFanoutStore(durable, bus)
+	manager := NewRunManager(newManagerTestAgent(store), store, bus, RunManagerOptions{
+		Registry: registry, OwnerID: "recovery", TerminalRetention: -1,
+	})
+	defer closeManager(t, manager)
+
+	recovered, err := manager.RecoverStale(context.Background(), RecoveryOptions{Max: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recovered) != 1 || recovered[0].RunID != "newer-stale" || recovered[0].Info != nil || recovered[0].Error == "" {
+		t.Fatalf("recoveries = %+v", recovered)
+	}
+	if _, err := manager.RecoverStale(context.Background(), RecoveryOptions{Max: -1}); err == nil {
+		t.Fatal("negative max was accepted")
+	}
+	withoutRegistry, _, _ := newTestRunManager(t, RunManagerOptions{})
+	defer closeManager(t, withoutRegistry)
+	if _, err := withoutRegistry.RecoverStale(context.Background(), RecoveryOptions{}); err == nil {
+		t.Fatal("recovery without registry was accepted")
+	}
+}
+
 func TestMemoryRunRegistryLeaseExpiryAllowsClaim(t *testing.T) {
 	now := time.Unix(100, 0).UTC()
 	registry := newMemoryRunRegistryWithClock(func() time.Time { return now })

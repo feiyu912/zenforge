@@ -128,9 +128,19 @@ For a graceful rollout:
    event stores in application-defined order.
 
 If a worker crashes, wait for its registry lease to expire before explicitly
-resuming the run on another worker. Lease expiry prevents two owners; it does
-not automatically start recovery. Resume begins from the last committed
-checkpoint boundary and does not continue a provider stream mid-token.
+resuming the run on another worker. A host recovery loop may call:
+
+```go
+results, err := runtime.Manager.RecoverStale(ctx, harnesshttp.RecoveryOptions{
+    Max: 32,
+})
+```
+
+The method only attempts expired, nonterminal records and uses the normal
+resume claim, so concurrent recovery workers remain fenced. Lease expiry
+prevents two owners; it does not automatically start recovery. Resume begins
+from the last committed checkpoint boundary and does not continue a provider
+stream mid-token.
 
 ## Deployment Acceptance
 

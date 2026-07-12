@@ -36,6 +36,9 @@ what is experimental, and what remains adapter territory.
   route cancellation using trusted `RunInfo.OwnerID`. Lease expiry permits
   explicit resume but does not automatically transfer execution. A resume
   owner consumes an inherited cancellation before opening the agent stream.
+- `RunManager.RecoverStale` is an application-triggered scan, not an automatic
+  controller. It reports per-run failures and still requires shared durable
+  checkpoints/events plus a listing registry.
 - Attachment disconnect stops only replay/follow delivery. It does not cancel
   detached execution; callers must use explicit cancel, a run timeout, or
   runtime shutdown.

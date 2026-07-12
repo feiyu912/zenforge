@@ -112,6 +112,20 @@ type RunInfo struct {
 	FinishedAt time.Time  `json:"finishedAt"`
 }
 
+// RunRecovery reports one explicit stale-run recovery attempt. Info is set
+// only when this manager won the resume claim.
+type RunRecovery struct {
+	RunID string   `json:"runId"`
+	Info  *RunInfo `json:"info,omitempty"`
+	Error string   `json:"error,omitempty"`
+}
+
+// RecoveryOptions bounds one explicit stale-run recovery scan. Max zero means
+// no limit.
+type RecoveryOptions struct {
+	Max int
+}
+
 type managedRun struct {
 	info   RunInfo
 	lease  RunLease
@@ -451,6 +465,55 @@ func (m *RunManager) List(ctx context.Context) ([]RunInfo, error) {
 		out = append(out, cloneRunInfo(run.info))
 	}
 	sortRunInfos(out)
+	return out, nil
+}
+
+// RecoverStale explicitly resumes up to opts.Max expired, nonterminal registry
+// records. Max zero means no limit. Per-run claim/open failures are
+// returned in RunRecovery; configuration, listing, and context failures abort
+// the scan. Concurrent callers remain fenced by RunRegistry.Claim.
+func (m *RunManager) RecoverStale(ctx context.Context, opts RecoveryOptions) ([]RunRecovery, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if opts.Max < 0 {
+		return nil, fmt.Errorf("recovery max must be non-negative")
+	}
+	if err := contextErr(ctx); err != nil {
+		return nil, err
+	}
+	if m.opts.Registry == nil || nilRunRegistry(m.opts.Registry) {
+		return nil, fmt.Errorf("run registry is required for stale recovery")
+	}
+	lister, ok := m.opts.Registry.(RunRegistryLister)
+	if !ok {
+		return nil, fmt.Errorf("run registry does not support listing")
+	}
+	infos, err := lister.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now().UTC()
+	out := make([]RunRecovery, 0)
+	for _, info := range infos {
+		if err := contextErr(ctx); err != nil {
+			return out, err
+		}
+		if terminal(info.Status) || info.LeaseUntil == nil || info.LeaseUntil.After(now) {
+			continue
+		}
+		if opts.Max > 0 && len(out) >= opts.Max {
+			break
+		}
+		recovery := RunRecovery{RunID: info.RunID}
+		resumed, err := m.Resume(ctx, info.RunID)
+		if err != nil {
+			recovery.Error = err.Error()
+		} else {
+			recovery.Info = &resumed
+		}
+		out = append(out, recovery)
+	}
 	return out, nil
 }
 

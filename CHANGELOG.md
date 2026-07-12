@@ -4,6 +4,9 @@
 
 ### Added
 
+- Explicit `RunManager.RecoverStale` scans with batch limits, expired-lease and
+  terminal filtering, normal claim fencing, and per-run recovery outcomes for
+  host-owned recovery loops.
 - Optional cross-manager cancellation requests through
   `RunCancellationRegistry`, implemented by the memory and SQLite registries
   with lease-fenced owner polling, pre-agent recovery checks, inherited pending

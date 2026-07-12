@@ -132,6 +132,13 @@ support listing and distributed cancellation. After claiming a run, a manager
 checks this signal before calling `Agent.Stream` or `Agent.Resume`, so a
 persisted cancellation inherited during recovery reaches the agent as an
 already-cancelled context.
+
+`RunManager.RecoverStale(ctx, RecoveryOptions{Max: n})` is an explicit host
+recovery scan. It lists the shared registry, skips terminal records and live
+leases, and calls the regular `Resume` path for expired records. `Max: 0` has no
+batch limit. Each attempted run returns a `RunRecovery` with either the won
+`RunInfo` claim or a per-run error; listing, configuration, and context errors
+abort the scan.
 Applications own model/provider construction (OpenAI or Anthropic protocol and
 compatible base URLs), auth, route paths, durable store selection/closure, and
 server/runtime shutdown.
