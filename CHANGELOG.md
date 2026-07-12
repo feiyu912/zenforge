@@ -4,8 +4,11 @@
 
 ### Added
 
+- Optional cross-manager cancellation requests through
+  `RunCancellationRegistry`, implemented by the memory and SQLite registries
+  with lease-fenced owner polling and legacy SQLite schema migration.
 - Multi-replica deployment guidance covering supported storage topologies,
-  per-operation routing, owner-affine cancellation, explicit crash recovery,
+  per-operation routing, distributed cancellation, explicit crash recovery,
   side-effect idempotency, graceful rollout, and external acceptance gates.
 - Bounded Agent Skill auxiliary resources with immutable bundle snapshots,
   digest/provenance metadata, symlink and path-escape rejection, and on-demand

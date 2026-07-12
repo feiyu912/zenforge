@@ -77,6 +77,13 @@ type RunRegistryLister interface {
 	List(ctx context.Context) ([]RunInfo, error)
 }
 
+// RunCancellationRegistry optionally lets any manager request cancellation of
+// a run owned by another process. The current lease owner polls the request.
+type RunCancellationRegistry interface {
+	RequestCancel(ctx context.Context, runID string) error
+	CancelRequested(ctx context.Context, lease RunLease) (bool, error)
+}
+
 type RunClaim struct {
 	RunID      string
 	OwnerID    string
@@ -455,17 +462,32 @@ func (m *RunManager) Attach(ctx context.Context, runID string, afterSeq int64) (
 
 // Cancel is idempotent for a cancelled run; other terminal states conflict.
 func (m *RunManager) Cancel(runID string) error {
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		return ErrInvalidRunID
+	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	run, ok := m.runs[strings.TrimSpace(runID)]
+	run, ok := m.runs[runID]
 	if !ok {
+		m.mu.Unlock()
+		if registry, ok := m.opts.Registry.(RunCancellationRegistry); ok && !nilRunRegistry(m.opts.Registry) {
+			return registry.RequestCancel(context.Background(), runID)
+		}
 		return ErrRunNotFound
 	}
 	if run.info.Status == RunCancelled {
+		m.mu.Unlock()
 		return nil
 	}
 	if terminal(run.info.Status) {
+		m.mu.Unlock()
 		return ErrRunTerminal
+	}
+	m.mu.Unlock()
+	if registry, ok := m.opts.Registry.(RunCancellationRegistry); ok && !nilRunRegistry(m.opts.Registry) {
+		if err := registry.RequestCancel(context.Background(), runID); err != nil {
+			return err
+		}
 	}
 	run.cancel()
 	return nil
@@ -577,6 +599,22 @@ func (m *RunManager) heartbeat(run *managedRun) {
 				}
 				m.mu.Unlock()
 				return
+			}
+			if registry, ok := m.opts.Registry.(RunCancellationRegistry); ok {
+				requested, err := registry.CancelRequested(context.Background(), run.lease)
+				if err != nil {
+					m.mu.Lock()
+					if !terminal(run.info.Status) {
+						run.info.Error = err.Error()
+						run.cancel()
+					}
+					m.mu.Unlock()
+					return
+				}
+				if requested {
+					run.cancel()
+					return
+				}
 			}
 		}
 	}

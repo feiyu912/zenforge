@@ -57,8 +57,8 @@ func (r *SQLiteRunRegistry) Claim(ctx context.Context, claim RunClaim) (RunLease
 	leaseToken := randomLeaseToken()
 	res, err := r.db.ExecContext(ctx, `
 INSERT INTO detached_runs
-    (run_id, status, error, owner_id, lease_token, lease_until, started_at, updated_at, finished_at)
-VALUES (?, ?, '', ?, ?, ?, ?, ?, '')
+    (run_id, status, error, owner_id, lease_token, lease_until, started_at, updated_at, finished_at, cancel_requested)
+VALUES (?, ?, '', ?, ?, ?, ?, ?, '', 0)
 ON CONFLICT(run_id) DO UPDATE SET
     status = excluded.status,
     error = '',
@@ -67,11 +67,13 @@ ON CONFLICT(run_id) DO UPDATE SET
     lease_until = excluded.lease_until,
     started_at = excluded.started_at,
     updated_at = excluded.updated_at,
-    finished_at = ''
+    finished_at = '',
+    cancel_requested = CASE WHEN ? THEN detached_runs.cancel_requested ELSE 0 END
 WHERE detached_runs.finished_at != ''
    OR detached_runs.lease_until <= ?`,
 		claim.RunID, string(claim.Status), claim.OwnerID, leaseToken,
 		formatTime(claim.LeaseUntil), formatTime(claim.StartedAt), formatTime(claim.UpdatedAt),
+		claim.Resume,
 		formatTime(time.Now().UTC()))
 	if err != nil {
 		return RunLease{}, err
@@ -84,6 +86,63 @@ WHERE detached_runs.finished_at != ''
 		return RunLease{}, ErrRunClaimed
 	}
 	return RunLease{RunID: claim.RunID, OwnerID: claim.OwnerID, Token: leaseToken}, nil
+}
+
+func (r *SQLiteRunRegistry) RequestCancel(ctx context.Context, runID string) error {
+	if err := r.ready(); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		return ErrInvalidRunID
+	}
+	res, err := r.db.ExecContext(ctx, `
+UPDATE detached_runs SET cancel_requested = 1 WHERE run_id = ? AND finished_at = ''`, runID)
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected > 0 {
+		return nil
+	}
+	info, err := r.Get(ctx, runID)
+	if err != nil {
+		return err
+	}
+	if info.Status == RunCancelled {
+		return nil
+	}
+	return ErrRunTerminal
+}
+
+func (r *SQLiteRunRegistry) CancelRequested(ctx context.Context, lease RunLease) (bool, error) {
+	if err := r.ready(); err != nil {
+		return false, err
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if err := validateRunLease(lease); err != nil {
+		return false, err
+	}
+	var requested int
+	err := r.db.QueryRowContext(ctx, `
+SELECT cancel_requested FROM detached_runs
+WHERE run_id = ? AND owner_id = ? AND lease_token = ? AND finished_at = ''`,
+		lease.RunID, lease.OwnerID, lease.Token).Scan(&requested)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, ErrRunLeaseLost
+	}
+	if err != nil {
+		return false, err
+	}
+	return requested != 0, nil
 }
 
 func (r *SQLiteRunRegistry) Update(ctx context.Context, lease RunLease, info RunInfo) error {
@@ -224,9 +283,17 @@ CREATE TABLE IF NOT EXISTS detached_runs (
     lease_until TEXT NOT NULL,
     started_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    finished_at TEXT NOT NULL
+    finished_at TEXT NOT NULL,
+    cancel_requested INTEGER NOT NULL DEFAULT 0
 )`)
-	return err
+	if err != nil {
+		return err
+	}
+	_, err = r.db.ExecContext(ctx, `ALTER TABLE detached_runs ADD COLUMN cancel_requested INTEGER NOT NULL DEFAULT 0`)
+	if err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+		return err
+	}
+	return nil
 }
 
 func (r *SQLiteRunRegistry) ready() error {
@@ -315,3 +382,4 @@ func formatTime(t time.Time) string {
 
 var _ RunRegistry = (*SQLiteRunRegistry)(nil)
 var _ RunRegistryLister = (*SQLiteRunRegistry)(nil)
+var _ RunCancellationRegistry = (*SQLiteRunRegistry)(nil)

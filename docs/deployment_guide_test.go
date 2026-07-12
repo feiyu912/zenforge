@@ -15,7 +15,7 @@ func TestDeploymentGuideLocksMultiReplicaContract(t *testing.T) {
 	for _, required := range []string{
 		"RunInfo.OwnerID",
 		"RunManager.Cancel",
-		"owner-cancel routing",
+		"RunCancellationRegistry",
 		"Last-Event-ID",
 		"RunRegistry.Claim",
 		"Runtime.Close",

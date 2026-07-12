@@ -67,7 +67,7 @@ V0.2 Production hardening
 | S8 | The built-in Docker sandbox, fake sandbox backend, and Container Hub beta adapter are contract-tested. A gated real-Docker consumer test verifies Linux execution and a read-only workspace mount; a real Container Hub service remains external acceptance. |
 | MVP | Repository-scoped acceptance is implemented and test-mapped. The complete `examples/harness-agent` app and independent `integration/consumer` module cover environment-owned models, Agent Skill progressive disclosure, typed tools, HITL, and Docker-backed shell execution. Live provider credentials remain an application-owned smoke test. |
 | V0.1 | `v0.1.0` was tagged. Repository wire goldens cover the ZenMind DTO/projector/approval/event-line boundary at `agent-platform@1893edb5`. The downstream engine bridge, feature-flag selector, HTTP/SSE/WS, approval, attach, and fallback integration is implemented and tested on `agent-platform` branch `codex/zenforge-engine-bridge@82ca4d3`, but is not yet merged to platform `main`. |
-| V0.2 | Repository hardening includes SQLite soak coverage, Go 1.26-only CI, JSONL crash/concurrency safety, typed tools, filesystem Agent Skill catalogs with instruction/resource progressive disclosure, bounded shell/Hub/Docker responses, fail-closed checkpoint/ZenMind adapter loading, host-resolved run assembly, approval correlation recovery, run-scoped strict projection with v2/v1 state compatibility, optional cross-run persistent rule authorization, durable model-attempt replacement, replay-to-live SSE, canonical detached HTTP lifecycle, optional memory/SQLite run registries for shared claims, durable status/listing, and cross-manager durable attach, plus explicit deployment routing and shutdown guidance. Independent consumer CI is also present. Marketplace lifecycle and external acceptance remain incomplete. This roadmap stage is not declared complete. |
+| V0.2 | Repository hardening includes SQLite soak coverage, Go 1.26-only CI, JSONL crash/concurrency safety, typed tools, filesystem Agent Skill catalogs with instruction/resource progressive disclosure, bounded shell/Hub/Docker responses, fail-closed checkpoint/ZenMind adapter loading, host-resolved run assembly, approval correlation recovery, run-scoped strict projection with v2/v1 state compatibility, optional cross-run persistent rule authorization, durable model-attempt replacement, replay-to-live SSE, canonical detached HTTP lifecycle, optional memory/SQLite run registries for shared claims, durable status/listing, cross-manager durable attach/cancel, plus explicit deployment routing and shutdown guidance. Independent consumer CI is also present. Marketplace lifecycle and external acceptance remain incomplete. This roadmap stage is not declared complete. |
 
 Completion in this table distinguishes ZenForge repository tests from tests on
 the named downstream integration branch. It does not claim merge to
@@ -526,7 +526,7 @@ Remaining:
 - external acceptance, including downstream platform merge/deployment and a
   smoke against a real Container Hub service.
 - external deployment acceptance. The deployment guide now defines routing,
-  owner-affine cancellation, recovery, idempotency, and shutdown requirements;
+  distributed cancellation, recovery, idempotency, and shutdown requirements;
   applications still own their concrete load balancer, distributed stores,
   provider/tool side-effect idempotency, and rollout policy.
 

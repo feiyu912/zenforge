@@ -17,8 +17,9 @@ type MemoryRunRegistry struct {
 }
 
 type runRegistryRecord struct {
-	info  RunInfo
-	token string
+	info            RunInfo
+	token           string
+	cancelRequested bool
 }
 
 func NewMemoryRunRegistry() *MemoryRunRegistry {
@@ -45,7 +46,8 @@ func (r *MemoryRunRegistry) Claim(ctx context.Context, claim RunClaim) (RunLease
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if record, ok := r.records[claim.RunID]; ok && !claimable(record.info, r.clock().UTC()) {
+	record, exists := r.records[claim.RunID]
+	if exists && !claimable(record.info, r.clock().UTC()) {
 		return RunLease{}, ErrRunClaimed
 	}
 	token := randomLeaseToken()
@@ -54,7 +56,10 @@ func (r *MemoryRunRegistry) Claim(ctx context.Context, claim RunClaim) (RunLease
 		LeaseUntil: timePtr(claim.LeaseUntil), StartedAt: claim.StartedAt,
 		UpdatedAt: claim.UpdatedAt,
 	}
-	r.records[claim.RunID] = runRegistryRecord{info: info, token: token}
+	r.records[claim.RunID] = runRegistryRecord{
+		info: info, token: token,
+		cancelRequested: exists && claim.Resume && record.cancelRequested,
+	}
 	return RunLease{RunID: claim.RunID, OwnerID: claim.OwnerID, Token: token}, nil
 }
 
@@ -76,8 +81,54 @@ func (r *MemoryRunRegistry) Update(ctx context.Context, lease RunLease, info Run
 	if info.StartedAt.IsZero() {
 		info.StartedAt = record.info.StartedAt
 	}
-	r.records[lease.RunID] = runRegistryRecord{info: cloneRunInfo(info), token: lease.Token}
+	record.info = cloneRunInfo(info)
+	record.token = lease.Token
+	r.records[lease.RunID] = record
 	return nil
+}
+
+func (r *MemoryRunRegistry) RequestCancel(ctx context.Context, runID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if r == nil {
+		return fmt.Errorf("memory run registry is nil")
+	}
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		return ErrInvalidRunID
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	record, ok := r.records[runID]
+	if !ok {
+		return ErrRunNotFound
+	}
+	if record.info.Status == RunCancelled {
+		return nil
+	}
+	if terminal(record.info.Status) {
+		return ErrRunTerminal
+	}
+	record.cancelRequested = true
+	r.records[runID] = record
+	return nil
+}
+
+func (r *MemoryRunRegistry) CancelRequested(ctx context.Context, lease RunLease) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if r == nil {
+		return false, fmt.Errorf("memory run registry is nil")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	record, err := r.recordForLease(lease)
+	if err != nil {
+		return false, err
+	}
+	return record.cancelRequested, nil
 }
 
 func (r *MemoryRunRegistry) Release(ctx context.Context, lease RunLease, info RunInfo) error {
@@ -207,3 +258,4 @@ func timePtr(t time.Time) *time.Time {
 
 var _ RunRegistry = (*MemoryRunRegistry)(nil)
 var _ RunRegistryLister = (*MemoryRunRegistry)(nil)
+var _ RunCancellationRegistry = (*MemoryRunRegistry)(nil)

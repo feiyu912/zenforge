@@ -30,10 +30,11 @@ what is experimental, and what remains adapter territory.
   approval inboxes make approval list/submit shareable; they do not by
   themselves move execution between workers.
 - Status, list, durable attach, and durable approval operations may use any
-  correctly configured replica. Cancellation is owner-affine because the
-  execution context is process-local; the host routes it using trusted
-  `RunInfo.OwnerID`. Lease expiry permits explicit resume but does not
-  automatically transfer execution.
+  correctly configured replica. Cancellation may also use any replica when the
+  registry implements `RunCancellationRegistry`; the built-in memory and
+  SQLite registries do. Custom registries without that optional interface must
+  route cancellation using trusted `RunInfo.OwnerID`. Lease expiry permits
+  explicit resume but does not automatically transfer execution.
 - Attachment disconnect stops only replay/follow delivery. It does not cancel
   detached execution; callers must use explicit cancel, a run timeout, or
   runtime shutdown.

@@ -270,12 +270,14 @@ skills/
 - The manager is single-process by default. Configure `RunManagerOptions.Registry`
   with `NewMemoryRunRegistry` or `OpenSQLiteRunRegistry` to add shared run
   claims, lease refresh, durable status/list lookup, and cross-manager durable
-  replay attachment. Applications still own model provider/protocol and
+  replay attachment. Their optional `RunCancellationRegistry` extension also
+  lets any replica persist cancellation for the active owner. Applications
+  still own model provider/protocol and
   compatible base URL configuration, auth, route paths, durable store closure,
   lifecycle shutdown, and idempotent external side effects.
 - The [deployment guide](docs/deployment-guide.md) defines supported
   single-process, shared-host, and multi-host topologies; per-operation routing;
-  external side-effect idempotency; owner-affine cancellation; crash recovery;
+  external side-effect idempotency; distributed cancellation; crash recovery;
   and graceful rollout acceptance.
 
 **Live events**

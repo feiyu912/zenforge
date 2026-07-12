@@ -2,6 +2,7 @@ package harnesshttp
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"sync"
@@ -95,6 +96,91 @@ func TestRunManagerRegistryClaimsAcrossManagersAndKeepsStatus(t *testing.T) {
 	}
 	if len(listed) != 1 || listed[0].RunID != "claimed" || listed[0].Status != RunCompleted {
 		t.Fatalf("registry list = %+v", listed)
+	}
+}
+
+func TestRunManagerCancelsAcrossManagersThroughRegistry(t *testing.T) {
+	durable := eventlogmemory.New()
+	bus1 := eventlog.NewBus()
+	bus2 := eventlog.NewBus()
+	store1 := eventlog.NewFanoutStore(durable, bus1)
+	store2 := eventlog.NewFanoutStore(durable, bus2)
+	registry := NewMemoryRunRegistry()
+	agent1 := newManagerTestAgent(store1)
+	manager1 := NewRunManager(agent1, store1, bus1, RunManagerOptions{
+		Registry: registry, OwnerID: "cancel_owner", TerminalRetention: -1,
+		LeaseDuration: 100 * time.Millisecond, HeartbeatInterval: 5 * time.Millisecond,
+	})
+	manager2 := NewRunManager(newManagerTestAgent(store2), store2, bus2, RunManagerOptions{
+		Registry: registry, OwnerID: "cancel_requester", TerminalRetention: -1,
+		LeaseDuration: 100 * time.Millisecond, HeartbeatInterval: 5 * time.Millisecond,
+	})
+	defer closeManager(t, manager1)
+	defer closeManager(t, manager2)
+
+	if _, err := manager1.Start(context.Background(), zenforge.Task{RunID: "remote_cancel", Input: "hi"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager2.Cancel("remote_cancel"); err != nil {
+		t.Fatal(err)
+	}
+	waitStatus(t, manager2, "remote_cancel", RunCancelled)
+	if !agent1.cancelled("remote_cancel") {
+		t.Fatal("owner context was not cancelled")
+	}
+	if err := manager2.Cancel("remote_cancel"); err != nil {
+		t.Fatalf("repeated remote cancel = %v", err)
+	}
+}
+
+func TestMemoryRunRegistryCancellationIsLeaseFenced(t *testing.T) {
+	now := time.Now().UTC()
+	registry := NewMemoryRunRegistry()
+	lease, err := registry.Claim(context.Background(), RunClaim{
+		RunID: "memory_cancel", OwnerID: "owner", Status: RunRunning,
+		LeaseUntil: now.Add(time.Minute), StartedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.RequestCancel(context.Background(), "memory_cancel"); err != nil {
+		t.Fatal(err)
+	}
+	requested, err := registry.CancelRequested(context.Background(), lease)
+	if err != nil || !requested {
+		t.Fatalf("requested=%v err=%v", requested, err)
+	}
+	stale := lease
+	stale.Token = "stale"
+	if _, err := registry.CancelRequested(context.Background(), stale); !errors.Is(err, ErrRunLeaseLost) {
+		t.Fatalf("stale cancellation read = %v, want ErrRunLeaseLost", err)
+	}
+}
+
+func TestMemoryRunRegistryResumeClaimPreservesCancellation(t *testing.T) {
+	now := time.Unix(100, 0).UTC()
+	registry := newMemoryRunRegistryWithClock(func() time.Time { return now })
+	_, err := registry.Claim(context.Background(), RunClaim{
+		RunID: "memory_resume_cancel", OwnerID: "old", Status: RunRunning,
+		LeaseUntil: now.Add(time.Second), StartedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.RequestCancel(context.Background(), "memory_resume_cancel"); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(2 * time.Second)
+	lease, err := registry.Claim(context.Background(), RunClaim{
+		RunID: "memory_resume_cancel", OwnerID: "new", Status: RunStarting, Resume: true,
+		LeaseUntil: now.Add(time.Second), StartedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requested, err := registry.CancelRequested(context.Background(), lease)
+	if err != nil || !requested {
+		t.Fatalf("requested=%v err=%v", requested, err)
 	}
 }
 
@@ -244,6 +330,112 @@ func TestSQLiteRunRegistryClaimsAcrossConnections(t *testing.T) {
 	}
 	if len(listed) != 1 || listed[0].RunID != "sqlite_claim" || listed[0].Status != RunCompleted {
 		t.Fatalf("sqlite list = %+v", listed)
+	}
+}
+
+func TestSQLiteRunRegistrySharesCancellationAcrossConnections(t *testing.T) {
+	path := t.TempDir() + "/cancel.db"
+	owner, err := OpenSQLiteRunRegistry(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer owner.Close()
+	requester, err := OpenSQLiteRunRegistry(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer requester.Close()
+	now := time.Now().UTC()
+	lease, err := owner.Claim(context.Background(), RunClaim{
+		RunID: "sqlite_cancel", OwnerID: "owner", Status: RunRunning,
+		LeaseUntil: now.Add(time.Minute), StartedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := requester.RequestCancel(context.Background(), "sqlite_cancel"); err != nil {
+		t.Fatal(err)
+	}
+	requested, err := owner.CancelRequested(context.Background(), lease)
+	if err != nil || !requested {
+		t.Fatalf("requested=%v err=%v", requested, err)
+	}
+	if err := owner.Release(context.Background(), lease, RunInfo{
+		Status: RunCancelled, StartedAt: now, UpdatedAt: now, FinishedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := requester.RequestCancel(context.Background(), "sqlite_cancel"); err != nil {
+		t.Fatalf("repeated terminal cancellation = %v", err)
+	}
+}
+
+func TestSQLiteRunRegistryMigratesExistingSchemaForCancellation(t *testing.T) {
+	path := t.TempDir() + "/legacy.db"
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`CREATE TABLE detached_runs (
+		run_id TEXT PRIMARY KEY, status TEXT NOT NULL, error TEXT NOT NULL,
+		owner_id TEXT NOT NULL, lease_token TEXT NOT NULL, lease_until TEXT NOT NULL,
+		started_at TEXT NOT NULL, updated_at TEXT NOT NULL, finished_at TEXT NOT NULL
+	)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	registry, err := OpenSQLiteRunRegistry(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer registry.Close()
+	now := time.Now().UTC()
+	lease, err := registry.Claim(context.Background(), RunClaim{
+		RunID: "migrated_cancel", OwnerID: "owner", Status: RunRunning,
+		LeaseUntil: now.Add(time.Minute), StartedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.RequestCancel(context.Background(), "migrated_cancel"); err != nil {
+		t.Fatal(err)
+	}
+	requested, err := registry.CancelRequested(context.Background(), lease)
+	if err != nil || !requested {
+		t.Fatalf("requested=%v err=%v", requested, err)
+	}
+}
+
+func TestSQLiteRunRegistryResumeClaimPreservesCancellation(t *testing.T) {
+	registry, err := OpenSQLiteRunRegistry(context.Background(), t.TempDir()+"/resume-cancel.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer registry.Close()
+	now := time.Now().UTC()
+	_, err = registry.Claim(context.Background(), RunClaim{
+		RunID: "sqlite_resume_cancel", OwnerID: "old", Status: RunRunning,
+		LeaseUntil: now.Add(-time.Second), StartedAt: now.Add(-time.Minute), UpdatedAt: now.Add(-time.Minute),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.RequestCancel(context.Background(), "sqlite_resume_cancel"); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := registry.Claim(context.Background(), RunClaim{
+		RunID: "sqlite_resume_cancel", OwnerID: "new", Status: RunStarting, Resume: true,
+		LeaseUntil: now.Add(time.Minute), StartedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requested, err := registry.CancelRequested(context.Background(), lease)
+	if err != nil || !requested {
+		t.Fatalf("requested=%v err=%v", requested, err)
 	}
 }
 

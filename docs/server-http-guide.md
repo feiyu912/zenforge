@@ -155,6 +155,10 @@ POST /runs/cancel  {"runId":"run_123"}
 Success returns `202` with `{"runId":"run_123"}`. Cancelling an already
 cancelled run is idempotent; another terminal state conflicts. Manager shutdown
 and `RunTimeout` also stop execution, with timeout reported as `failed`.
+With a registry that implements `RunCancellationRegistry`, cancellation may
+reach any replica: the request is persisted and the lease owner consumes it on
+heartbeat. The built-in memory and SQLite registries implement this extension.
+Custom registries without it still require cancellation routing to `OwnerID`.
 
 `MaxActive > 0` bounds active runs and overflow maps to HTTP `429`.
 `TerminalRetention` defaults to five minutes; a negative value retains
@@ -172,7 +176,7 @@ though the live event bus remains process-local. Applications still own
 reconnect routing, model/tool side-effect idempotency, provider configuration,
 auth, and shutdown.
 
-For the exact single-host and multi-host topology, owner-affine cancellation,
+For the exact single-host and multi-host topology, distributed cancellation,
 idempotency-key, rollout, and deployment-acceptance contract, see the
 [Deployment Guide](deployment-guide.md).
 

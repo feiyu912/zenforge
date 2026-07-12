@@ -52,12 +52,16 @@ The following table is the supported detached-run routing contract:
 | status and list | yes | The shared registry supplies durable `RunInfo` records and listing. |
 | attach | yes | The shared event store supplies replay and polling. The process-local bus only accelerates delivery on the owner. |
 | list or submit approval | yes | All replicas must use the same durable approval inbox and the same access policy. |
-| cancel | no | Route to the active `RunInfo.OwnerID`; `RunManager.Cancel` cancels only a process-local execution context. |
+| cancel | yes with `RunCancellationRegistry` | Built-in memory/SQLite registries persist a request that the lease owner consumes on heartbeat. Otherwise route to `RunInfo.OwnerID`. |
 
-An edge service can read `RunInfo.OwnerID` from status before forwarding a
-cancel. Treat owner identifiers as internal routing data: authorize the run
-before lookup, do not accept an owner value supplied by the client, and do not
-use it as a tenancy decision.
+`RunCancellationRegistry` is an optional extension, so existing custom
+registries remain source compatible. Without that extension, an edge service
+reads `RunInfo.OwnerID` before forwarding cancel. Treat owner identifiers as
+internal routing data: authorize the run before lookup, do not accept an owner
+value supplied by the client, and do not use it as a tenancy decision. With the
+extension, `RunManager.Cancel` stores a remote request when it has no local run.
+HTTP acceptance means the request was stored; terminal status proves the owner
+consumed it.
 
 Attach clients should persist the latest SSE sequence and reconnect with
 `Last-Event-ID` or `afterSeq`. A reconnect may use another replica. Replay and
@@ -114,7 +118,7 @@ active run to another worker and does not close caller-owned stores.
 
 For a graceful rollout:
 
-1. Remove the worker from start/resume and owner-cancel routing.
+1. Remove the worker from start/resume routing.
 2. Stop accepting new HTTP requests and allow existing attachments to detach.
 3. Wait for owned runs to become terminal, or explicitly choose to cancel them.
 4. Call `Runtime.Close` with a bounded context.
@@ -132,7 +136,8 @@ Before serving production traffic, prove the following in the real deployment:
 
 - two workers racing to start one run produce exactly one owner;
 - status, list, approval submission, and attach work through a non-owner;
-- cancel is forwarded to the owner and reaches a terminal event;
+- cancel through a non-owner is consumed by the owner and reaches a terminal
+  event when the registry implements `RunCancellationRegistry`;
 - killing the owner expires its lease and an explicit resume completes;
 - reconnect after worker change produces a gap-free, duplicate-tolerant event
   projection;

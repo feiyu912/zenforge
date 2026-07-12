@@ -125,7 +125,10 @@ registry, manager status and duplicate exclusion are process-local. With a
 registry, detached start/resume uses shared leases and `Get` can read durable
 status after local retention expires; registries that implement listing also
 back `RunManager.List` and `ServeDetachedRuns`. The live bus remains
-process-local.
+process-local. Registries may additionally implement
+`RunCancellationRegistry`; then `RunManager.Cancel` persists a request for a
+remote lease owner to consume. The built-in memory and SQLite registries
+support listing and distributed cancellation.
 Applications own model/provider construction (OpenAI or Anthropic protocol and
 compatible base URLs), auth, route paths, durable store selection/closure, and
 server/runtime shutdown.
