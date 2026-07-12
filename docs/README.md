@@ -52,7 +52,8 @@ Recommended reading order:
 48. [security-guide.md](./security-guide.md)
 49. [tool-authoring-guide.md](./tool-authoring-guide.md)
 50. [agent-skills-spec.md](./agent-skills-spec.md)
-51. [api-sketch.md](./api-sketch.md) historical draft
+51. [deployment-guide.md](./deployment-guide.md)
+52. [api-sketch.md](./api-sketch.md) historical draft
 
 ## Architecture Decision Records
 

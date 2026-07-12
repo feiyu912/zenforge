@@ -273,6 +273,10 @@ skills/
   replay attachment. Applications still own model provider/protocol and
   compatible base URL configuration, auth, route paths, durable store closure,
   lifecycle shutdown, and idempotent external side effects.
+- The [deployment guide](docs/deployment-guide.md) defines supported
+  single-process, shared-host, and multi-host topologies; per-operation routing;
+  external side-effect idempotency; owner-affine cancellation; crash recovery;
+  and graceful rollout acceptance.
 
 **Live events**
 - `eventlog.Bus` and `eventlog.FanoutStore` for multiple live subscribers.
@@ -382,6 +386,7 @@ Start here:
 - [Provider Guide](docs/provider-guide.md)
 - [Tool Authoring](docs/tool-authoring-guide.md)
 - [Agent Skills Spec](docs/agent-skills-spec.md)
+- [Deployment Guide](docs/deployment-guide.md)
 
 Server and edge:
 - [Server HTTP Guide](docs/server-http-guide.md) · [Server SSE Guide](docs/server-sse-guide.md)

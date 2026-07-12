@@ -172,6 +172,10 @@ though the live event bus remains process-local. Applications still own
 reconnect routing, model/tool side-effect idempotency, provider configuration,
 auth, and shutdown.
 
+For the exact single-host and multi-host topology, owner-affine cancellation,
+idempotency-key, rollout, and deployment-acceptance contract, see the
+[Deployment Guide](deployment-guide.md).
+
 ## Access Control
 
 Host platforms can attach an access controller before exposing run, resume, or

@@ -4,6 +4,9 @@
 
 ### Added
 
+- Multi-replica deployment guidance covering supported storage topologies,
+  per-operation routing, owner-affine cancellation, explicit crash recovery,
+  side-effect idempotency, graceful rollout, and external acceptance gates.
 - Bounded Agent Skill auxiliary resources with immutable bundle snapshots,
   digest/provenance metadata, symlink and path-escape rejection, and on-demand
   progressive disclosure through the existing `load_skill` tool.

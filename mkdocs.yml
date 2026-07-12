@@ -120,6 +120,7 @@ nav:
       - Spawn subagents: subagent-guide.md
       - Plan then execute: planner-guide.md
       - Harden against attacks: security-guide.md
+      - Deploy the HTTP runtime: deployment-guide.md
   - Reference:
       - API: api.md
       - Configuration: config-reference.md
