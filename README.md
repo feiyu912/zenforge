@@ -220,8 +220,9 @@ new core provider names.
 **Agent Skills**
 - Filesystem `SKILL.md` catalogs with bounded metadata/content validation.
 - Progressive disclosure through `Config.Skills`: the first model request sees
-  descriptors only, and `load_skill` returns one body with SHA-256 digest and
-  safe relative provenance.
+  descriptors only. `load_skill` returns instructions plus a bounded auxiliary
+  resource index, and the same tool loads one indexed resource on demand. All
+  returned content includes SHA-256 identity and safe relative provenance.
 - Skills are instruction packages, not executable tools. Catalog ownership,
   installation, trust, allowlists, and marketplace integration stay with the
   embedding application or platform.
@@ -250,6 +251,8 @@ Each immediate child of `./skills` is one package:
 skills/
   project-review/
     SKILL.md
+    references/
+      checklist.md
 ```
 
 - Memory augmenter that hydrates normalized tasks from a store.

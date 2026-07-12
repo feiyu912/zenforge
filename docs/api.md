@@ -98,7 +98,11 @@ agent := zenforge.New(zenforge.Config{Model: modelClient, Skills: bundle})
 `Config.Skills` adds descriptor-only system context and the `load_skill` tool.
 Ordinary `Config.Tools` remain callable operations and are not skills. A nil
 allowlist snapshots all discovered skills; pass an explicit list to restrict
-the bundle.
+the bundle. A filesystem package may include bounded ordinary files below its
+package root. Loading the instructions returns their path/size/digest index;
+calling `load_skill` again with `name` and an indexed `resource` path returns
+that frozen file. Resource paths are selected from the index, not arbitrary
+host paths.
 
 ## HTTP Runtime
 

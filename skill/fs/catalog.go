@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/feiyu912/zenforge/skill"
 )
@@ -23,11 +24,14 @@ var validName = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 
 // Options controls filesystem catalog validation.
 type Options struct {
-	Source              string
-	MaxContentBytes     int64
-	MaxFrontmatterBytes int
-	MaxDescriptionBytes int
-	MaxCatalogEntries   int
+	Source                string
+	MaxContentBytes       int64
+	MaxFrontmatterBytes   int
+	MaxDescriptionBytes   int
+	MaxCatalogEntries     int
+	MaxResourceBytes      int64
+	MaxResourceTotalBytes int64
+	MaxResources          int
 }
 
 // Catalog scans either a skill directory containing SKILL.md or a source
@@ -59,10 +63,22 @@ func New(root string, options Options) (*Catalog, error) {
 	if options.MaxCatalogEntries == 0 {
 		options.MaxCatalogEntries = skill.MaxCatalogEntries
 	}
+	if options.MaxResourceBytes == 0 {
+		options.MaxResourceBytes = skill.MaxResourceBytes
+	}
+	if options.MaxResourceTotalBytes == 0 {
+		options.MaxResourceTotalBytes = skill.MaxResourceTotalBytes
+	}
+	if options.MaxResources == 0 {
+		options.MaxResources = skill.MaxResources
+	}
 	if options.MaxContentBytes < 1 || options.MaxContentBytes > skill.MaxContentBytes ||
 		options.MaxFrontmatterBytes < 1 || options.MaxFrontmatterBytes > skill.MaxFrontmatterBytes ||
 		options.MaxDescriptionBytes < 1 || options.MaxDescriptionBytes > skill.MaxDescriptionBytes ||
-		options.MaxCatalogEntries < 1 || options.MaxCatalogEntries > skill.MaxCatalogEntries {
+		options.MaxCatalogEntries < 1 || options.MaxCatalogEntries > skill.MaxCatalogEntries ||
+		options.MaxResourceBytes < 1 || options.MaxResourceBytes > skill.MaxResourceBytes ||
+		options.MaxResourceTotalBytes < 1 || options.MaxResourceTotalBytes > skill.MaxResourceTotalBytes ||
+		options.MaxResources < 1 || options.MaxResources > skill.MaxResources {
 		return nil, fmt.Errorf("%w: limits must be positive and no greater than defaults", skill.ErrInvalid)
 	}
 	if options.Source == "" {
@@ -115,12 +131,117 @@ func (c *Catalog) Load(ctx context.Context, name string) (skill.Content, error) 
 	if err != nil || provenancePath == ".." || strings.HasPrefix(provenancePath, ".."+string(filepath.Separator)) {
 		return skill.Content{}, fmt.Errorf("%w: provenance path %s", skill.ErrPathEscape, entries[index].path)
 	}
+	resources, err := c.resources(ctx, filepath.Dir(entries[index].path))
+	if err != nil {
+		return skill.Content{}, err
+	}
 	return skill.Content{
 		Descriptor: cloneDescriptor(descriptor),
 		Body:       body,
 		Digest:     "sha256:" + hex.EncodeToString(sum[:]),
 		Provenance: skill.Provenance{Source: c.options.Source, Path: filepath.ToSlash(provenancePath)},
+		Resources:  resources,
 	}, nil
+}
+
+// LoadResource loads one previously advertised auxiliary file.
+func (c *Catalog) LoadResource(ctx context.Context, name, resourcePath string) (skill.Resource, error) {
+	content, err := c.Load(ctx, name)
+	if err != nil {
+		return skill.Resource{}, err
+	}
+	var descriptor skill.ResourceDescriptor
+	found := false
+	for _, candidate := range content.Resources {
+		if candidate.Path == resourcePath {
+			descriptor, found = candidate, true
+			break
+		}
+	}
+	if !found {
+		return skill.Resource{}, fmt.Errorf("%w: resource", skill.ErrNotFound)
+	}
+	entries, err := c.scan(ctx)
+	if err != nil {
+		return skill.Resource{}, err
+	}
+	index := sort.Search(len(entries), func(i int) bool { return entries[i].descriptor.Name >= name })
+	if index == len(entries) || entries[index].descriptor.Name != name {
+		return skill.Resource{}, skill.ErrNotFound
+	}
+	packageDir := filepath.Dir(entries[index].path)
+	path := filepath.Join(packageDir, filepath.FromSlash(resourcePath))
+	raw, err := c.readBoundedSafe(path, c.options.MaxResourceBytes)
+	if err != nil {
+		return skill.Resource{}, err
+	}
+	sum := sha256.Sum256(raw)
+	actual := "sha256:" + hex.EncodeToString(sum[:])
+	if int64(len(raw)) != descriptor.Size || actual != descriptor.Digest {
+		return skill.Resource{}, fmt.Errorf("%w: resource changed while loading", skill.ErrInvalid)
+	}
+	provenancePath, err := filepath.Rel(c.root, path)
+	if err != nil {
+		return skill.Resource{}, fmt.Errorf("%w: resource provenance", skill.ErrPathEscape)
+	}
+	return skill.Resource{Descriptor: descriptor, Body: string(raw), Provenance: skill.Provenance{
+		Source: c.options.Source, Path: filepath.ToSlash(provenancePath),
+	}}, nil
+}
+
+func (c *Catalog) resources(ctx context.Context, packageDir string) ([]skill.ResourceDescriptor, error) {
+	var out []skill.ResourceDescriptor
+	var total int64
+	err := filepath.WalkDir(packageDir, func(path string, item iofs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if path == packageDir {
+			return nil
+		}
+		if item.Type()&os.ModeSymlink != 0 {
+			return fmt.Errorf("%w: auxiliary symlink", skill.ErrPathEscape)
+		}
+		if item.IsDir() {
+			return nil
+		}
+		if !item.Type().IsRegular() {
+			return fmt.Errorf("%w: auxiliary file is not regular", skill.ErrPathEscape)
+		}
+		relative, err := filepath.Rel(packageDir, path)
+		if err != nil {
+			return err
+		}
+		relative = filepath.ToSlash(relative)
+		if relative == "SKILL.md" {
+			return nil
+		}
+		if len(out) >= c.options.MaxResources {
+			return fmt.Errorf("%w: resources exceed %d entries", skill.ErrTooLarge, c.options.MaxResources)
+		}
+		raw, err := c.readBoundedSafe(path, c.options.MaxResourceBytes)
+		if err != nil {
+			return err
+		}
+		if !utf8.Valid(raw) {
+			return fmt.Errorf("%w: auxiliary resource is not UTF-8", skill.ErrInvalid)
+		}
+		total += int64(len(raw))
+		if total > c.options.MaxResourceTotalBytes {
+			return fmt.Errorf("%w: resources exceed %d bytes", skill.ErrTooLarge, c.options.MaxResourceTotalBytes)
+		}
+		sum := sha256.Sum256(raw)
+		out = append(out, skill.ResourceDescriptor{Path: relative, Size: int64(len(raw)), Digest: "sha256:" + hex.EncodeToString(sum[:])})
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
+	return out, nil
 }
 
 func (c *Catalog) scan(ctx context.Context) ([]entry, error) {
@@ -231,16 +352,20 @@ func (c *Catalog) readFrontmatterSafe(path string) ([]byte, error) {
 }
 
 func (c *Catalog) readSafe(path string) ([]byte, error) {
+	return c.readBoundedSafe(path, c.options.MaxContentBytes)
+}
+
+func (c *Catalog) readBoundedSafe(path string, limit int64) ([]byte, error) {
 	file, err := c.openSafe(path)
 	if err != nil {
 		return nil, err
 	}
 	defer file.Close()
-	raw, err := io.ReadAll(io.LimitReader(file, c.options.MaxContentBytes+1))
+	raw, err := io.ReadAll(io.LimitReader(file, limit+1))
 	if err != nil {
 		return nil, fmt.Errorf("read skill content: %w", err)
 	}
-	if int64(len(raw)) > c.options.MaxContentBytes {
+	if int64(len(raw)) > limit {
 		return nil, fmt.Errorf("%w: %s", skill.ErrTooLarge, path)
 	}
 	return raw, nil

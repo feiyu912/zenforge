@@ -538,7 +538,10 @@ agent := zenforge.New(zenforge.Config{
 ```
 
 The initial model request contains only skill names and descriptions.
-`load_skill` returns a selected body, digest, and safe relative provenance.
+`load_skill` returns a selected body, digest, safe relative provenance, and an
+index of bounded auxiliary files. A second call such as
+`{"name":"code-review","resource":"references/checklist.md"}` loads one
+indexed resource from the immutable startup snapshot.
 Installing packages, choosing trust policy, and integrating a marketplace are
 application or platform responsibilities.
 

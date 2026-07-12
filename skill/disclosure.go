@@ -24,6 +24,11 @@ type Bundle struct {
 	fingerprint string
 }
 
+type frozenSkill struct {
+	content   Content
+	resources map[string]Resource
+}
+
 // Options controls bundle advertisement limits. Non-zero values may only make
 // the defaults stricter.
 type Options struct {
@@ -83,7 +88,7 @@ func NewBundle(ctx context.Context, catalog Catalog, allowlist []string, configu
 	if len(prompt) > options.MaxAdvertisedMetadataBytes {
 		return nil, fmt.Errorf("%w: advertised metadata exceeds %d bytes", ErrTooLarge, options.MaxAdvertisedMetadataBytes)
 	}
-	frozen := make(memoryCatalog, len(filtered))
+	frozen := make(frozenCatalog, len(filtered))
 	for _, name := range allowedNames {
 		content, err := catalog.Load(ctx, name)
 		if err != nil {
@@ -96,7 +101,27 @@ func NewBundle(ctx context.Context, catalog Catalog, allowlist []string, configu
 		if err := validateContent(content); err != nil {
 			return nil, fmt.Errorf("snapshot skill %q: %w", name, err)
 		}
-		frozen[name] = cloneContent(content)
+		entry := frozenSkill{content: cloneContent(content), resources: make(map[string]Resource, len(content.Resources))}
+		if len(content.Resources) > 0 {
+			resources, ok := catalog.(ResourceCatalog)
+			if !ok {
+				return nil, fmt.Errorf("%w: catalog advertises resources without ResourceCatalog", ErrInvalid)
+			}
+			for _, descriptor := range content.Resources {
+				resource, err := resources.LoadResource(ctx, name, descriptor.Path)
+				if err != nil {
+					return nil, fmt.Errorf("snapshot skill %q resource %q: %w", name, descriptor.Path, err)
+				}
+				if resource.Descriptor != descriptor || int64(len(resource.Body)) != descriptor.Size {
+					return nil, fmt.Errorf("%w: resource changed while snapshotting %q", ErrInvalid, descriptor.Path)
+				}
+				if err := validateResource(resource); err != nil {
+					return nil, fmt.Errorf("snapshot skill %q resource %q: %w", name, descriptor.Path, err)
+				}
+				entry.resources[descriptor.Path] = resource
+			}
+		}
+		frozen[name] = entry
 	}
 	fingerprint, err := bundleFingerprint(filtered, frozen)
 	if err != nil {
@@ -138,17 +163,18 @@ func (b *Bundle) Fingerprint() string {
 	return b.fingerprint
 }
 
-func bundleFingerprint(descriptors []Descriptor, contents memoryCatalog) (string, error) {
+func bundleFingerprint(descriptors []Descriptor, contents frozenCatalog) (string, error) {
 	type fingerprintEntry struct {
-		Name       string     `json:"name"`
-		Descriptor Descriptor `json:"descriptor"`
-		Digest     string     `json:"digest"`
-		BodyDigest string     `json:"bodyDigest"`
-		Provenance Provenance `json:"provenance"`
+		Name       string               `json:"name"`
+		Descriptor Descriptor           `json:"descriptor"`
+		Digest     string               `json:"digest"`
+		BodyDigest string               `json:"bodyDigest"`
+		Provenance Provenance           `json:"provenance"`
+		Resources  []ResourceDescriptor `json:"resources,omitempty"`
 	}
 	entries := make([]fingerprintEntry, 0, len(descriptors))
 	for _, descriptor := range descriptors {
-		content := contents[descriptor.Name]
+		content := contents[descriptor.Name].content
 		bodySum := sha256.Sum256([]byte(content.Body))
 		entries = append(entries, fingerprintEntry{
 			Name:       descriptor.Name,
@@ -156,6 +182,7 @@ func bundleFingerprint(descriptors []Descriptor, contents memoryCatalog) (string
 			Digest:     content.Digest,
 			BodyDigest: fmt.Sprintf("sha256:%x", bodySum),
 			Provenance: content.Provenance,
+			Resources:  append([]ResourceDescriptor(nil), content.Resources...),
 		})
 	}
 	encoded, err := json.Marshal(entries)
@@ -224,21 +251,23 @@ type loadTool struct {
 
 func (*loadTool) Name() string { return "load_skill" }
 func (*loadTool) Description() string {
-	return "Load the complete instructions for an available skill by name."
+	return "Load an available skill's instructions, or one listed auxiliary resource, by name."
 }
 func (*loadTool) Schema() map[string]any {
 	return map[string]any{
 		"type":                 "object",
 		"additionalProperties": false,
 		"properties": map[string]any{
-			"name": map[string]any{"type": "string"},
+			"name":     map[string]any{"type": "string"},
+			"resource": map[string]any{"type": "string", "description": "Optional resource path returned by a prior instruction load."},
 		},
 		"required": []string{"name"},
 	}
 }
 func (t *loadTool) Call(ctx context.Context, input json.RawMessage, _ tool.Context) (tool.Result, error) {
 	var request struct {
-		Name string `json:"name"`
+		Name     string `json:"name"`
+		Resource string `json:"resource"`
 	}
 	decoder := json.NewDecoder(strings.NewReader(string(input)))
 	decoder.DisallowUnknownFields()
@@ -259,6 +288,22 @@ func (t *loadTool) Call(ctx context.Context, input json.RawMessage, _ tool.Conte
 			return unavailableResult()
 		}
 	}
+	if request.Resource != "" {
+		catalog, ok := t.catalog.(ResourceCatalog)
+		if !ok {
+			return unavailableResult()
+		}
+		resource, err := catalog.LoadResource(ctx, request.Name, request.Resource)
+		if err != nil {
+			if errors.Is(err, ErrNotFound) || errors.Is(err, ErrInvalid) || errors.Is(err, ErrPathEscape) || errors.Is(err, ErrTooLarge) {
+				return unavailableResult()
+			}
+			return tool.Result{Error: err.Error(), ExitCode: 1}, err
+		}
+		return tool.Result{Output: resource.Body, Structured: map[string]any{
+			"name": request.Name, "resource": resource.Descriptor, "provenance": resource.Provenance,
+		}}, nil
+	}
 	content, err := t.catalog.Load(ctx, request.Name)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
@@ -272,12 +317,44 @@ func (t *loadTool) Call(ctx context.Context, input json.RawMessage, _ tool.Conte
 			"name":       content.Descriptor.Name,
 			"digest":     content.Digest,
 			"provenance": content.Provenance,
+			"resources":  content.Resources,
 		},
 	}, nil
 }
 
 func unavailableResult() (tool.Result, error) {
 	return tool.Result{Error: ErrUnavailable.Error(), ExitCode: 1}, ErrUnavailable
+}
+
+type frozenCatalog map[string]frozenSkill
+
+func (m frozenCatalog) List(context.Context) ([]Descriptor, error) {
+	out := make([]Descriptor, 0, len(m))
+	for _, entry := range m {
+		out = append(out, cloneDescriptor(entry.content.Descriptor))
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+func (m frozenCatalog) Load(_ context.Context, name string) (Content, error) {
+	entry, ok := m[name]
+	if !ok {
+		return Content{}, ErrNotFound
+	}
+	return cloneContent(entry.content), nil
+}
+
+func (m frozenCatalog) LoadResource(_ context.Context, name, resourcePath string) (Resource, error) {
+	entry, ok := m[name]
+	if !ok {
+		return Resource{}, ErrNotFound
+	}
+	resource, ok := entry.resources[resourcePath]
+	if !ok {
+		return Resource{}, ErrNotFound
+	}
+	return resource, nil
 }
 
 type memoryCatalog map[string]Content

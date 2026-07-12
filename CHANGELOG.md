@@ -4,6 +4,9 @@
 
 ### Added
 
+- Bounded Agent Skill auxiliary resources with immutable bundle snapshots,
+  digest/provenance metadata, symlink and path-escape rejection, and on-demand
+  progressive disclosure through the existing `load_skill` tool.
 - Optional detached run registry for `server/harnesshttp.RunManager`, with
   shared run claims, lease refresh, durable status/list lookup, cross-manager
   durable attach evidence, in-memory and SQLite registry implementations, and
@@ -38,8 +41,9 @@
   Docker-backed shell execution. The example accepts `-skill-root` or
   `ZENFORGE_SKILL_ROOT` and ships a real `SKILL.md`.
 - Validated filesystem Agent Skill catalogs and immutable bundles that expose
-  descriptors first, then return one body with digest and safe provenance via
-  `load_skill`. Marketplace installation, entitlement, and lifecycle remain
+  descriptors first, then return instructions and individually requested
+  auxiliary resources with digest and safe provenance via `load_skill`.
+  Marketplace installation, entitlement, and lifecycle remain
   application/platform responsibilities.
 - CI gates for race detection, vet, the independent consumer module, and a
   real Docker integration test.

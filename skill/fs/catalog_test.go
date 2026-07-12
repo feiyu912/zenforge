@@ -65,6 +65,122 @@ func TestCatalogScansSortsLoadsAndDigests(t *testing.T) {
 	}
 }
 
+func TestCatalogListsAndLoadsBoundedAuxiliaryResources(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, "resourceful", "Resources", "Read the reference when needed.")
+	dir := filepath.Join(root, "resourceful")
+	if err := os.Mkdir(filepath.Join(dir, "references"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "references", "api.md"), []byte("API reference"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "example.json"), []byte(`{"ok":true}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := New(root, Options{Source: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := catalog.Load(context.Background(), "resourceful")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(content.Resources) != 2 || content.Resources[0].Path != "example.json" || content.Resources[1].Path != "references/api.md" {
+		t.Fatalf("unexpected resources: %#v", content.Resources)
+	}
+	resource, err := catalog.LoadResource(context.Background(), "resourceful", "references/api.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resource.Body != "API reference" || resource.Descriptor != content.Resources[1] || resource.Provenance.Path != "resourceful/references/api.md" {
+		t.Fatalf("unexpected resource: %#v", resource)
+	}
+	if _, err := catalog.LoadResource(context.Background(), "resourceful", "../outside"); !errors.Is(err, skill.ErrNotFound) {
+		t.Fatalf("unsafe resource error=%v, want ErrNotFound", err)
+	}
+}
+
+func TestBundleFreezesAuxiliaryResourcesAndLoadsOnDemand(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, "snapshot-resource", "Resource snapshot", "Use the listed resource.")
+	resourcePath := filepath.Join(root, "snapshot-resource", "reference.md")
+	if err := os.WriteFile(resourcePath, []byte("original reference"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := New(root, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := skill.NewBundle(context.Background(), catalog, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(resourcePath, []byte("changed reference"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	instructions, err := bundle.LoadSkillTool().Call(context.Background(), json.RawMessage(`{"name":"snapshot-resource"}`), tool.Context{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resources := instructions.Structured["resources"].([]skill.ResourceDescriptor)
+	if len(resources) != 1 || resources[0].Path != "reference.md" || strings.Contains(instructions.Output, "original reference") {
+		t.Fatalf("unexpected instruction disclosure: %#v", instructions)
+	}
+	resource, err := bundle.LoadSkillTool().Call(context.Background(), json.RawMessage(`{"name":"snapshot-resource","resource":"reference.md"}`), tool.Context{})
+	if err != nil || resource.Output != "original reference" {
+		t.Fatalf("resource=%#v err=%v", resource, err)
+	}
+}
+
+func TestCatalogRejectsAuxiliarySymlinksAndLimits(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, "unsafe-resource", "Unsafe", "body")
+	dir := filepath.Join(root, "unsafe-resource")
+	outside := filepath.Join(root, "outside.txt")
+	if err := os.WriteFile(outside, []byte("outside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "link.txt")); err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := New(root, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := catalog.Load(context.Background(), "unsafe-resource"); !errors.Is(err, skill.ErrPathEscape) {
+		t.Fatalf("symlink error=%v, want ErrPathEscape", err)
+	}
+	if err := os.Remove(filepath.Join(dir, "link.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "large.txt"), []byte("too large"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	catalog, err = New(root, Options{MaxResourceBytes: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := catalog.Load(context.Background(), "unsafe-resource"); !errors.Is(err, skill.ErrTooLarge) {
+		t.Fatalf("size error=%v, want ErrTooLarge", err)
+	}
+}
+
+func TestCatalogRejectsNonUTF8AuxiliaryResource(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, "binary-resource", "Binary", "body")
+	if err := os.WriteFile(filepath.Join(root, "binary-resource", "binary.dat"), []byte{0xff, 0xfe}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := New(root, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := catalog.Load(context.Background(), "binary-resource"); !errors.Is(err, skill.ErrInvalid) {
+		t.Fatalf("binary error=%v, want ErrInvalid", err)
+	}
+}
+
 func TestCatalogDefaultsMatchSpecification(t *testing.T) {
 	catalog, err := New(t.TempDir(), Options{})
 	if err != nil {
@@ -73,7 +189,10 @@ func TestCatalogDefaultsMatchSpecification(t *testing.T) {
 	if catalog.options.MaxContentBytes != 64<<10 ||
 		catalog.options.MaxFrontmatterBytes != 8<<10 ||
 		catalog.options.MaxDescriptionBytes != 512 ||
-		catalog.options.MaxCatalogEntries != 256 {
+		catalog.options.MaxCatalogEntries != 256 ||
+		catalog.options.MaxResourceBytes != 64<<10 ||
+		catalog.options.MaxResourceTotalBytes != 256<<10 ||
+		catalog.options.MaxResources != 64 {
 		t.Fatalf("unexpected defaults: %#v", catalog.options)
 	}
 }
@@ -84,6 +203,9 @@ func TestCatalogOptionsCannotRelaxDefaults(t *testing.T) {
 		{MaxFrontmatterBytes: skill.MaxFrontmatterBytes + 1},
 		{MaxDescriptionBytes: skill.MaxDescriptionBytes + 1},
 		{MaxCatalogEntries: skill.MaxCatalogEntries + 1},
+		{MaxResourceBytes: skill.MaxResourceBytes + 1},
+		{MaxResourceTotalBytes: skill.MaxResourceTotalBytes + 1},
+		{MaxResources: skill.MaxResources + 1},
 	}
 	for _, options := range tests {
 		if _, err := New(t.TempDir(), options); !errors.Is(err, skill.ErrInvalid) {

@@ -146,10 +146,12 @@ The filesystem parser also accepts optional scalar `license` and
 front matter fields, duplicate keys, multiline descriptions, nested values
 outside `metadata`, and non-mapping `metadata` are rejected.
 
-The body may contain instructions and relative references for the agent, but
-loading version 1 returns only the validated `SKILL.md` body. Referenced files
-are not recursively expanded or read implicitly. Future resource-loading APIs
-require their own path, size, policy, and provenance contract.
+The body may contain relative references. Loading instructions returns the
+validated `SKILL.md` body and a path/size/digest index of bounded UTF-8 regular files
+under the package root. Files are never recursively expanded into the body.
+The model may request one indexed path through the optional `resource` argument
+to `load_skill`; arbitrary paths, symbolic links, and files outside the frozen
+package snapshot are unavailable.
 
 The body is untrusted model context. It cannot configure runtime policy through
 front matter or prose.
@@ -169,6 +171,7 @@ toward stricter limits:
 | advertised entries | at most 64 after run filtering (`MaxAdvertisedEntries`) |
 | total advertised metadata | at most 32 KiB (`MaxAdvertisedMetadataBytes`) |
 | loaded body | at most 64 KiB, with no truncation |
+| auxiliary resources | valid UTF-8; at most 64 regular files, 64 KiB each and 256 KiB total per skill |
 
 Names are compared exactly after validation. Unicode lookalikes, underscores,
 dots, slashes, leading/trailing hyphens, and case folding are not accepted.

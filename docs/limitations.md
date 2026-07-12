@@ -74,9 +74,10 @@ what is experimental, and what remains adapter territory.
 
 ## Agent Skills
 
-- Version 1 catalogs load one bounded `SKILL.md` body. Referenced auxiliary
-  files, dependency resolution, package installation, updates, signatures, and
-  remote fetching are not implemented by `load_skill`.
+- Filesystem catalogs index and snapshot bounded regular auxiliary files, and
+  `load_skill` can disclose one indexed resource at a time. It does not resolve
+  dependencies, install packages, update packages, verify signatures, or fetch
+  remote resources.
 - `skill/fs` accepts an explicit trusted root and rejects unsafe provenance and
   symlink traversal. The application still owns source trust and allowlists.
 - Bundles are immutable startup snapshots. They do not provide live catalog

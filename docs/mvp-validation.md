@@ -255,3 +255,8 @@ integration-branch evidence, not proof of merge or deployment from platform
 service also remain external acceptance. Repository-local resolver, projector,
 and approval-correlation tests do not claim platform transport or
 pending-awaiting persistence. Both repositories are Go 1.26.x only.
+
+Agent Skill progressive-disclosure coverage additionally proves bounded
+auxiliary resource discovery, deterministic indexing, immutable snapshot
+loading, digest/provenance identity, unknown-path denial, symlink rejection,
+and per-resource size enforcement in `skill/fs`.
