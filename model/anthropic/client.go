@@ -37,7 +37,7 @@ type Config struct {
 }
 
 func New(config Config) *Client {
-	baseURL := strings.TrimRight(config.BaseURL, "/")
+	baseURL := normalizeBaseURL(config.BaseURL)
 	if baseURL == "" {
 		baseURL = defaultBaseURL
 	}
@@ -60,6 +60,19 @@ func New(config Config) *Client {
 		maxTokens:        maxTokens,
 		anthropicVersion: version,
 		httpClient:       httpClient,
+	}
+}
+
+func normalizeBaseURL(value string) string {
+	baseURL := strings.TrimRight(strings.TrimSpace(value), "/")
+	// MiniMax documents its Anthropic-compatible endpoint without /v1, while
+	// this adapter appends /messages itself. Normalize only those exact public
+	// endpoints; every other compatible BaseURL stays application-defined.
+	switch baseURL {
+	case "https://api.minimax.io/anthropic", "https://api.minimaxi.com/anthropic":
+		return baseURL + "/v1"
+	default:
+		return baseURL
 	}
 }
 

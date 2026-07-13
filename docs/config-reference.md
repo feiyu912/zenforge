@@ -129,7 +129,7 @@ MiniMax Anthropic-compatible config example:
     "provider": "anthropic",
     "name": "MiniMax-M3",
     "apiKeyEnv": "ANTHROPIC_API_KEY",
-    "baseUrl": "https://api.minimaxi.com/anthropic/v1"
+    "baseUrl": "https://api.minimax.io/anthropic"
   }
 }
 ```

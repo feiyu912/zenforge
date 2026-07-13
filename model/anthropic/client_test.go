@@ -64,6 +64,21 @@ func TestClientStreamsTextAndSendsMessagesRequest(t *testing.T) {
 	}
 }
 
+func TestNewNormalizesMiniMaxAnthropicBaseURL(t *testing.T) {
+	tests := map[string]string{
+		"https://api.minimax.io/anthropic":        "https://api.minimax.io/anthropic/v1",
+		"https://api.minimax.io/anthropic/":       "https://api.minimax.io/anthropic/v1",
+		"https://api.minimaxi.com/anthropic":      "https://api.minimaxi.com/anthropic/v1",
+		"https://compatible.example/anthropic":    "https://compatible.example/anthropic",
+		"https://compatible.example/anthropic/v1": "https://compatible.example/anthropic/v1",
+	}
+	for input, want := range tests {
+		if got := New(Config{BaseURL: input}).baseURL; got != want {
+			t.Errorf("base URL for %q = %q, want %q", input, got, want)
+		}
+	}
+}
+
 func TestClientStreamsToolUse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")

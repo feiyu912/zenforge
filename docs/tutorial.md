@@ -156,7 +156,7 @@ The relevant lines are:
 
 ```
 ANTHROPIC_API_KEY=<your-key>
-ANTHROPIC_BASE_URL=https://api.minimaxi.com/anthropic/v1
+ANTHROPIC_BASE_URL=https://api.minimax.io/anthropic
 ```
 
 Then:
@@ -276,7 +276,7 @@ go run . [flags] [question]
 | `ZENFORGE_WORKSPACE` | `.` | Host workspace directory. |
 | `ZENFORGE_VERBOSE` | `false` | `true`/`false`. |
 | `ANTHROPIC_API_KEY` | *(required for `-model minimax`)* | The MiniMax key. |
-| `ANTHROPIC_BASE_URL` | `https://api.minimaxi.com/anthropic/v1` | MiniMax endpoint. |
+| `ANTHROPIC_BASE_URL` | `https://api.minimax.io/anthropic` | MiniMax endpoint. |
 | `MINIMAX_API_KEY` | *(required for `-model minimax-openai`)* | OpenAI-style key. |
 
 ### 5.3 The `.env` file
@@ -289,7 +289,7 @@ exports always win.
 ```
 # .env
 ANTHROPIC_API_KEY=sk-cp-...
-ANTHROPIC_BASE_URL=https://api.minimaxi.com/anthropic/v1
+ANTHROPIC_BASE_URL=https://api.minimax.io/anthropic
 ZENFORGE_MODEL=auto
 ZENFORGE_APPROVE=auto
 ZENFORGE_DOCKER=true
@@ -340,7 +340,7 @@ with no network, no API keys, and no Docker (with `--docker=false`).
 return anthropic.New(anthropic.Config{
     APIKey:  apiKey,
     Model:   "MiniMax-M3",
-    BaseURL: "https://api.minimaxi.com/anthropic/v1",
+    BaseURL: "https://api.minimax.io/anthropic",
 }), nil
 ```
 
@@ -638,7 +638,7 @@ suffix.
 error: anthropic messages failed: 404 Not Found: 404 page not found
 ```
 
-Fix: set `ANTHROPIC_BASE_URL=https://api.minimaxi.com/anthropic/v1`.
+Fix: set `ANTHROPIC_BASE_URL=https://api.minimax.io/anthropic`.
 
 **401 Unauthorized** — your key is wrong, expired, or scoped to a
 different account.
@@ -864,7 +864,7 @@ given input. The fixed `RunID` makes test output easy to grep.
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| `error: anthropic messages failed: 404 Not Found` | Base URL missing `/v1` | Set `ANTHROPIC_BASE_URL=https://api.minimaxi.com/anthropic/v1` |
+| `error: anthropic messages failed: 404 Not Found` | Incorrect compatible endpoint | Set `ANTHROPIC_BASE_URL=https://api.minimax.io/anthropic` |
 | `error: MiniMax rejected the API key. ...` | Key wrong, expired, or placeholder | Regenerate the key in the MiniMax console, update `.env` |
 | `error: unknown model "x"` | Typo in `-model` | Use `auto`, `scripted`, `minimax`, or `minimax-openai` |
 | `error: unknown approval mode "x"` | Typo in `-approve` | Use `auto` or `prompt` |

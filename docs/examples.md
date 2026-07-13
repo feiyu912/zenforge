@@ -30,7 +30,7 @@ approval, and a Docker-backed shell with a read-only workspace mount.
 export ZENFORGE_PROVIDER=anthropic
 export ZENFORGE_MODEL=MiniMax-M3
 export ZENFORGE_API_KEY=...
-export ZENFORGE_BASE_URL=https://api.minimaxi.com/anthropic/v1
+export ZENFORGE_BASE_URL=https://api.minimax.io/anthropic
 go run ./examples/harness-agent -question "Inspect this project"
 ```
 

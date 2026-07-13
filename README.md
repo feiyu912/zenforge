@@ -103,7 +103,7 @@ ZenForge supplies public adapters so the assembly stays small:
 export ZENFORGE_PROVIDER=anthropic
 export ZENFORGE_MODEL=MiniMax-M3
 export ZENFORGE_API_KEY=...
-export ZENFORGE_BASE_URL=https://api.minimaxi.com/anthropic/v1
+export ZENFORGE_BASE_URL=https://api.minimax.io/anthropic
 
 go run ./examples/harness-agent -question \
   "Load the project skill, inspect this project, and prove the shell runs in Docker."
@@ -154,7 +154,7 @@ go run ./cmd/zenforge run \
   --provider anthropic \
   --model MiniMax-M3 \
   --api-key-env ANTHROPIC_API_KEY \
-  --base-url https://api.minimaxi.com/anthropic/v1 \
+  --base-url https://api.minimax.io/anthropic \
   "Analyze this repo"
 ```
 

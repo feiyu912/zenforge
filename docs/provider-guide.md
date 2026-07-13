@@ -119,16 +119,20 @@ DeepAgents-style environment:
     "provider": "anthropic",
     "name": "MiniMax-M3",
     "apiKeyEnv": "ANTHROPIC_API_KEY",
-    "baseUrl": "https://api.minimaxi.com/anthropic/v1"
+    "baseUrl": "https://api.minimax.io/anthropic"
   }
 }
 ```
 
 ```bash
 export ANTHROPIC_API_KEY=...
-export ANTHROPIC_BASE_URL=https://api.minimaxi.com/anthropic/v1
+export ANTHROPIC_BASE_URL=https://api.minimax.io/anthropic
 zenforge run --provider anthropic --model MiniMax-M3 --api-key-env ANTHROPIC_API_KEY --base-url "$ANTHROPIC_BASE_URL" "Analyze this repo"
 ```
+
+The Anthropic adapter accepts MiniMax's documented endpoint without `/v1` and
+normalizes only that exact public endpoint before appending `/messages`. Other
+Anthropic-compatible Base URLs are passed through unchanged.
 
 ## Boundary
 
