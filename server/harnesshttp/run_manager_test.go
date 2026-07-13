@@ -419,6 +419,32 @@ func TestMemoryRunRegistryLeaseExpiryAllowsClaim(t *testing.T) {
 	}
 }
 
+func TestMemoryRunRegistryDeletesOnlyTerminalRecords(t *testing.T) {
+	now := time.Unix(100, 0).UTC()
+	registry := newMemoryRunRegistryWithClock(func() time.Time { return now })
+	lease, err := registry.Claim(context.Background(), RunClaim{
+		RunID: "memory_delete", OwnerID: "owner", Status: RunRunning,
+		LeaseUntil: now.Add(time.Minute), StartedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Delete(context.Background(), "memory_delete"); !errors.Is(err, ErrRunActive) {
+		t.Fatalf("delete active record = %v", err)
+	}
+	if err := registry.Release(context.Background(), lease, RunInfo{
+		Status: RunCompleted, StartedAt: now, UpdatedAt: now, FinishedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Delete(context.Background(), "memory_delete"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.Get(context.Background(), "memory_delete"); !errors.Is(err, ErrRunNotFound) {
+		t.Fatalf("get deleted record = %v", err)
+	}
+}
+
 func TestSQLiteRunRegistryClaimsAcrossConnections(t *testing.T) {
 	path := t.TempDir() + "/runs.db"
 	registry1, err := OpenSQLiteRunRegistry(context.Background(), path)
@@ -445,6 +471,9 @@ func TestSQLiteRunRegistryClaimsAcrossConnections(t *testing.T) {
 	}); !errors.Is(err, ErrRunClaimed) {
 		t.Fatalf("second sqlite claim = %v", err)
 	}
+	if err := registry2.Delete(context.Background(), "sqlite_claim"); !errors.Is(err, ErrRunActive) {
+		t.Fatalf("delete active sqlite record = %v", err)
+	}
 	if err := registry1.Release(context.Background(), lease, RunInfo{
 		RunID: "sqlite_claim", OwnerID: "owner_1", Status: RunCompleted,
 		StartedAt: now, UpdatedAt: now, FinishedAt: now,
@@ -464,6 +493,12 @@ func TestSQLiteRunRegistryClaimsAcrossConnections(t *testing.T) {
 	}
 	if len(listed) != 1 || listed[0].RunID != "sqlite_claim" || listed[0].Status != RunCompleted {
 		t.Fatalf("sqlite list = %+v", listed)
+	}
+	if err := registry2.Delete(context.Background(), "sqlite_claim"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry1.Get(context.Background(), "sqlite_claim"); !errors.Is(err, ErrRunNotFound) {
+		t.Fatalf("get deleted sqlite record = %v", err)
 	}
 }
 
@@ -748,6 +783,32 @@ func TestRunManagerRequestContextMaxActiveAndForget(t *testing.T) {
 	}
 	if _, err := manager.Get("detached"); !errors.Is(err, ErrRunNotFound) {
 		t.Fatalf("Get forgotten = %v", err)
+	}
+}
+
+func TestRunManagerForgetDeletesTerminalRegistryRecord(t *testing.T) {
+	registry := NewMemoryRunRegistry()
+	manager, agent, store := newTestRunManager(t, RunManagerOptions{
+		Registry: registry, OwnerID: "owner", TerminalRetention: -1,
+	})
+	defer closeManager(t, manager)
+	if _, err := manager.Start(context.Background(), zenforge.Task{RunID: "forget_registry", Input: "hi"}); err != nil {
+		t.Fatal(err)
+	}
+	agent.finish("forget_registry", zenforge.EventRunDone)
+	waitStatus(t, manager, "forget_registry", RunCompleted)
+	if err := manager.Forget("forget_registry"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.Get(context.Background(), "forget_registry"); !errors.Is(err, ErrRunNotFound) {
+		t.Fatalf("registry get after forget = %v", err)
+	}
+	events, err := store.Read(context.Background(), "forget_registry", 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) == 0 {
+		t.Fatal("Forget deleted durable events")
 	}
 }
 

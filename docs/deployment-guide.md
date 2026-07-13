@@ -53,6 +53,7 @@ The following table is the supported detached-run routing contract:
 | attach | yes | The shared event store supplies replay and polling. The process-local bus only accelerates delivery on the owner. |
 | list or submit approval | yes | All replicas must use the same durable approval inbox and the same access policy. |
 | cancel | yes with `RunCancellationRegistry` | Built-in memory/SQLite registries persist a request that the lease owner consumes on heartbeat. Otherwise route to `RunInfo.OwnerID`. |
+| explicit terminal cleanup | yes with `RunRegistryDeleter` | `RunManager.Forget` removes only the terminal registry status record; events and checkpoints retain their own application lifecycle. |
 
 `RunCancellationRegistry` is an optional extension, so existing custom
 registries remain source compatible. Without that extension, an edge service

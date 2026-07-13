@@ -77,6 +77,13 @@ type RunRegistryLister interface {
 	List(ctx context.Context) ([]RunInfo, error)
 }
 
+// RunRegistryDeleter optionally removes a terminal registry record. It is
+// intended for application-requested retention cleanup; durable events and
+// checkpoints remain outside the registry's ownership.
+type RunRegistryDeleter interface {
+	Delete(ctx context.Context, runID string) error
+}
+
 // RunCancellationRegistry optionally lets any manager request cancellation of
 // a run owned by another process. The current lease owner polls the request.
 type RunCancellationRegistry interface {
@@ -575,7 +582,9 @@ func (m *RunManager) Cancel(runID string) error {
 	return nil
 }
 
-// Forget removes a terminal record early. Durable events are not deleted.
+// Forget removes a terminal record early. Durable events and checkpoints are
+// not deleted. Registries that implement RunRegistryDeleter remove their
+// terminal status record as part of the same explicit cleanup request.
 func (m *RunManager) Forget(runID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -585,6 +594,11 @@ func (m *RunManager) Forget(runID string) error {
 	}
 	if !terminal(run.info.Status) {
 		return ErrRunActive
+	}
+	if registry, ok := m.opts.Registry.(RunRegistryDeleter); ok && !nilRunRegistry(m.opts.Registry) {
+		if err := registry.Delete(context.Background(), run.info.RunID); err != nil {
+			return fmt.Errorf("delete run registry record %q: %w", run.info.RunID, err)
+		}
 	}
 	if run.timer != nil {
 		run.timer.Stop()

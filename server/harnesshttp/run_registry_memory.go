@@ -195,6 +195,32 @@ func (r *MemoryRunRegistry) List(ctx context.Context) ([]RunInfo, error) {
 	return out, nil
 }
 
+// Delete removes a terminal record. Active records remain lease-protected and
+// must be released before application-requested cleanup.
+func (r *MemoryRunRegistry) Delete(ctx context.Context, runID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if r == nil {
+		return fmt.Errorf("memory run registry is nil")
+	}
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		return ErrInvalidRunID
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	record, ok := r.records[runID]
+	if !ok {
+		return ErrRunNotFound
+	}
+	if !terminal(record.info.Status) {
+		return ErrRunActive
+	}
+	delete(r.records, runID)
+	return nil
+}
+
 func (r *MemoryRunRegistry) recordForLease(lease RunLease) (runRegistryRecord, error) {
 	if strings.TrimSpace(lease.RunID) == "" || strings.TrimSpace(lease.OwnerID) == "" || strings.TrimSpace(lease.Token) == "" {
 		return runRegistryRecord{}, ErrRunLeaseLost
@@ -258,4 +284,5 @@ func timePtr(t time.Time) *time.Time {
 
 var _ RunRegistry = (*MemoryRunRegistry)(nil)
 var _ RunRegistryLister = (*MemoryRunRegistry)(nil)
+var _ RunRegistryDeleter = (*MemoryRunRegistry)(nil)
 var _ RunCancellationRegistry = (*MemoryRunRegistry)(nil)

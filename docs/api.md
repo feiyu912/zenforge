@@ -139,6 +139,10 @@ leases, and calls the regular `Resume` path for expired records. `Max: 0` has no
 batch limit. Each attempted run returns a `RunRecovery` with either the won
 `RunInfo` claim or a per-run error; listing, configuration, and context errors
 abort the scan.
+
+Registries may additionally implement `RunRegistryDeleter`. `RunManager.Forget`
+uses it to remove a terminal registry status record during explicit cleanup;
+durable event and checkpoint stores are intentionally untouched.
 Applications own model/provider construction (OpenAI or Anthropic protocol and
 compatible base URLs), auth, route paths, durable store selection/closure, and
 server/runtime shutdown.

@@ -172,7 +172,9 @@ process-local status until `Forget` or the manager is discarded. Retention
 removes only the manager's in-memory status, never durable events or registry
 records. Without a registry, status after retention is unavailable from that
 manager. With a registry, `Get` and `ServeDetachedStatus` fall back to the
-durable registry record.
+durable registry record. Both built-in registries implement
+`RunRegistryDeleter`, so explicit `RunManager.Forget` also deletes a terminal
+registry status record; it still does not delete durable events or checkpoints.
 
 By default, duplicate reservation is atomic only within one manager. With a
 registry, duplicate start/resume is fenced by the registry lease, and stale

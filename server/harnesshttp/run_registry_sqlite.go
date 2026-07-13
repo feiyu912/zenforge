@@ -269,6 +269,41 @@ ORDER BY updated_at DESC, run_id ASC`)
 	return out, nil
 }
 
+// Delete removes a terminal record. Active records remain lease-protected and
+// must be released before application-requested cleanup.
+func (r *SQLiteRunRegistry) Delete(ctx context.Context, runID string) error {
+	if err := r.ready(); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		return ErrInvalidRunID
+	}
+	res, err := r.db.ExecContext(ctx, `
+DELETE FROM detached_runs WHERE run_id = ? AND finished_at != ''`, runID)
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected > 0 {
+		return nil
+	}
+	info, err := r.Get(ctx, runID)
+	if err != nil {
+		return err
+	}
+	if !terminal(info.Status) {
+		return ErrRunActive
+	}
+	return ErrRunNotFound
+}
+
 func (r *SQLiteRunRegistry) init(ctx context.Context) error {
 	if _, err := r.db.ExecContext(ctx, `PRAGMA busy_timeout = 5000`); err != nil {
 		return err
@@ -382,4 +417,5 @@ func formatTime(t time.Time) string {
 
 var _ RunRegistry = (*SQLiteRunRegistry)(nil)
 var _ RunRegistryLister = (*SQLiteRunRegistry)(nil)
+var _ RunRegistryDeleter = (*SQLiteRunRegistry)(nil)
 var _ RunCancellationRegistry = (*SQLiteRunRegistry)(nil)

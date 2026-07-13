@@ -4,6 +4,9 @@
 
 ### Added
 
+- Optional `RunRegistryDeleter` terminal-record cleanup, implemented by the
+  memory and SQLite registries and invoked by explicit `RunManager.Forget`
+  without deleting durable events or checkpoints.
 - Explicit `RunManager.RecoverStale` scans with batch limits, expired-lease and
   terminal filtering, normal claim fencing, and per-run recovery outcomes for
   host-owned recovery loops.

@@ -273,6 +273,9 @@ skills/
   replay attachment. Their optional `RunCancellationRegistry` extension also
   lets any replica persist cancellation for the active owner; a recovering
   owner consumes a pending request before opening the resumed agent stream.
+  Their optional `RunRegistryDeleter` extension lets explicit terminal
+  `RunManager.Forget` cleanup remove a registry status record while preserving
+  durable events and checkpoints.
   Applications still own model provider/protocol and compatible base URL
   configuration, auth, route paths, durable store closure, lifecycle shutdown,
   and idempotent external side effects.
