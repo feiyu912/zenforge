@@ -3,6 +3,8 @@ package containerhub
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -40,10 +42,11 @@ func NewClient(config Config) (*Client, error) {
 }
 
 func (c *Client) CreateSession(ctx context.Context, req sandbox.OpenRequest) (*sandbox.Session, error) {
-	sessionID := sandbox.SessionKey(req.RunID, req.SubtaskID)
-	if sessionID == "" {
+	scopeKey := sandbox.SessionKey(req.RunID, req.SubtaskID)
+	if scopeKey == "" {
 		return nil, fmt.Errorf("%w: run id is required", sandbox.ErrSessionOpenFailed)
 	}
+	sessionID := containerHubSessionID(scopeKey)
 	payload := map[string]any{
 		"session_id":       sessionID,
 		"environment_name": req.EnvironmentID,
@@ -77,6 +80,11 @@ func (c *Client) CreateSession(ctx context.Context, req sandbox.OpenRequest) (*s
 		WorkingDir:    workingDir,
 		Metadata:      cloneMap(req.Metadata),
 	}, nil
+}
+
+func containerHubSessionID(scopeKey string) string {
+	sum := sha256.Sum256([]byte(scopeKey))
+	return "zf-" + hex.EncodeToString(sum[:])
 }
 
 func (c *Client) ExecuteSession(ctx context.Context, sessionID string, req sandbox.ExecuteRequest) (sandbox.ExecuteResult, error) {

@@ -96,6 +96,17 @@ if err != nil {
 }
 ```
 
+For a real Hub acceptance run, set its endpoint and execute the opt-in adapter
+test. It creates and closes a disposable session in the selected environment:
+
+```bash
+ZENFORGE_CONTAINERHUB_INTEGRATION_URL=http://127.0.0.1:11960 \
+ZENFORGE_CONTAINERHUB_ENVIRONMENT=shell \
+go test ./sandbox/containerhub -run '^TestAdapterRunsAgainstRealContainerHub$' -v
+```
+
+Set `ZENFORGE_CONTAINERHUB_TOKEN` when the Hub requires bearer authentication.
+
 ## Session Scope
 
 ZenForge uses one sandbox session for the main run and separate sessions for

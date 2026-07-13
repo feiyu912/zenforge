@@ -319,10 +319,12 @@ lifecycles, approval ask/submit/answer, and chat event lines. A checked
 integration is implemented and tested on `agent-platform` branch
 `codex/zenforge-engine-bridge` at `82ca4d3`: it includes the engine bridge,
 feature-flag selector, HTTP sync/async, SSE, WebSocket, approval, attach, and
-legacy-fallback paths. GitHub ancestry confirms that commit is contained in
-`agent-platform` `main@0a9f734`. These repository goldens alone still remain
-narrower evidence: deployed UI behavior and real Container Hub acceptance have
-not been verified here.
+legacy-fallback paths. The bridge commit appears in `agent-platform` history,
+but current `main@0a9f734` reverts the bridge, routing, initialization, and
+selector changes; current platform source contains no ZenForge integration.
+These repository goldens alone remain narrower evidence: deployed UI behavior
+has not been verified here. The opt-in Container Hub adapter test covers a
+disposable live Hub session, not a production deployment.
 
 `BuildRun` maps `Session.HistoryMessages` into `Task.InitialMessages`, including
 OpenAI `tool_calls` and snake/camel tool-call IDs, and rejects malformed history
@@ -542,8 +544,9 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - ZenMind adapter wire goldens are pinned to `agent-platform@1893edb5`, while
   downstream engine/feature-flag/HTTP/SSE/WS/approval/attach integration is
   tested on `agent-platform` branch `codex/zenforge-engine-bridge@82ca4d3`.
-  GitHub ancestry confirms that bridge commit is contained in platform
-  `main@0a9f734`; production deployment acceptance remains external.
+  The bridge is historical branch evidence only: current platform
+  `main@0a9f734` reverts the ZenForge bridge, routing, initialization, and
+  selector. Production deployment acceptance remains external.
 - ZenMind run assembly rejects missing or typed-nil models and explicitly
   declared unavailable tools, while preserving undeclared, explicitly empty,
   and legacy tool-list semantics.
@@ -574,7 +577,8 @@ git diff --check
   multi-process writers.
 - Nested sub-agents are blocked by default.
 - Container Hub sandbox is optional and beta.
-- A real Container Hub deployment smoke test remains external acceptance.
+- A production Container Hub deployment smoke test remains external acceptance;
+  the opt-in adapter integration test covers a disposable live Hub session.
 
 ## Repository Layout
 

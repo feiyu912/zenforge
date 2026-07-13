@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -51,7 +52,7 @@ func TestClientShapesRequestsAndHeaders(t *testing.T) {
 	}
 	assertRequest(t, transport.requests[0], http.MethodPost, "/api/sessions/create", "Bearer token", "")
 	createBody := decodeBody(t, transport.requests[0])
-	if createBody["session_id"] != sandbox.SessionKey("run_1", "sub_1") || createBody["environment_name"] != "go" || createBody["cwd"] != "/workspace" {
+	if createBody["session_id"] != containerHubSessionID(sandbox.SessionKey("run_1", "sub_1")) || createBody["environment_name"] != "go" || createBody["cwd"] != "/workspace" {
 		t.Fatalf("create body = %#v", createBody)
 	}
 	labels := createBody["labels"].(map[string]any)
@@ -72,6 +73,19 @@ func TestClientShapesRequestsAndHeaders(t *testing.T) {
 		t.Fatalf("execute args = %#v", args)
 	}
 	assertRequest(t, transport.requests[2], http.MethodPost, "/api/sessions/session_1/stop", "Bearer token", "")
+}
+
+func TestContainerHubSessionIDIsStableLowercaseAndScoped(t *testing.T) {
+	first := containerHubSessionID(sandbox.SessionKey("run_1", "sub_1"))
+	if first != containerHubSessionID(sandbox.SessionKey("run_1", "sub_1")) {
+		t.Fatalf("session ID is not stable: %q", first)
+	}
+	if first == containerHubSessionID(sandbox.SessionKey("run_1", "sub_2")) {
+		t.Fatalf("session ID does not include subtask scope: %q", first)
+	}
+	if !regexp.MustCompile(`^zf-[a-f0-9]{64}$`).MatchString(first) {
+		t.Fatalf("session ID = %q, want lower-case Container Hub-safe ID", first)
+	}
 }
 
 func TestClientRejectsOversizedSuccessResponses(t *testing.T) {

@@ -5,8 +5,9 @@ repository. The validation commands are:
 
 Status: the repository-scoped MVP acceptance items below are implemented and
 covered by named tests. Provider-backed examples, a deployed `agent-platform`
-integration, and a real Container Hub service require external acceptance and
-are not implied by this status.
+integration and production Container Hub deployment require external
+acceptance and are not implied by this status. A separate opt-in test covers a
+disposable live Container Hub session.
 
 ```bash
 env GOTOOLCHAIN=local go test ./...
@@ -83,6 +84,7 @@ rg -n '"[^"[:space:]]*agent-platform[^"[:space:]]*"' --glob "*.go" .
 | the built-in Docker adapter runs in a real Linux container with a read-only workspace mount | `TestDockerAdapterRunsInsideContainerWithWorkspaceMount` under `integration/consumer` when `ZENFORGE_DOCKER_INTEGRATION=1` |
 | Container Hub failures, deadlines, and cancellation map predictably | `sandbox/containerhub.TestClientMapsHTTPFailuresToSandboxCodes`, `sandbox/containerhub.TestClientMapsTransportCancellationAndTimeout` |
 | Container Hub response bodies are bounded | `sandbox/containerhub.TestClientRejectsOversizedSuccessResponses` |
+| Container Hub adapter opens, executes, and closes a real Hub session | `sandbox/containerhub.TestAdapterRunsAgainstRealContainerHub` when `ZENFORGE_CONTAINERHUB_INTEGRATION_URL` is set |
 | JSONL checkpoint saves recover pending transactions and reject unsafe run IDs | `checkpoint/jsonl.TestStoreLoadRecoversPendingCheckpointWithoutRetryingSave`, `checkpoint/jsonl.TestStoreRejectsUnsafeRunIDs` |
 | JSONL checkpoint/event writers serialize across processes | `checkpoint/jsonl.TestStoresAcrossProcessesSerializeCheckpointSequences`, `eventlog/jsonl.TestStoresAcrossProcessesSerializeAppends` |
 | repeated SQLite durable runs work | `TestSQLiteDurableRunSoak` |
@@ -251,12 +253,14 @@ platform wire goldens captured from `agent-platform@1893edb5`. Separately,
 `agent-platform` branch `codex/zenforge-engine-bridge@82ca4d3` has automated
 coverage for the engine bridge and selector across HTTP sync/async, SSE,
 WebSocket, approval, attach, selector errors, and legacy fallback. This is
-integration-commit evidence. GitHub ancestry confirms that commit is contained
-in platform `main@0a9f734`, but it is not proof of deployed UI behavior.
-Complete Chat Storage V3.1 and a smoke against a real Container Hub service
-also remain external acceptance. Repository-local resolver, projector, and
-approval-correlation tests do not claim platform transport or pending-awaiting
-persistence. Both repositories are Go 1.26.x only.
+integration-branch evidence only. While that commit remains in platform
+history, `main@0a9f734` reverts the bridge, routing, initialization, and
+selector changes, so it is not proof of current platform or deployed UI
+behavior. Complete Chat Storage V3.1 and a production Container Hub deployment
+smoke also remain external acceptance. The opt-in adapter test covers a
+disposable live Hub session. Repository-local resolver, projector, and
+approval-correlation tests do not claim platform transport or
+pending-awaiting persistence. Both repositories are Go 1.26.x only.
 
 Agent Skill progressive-disclosure coverage additionally proves bounded
 auxiliary resource discovery, deterministic indexing, immutable snapshot
