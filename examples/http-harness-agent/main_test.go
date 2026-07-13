@@ -35,21 +35,27 @@ func TestHTTPHarnessServesDetachedRunWithCompatibleProvider(t *testing.T) {
 	}
 	address := freeLoopbackAddress(t)
 	dataDir := t.TempDir()
-	command := exec.Command(binary,
+	args := []string{
 		"-addr", address,
 		"-data-dir", dataDir,
 		"-workspace", "..",
 		"-skill-root", "../harness-agent/skills",
-	)
-	command.Env = append(os.Environ(),
+	}
+	env := append(os.Environ(),
 		"ZENFORGE_PROVIDER=openai",
 		"ZENFORGE_MODEL=smoke-model",
 		"ZENFORGE_API_KEY=smoke-key",
 		"ZENFORGE_BASE_URL="+provider.URL+"/v1",
 	)
 	var output bytes.Buffer
-	command.Stdout = &output
-	command.Stderr = &output
+	newCommand := func() *exec.Cmd {
+		command := exec.Command(binary, args...)
+		command.Env = env
+		command.Stdout = &output
+		command.Stderr = &output
+		return command
+	}
+	command := newCommand()
 	if err := command.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -57,8 +63,7 @@ func TestHTTPHarnessServesDetachedRunWithCompatibleProvider(t *testing.T) {
 		if command.Process == nil || command.ProcessState != nil && command.ProcessState.Exited() {
 			return
 		}
-		_ = command.Process.Signal(os.Interrupt)
-		waitForExit(t, command, &output)
+		stopHarness(t, command, &output)
 	})
 
 	baseURL := "http://" + address
@@ -107,6 +112,39 @@ func TestHTTPHarnessServesDetachedRunWithCompatibleProvider(t *testing.T) {
 	if attach.StatusCode != http.StatusOK || !strings.Contains(string(data), "smoke complete") {
 		t.Fatalf("attach status=%s body=%q output=%s", attach.Status, data, output.String())
 	}
+	stopHarness(t, command, &output)
+
+	command = newCommand()
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitForHTTP(t, client, baseURL+"/runs")
+	status, err := client.Get(baseURL + "/runs/status?runId=smoke_run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer status.Body.Close()
+	var persisted struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(status.Body).Decode(&persisted); err != nil {
+		t.Fatal(err)
+	}
+	if status.StatusCode != http.StatusOK || persisted.Status != "completed" {
+		t.Fatalf("restarted status=%s body=%+v output=%s", status.Status, persisted, output.String())
+	}
+	replayed, err := client.Get(baseURL + "/runs/attach?runId=smoke_run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer replayed.Body.Close()
+	data, err = io.ReadAll(replayed.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayed.StatusCode != http.StatusOK || !strings.Contains(string(data), "smoke complete") {
+		t.Fatalf("restarted attach status=%s body=%q output=%s", replayed.Status, data, output.String())
+	}
 }
 
 func freeLoopbackAddress(t *testing.T) string {
@@ -149,4 +187,12 @@ func waitForExit(t *testing.T, command *exec.Cmd, output *bytes.Buffer) {
 		_ = command.Process.Kill()
 		t.Fatalf("HTTP harness did not stop\n%s", output.String())
 	}
+}
+
+func stopHarness(t *testing.T, command *exec.Cmd, output *bytes.Buffer) {
+	t.Helper()
+	if err := command.Process.Signal(os.Interrupt); err != nil {
+		t.Fatalf("interrupt HTTP harness: %v\n%s", err, output.String())
+	}
+	waitForExit(t, command, output)
 }
