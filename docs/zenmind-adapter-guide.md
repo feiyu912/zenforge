@@ -6,9 +6,9 @@ contracts are checked against fixtures captured from
 `agent-platform@1893edb5`. This repository owns the neutral harness and adapter
 contracts. The downstream engine integration is implemented and tested on
 `agent-platform` branch `codex/zenforge-engine-bridge` at `82ca4d3`; it is not
-part of this repository. It is historical branch evidence only: current
-platform `main@0a9f734` reverts the bridge, routing, initialization, and
-selector changes. Deployed UI verification remains external.
+part of this repository. Platform `main@f6d89da` restores the bridge,
+selector, routing, initialization, and rollout documentation. Deployed UI
+verification remains external.
 
 ## Catalog And Session Mapping
 
@@ -149,8 +149,8 @@ platform implementation at `codex/zenforge-engine-bridge@82ca4d3` installs the
 engine selector and holds the chosen engine across HTTP sync/async, SSE,
 WebSocket, approval submit, and attach/continuation paths. Its integration tests
 cover selector initialization errors and legacy fallback; no fallback occurs
-after a selected engine starts streaming. Current platform `main@0a9f734`
-reverts this bridge, so these remain historical integration-branch tests.
+after a selected engine starts streaming. Platform `main@f6d89da` restores
+this bridge and its selector integration tests.
 
 ## Stateful Stream Projection
 

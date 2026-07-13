@@ -235,6 +235,6 @@ longer limited to similar event names. Downstream connection is implemented and
 tested on `agent-platform` branch `codex/zenforge-engine-bridge@82ca4d3`: the
 selector fixes one engine per query across HTTP sync/async, SSE, WebSocket,
 approval, attach, and fallback behavior. This does not move platform ownership
-into ZenForge core. Although the bridge commit is in platform history, current
-`main@0a9f734` reverts the bridge, routing, initialization, and selector, so
-deployment and any future re-integration remain platform responsibilities.
+into ZenForge core. Platform `main@f6d89da` restores the bridge, selector,
+routing, initialization, and rollout documentation. Deployment remains a
+platform responsibility.

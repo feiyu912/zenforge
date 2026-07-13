@@ -43,11 +43,10 @@ They are exercised by `env GOTOOLCHAIN=local go test ./adapters/zenmind` and
 the manifest verifies source files and SHA-256 hashes from
 `agent-platform@1893edb5`. Keep this repository evidence distinct from the
 downstream engine/selector/HTTP/SSE/WS/approval/attach/fallback tests on
-`agent-platform` branch `codex/zenforge-engine-bridge@82ca4d3`. Do not claim
-that branch as current platform behavior: `main@0a9f734` reverts the bridge,
-routing, initialization, and selector changes. Neither suite proves deployed
-UI behavior, complete Chat Storage V3.1, or production Container Hub
-acceptance. Use Go 1.26.x only.
+`agent-platform` branch `codex/zenforge-engine-bridge@82ca4d3`. Platform
+`main@f6d89da` restores the bridge, selector, routing, initialization, and
+rollout documentation. Neither suite proves deployed UI behavior, complete Chat
+Storage V3.1, or production Container Hub acceptance. Use Go 1.26.x only.
 
 ## CLI Smoke
 

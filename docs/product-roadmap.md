@@ -66,15 +66,14 @@ V0.2 Production hardening
 | S7 | Implemented for runtime subtask streaming, bounded parallel execution, child checkpoint resume, and default-denied nesting; see the named sub-agent tests in `docs/mvp-validation.md`. |
 | S8 | The built-in Docker sandbox, fake sandbox backend, and Container Hub beta adapter are contract-tested. A gated real-Docker consumer test verifies Linux execution and a read-only workspace mount; `TestAdapterRunsAgainstRealContainerHub` can create, execute, and close a disposable session against a live Hub endpoint. Production Hub deployment remains external acceptance. |
 | MVP | Repository-scoped acceptance is implemented and test-mapped. The complete `examples/harness-agent` CLI app, loopback-only `examples/http-harness-agent` service, and independent `integration/consumer` module cover environment-owned models, Agent Skill progressive disclosure, typed tools, HITL, Docker-backed shell execution, and detached HTTP lifecycle assembly. Live provider credentials remain an application-owned smoke test. |
-| V0.1 | `v0.1.0` was tagged. Repository wire goldens cover the ZenMind DTO/projector/approval/event-line boundary at `agent-platform@1893edb5`. The downstream engine bridge, feature-flag selector, HTTP/SSE/WS, approval, attach, and fallback integration is implemented and tested at `agent-platform@82ca4d3`, but current platform `main@0a9f734` reverts that bridge, routing, initialization, and selector. Deployed UI verification remains external acceptance. |
+| V0.1 | `v0.1.0` was tagged. Repository wire goldens cover the ZenMind DTO/projector/approval/event-line boundary at `agent-platform@1893edb5`. The downstream engine bridge, feature-flag selector, HTTP/SSE/WS, approval, attach, and fallback integration is restored in `agent-platform main@f6d89da`; platform Go 1.26 tests, race tests, and HTTP stream integration pass. Deployed UI verification remains external acceptance. |
 | V0.2 | Repository hardening includes SQLite soak coverage, Go 1.26-only CI, JSONL crash/concurrency safety, typed tools, filesystem Agent Skill catalogs with instruction/resource progressive disclosure, bounded shell/Hub/Docker responses, fail-closed checkpoint/ZenMind adapter loading, host-resolved run assembly, approval correlation recovery, run-scoped strict projection with v2/v1 state compatibility, optional cross-run persistent rule authorization, durable model-attempt replacement, replay-to-live SSE, canonical detached HTTP lifecycle, optional memory/SQLite run registries for shared claims, durable status/listing, cross-manager durable attach/cancel, explicit stale-run recovery, plus deployment routing and shutdown guidance. Independent consumer CI is also present. Marketplace lifecycle and external acceptance remain incomplete. This roadmap stage is not declared complete. |
 
-Completion in this table distinguishes ZenForge repository tests from the named
-downstream integration branch. The branch is historical evidence, not current
-`agent-platform` behavior: `main@0a9f734` reverts its ZenForge changes. This
-does not claim production deployment. The opt-in adapter test covers a live
-disposable Hub session, not a production Hub deployment. All supported builds
-use Go 1.26.x only.
+Completion in this table distinguishes ZenForge repository tests from platform
+integration tests. `agent-platform main@f6d89da` restores its ZenForge changes,
+but this does not claim production deployment. The opt-in adapter test covers a
+live disposable Hub session, not a production Hub deployment. All supported
+builds use Go 1.26.x only.
 
 Agent Skills currently cover validated local `SKILL.md` catalogs, immutable
 bundles, descriptor-only initial context, and on-demand body/digest/provenance.
@@ -566,9 +565,10 @@ v2/v1 compatibility. These are adapter contracts, not complete Chat Storage or
 platform transport/persistence. The corresponding downstream
 engine bridge, selector, HTTP sync/async, SSE, WebSocket, approval, attach, and
 legacy-fallback paths are implemented and tested on `agent-platform` branch
-`codex/zenforge-engine-bridge@82ca4d3`. Current platform `main@0a9f734`
-reverts the bridge, routing, initialization, and selector changes; deployed UI
-verification and a production Container Hub deployment smoke remain external.
+`codex/zenforge-engine-bridge@82ca4d3`. Platform `main@f6d89da` restores the
+bridge, selector, routing, initialization, and rollout documentation; deployed
+UI verification and a production Container Hub deployment smoke remain
+external.
 
 ## Final Initial Product Vision
 

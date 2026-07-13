@@ -253,9 +253,9 @@ platform wire goldens captured from `agent-platform@1893edb5`. Separately,
 `agent-platform` branch `codex/zenforge-engine-bridge@82ca4d3` has automated
 coverage for the engine bridge and selector across HTTP sync/async, SSE,
 WebSocket, approval, attach, selector errors, and legacy fallback. This is
-integration-branch evidence only. While that commit remains in platform
-history, `main@0a9f734` reverts the bridge, routing, initialization, and
-selector changes, so it is not proof of current platform or deployed UI
+integration evidence. Platform `main@f6d89da` restores the bridge, selector,
+routing, initialization, and rollout documentation; its Go 1.26 tests, race
+tests, and HTTP stream integration pass. This is not proof of deployed UI
 behavior. Complete Chat Storage V3.1 and a production Container Hub deployment
 smoke also remain external acceptance. The opt-in adapter test covers a
 disposable live Hub session. Repository-local resolver, projector, and

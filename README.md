@@ -319,11 +319,10 @@ lifecycles, approval ask/submit/answer, and chat event lines. A checked
 integration is implemented and tested on `agent-platform` branch
 `codex/zenforge-engine-bridge` at `82ca4d3`: it includes the engine bridge,
 feature-flag selector, HTTP sync/async, SSE, WebSocket, approval, attach, and
-legacy-fallback paths. The bridge commit appears in `agent-platform` history,
-but current `main@0a9f734` reverts the bridge, routing, initialization, and
-selector changes; current platform source contains no ZenForge integration.
-These repository goldens alone remain narrower evidence: deployed UI behavior
-has not been verified here. The opt-in Container Hub adapter test covers a
+legacy-fallback paths. `agent-platform` `main@f6d89da` restores the bridge,
+selector, routing, initialization, and rollout documentation; platform Go
+1.26 tests, race tests, and HTTP stream integration pass. This remains narrower
+than deployed UI evidence. The opt-in Container Hub adapter test covers a
 disposable live Hub session, not a production deployment.
 
 `BuildRun` maps `Session.HistoryMessages` into `Task.InitialMessages`, including
@@ -544,9 +543,9 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - ZenMind adapter wire goldens are pinned to `agent-platform@1893edb5`, while
   downstream engine/feature-flag/HTTP/SSE/WS/approval/attach integration is
   tested on `agent-platform` branch `codex/zenforge-engine-bridge@82ca4d3`.
-  The bridge is historical branch evidence only: current platform
-  `main@0a9f734` reverts the ZenForge bridge, routing, initialization, and
-  selector. Production deployment acceptance remains external.
+  Platform `main@f6d89da` restores the ZenForge bridge, selector, routing,
+  initialization, and rollout documentation. Production deployment acceptance
+  remains external.
 - ZenMind run assembly rejects missing or typed-nil models and explicitly
   declared unavailable tools, while preserving undeclared, explicitly empty,
   and legacy tool-list semantics.
