@@ -6,7 +6,8 @@ contracts are checked against fixtures captured from
 `agent-platform@1893edb5`. This repository owns the neutral harness and adapter
 contracts. The downstream engine integration is implemented and tested on
 `agent-platform` branch `codex/zenforge-engine-bridge` at `82ca4d3`; it is not
-part of this repository and has not been merged to platform `main`.
+part of this repository. GitHub ancestry confirms that commit is contained in
+platform `main@0a9f734`; deployed UI verification remains external.
 
 ## Catalog And Session Mapping
 
@@ -147,8 +148,8 @@ platform implementation at `codex/zenforge-engine-bridge@82ca4d3` installs the
 engine selector and holds the chosen engine across HTTP sync/async, SSE,
 WebSocket, approval submit, and attach/continuation paths. Its integration tests
 cover selector initialization errors and legacy fallback; no fallback occurs
-after a selected engine starts streaming. The branch is not yet platform
-`main`.
+after a selected engine starts streaming. GitHub ancestry confirms that the
+bridge commit is contained in platform `main@0a9f734`.
 
 ## Stateful Stream Projection
 
@@ -312,5 +313,5 @@ Passing these tests proves the
 repository-local wire contract only. Separate downstream tests at
 `agent-platform` branch `codex/zenforge-engine-bridge@82ca4d3` cover the engine
 bridge, feature-flag selector, HTTP/SSE/WS delivery, approval, attach, and
-legacy fallback. They do not prove deployment from platform `main`, full Chat
-Storage V3.1, or real Container Hub connectivity.
+legacy fallback. They do not prove deployed UI behavior, complete Chat Storage
+V3.1, or real Container Hub connectivity.

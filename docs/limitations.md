@@ -121,6 +121,7 @@ Reused grant resolutions emit no answer because no awaiting request was opened.
 This repository does not implement complete Chat Storage V3.1 or own platform
 server wiring. That downstream wiring is implemented and tested on
 `agent-platform` branch `codex/zenforge-engine-bridge@82ca4d3`, including the
-engine selector, HTTP/SSE/WS, approval, attach, and legacy fallback. It has not
-been merged to platform `main`. A real Container Hub deployment also remains an
-environment acceptance item.
+engine selector, HTTP/SSE/WS, approval, attach, and legacy fallback. GitHub
+ancestry confirms that bridge commit is contained in platform `main@0a9f734`.
+Deployed UI verification and a real Container Hub deployment remain environment
+acceptance items.

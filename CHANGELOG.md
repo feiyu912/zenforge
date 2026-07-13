@@ -71,9 +71,9 @@
   provides the downstream ZenForge engine bridge, feature-flag selector, and
   HTTP sync/async, SSE, WebSocket, approval, attach, and legacy fallback
   integration tests.
-- The bridge remains on its integration branch and is not claimed as merged to
-  `agent-platform` `main`. A smoke test against a real Container Hub service
-  also remains external acceptance.
+- GitHub ancestry confirms that bridge commit is contained in `agent-platform`
+  `main@0a9f734`. Deployed UI verification and a smoke test against a real
+  Container Hub service remain external acceptance.
 - ZenForge and the bridge require Go 1.26.x; older Go toolchains are unsupported.
 
 ## 0.1.0 - 2026-05-30

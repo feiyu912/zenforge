@@ -66,13 +66,13 @@ V0.2 Production hardening
 | S7 | Implemented for runtime subtask streaming, bounded parallel execution, child checkpoint resume, and default-denied nesting; see the named sub-agent tests in `docs/mvp-validation.md`. |
 | S8 | The built-in Docker sandbox, fake sandbox backend, and Container Hub beta adapter are contract-tested. A gated real-Docker consumer test verifies Linux execution and a read-only workspace mount; a real Container Hub service remains external acceptance. |
 | MVP | Repository-scoped acceptance is implemented and test-mapped. The complete `examples/harness-agent` CLI app, loopback-only `examples/http-harness-agent` service, and independent `integration/consumer` module cover environment-owned models, Agent Skill progressive disclosure, typed tools, HITL, Docker-backed shell execution, and detached HTTP lifecycle assembly. Live provider credentials remain an application-owned smoke test. |
-| V0.1 | `v0.1.0` was tagged. Repository wire goldens cover the ZenMind DTO/projector/approval/event-line boundary at `agent-platform@1893edb5`. The downstream engine bridge, feature-flag selector, HTTP/SSE/WS, approval, attach, and fallback integration is implemented and tested on `agent-platform` branch `codex/zenforge-engine-bridge@82ca4d3`, but is not yet merged to platform `main`. |
+| V0.1 | `v0.1.0` was tagged. Repository wire goldens cover the ZenMind DTO/projector/approval/event-line boundary at `agent-platform@1893edb5`. The downstream engine bridge, feature-flag selector, HTTP/SSE/WS, approval, attach, and fallback integration is implemented and tested at `agent-platform@82ca4d3`; GitHub ancestry confirms that commit is contained in platform `main@0a9f734`. Deployed UI verification remains external acceptance. |
 | V0.2 | Repository hardening includes SQLite soak coverage, Go 1.26-only CI, JSONL crash/concurrency safety, typed tools, filesystem Agent Skill catalogs with instruction/resource progressive disclosure, bounded shell/Hub/Docker responses, fail-closed checkpoint/ZenMind adapter loading, host-resolved run assembly, approval correlation recovery, run-scoped strict projection with v2/v1 state compatibility, optional cross-run persistent rule authorization, durable model-attempt replacement, replay-to-live SSE, canonical detached HTTP lifecycle, optional memory/SQLite run registries for shared claims, durable status/listing, cross-manager durable attach/cancel, explicit stale-run recovery, plus deployment routing and shutdown guidance. Independent consumer CI is also present. Marketplace lifecycle and external acceptance remain incomplete. This roadmap stage is not declared complete. |
 
 Completion in this table distinguishes ZenForge repository tests from tests on
-the named downstream integration branch. It does not claim merge to
-`agent-platform` `main`, production deployment, or real Container Hub
-acceptance. All supported builds use Go 1.26.x only.
+the named downstream integration commit. It confirms source ancestry into
+`agent-platform` `main`, but does not claim production deployment or real
+Container Hub acceptance. All supported builds use Go 1.26.x only.
 
 Agent Skills currently cover validated local `SKILL.md` catalogs, immutable
 bundles, descriptor-only initial context, and on-demand body/digest/provenance.
@@ -563,8 +563,9 @@ v2/v1 compatibility. These are adapter contracts, not complete Chat Storage or
 platform transport/persistence. The corresponding downstream
 engine bridge, selector, HTTP sync/async, SSE, WebSocket, approval, attach, and
 legacy-fallback paths are implemented and tested on `agent-platform` branch
-`codex/zenforge-engine-bridge@82ca4d3`. That integration still requires review
-and merge to platform `main`; a real Container Hub smoke remains external.
+`codex/zenforge-engine-bridge@82ca4d3`. GitHub ancestry confirms that commit is
+contained in platform `main@0a9f734`; deployed UI verification and a real
+Container Hub smoke remain external.
 
 ## Final Initial Product Vision
 

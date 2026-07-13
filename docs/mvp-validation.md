@@ -251,11 +251,12 @@ platform wire goldens captured from `agent-platform@1893edb5`. Separately,
 `agent-platform` branch `codex/zenforge-engine-bridge@82ca4d3` has automated
 coverage for the engine bridge and selector across HTTP sync/async, SSE,
 WebSocket, approval, attach, selector errors, and legacy fallback. This is
-integration-branch evidence, not proof of merge or deployment from platform
-`main`. Complete Chat Storage V3.1 and a smoke against a real Container Hub
-service also remain external acceptance. Repository-local resolver, projector,
-and approval-correlation tests do not claim platform transport or
-pending-awaiting persistence. Both repositories are Go 1.26.x only.
+integration-commit evidence. GitHub ancestry confirms that commit is contained
+in platform `main@0a9f734`, but it is not proof of deployed UI behavior.
+Complete Chat Storage V3.1 and a smoke against a real Container Hub service
+also remain external acceptance. Repository-local resolver, projector, and
+approval-correlation tests do not claim platform transport or pending-awaiting
+persistence. Both repositories are Go 1.26.x only.
 
 Agent Skill progressive-disclosure coverage additionally proves bounded
 auxiliary resource discovery, deterministic indexing, immutable snapshot
