@@ -123,6 +123,7 @@ server wiring. That downstream wiring is implemented and tested on
 `agent-platform` branch `codex/zenforge-engine-bridge@82ca4d3`, including the
 engine selector, HTTP/SSE/WS, approval, attach, and legacy fallback. Platform
 `main@f6d89da` restores this bridge, selector, routing, initialization, and
-rollout documentation. Deployed UI verification and a production Container Hub
-deployment remain environment acceptance items; the adapter has an opt-in
+rollout documentation. The existing `agent-webclient` protocol tests and
+production build pass, but deployed UI verification and a production Container
+Hub deployment remain environment acceptance items; the adapter has an opt-in
 disposable live-Hub test.

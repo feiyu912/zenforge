@@ -45,8 +45,10 @@ the manifest verifies source files and SHA-256 hashes from
 downstream engine/selector/HTTP/SSE/WS/approval/attach/fallback tests on
 `agent-platform` branch `codex/zenforge-engine-bridge@82ca4d3`. Platform
 `main@f6d89da` restores the bridge, selector, routing, initialization, and
-rollout documentation. Neither suite proves deployed UI behavior, complete Chat
-Storage V3.1, or production Container Hub acceptance. Use Go 1.26.x only.
+rollout documentation. The existing `agent-webclient` focused protocol suite
+and production build pass, but neither suite proves deployed UI behavior,
+complete Chat Storage V3.1, or production Container Hub acceptance. Use Go
+1.26.x only.
 
 ## CLI Smoke
 

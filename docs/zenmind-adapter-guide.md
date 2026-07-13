@@ -7,7 +7,8 @@ contracts are checked against fixtures captured from
 contracts. The downstream engine integration is implemented and tested on
 `agent-platform` branch `codex/zenforge-engine-bridge` at `82ca4d3`; it is not
 part of this repository. Platform `main@f6d89da` restores the bridge,
-selector, routing, initialization, and rollout documentation. Deployed UI
+selector, routing, initialization, and rollout documentation. The existing
+`agent-webclient` focused protocol tests and production build pass. Deployed UI
 verification remains external.
 
 ## Catalog And Session Mapping

@@ -255,9 +255,11 @@ coverage for the engine bridge and selector across HTTP sync/async, SSE,
 WebSocket, approval, attach, selector errors, and legacy fallback. This is
 integration evidence. Platform `main@f6d89da` restores the bridge, selector,
 routing, initialization, and rollout documentation; its Go 1.26 tests, race
-tests, and HTTP stream integration pass. This is not proof of deployed UI
-behavior. Complete Chat Storage V3.1 and a production Container Hub deployment
-smoke also remain external acceptance. The opt-in adapter test covers a
+tests, and HTTP stream integration pass. The existing `agent-webclient` passes
+90 focused query/attach/submit, event-processing, and HITL tests, and its
+production build succeeds. This is not proof of deployed UI behavior. Complete
+Chat Storage V3.1 and a production Container Hub deployment smoke also remain
+external acceptance. The opt-in adapter test covers a
 disposable live Hub session. Repository-local resolver, projector, and
 approval-correlation tests do not claim platform transport or
 pending-awaiting persistence. Both repositories are Go 1.26.x only.

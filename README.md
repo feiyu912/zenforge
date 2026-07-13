@@ -321,8 +321,10 @@ integration is implemented and tested on `agent-platform` branch
 feature-flag selector, HTTP sync/async, SSE, WebSocket, approval, attach, and
 legacy-fallback paths. `agent-platform` `main@f6d89da` restores the bridge,
 selector, routing, initialization, and rollout documentation; platform Go
-1.26 tests, race tests, and HTTP stream integration pass. This remains narrower
-than deployed UI evidence. The opt-in Container Hub adapter test covers a
+1.26 tests, race tests, and HTTP stream integration pass. The existing
+`agent-webclient` protocol consumer also passes 90 focused query/attach/submit,
+event-processing, and HITL tests and its production build. This remains
+narrower than deployed UI evidence. The opt-in Container Hub adapter test covers a
 disposable live Hub session, not a production deployment.
 
 `BuildRun` maps `Session.HistoryMessages` into `Task.InitialMessages`, including
@@ -544,8 +546,9 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
   downstream engine/feature-flag/HTTP/SSE/WS/approval/attach integration is
   tested on `agent-platform` branch `codex/zenforge-engine-bridge@82ca4d3`.
   Platform `main@f6d89da` restores the ZenForge bridge, selector, routing,
-  initialization, and rollout documentation. Production deployment acceptance
-  remains external.
+  initialization, and rollout documentation. The existing `agent-webclient`
+  focused protocol tests and production build pass; production deployment
+  acceptance remains external.
 - ZenMind run assembly rejects missing or typed-nil models and explicitly
   declared unavailable tools, while preserving undeclared, explicitly empty,
   and legacy tool-list semantics.
