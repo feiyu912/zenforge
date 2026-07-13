@@ -94,6 +94,9 @@ jobs:
           docker info
           docker pull alpine:3.20
 
+      - name: Run Docker HTTP harness integration
+        run: go test ./examples/http-harness-agent -run '^TestHTTPHarnessRunsApprovedDockerShellWhenEnabled$' -v
+
       - name: Run Docker consumer integration
         working-directory: integration/consumer
         run: go test -run '^TestDockerAdapterRunsInsideContainerWithWorkspaceMount$' -v
