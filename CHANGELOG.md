@@ -4,6 +4,10 @@
 
 ### Added
 
+- `examples/http-harness-agent`, a loopback-only production-shaped HTTP
+  assembly with an environment-selected provider, Agent Skills, typed tool,
+  Docker shell, durable SQLite stores, HITL, detached runs, and graceful
+  shutdown. Authentication and tenancy remain application-owned.
 - Optional `RunRegistryDeleter` terminal-record cleanup, implemented by the
   memory and SQLite registries and invoked by explicit `RunManager.Forget`
   without deleting durable events or checkpoints.

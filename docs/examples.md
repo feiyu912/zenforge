@@ -14,6 +14,7 @@ execute / summary workflow with approval gating.
 
 !!! tip "Picking a starting point"
     To test the complete user-owned harness first, start with `harness-agent`.
+    To test the durable HTTP lifecycle, start with `http-harness-agent`.
     For individual concepts, read `simple`, `sdk-embedded`, `code-review`,
     then `repo-refactor`.
 
@@ -37,6 +38,40 @@ MiniMax is configured as an Anthropic- or OpenAI-compatible BaseURL, not as a
 third provider protocol. The credential must match the chosen endpoint.
 The skill root defaults to `examples/harness-agent/skills`; use `-skill-root`
 or `ZENFORGE_SKILL_ROOT` to select an application-owned catalog.
+
+---
+
+## http-harness-agent
+
+A complete local HTTP service assembly. It combines `provider.FromEnv()`, a
+filesystem Agent Skill catalog, a typed inspection tool, Docker-backed shell
+execution, a durable SQLite HITL inbox, SQLite events/checkpoints, and a SQLite
+detached-run registry. It exposes detached start, resume, status, list, attach,
+cancel, and approval endpoints through `harnesshttp.NewRuntime`.
+
+**Key thing it demonstrates:** the application, rather than ZenForge core,
+owns durable-store selection, HTTP server lifetime, and the provider endpoint.
+The example binds only to `127.0.0.1`; production applications must add their
+own authentication and tenancy layer before binding externally.
+
+```bash
+export ZENFORGE_PROVIDER=anthropic
+export ZENFORGE_MODEL=your-model
+export ZENFORGE_API_KEY=your-key
+export ZENFORGE_BASE_URL=https://your-endpoint.example/v1
+
+go run ./examples/http-harness-agent \
+  -workspace . \
+  -skill-root examples/harness-agent/skills
+
+curl -sS -X POST http://127.0.0.1:8080/runs/start \
+  -H 'content-type: application/json' \
+  -d '{"runId":"review_1","input":"Inspect this workspace."}'
+curl -N 'http://127.0.0.1:8080/runs/attach?runId=review_1'
+```
+
+See [the example README](https://github.com/feiyu912/zenforge/tree/main/examples/http-harness-agent)
+for approval and recovery commands.
 
 ---
 

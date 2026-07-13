@@ -18,6 +18,41 @@ func TestSDKEmbeddedAgentRunsWithoutAPIKey(t *testing.T) {
 	}
 }
 
+func TestHTTPHarnessExampleWiresDurableLocalService(t *testing.T) {
+	data, err := os.ReadFile("http-harness-agent/main.go")
+	if err != nil {
+		t.Fatalf("ReadFile http-harness-agent/main.go returned error: %v", err)
+	}
+	source := string(data)
+	for _, want := range []string{
+		"provider.FromEnv()",
+		"eventlogsqlite.Open",
+		"checkpointsqlite.Open",
+		"approvalsqlite.OpenInbox",
+		"harnesshttp.OpenSQLiteRunRegistry",
+		"harnesshttp.NewRuntime",
+		"shelltool.ShellBackendSandbox",
+		"127.0.0.1:8080",
+		"ServeDetachedStart",
+		"ServeApproval",
+	} {
+		if !strings.Contains(source, want) {
+			t.Fatalf("HTTP harness example missing %q", want)
+		}
+	}
+}
+
+func TestHTTPHarnessExampleRefusesNonLoopbackAddress(t *testing.T) {
+	cmd := exec.Command("go", "run", "./http-harness-agent", "-addr", "0.0.0.0:8080")
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatal("HTTP harness accepted a non-loopback address")
+	}
+	if !strings.Contains(string(output), "must be a loopback address") {
+		t.Fatalf("unexpected non-loopback error: %s", output)
+	}
+}
+
 func TestCodeReviewExampleWiresSafetyControls(t *testing.T) {
 	data, err := os.ReadFile("code-review-agent/main.go")
 	if err != nil {

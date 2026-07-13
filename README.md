@@ -286,6 +286,10 @@ skills/
   single-process, shared-host, and multi-host topologies; per-operation routing;
   external side-effect idempotency; distributed cancellation; crash recovery;
   and graceful rollout acceptance.
+- `examples/http-harness-agent` is the runnable loopback-only service assembly:
+  environment-selected OpenAI/Anthropic protocol, SQLite events/checkpoints/
+  approvals/runs, Agent Skills, typed tool, Docker shell sandbox, HITL, and
+  detached HTTP lifecycle endpoints.
 
 **Live events**
 - `eventlog.Bus` and `eventlog.FanoutStore` for multiple live subscribers.

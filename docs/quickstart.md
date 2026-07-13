@@ -106,6 +106,9 @@ go run ./examples/sdk-embedded-agent
 ZENFORGE_PROVIDER=openai ZENFORGE_MODEL=... ZENFORGE_API_KEY=... \
   go run ./examples/harness-agent -skill-root examples/harness-agent/skills \
     -question "Inspect this project"
+ZENFORGE_PROVIDER=anthropic ZENFORGE_MODEL=... ZENFORGE_API_KEY=... \
+  go run ./examples/http-harness-agent -workspace . \
+    -skill-root examples/harness-agent/skills
 OPENAI_API_KEY=... go run ./examples/simple-tool-agent
 OPENAI_API_KEY=... go run ./examples/repo-refactor-agent
 OPENAI_API_KEY=... go run ./examples/code-review-agent
@@ -115,6 +118,9 @@ The SDK embedded example uses a local scripted model and runs without an API
 key. `harness-agent` combines an environment-selected OpenAI- or
 Anthropic-compatible provider with a filesystem Agent Skill, an ordinary typed
 tool, HITL, and Docker. `ZENFORGE_SKILL_ROOT` can replace `-skill-root`.
+`http-harness-agent` uses the same application-owned provider configuration in
+a loopback-only service with durable SQLite events, checkpoints, approvals, and
+detached runs; add application auth before exposing it beyond localhost.
 
 For an external Go application, the complete Agent Skills assembly is:
 
