@@ -1015,7 +1015,6 @@ func TestAgentStreamRunsToolAndContinuesModelLoop(t *testing.T) {
 
 func TestAgentSteerPersistsAndEntersNextModelTurnAfterToolResult(t *testing.T) {
 	checkpoints := checkpointmemory.New()
-	controller := harness.NewRunController()
 	model := &scriptedModel{turns: []scriptedTurn{
 		{events: []model.Event{{Message: &model.Message{ToolCalls: []model.ToolCallSpec{{
 			ID: "call_steer", Name: "wait_for_steer", Arguments: json.RawMessage(`{}`),
@@ -1024,7 +1023,7 @@ func TestAgentSteerPersistsAndEntersNextModelTurnAfterToolResult(t *testing.T) {
 	}}
 	tool := &steerGateTool{release: make(chan struct{})}
 	agent := New(Config{
-		Model: model, Tools: []Tool{tool}, Checkpoints: checkpoints, RunController: controller,
+		Model: model, Tools: []Tool{tool}, Checkpoints: checkpoints,
 	})
 
 	events, err := agent.Stream(context.Background(), Task{RunID: "run_steer", Input: "inspect"})

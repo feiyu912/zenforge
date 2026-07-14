@@ -118,6 +118,8 @@ Existing synchronous handlers remain available. Detached handlers add start,
 resume, status, list, attach, explicit cancel, and steer. Start/resume return `202`
 `RunInfo` JSON; attach replays from `afterSeq` or `Last-Event-ID` and follows
 live events. Attachment disconnect does not cancel managed execution.
+`zenforge.New` creates an in-process `RunController` by default, so direct SDK
+users can call `Agent.Steer` without separately wiring a controller.
 
 `RunManagerOptions` controls `MaxActive`, `RunTimeout`, `TerminalRetention`,
 follow buffering, run ID generation, and the optional `RunRegistry`. Without a

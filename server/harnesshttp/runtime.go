@@ -8,7 +8,6 @@ import (
 	"github.com/feiyu912/zenforge"
 	"github.com/feiyu912/zenforge/approval"
 	"github.com/feiyu912/zenforge/eventlog"
-	"github.com/feiyu912/zenforge/harness"
 	"github.com/feiyu912/zenforge/server/sse"
 )
 
@@ -62,9 +61,6 @@ func NewRuntime(config zenforge.Config, durable eventlog.Store, opts RuntimeOpti
 	approvals, _ := inbox.(*approval.PendingBroker)
 
 	config.Events = events
-	if config.RunController == nil {
-		config.RunController = harness.NewRunController()
-	}
 	config.Approval = inbox
 	agent := zenforge.New(config)
 	manager := NewRunManager(agent, events, bus, opts.Manager)

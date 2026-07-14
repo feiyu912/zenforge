@@ -267,6 +267,8 @@ skills/
 - Canonical `NewRuntime` wiring for detached start, resume, status, list,
   attach, explicit cancel, and safe-boundary steer. It shares one fanout store, bus, and approval inbox;
   disconnecting an attachment does not cancel the run.
+- Every `zenforge.Agent` creates an in-process run controller by default, so
+  SDK callers can use `Agent.Steer` without extra wiring.
 - The manager is single-process by default. Configure `RunManagerOptions.Registry`
   with `NewMemoryRunRegistry` or `OpenSQLiteRunRegistry` to add shared run
   claims, lease refresh, durable status/list lookup, and cross-manager durable

@@ -34,6 +34,9 @@ type Agent struct {
 // New creates an Agent with the provided runtime configuration.
 func New(config Config) *Agent {
 	config = cloneConfig(config)
+	if config.RunController == nil {
+		config.RunController = harness.NewRunController()
+	}
 	var configErr error
 	var skillCatalogPrompt string
 	if config.Skills != nil {
