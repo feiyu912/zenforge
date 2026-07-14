@@ -18,6 +18,7 @@ func TestMapEventUsesDefaultCompatibilityNames(t *testing.T) {
 		{event: zenforge.EventModelDelta, want: "content.delta"},
 		{event: zenforge.EventToolCall, want: "tool.start"},
 		{event: zenforge.EventTodoUpdated, want: "plan.update"},
+		{event: zenforge.EventRequestSteer, want: "request.steer"},
 		{event: zenforge.EventApprovalRequested, want: "awaiting.ask"},
 		{event: zenforge.EventApprovalResolved, want: "awaiting.answer"},
 		{event: zenforge.EventSubtaskStarted, want: "task.start"},
