@@ -13,6 +13,7 @@ import (
 	"github.com/feiyu912/zenforge"
 	"github.com/feiyu912/zenforge/eventlog"
 	eventlogmemory "github.com/feiyu912/zenforge/eventlog/memory"
+	"github.com/feiyu912/zenforge/harness"
 )
 
 func TestRunManagerConcurrentDuplicateAndDurableDuplicate(t *testing.T) {
@@ -51,6 +52,32 @@ func TestRunManagerConcurrentDuplicateAndDurableDuplicate(t *testing.T) {
 	info, err := manager.Start(context.Background(), zenforge.Task{RunID: "durable", Input: "hi"})
 	if !errors.Is(err, ErrEventsExist) || info.RunID != "durable" {
 		t.Fatalf("Start durable = (%+v, %v)", info, err)
+	}
+}
+
+func TestRunManagerSteerRoutesToActiveAgentOnly(t *testing.T) {
+	manager, agent, _ := newTestRunManager(t, RunManagerOptions{TerminalRetention: -1})
+	defer closeManager(t, manager)
+	if _, err := manager.Start(context.Background(), zenforge.Task{RunID: "steer_active", Input: "hi"}); err != nil {
+		t.Fatal(err)
+	}
+	steer, err := manager.Steer("steer_active", "client_steer", "focus on tests")
+	if err != nil {
+		t.Fatalf("Steer: %v", err)
+	}
+	if steer.RunID != "steer_active" || steer.SteerID != "client_steer" || steer.CreatedAt.IsZero() {
+		t.Fatalf("steer = %#v", steer)
+	}
+	if got := agent.steerMessages("steer_active"); len(got) != 1 || got[0] != "focus on tests" {
+		t.Fatalf("agent steers = %#v", got)
+	}
+	agent.finish("steer_active", zenforge.EventRunDone)
+	waitStatus(t, manager, "steer_active", RunCompleted)
+	if _, err := manager.Steer("steer_active", "", "late"); !errors.Is(err, ErrRunTerminal) {
+		t.Fatalf("terminal Steer = %v, want ErrRunTerminal", err)
+	}
+	if _, err := manager.Steer("missing", "", "none"); !errors.Is(err, ErrRunNotFound) {
+		t.Fatalf("missing Steer = %v, want ErrRunNotFound", err)
 	}
 }
 
@@ -856,6 +883,7 @@ type managerTestAgent struct {
 	mu      sync.Mutex
 	streams map[string]chan zenforge.Event
 	ctxs    map[string]context.Context
+	steers  map[string][]string
 	store   eventlog.Store
 }
 
@@ -872,6 +900,7 @@ func newManagerTestAgent(store eventlog.Store) *managerTestAgent {
 	return &managerTestAgent{
 		streams: make(map[string]chan zenforge.Event),
 		ctxs:    make(map[string]context.Context),
+		steers:  make(map[string][]string),
 		store:   store,
 	}
 }
@@ -899,6 +928,22 @@ func (a *managerTestAgent) Stream(ctx context.Context, task zenforge.Task) (<-ch
 
 func (a *managerTestAgent) Resume(ctx context.Context, runID string) (<-chan zenforge.Event, error) {
 	return a.Stream(ctx, zenforge.Task{RunID: runID})
+}
+
+func (a *managerTestAgent) Steer(runID, steerID, message string) (harness.SteerState, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.streams[runID] == nil {
+		return harness.SteerState{}, false
+	}
+	a.steers[runID] = append(a.steers[runID], message)
+	return harness.SteerState{ID: steerID, Message: message, CreatedAt: time.Now().UTC()}, true
+}
+
+func (a *managerTestAgent) steerMessages(runID string) []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]string(nil), a.steers[runID]...)
 }
 
 func (a *managerTestAgent) send(runID string, event zenforge.Event) {

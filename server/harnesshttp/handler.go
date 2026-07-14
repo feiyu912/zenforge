@@ -81,6 +81,13 @@ type ApprovalRequest struct {
 	Payload   map[string]any          `json:"payload,omitempty"`
 }
 
+// SteerRequest adds a user message to an active detached run.
+type SteerRequest struct {
+	RunID   string `json:"runId"`
+	SteerID string `json:"steerId,omitempty"`
+	Message string `json:"message"`
+}
+
 // New creates a Handler that streams agent events as Server-Sent Events.
 func New(agent Agent, opts sse.Options) *Handler {
 	return &Handler{Agent: agent, SSE: opts}
@@ -346,6 +353,38 @@ func (h *Handler) ServeDetachedCancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{"runId": runID})
+}
+
+// ServeDetachedSteer queues a message for the next safe model-turn boundary.
+func (h *Handler) ServeDetachedSteer(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "detached steer requires POST")
+		return
+	}
+	if h.Manager == nil {
+		writeError(w, http.StatusServiceUnavailable, "manager_not_configured", "run manager is not configured")
+		return
+	}
+	var req SteerRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	req.RunID = strings.TrimSpace(req.RunID)
+	req.Message = strings.TrimSpace(req.Message)
+	if req.RunID == "" || req.Message == "" {
+		writeError(w, http.StatusBadRequest, "invalid_steer", "runId and message are required")
+		return
+	}
+	if _, ok := h.authorize(w, r, Operation{Name: "detachedSteer", RunID: req.RunID}); !ok {
+		return
+	}
+	info, err := h.Manager.Steer(req.RunID, req.SteerID, req.Message)
+	if err != nil {
+		writeManagerError(w, "detached_steer_failed", err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, info)
 }
 
 // ServeEvents replays persisted events for a run as Server-Sent Events.

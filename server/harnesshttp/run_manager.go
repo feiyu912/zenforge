@@ -14,6 +14,7 @@ import (
 
 	"github.com/feiyu912/zenforge"
 	"github.com/feiyu912/zenforge/eventlog"
+	"github.com/feiyu912/zenforge/harness"
 )
 
 // RunStatus is the manager's in-memory view of a detached run.
@@ -29,18 +30,19 @@ const (
 )
 
 var (
-	ErrRunExists      = errors.New("run already exists")
-	ErrRunNotFound    = errors.New("run not found")
-	ErrManagerClosed  = errors.New("run manager is closed")
-	ErrMaxActive      = errors.New("maximum active runs reached")
-	ErrRunTerminal    = errors.New("run is already terminal")
-	ErrRunActive      = errors.New("run is still active")
-	ErrInvalidRunID   = errors.New("run ID is required")
-	ErrRunClaimed     = fmt.Errorf("%w: run is claimed by another owner", ErrRunExists)
-	ErrRunLeaseLost   = errors.New("run lease lost")
-	ErrEventsExist    = fmt.Errorf("%w: durable events already exist", ErrRunExists)
-	ErrResumeNotFound = fmt.Errorf("%w: no durable events exist", ErrRunNotFound)
-	ErrEventsRequired = errors.New("event store and bus are required")
+	ErrRunExists        = errors.New("run already exists")
+	ErrRunNotFound      = errors.New("run not found")
+	ErrManagerClosed    = errors.New("run manager is closed")
+	ErrMaxActive        = errors.New("maximum active runs reached")
+	ErrRunTerminal      = errors.New("run is already terminal")
+	ErrRunActive        = errors.New("run is still active")
+	ErrInvalidRunID     = errors.New("run ID is required")
+	ErrRunClaimed       = fmt.Errorf("%w: run is claimed by another owner", ErrRunExists)
+	ErrRunLeaseLost     = errors.New("run lease lost")
+	ErrEventsExist      = fmt.Errorf("%w: durable events already exist", ErrRunExists)
+	ErrResumeNotFound   = fmt.Errorf("%w: no durable events exist", ErrRunNotFound)
+	ErrEventsRequired   = errors.New("event store and bus are required")
+	ErrSteerUnavailable = errors.New("run does not accept steer")
 )
 
 const defaultTerminalRetention = 5 * time.Minute
@@ -141,6 +143,17 @@ type managedRun struct {
 	timer  *time.Timer
 }
 
+// SteerInfo confirms a message queued for the next model-turn boundary.
+type SteerInfo struct {
+	RunID     string    `json:"runId"`
+	SteerID   string    `json:"steerId"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+type steeringAgent interface {
+	Steer(runID, steerID, message string) (harness.SteerState, bool)
+}
+
 // RunManager owns detached run contexts and their sole stream drainers.
 //
 // Duplicate exclusion is single-process by default. Configure Registry to back
@@ -211,6 +224,36 @@ func (m *RunManager) Resume(ctx context.Context, runID string) (RunInfo, error) 
 	return m.start(ctx, runID, true, func(runCtx context.Context) (<-chan zenforge.Event, error) {
 		return m.agent.Resume(runCtx, runID)
 	})
+}
+
+// Steer queues a message for a locally owned active run. A shared run registry
+// deliberately does not imply cross-process control delivery; route the request
+// to RunInfo.OwnerID or provide an application-owned durable control queue.
+func (m *RunManager) Steer(runID, steerID, message string) (SteerInfo, error) {
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		return SteerInfo{}, ErrInvalidRunID
+	}
+	m.mu.Lock()
+	run := m.runs[runID]
+	if run == nil {
+		m.mu.Unlock()
+		return SteerInfo{RunID: runID}, ErrRunNotFound
+	}
+	if terminal(run.info.Status) {
+		m.mu.Unlock()
+		return SteerInfo{RunID: runID}, ErrRunTerminal
+	}
+	m.mu.Unlock()
+	controller, ok := m.agent.(steeringAgent)
+	if !ok {
+		return SteerInfo{RunID: runID}, ErrSteerUnavailable
+	}
+	steer, accepted := controller.Steer(runID, steerID, message)
+	if !accepted {
+		return SteerInfo{RunID: runID}, ErrSteerUnavailable
+	}
+	return SteerInfo{RunID: runID, SteerID: steer.ID, CreatedAt: steer.CreatedAt}, nil
 }
 
 func (m *RunManager) start(

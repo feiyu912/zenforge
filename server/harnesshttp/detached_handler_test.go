@@ -28,6 +28,7 @@ func TestDetachedHandlersRejectUnsupportedMethods(t *testing.T) {
 		{"runs", http.MethodPost, handler.ServeDetachedRuns},
 		{"attach", http.MethodPost, handler.ServeDetachedAttach},
 		{"cancel", http.MethodGet, handler.ServeDetachedCancel},
+		{"steer", http.MethodGet, handler.ServeDetachedSteer},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

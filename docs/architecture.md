@@ -205,6 +205,7 @@ run.resumed
 run.done
 run.error
 run.cancelled
+request.steer
 step.started
 step.done
 model.started

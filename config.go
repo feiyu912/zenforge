@@ -6,6 +6,7 @@ import (
 
 	"github.com/feiyu912/zenforge/approval"
 	"github.com/feiyu912/zenforge/checkpoint"
+	"github.com/feiyu912/zenforge/harness"
 	"github.com/feiyu912/zenforge/model"
 	"github.com/feiyu912/zenforge/planner"
 	"github.com/feiyu912/zenforge/skill"
@@ -69,6 +70,7 @@ type Config struct {
 	Workspace             workspace.Workspace
 	Events                EventStore
 	Checkpoints           checkpoint.Store
+	RunController         *harness.RunController
 	Trace                 trace.Sink
 	MaxSteps              int
 	Mode                  AgentMode

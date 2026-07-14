@@ -41,6 +41,7 @@ type Runner struct {
 	CallModel             func(context.Context, RunState, model.ToolChoice) (MessageState, model.Usage, error)
 	DurableCallModel      func(context.Context, *RunState, model.ToolChoice) (MessageState, model.Usage, error)
 	RunPendingTools       func(context.Context, *RunState) error
+	DrainSteers           func(context.Context, *RunState) error
 	ResumeWaitingApproval func(context.Context, *RunState) error
 	ResumeTerminal        func(RunState) bool
 	IsPause               func(error) bool
@@ -221,6 +222,12 @@ func (r Runner) Run(ctx context.Context, state RunState, resumed bool) (terminal
 				return terminal
 			}
 			continue
+		}
+		if r.DrainSteers != nil {
+			if err := r.DrainSteers(ctx, &state); err != nil {
+				fail(err)
+				return terminal
+			}
 		}
 		replacing := state.Model.Active != nil && state.Model.Active.Status == ModelAttemptSuperseded
 		if state.Step >= maxSteps && !replacing {

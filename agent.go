@@ -122,6 +122,9 @@ func (a *Agent) Stream(ctx context.Context, task Task) (<-chan Event, error) {
 	if a.config.Model == nil {
 		return a.streamNoop(ctx, runID, task.Input), nil
 	}
+	if err := a.openRunControl(runID); err != nil {
+		return nil, err
+	}
 	if grantStoreConfigured(a.config.ApprovalGrants) {
 		task.Meta = approvalNamespaceMeta(task.Meta, a.approvalNamespace(task.ApprovalNamespace))
 	}
@@ -130,6 +133,7 @@ func (a *Agent) Stream(ctx context.Context, task Task) (<-chan Event, error) {
 		events := make(chan Event, 64)
 		go func() {
 			defer close(events)
+			defer a.closeRunControl(runID)
 			a.runPlanExecute(ctx, events, runID, task, nil)
 		}()
 		return events, nil
@@ -140,6 +144,7 @@ func (a *Agent) Stream(ctx context.Context, task Task) (<-chan Event, error) {
 	events := make(chan Event, 32)
 	go func() {
 		defer close(events)
+		defer a.closeRunControl(runID)
 		a.runLoop(ctx, events, state, false)
 	}()
 	return events, nil
@@ -169,9 +174,13 @@ func (a *Agent) Resume(ctx context.Context, runID string) (<-chan Event, error) 
 	if err := a.validateCheckpointSkills(cp.State); err != nil {
 		return nil, err
 	}
+	if err := a.openRunControl(runID); err != nil {
+		return nil, err
+	}
 	events := make(chan Event, 32)
 	go func() {
 		defer close(events)
+		defer a.closeRunControl(runID)
 		if AgentMode(cp.State.Mode) == ModePlanExecute || isPlanExecuteState(cp.State) {
 			a.runPlanExecute(ctx, events, runID, Task{
 				Input: planExecuteOriginalInput(cp.State),
@@ -182,6 +191,29 @@ func (a *Agent) Resume(ctx context.Context, runID string) (<-chan Event, error) 
 		a.runLoop(ctx, events, cp.State, true)
 	}()
 	return events, nil
+}
+
+// Steer queues a user message for an active run. The message becomes a normal
+// user turn after outstanding tools finish and before the next model request.
+// It returns false when this Agent has no controller or the run is terminal.
+func (a *Agent) Steer(runID, steerID, message string) (harness.SteerState, bool) {
+	if a == nil || a.config.RunController == nil {
+		return harness.SteerState{}, false
+	}
+	return a.config.RunController.EnqueueSteer(runID, steerID, message)
+}
+
+func (a *Agent) openRunControl(runID string) error {
+	if a == nil || a.config.RunController == nil {
+		return nil
+	}
+	return a.config.RunController.Open(runID)
+}
+
+func (a *Agent) closeRunControl(runID string) {
+	if a != nil && a.config.RunController != nil {
+		a.config.RunController.Close(runID)
+	}
 }
 
 func newRunID() string {
@@ -244,6 +276,35 @@ func (e *eventPersistenceError) Unwrap() error {
 func isEventPersistenceError(err error) bool {
 	var persistenceErr *eventPersistenceError
 	return errors.As(err, &persistenceErr)
+}
+
+func (a *Agent) drainSteers(ctx context.Context, emit eventEmitter, checkpointState func() error, state *harness.RunState) error {
+	if a.config.RunController == nil {
+		return nil
+	}
+	steers := a.config.RunController.DrainSteers(state.RunID)
+	if len(steers) == 0 {
+		return nil
+	}
+	state.Control.Steers = append(state.Control.Steers, steers...)
+	for _, steer := range steers {
+		state.Messages = append(state.Messages, harness.MessageState{Role: "user", Content: steer.Message})
+	}
+	// The message is now part of durable conversation state. Keep no duplicate
+	// pending queue in the checkpoint after this safe-boundary commit.
+	state.Control.Steers = nil
+	if err := checkpointState(); err != nil {
+		return err
+	}
+	for _, steer := range steers {
+		if err := emit(EventRequestSteer, map[string]any{
+			"steerId": steer.ID,
+			"message": steer.Message,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (a *Agent) emit(ctx context.Context, out chan<- Event, eventType EventType, runID string, data map[string]any) error {
@@ -705,6 +766,11 @@ func (a *Agent) runHarnessLoop(ctx context.Context, out chan<- Event, state harn
 		},
 		RunPendingTools: func(callCtx context.Context, current *harness.RunState) error {
 			return a.runPendingTools(callCtx, emit, func() error {
+				return checkpointState(callCtx, *current)
+			}, current)
+		},
+		DrainSteers: func(callCtx context.Context, current *harness.RunState) error {
+			return a.drainSteers(callCtx, emit, func() error {
 				return checkpointState(callCtx, *current)
 			}, current)
 		},

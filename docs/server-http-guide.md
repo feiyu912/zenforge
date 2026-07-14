@@ -19,7 +19,7 @@ exposes:
 - optional `GET /live?runId=...` style live event fanout from `eventlog.Bus`;
 - optional `GET /approvals?runId=...` style pending approval query;
 - optional `POST /approval` style approval submit to `approval.Inbox`;
-- detached start, resume, status, list, attach, and cancel handlers;
+- detached start, resume, status, list, attach, cancel, and steer handlers;
 - standard Server-Sent Events responses through `server/sse`.
 
 ```go
@@ -52,6 +52,7 @@ mux.HandleFunc("/runs/status", runtime.Handler.ServeDetachedStatus)
 mux.HandleFunc("/runs", runtime.Handler.ServeDetachedRuns)
 mux.HandleFunc("/runs/attach", runtime.Handler.ServeDetachedAttach)
 mux.HandleFunc("/runs/cancel", runtime.Handler.ServeDetachedCancel)
+mux.HandleFunc("/runs/steer", runtime.Handler.ServeDetachedSteer)
 ```
 
 These paths are examples, not framework-owned routes. `Runtime.Close` rejects
@@ -159,6 +160,20 @@ With a registry that implements `RunCancellationRegistry`, cancellation may
 reach any replica: the request is persisted and the lease owner consumes it on
 heartbeat. The built-in memory and SQLite registries implement this extension.
 Custom registries without it still require cancellation routing to `OwnerID`.
+
+Steer adds a user instruction without cancelling the run:
+
+```http
+POST /runs/steer
+Content-Type: application/json
+
+{"runId":"run_123","steerId":"s_9","message":"Focus on the failing tests."}
+```
+
+It returns `202` with the assigned steer ID. ZenForge applies the message only
+after pending tools complete and before the next model call, persists it in the
+run checkpoint, and emits `request.steer`. It is not a distributed queue: route
+from a non-owner replica to `OwnerID`, or provide a durable control transport.
 
 Crash recovery remains host-triggered. After leases have expired, call
 `RunManager.RecoverStale` with a bounded `RecoveryOptions.Max` to scan a listing

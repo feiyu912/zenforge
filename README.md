@@ -265,7 +265,7 @@ skills/
   (live fanout or durable replay-to-live with `replay=true`).
 - `GET /approvals`, `POST /approval` for run-scoped pending approval flows.
 - Canonical `NewRuntime` wiring for detached start, resume, status, list,
-  attach, and explicit cancel. It shares one fanout store, bus, and approval inbox;
+  attach, explicit cancel, and safe-boundary steer. It shares one fanout store, bus, and approval inbox;
   disconnecting an attachment does not cancel the run.
 - The manager is single-process by default. Configure `RunManagerOptions.Registry`
   with `NewMemoryRunRegistry` or `OpenSQLiteRunRegistry` to add shared run
@@ -276,6 +276,9 @@ skills/
   Their optional `RunRegistryDeleter` extension lets explicit terminal
   `RunManager.Forget` cleanup remove a registry status record while preserving
   durable events and checkpoints.
+  Steer is owner-local: it becomes a user message after pending tools and
+  before the next model request. Multi-worker hosts route it to `OwnerID` or
+  use an application-owned durable control queue.
   Applications still own model provider/protocol and compatible base URL
   configuration, auth, route paths, durable store closure, lifecycle shutdown,
   and idempotent external side effects.

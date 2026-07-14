@@ -115,7 +115,7 @@ that caller-owned `approval.Inbox`. The caller retains ownership of the durable
 event and approval stores.
 
 Existing synchronous handlers remain available. Detached handlers add start,
-resume, status, list, attach, and explicit cancel. Start/resume return `202`
+resume, status, list, attach, explicit cancel, and steer. Start/resume return `202`
 `RunInfo` JSON; attach replays from `afterSeq` or `Last-Event-ID` and follows
 live events. Attachment disconnect does not cancel managed execution.
 
@@ -132,6 +132,10 @@ support listing and distributed cancellation. After claiming a run, a manager
 checks this signal before calling `Agent.Stream` or `Agent.Resume`, so a
 persisted cancellation inherited during recovery reaches the agent as an
 already-cancelled context.
+
+Steer is accepted only by the manager that owns an active run. It is applied
+after pending tools and before the next model call. Multi-worker hosts must
+route to `OwnerID` or provide their own durable control queue.
 
 `RunManager.RecoverStale(ctx, RecoveryOptions{Max: n})` is an explicit host
 recovery scan. It lists the shared registry, skips terminal records and live

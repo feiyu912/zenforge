@@ -156,6 +156,7 @@ func DefaultEventTypes() map[zenforge.EventType]string {
 		zenforge.EventRunDone:           "run.complete",
 		zenforge.EventRunError:          "run.error",
 		zenforge.EventRunCancelled:      "run.cancel",
+		zenforge.EventRequestSteer:      "request.steer",
 		zenforge.EventStepStarted:       "step.start",
 		zenforge.EventStepDone:          "step.complete",
 		zenforge.EventModelStarted:      "model.start",
@@ -523,6 +524,12 @@ func (p *Projector) Project(event zenforge.Event) []StreamEvent {
 		out = append(out, p.closeTools(event)...)
 		out = append(out, p.event(event, "run.cancel", map[string]any{"runId": runID}))
 		p.terminated = true
+	case zenforge.EventRequestSteer:
+		out = append(out, p.closeContent(event)...)
+		out = append(out, p.event(event, "request.steer", map[string]any{
+			"runId": runID, "steerId": stringValue(event.Payload["steerId"]),
+			"message": stringValue(event.Payload["message"]),
+		}))
 		// run.resumed, step.*, workspace, checkpoint, and nested subtask events
 		// have no direct platform wire equivalent. Plan, approval, and task
 		// events are also ignored because ZenForge lacks the required platform

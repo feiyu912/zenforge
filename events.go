@@ -18,6 +18,7 @@ const (
 	EventRunDone            EventType = "run.done"
 	EventRunError           EventType = "run.error"
 	EventRunCancelled       EventType = "run.cancelled"
+	EventRequestSteer       EventType = "request.steer"
 	EventStepStarted        EventType = "step.started"
 	EventStepDone           EventType = "step.done"
 	EventModelStarted       EventType = "model.started"

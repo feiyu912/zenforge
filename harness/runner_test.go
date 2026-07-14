@@ -101,6 +101,39 @@ func TestRunnerExecutesPendingToolsBeforeNextModelTurn(t *testing.T) {
 	}
 }
 
+func TestRunnerDrainsSteersAfterToolsBeforeTheNextModelTurn(t *testing.T) {
+	modelCalls := 0
+	runner := Runner{
+		MaxSteps: 3,
+		CallModel: func(_ context.Context, state RunState, _ model.ToolChoice) (MessageState, model.Usage, error) {
+			modelCalls++
+			if modelCalls == 1 {
+				return MessageState{Role: "assistant", ToolCalls: []ToolCallSpec{{ID: "call_1", Name: "lookup"}}}, model.Usage{}, nil
+			}
+			if got := state.Messages; len(got) != 4 || got[2].Role != "tool" || got[3].Role != "user" || got[3].Content != "focus on tests" {
+				t.Fatalf("second model messages = %#v", got)
+			}
+			return MessageState{Role: "assistant", Content: "steered"}, model.Usage{}, nil
+		},
+		RunPendingTools: func(_ context.Context, state *RunState) error {
+			state.Messages = append(state.Messages, MessageState{Role: "tool", ToolCallID: "call_1", Content: "found"})
+			state.Tool.Pending = nil
+			return nil
+		},
+		DrainSteers: func(_ context.Context, state *RunState) error {
+			if modelCalls == 1 {
+				state.Messages = append(state.Messages, MessageState{Role: "user", Content: "focus on tests"})
+			}
+			return nil
+		},
+	}
+
+	terminal := runner.Run(context.Background(), testRunState(), false)
+	if terminal.Type != RuntimeRunDone || terminal.Data["output"] != "steered" {
+		t.Fatalf("terminal = %#v", terminal)
+	}
+}
+
 func TestRunnerOneshotCapsAutoTurnsAndUsesFinalNoToolTurn(t *testing.T) {
 	var choices []model.ToolChoice
 	runner := Runner{
