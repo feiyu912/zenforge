@@ -359,6 +359,26 @@ func TestClientReturnsHTTPError(t *testing.T) {
 	}
 }
 
+func TestClientReturnsActionableAndRedactedHTTPError(t *testing.T) {
+	const secret = "test-secret"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":"invalid ` + secret + `"}`))
+	}))
+	defer server.Close()
+
+	_, err := New(Config{BaseURL: server.URL, APIKey: secret, Model: "claude-test"}).Stream(context.Background(), model.Request{})
+	if err == nil {
+		t.Fatal("Stream returned nil error")
+	}
+	if !strings.Contains(err.Error(), "authentication failed") || !strings.Contains(err.Error(), "/messages") {
+		t.Fatalf("error = %q", err)
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("error leaked API key: %q", err)
+	}
+}
+
 type anthropicRoundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f anthropicRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {

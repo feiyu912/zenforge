@@ -130,6 +130,33 @@ func TestClientReturnsStreamingProviderError(t *testing.T) {
 	}
 }
 
+func TestClientReturnsActionableAndRedactedHTTPError(t *testing.T) {
+	const secret = "test-secret"
+	httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusUnauthorized,
+			Status:     "401 Unauthorized",
+			Body:       io.NopCloser(strings.NewReader(`{"error":"invalid ` + secret + `"}`)),
+		}, nil
+	})}
+
+	_, err := New(Config{
+		BaseURL:    "https://user:password@example.test/v1",
+		APIKey:     secret,
+		Model:      "gpt-test",
+		HTTPClient: httpClient,
+	}).Stream(context.Background(), model.Request{})
+	if err == nil {
+		t.Fatal("Stream returned nil error")
+	}
+	if !strings.Contains(err.Error(), "authentication failed") || !strings.Contains(err.Error(), "https://example.test/v1/chat/completions") {
+		t.Fatalf("error = %q", err)
+	}
+	if strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), "user:password") {
+		t.Fatalf("error leaked sensitive configuration: %q", err)
+	}
+}
+
 func TestClientRejectsMalformedStreamingChunk(t *testing.T) {
 	httpClient := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		return sseResponse("data: {}\n\n"), nil

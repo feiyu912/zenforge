@@ -134,6 +134,15 @@ The Anthropic adapter accepts MiniMax's documented endpoint without `/v1` and
 normalizes only that exact public endpoint before appending `/messages`. Other
 Anthropic-compatible Base URLs are passed through unchanged.
 
+## Configuration Failures
+
+For an HTTP `401` or `403`, ZenForge reports the protocol, sanitized endpoint,
+and an authentication hint. Verify that the key came from the provider behind
+the configured BaseURL and that the endpoint uses the selected protocol:
+OpenAI-compatible Chat Completions for `openai`, or Anthropic-compatible
+Messages for `anthropic`. A `404` means the BaseURL is not the API root expected
+by that protocol. The configured key is redacted from provider error bodies.
+
 ## Boundary
 
 Provider adapters own API-specific request/stream parsing. The harness should

@@ -162,6 +162,11 @@ SDK users can pass any application-owned `model.Model` to `zenforge.New`, so
 custom gateways and test models live outside the harness instead of becoming
 new core provider names.
 
+When a compatible provider returns `401` or `403`, ZenForge reports a
+sanitized endpoint and tells you to check that the key belongs to that BaseURL
+and protocol. `404` errors usually mean the BaseURL is not the expected API
+root. Provider error output redacts the configured API key.
+
 ## Highlights
 
 **Runtime**
