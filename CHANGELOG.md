@@ -4,6 +4,11 @@
 
 ### Added
 
+- Safe-boundary run steering through `Agent.Steer` and detached HTTP
+  `ServeDetachedSteer`. Accepted messages become durable user turns after
+  pending tools and before the next model call, emit `request.steer`, and map
+  through the ZenMind projector. The built-in controller is owner-local;
+  multi-worker routing remains application-owned.
 - `examples/http-harness-agent`, a loopback-only production-shaped HTTP
   assembly with an environment-selected provider, Agent Skills, typed tool,
   Docker shell, durable SQLite stores, HITL, detached runs, and graceful

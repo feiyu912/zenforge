@@ -48,10 +48,10 @@ See [limitations.md](./limitations.md). Important V0.1 limitations:
 - Container Hub remains optional/beta.
 - Downstream `agent-platform`
   engine/feature-flag/HTTP/SSE/WS/approval/attach/legacy-fallback integration
-  is implemented and tested on
-  `codex/zenforge-engine-bridge@82ca4d3`, but is not merged to platform `main`.
-- Complete Chat Storage V3.1 and real Container Hub acceptance are not covered
-  by repository-local or integration-branch tests.
+  is restored on `main@f6d89da`. Deployed UI acceptance remains external.
+- Complete Chat Storage V3.1 and production Container Hub acceptance are not
+  covered by repository-local tests; the opt-in adapter test covers a
+  disposable live Hub session.
 - Go 1.26.x is the only supported toolchain.
 
 ## Verification
