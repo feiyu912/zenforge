@@ -38,6 +38,19 @@ func TestProjectorToolLifecycleGolden(t *testing.T) {
 	assertProjectorGolden(t, "lifecycle_tool.jsonl", ProjectorIdentity{ChatID: "chat_tool", AgentKey: "zenmind"}, events)
 }
 
+func TestProjectorPreservesSteerAsPlatformRequest(t *testing.T) {
+	projector := NewProjector()
+	got := projector.Project(testEvent(zenforge.EventRequestSteer, 210, "run_steer", map[string]any{
+		"steerId": "steer_1", "message": "focus on tests",
+	}))
+	if len(got) != 1 || got[0].Type != "request.steer" || got[0].Seq != 1 {
+		t.Fatalf("projection = %#v", got)
+	}
+	if got[0].Payload["runId"] != "run_steer" || got[0].Payload["steerId"] != "steer_1" || got[0].Payload["message"] != "focus on tests" {
+		t.Fatalf("payload = %#v", got[0].Payload)
+	}
+}
+
 func TestProjectorTerminalErrorsAndCancellationNeverComplete(t *testing.T) {
 	tests := []struct {
 		name     string
