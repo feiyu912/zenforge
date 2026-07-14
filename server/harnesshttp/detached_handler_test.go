@@ -80,6 +80,44 @@ func TestDetachedStartAuthorizationMetaAndStatus(t *testing.T) {
 	waitStatus(t, manager, "run_http", RunCompleted)
 }
 
+func TestDetachedSteerAuthorizesAndQueuesMessage(t *testing.T) {
+	manager, agent, _ := newTestRunManager(t, RunManagerOptions{TerminalRetention: -1})
+	defer closeManager(t, manager)
+	if _, err := manager.Start(context.Background(), zenforge.Task{RunID: "run_steer_http", Input: "hello"}); err != nil {
+		t.Fatal(err)
+	}
+	var operation Operation
+	handler := &Handler{
+		Manager: manager,
+		Access: AccessFunc(func(_ context.Context, _ *http.Request, op Operation) (AccessDecision, error) {
+			operation = op
+			return AccessDecision{}, nil
+		}),
+	}
+	rec := httptest.NewRecorder()
+	handler.ServeDetachedSteer(rec, httptest.NewRequest(http.MethodPost, "/detached/steer",
+		strings.NewReader(`{"runId":"run_steer_http","steerId":"steer_http","message":"focus on tests"}`)))
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d; body=%s", rec.Code, rec.Body.String())
+	}
+	if operation != (Operation{Name: "detachedSteer", RunID: "run_steer_http"}) {
+		t.Fatalf("operation = %#v", operation)
+	}
+	var info SteerInfo
+	if err := json.Unmarshal(rec.Body.Bytes(), &info); err != nil {
+		t.Fatal(err)
+	}
+	if info.RunID != "run_steer_http" || info.SteerID != "steer_http" || info.CreatedAt.IsZero() {
+		t.Fatalf("response = %#v", info)
+	}
+	if got := agent.steerMessages("run_steer_http"); len(got) != 1 || got[0] != "focus on tests" {
+		t.Fatalf("steers = %#v", got)
+	}
+	assertHTTPError(t, handler.ServeDetachedSteer, http.MethodPost, "/detached/steer", `{`, http.StatusBadRequest)
+	assertHTTPError(t, handler.ServeDetachedSteer, http.MethodPost, "/detached/steer", `{"runId":"run_steer_http","message":" "}`, http.StatusBadRequest)
+	agent.finish("run_steer_http", zenforge.EventRunDone)
+}
+
 func TestDetachedRunsListsAuthorizedManagerSnapshots(t *testing.T) {
 	manager, agent, _ := newTestRunManager(t, RunManagerOptions{TerminalRetention: -1})
 	defer closeManager(t, manager)
