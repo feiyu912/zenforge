@@ -1013,6 +1013,55 @@ func TestAgentStreamRunsToolAndContinuesModelLoop(t *testing.T) {
 	}
 }
 
+func TestAgentSteerPersistsAndEntersNextModelTurnAfterToolResult(t *testing.T) {
+	checkpoints := checkpointmemory.New()
+	controller := harness.NewRunController()
+	model := &scriptedModel{turns: []scriptedTurn{
+		{events: []model.Event{{Message: &model.Message{ToolCalls: []model.ToolCallSpec{{
+			ID: "call_steer", Name: "wait_for_steer", Arguments: json.RawMessage(`{}`),
+		}}}}}},
+		{events: []model.Event{{Delta: "steered result"}}},
+	}}
+	tool := &steerGateTool{release: make(chan struct{})}
+	agent := New(Config{
+		Model: model, Tools: []Tool{tool}, Checkpoints: checkpoints, RunController: controller,
+	})
+
+	events, err := agent.Stream(context.Background(), Task{RunID: "run_steer", Input: "inspect"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawSteer bool
+	for event := range events {
+		if event.Type == EventToolCall {
+			if _, accepted := agent.Steer("run_steer", "steer_1", "focus on failing tests"); !accepted {
+				t.Fatal("steer was not accepted while tool was active")
+			}
+			close(tool.release)
+		}
+		if event.Type == EventRequestSteer {
+			sawSteer = event.Payload["steerId"] == "steer_1" && event.Payload["message"] == "focus on failing tests"
+		}
+	}
+	if !sawSteer {
+		t.Fatal("request.steer event was not emitted")
+	}
+	if len(model.requests) != 2 {
+		t.Fatalf("model requests = %d, want 2", len(model.requests))
+	}
+	messages := model.requests[1].Messages
+	if len(messages) != 4 || messages[2].Role != "tool" || messages[3].Role != "user" || messages[3].Content != "focus on failing tests" {
+		t.Fatalf("second model messages = %#v", messages)
+	}
+	cp, err := checkpoints.Load(context.Background(), "run_steer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cp.State.Messages) != 5 || cp.State.Messages[3].Role != "user" || cp.State.Messages[3].Content != "focus on failing tests" {
+		t.Fatalf("checkpoint did not retain steer message: %#v", cp.State.Messages)
+	}
+}
+
 func TestAgentWorkspaceWriteEmitsChangedEventAndDirtyPath(t *testing.T) {
 	ws, err := workspacelocal.New(workspacelocal.Config{Root: t.TempDir(), CreateParentDir: true})
 	if err != nil {
@@ -4134,6 +4183,22 @@ func (m cancelAfterToolCallModel) Stream(ctx context.Context, req model.Request)
 
 type recordingTool struct {
 	calls int
+}
+
+type steerGateTool struct {
+	release chan struct{}
+}
+
+func (t *steerGateTool) Name() string           { return "wait_for_steer" }
+func (t *steerGateTool) Description() string    { return "Wait for a steer" }
+func (t *steerGateTool) Schema() map[string]any { return nil }
+func (t *steerGateTool) Call(ctx context.Context, _ json.RawMessage, _ tool.Context) (tool.Result, error) {
+	select {
+	case <-t.release:
+		return tool.Result{Output: "released"}, nil
+	case <-ctx.Done():
+		return tool.Result{}, ctx.Err()
+	}
 }
 
 func (t *recordingTool) Name() string { return "record" }
