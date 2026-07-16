@@ -334,8 +334,11 @@ selector, routing, initialization, and rollout documentation; platform Go
 1.26 tests, race tests, and HTTP stream integration pass. The existing
 `agent-webclient` protocol consumer also passes 90 focused query/attach/submit,
 event-processing, and HITL tests and its production build. This remains
-narrower than deployed UI evidence. The opt-in Container Hub adapter test covers a
-disposable live Hub session, not a production deployment.
+narrower than deployed UI evidence. An isolated local Platform canary with
+`ZENFORGE_ENABLED=true` and a real compatible provider also emitted
+`request.query`, `run.start`, `content.*`, usage, and `run.complete` over SSE.
+The opt-in Container Hub adapter test covers a disposable live Hub session, not
+a production deployment.
 
 `BuildRun` maps `Session.HistoryMessages` into `Task.InitialMessages`, including
 OpenAI `tool_calls` and snake/camel tool-call IDs, and rejects malformed history

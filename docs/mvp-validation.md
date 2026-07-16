@@ -265,6 +265,13 @@ disposable live Hub session. Repository-local resolver, projector, and
 approval-correlation tests do not claim platform transport or
 pending-awaiting persistence. Both repositories are Go 1.26.x only.
 
+On 2026-07-16, an isolated local Platform runtime with
+`ZENFORGE_ENABLED=true` used a real compatible provider for a canary
+`POST /api/query`. The SSE stream contained `request.query`, `run.start`,
+`content.*`, usage, and `run.complete`; catalog, chat, and memory paths were
+temporary copies. This closes local API acceptance, but does not substitute for
+deployed UI or production Container Hub acceptance.
+
 Agent Skill progressive-disclosure coverage additionally proves bounded
 auxiliary resource discovery, deterministic indexing, immutable snapshot
 loading, digest/provenance identity, unknown-path denial, symlink rejection,
