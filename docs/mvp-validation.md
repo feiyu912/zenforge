@@ -274,6 +274,12 @@ streamed result, and returned to `Idle` through the SSE proxy. This closes
 local API and UI acceptance, but does not substitute for deployed UI or
 production Container Hub acceptance.
 
+On 2026-07-18, `TestAdapterRunsAgainstRealContainerHub` also ran against a
+local `agent-container-hub` process with its Docker-backed `shell`
+environment. It created a disposable session, executed
+`printf zenforge-containerhub-ok`, and closed the session successfully. This
+is local live-Hub evidence, not production deployment acceptance.
+
 Agent Skill progressive-disclosure coverage additionally proves bounded
 auxiliary resource discovery, deterministic indexing, immutable snapshot
 loading, digest/provenance identity, unknown-path denial, symlink rejection,

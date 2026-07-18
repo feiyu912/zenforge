@@ -339,7 +339,9 @@ narrower than deployed UI evidence. An isolated local Platform canary with
 `request.query`, `run.start`, `content.*`, usage, and `run.complete` over SSE.
 The local webclient selected the canary agent, rendered its streamed response,
 and returned to `Idle` through its SSE proxy. The opt-in Container Hub adapter
-test covers a disposable live Hub session, not a production deployment.
+also completed a real local Hub `shell` session with Docker-backed
+create/execute/close. Neither local smoke substitutes for a production
+deployment.
 
 `BuildRun` maps `Session.HistoryMessages` into `Task.InitialMessages`, including
 OpenAI `tool_calls` and snake/camel tool-call IDs, and rejects malformed history
