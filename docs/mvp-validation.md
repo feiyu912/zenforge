@@ -86,6 +86,7 @@ rg -n '"[^"[:space:]]*agent-platform[^"[:space:]]*"' --glob "*.go" .
 | Container Hub failures, deadlines, and cancellation map predictably | `sandbox/containerhub.TestClientMapsHTTPFailuresToSandboxCodes`, `sandbox/containerhub.TestClientMapsTransportCancellationAndTimeout` |
 | Container Hub response bodies are bounded | `sandbox/containerhub.TestClientRejectsOversizedSuccessResponses` |
 | Container Hub adapter opens, executes, and closes a real Hub session | `sandbox/containerhub.TestAdapterRunsAgainstRealContainerHub` when `ZENFORGE_CONTAINERHUB_INTEGRATION_URL` is set |
+| deployment canaries send the documented Platform SSE and Container Hub create/execute/stop protocol | `scripts.TestPlatformDeploymentCanaryRunsCatalogAndSSELifecycle`, `scripts.TestContainerHubDeploymentCanaryCreatesExecutesAndStopsSession` |
 | JSONL checkpoint saves recover pending transactions and reject unsafe run IDs | `checkpoint/jsonl.TestStoreLoadRecoversPendingCheckpointWithoutRetryingSave`, `checkpoint/jsonl.TestStoreRejectsUnsafeRunIDs` |
 | JSONL checkpoint/event writers serialize across processes | `checkpoint/jsonl.TestStoresAcrossProcessesSerializeCheckpointSequences`, `eventlog/jsonl.TestStoresAcrossProcessesSerializeAppends` |
 | repeated SQLite durable runs work | `TestSQLiteDurableRunSoak` |
