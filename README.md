@@ -337,8 +337,9 @@ event-processing, and HITL tests and its production build. This remains
 narrower than deployed UI evidence. An isolated local Platform canary with
 `ZENFORGE_ENABLED=true` and a real compatible provider also emitted
 `request.query`, `run.start`, `content.*`, usage, and `run.complete` over SSE.
-The opt-in Container Hub adapter test covers a disposable live Hub session, not
-a production deployment.
+The local webclient selected the canary agent, rendered its streamed response,
+and returned to `Idle` through its SSE proxy. The opt-in Container Hub adapter
+test covers a disposable live Hub session, not a production deployment.
 
 `BuildRun` maps `Session.HistoryMessages` into `Task.InitialMessages`, including
 OpenAI `tool_calls` and snake/camel tool-call IDs, and rejects malformed history
