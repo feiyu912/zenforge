@@ -50,6 +50,30 @@ and production build pass, but neither suite proves deployed UI behavior,
 complete Chat Storage V3.1, or production Container Hub acceptance. Use Go
 1.26.x only.
 
+## Deployment Acceptance
+
+Run these only against the intended deployed services. They do not contain a
+deployment address or credential, and the stateful modes create disposable
+work that can incur provider or sandbox cost.
+
+```bash
+export ZENFORGE_PLATFORM_BASE_URL=https://platform.example
+export ZENFORGE_PLATFORM_TOKEN=replace-with-deployment-token # optional
+export ZENFORGE_PLATFORM_AGENT_KEY=deployed-zenforge-agent
+./scripts/verify-platform-deployment.sh --run-query
+
+export ZENFORGE_CONTAINERHUB_URL=https://hub.example
+export ZENFORGE_CONTAINERHUB_TOKEN=replace-with-deployment-token # optional
+export ZENFORGE_CONTAINERHUB_ENVIRONMENT=shell
+./scripts/verify-containerhub-deployment.sh --run-session
+```
+
+The Platform command must report catalog success and the complete SSE
+lifecycle. Verify the deployed UI renders the resulting request/run/content
+events and returns to its terminal idle state. The Hub command must report a
+successful create/execute/cleanup cycle; it uses a fresh session and stops it
+before returning success.
+
 ## CLI Smoke
 
 ```bash
@@ -87,6 +111,9 @@ go run ./cmd/zenforge run --approve never "Run a useful shell check"
 - ZenMind platform fixtures retain source commit/file provenance and their
   golden tests pass.
 - `docs/release-notes-v0.1.md` summarizes highlights and limitations.
+- Deployment acceptance has been run against the intended Platform and
+  Container Hub services, including deployed UI rendering for the Platform
+  canary.
 - GitHub Actions CI is green.
 
 ## Tagging
