@@ -145,6 +145,29 @@ stream mid-token.
 
 ## Deployment Acceptance
 
+### Platform canary
+
+For a deployed `agent-platform` bridge, use the repository's executable
+`scripts/verify-platform-deployment.sh` rather than reconstructing a request
+by hand:
+
+```bash
+export ZENFORGE_PLATFORM_BASE_URL=https://platform.example
+export ZENFORGE_PLATFORM_TOKEN=replace-with-deployment-token # optional
+export ZENFORGE_PLATFORM_AGENT_KEY=deployed-zenforge-agent
+./scripts/verify-platform-deployment.sh --run-query
+```
+
+Without `--run-query`, the script only requests `/api/agents` and checks the
+Platform success envelope. `--run-query` creates one model-backed run with
+fresh `chatId`, `runId`, and `requestId`, then requires `request.query`,
+`run.start`, `content.delta`, `run.complete`, and `data: [DONE]` in the SSE
+stream. It does not create credentials, alter deployment configuration, submit
+approvals, or clean up the generated chat. Set
+`ZENFORGE_PLATFORM_TIMEOUT_SECONDS` when the deployment has a longer expected
+model latency, and `ZENFORGE_PLATFORM_CANARY_MESSAGE` only when the selected
+agent needs a different harmless prompt.
+
 Before serving production traffic, prove the following in the real deployment:
 
 - two workers racing to start one run produce exactly one owner;

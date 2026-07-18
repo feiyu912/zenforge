@@ -341,7 +341,10 @@ The local webclient selected the canary agent, rendered its streamed response,
 and returned to `Idle` through its SSE proxy. The opt-in Container Hub adapter
 also completed a real local Hub `shell` session with Docker-backed
 create/execute/close. Neither local smoke substitutes for a production
-deployment.
+deployment. For a deployed Platform endpoint, use the opt-in
+[`verify-platform-deployment.sh`](scripts/verify-platform-deployment.sh)
+canary: it checks the catalog by default and, with `--run-query`, checks a real
+ZenForge SSE lifecycle with a fresh chat/run/request identity.
 
 `BuildRun` maps `Session.HistoryMessages` into `Task.InitialMessages`, including
 OpenAI `tool_calls` and snake/camel tool-call IDs, and rejects malformed history

@@ -274,6 +274,11 @@ streamed result, and returned to `Idle` through the SSE proxy. This closes
 local API and UI acceptance, but does not substitute for deployed UI or
 production Container Hub acceptance.
 
+For the deployed Platform check, run `scripts/verify-platform-deployment.sh`
+with `--run-query`. It verifies the deployed catalog and a fresh `/api/query`
+SSE lifecycle without committing a deployment address or credential to this
+repository; deployed UI rendering remains a separate visual acceptance.
+
 On 2026-07-18, `TestAdapterRunsAgainstRealContainerHub` also ran against a
 local `agent-container-hub` process with its Docker-backed `shell`
 environment. It created a disposable session, executed
