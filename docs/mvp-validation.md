@@ -285,6 +285,10 @@ environment. It created a disposable session, executed
 `printf zenforge-containerhub-ok`, and closed the session successfully. This
 is local live-Hub evidence, not production deployment acceptance.
 
+For a deployed Hub check, run `scripts/verify-containerhub-deployment.sh`.
+Its default path verifies runtime information without a session; `--run-session`
+checks create, execute, and cleanup against the selected environment.
+
 Agent Skill progressive-disclosure coverage additionally proves bounded
 auxiliary resource discovery, deterministic indexing, immutable snapshot
 loading, digest/provenance identity, unknown-path denial, symlink rejection,

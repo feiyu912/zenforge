@@ -598,8 +598,10 @@ git diff --check
   multi-process writers.
 - Nested sub-agents are blocked by default.
 - Container Hub sandbox is optional and beta.
-- A production Container Hub deployment smoke test remains external acceptance;
-  the opt-in adapter integration test covers a disposable live Hub session.
+- A production Container Hub deployment smoke test remains external acceptance.
+  [`verify-containerhub-deployment.sh`](scripts/verify-containerhub-deployment.sh)
+  performs the deployed runtime check by default and can create, execute, and
+  clean up a disposable live Hub session with `--run-session`.
 
 ## Repository Layout
 

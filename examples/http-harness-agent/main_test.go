@@ -273,7 +273,9 @@ func freeLoopbackAddress(t *testing.T) string {
 
 func waitForHTTP(t *testing.T, client *http.Client, url string) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	// This example builds and starts a separate process. Allow it enough time
+	// to acquire CPU while the full repository test suite is building packages.
+	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		response, err := client.Get(url)
 		if err == nil {

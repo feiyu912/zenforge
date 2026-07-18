@@ -96,14 +96,19 @@ if err != nil {
 }
 ```
 
-For a real Hub acceptance run, set its endpoint and execute the opt-in adapter
-test. It creates and closes a disposable session in the selected environment:
+For a real Hub acceptance run, set its endpoint and use the executable
+deployment canary. It checks runtime information by default; `--run-session`
+creates, executes, and closes a disposable session in the selected environment:
 
 ```bash
-ZENFORGE_CONTAINERHUB_INTEGRATION_URL=http://127.0.0.1:11960 \
-ZENFORGE_CONTAINERHUB_ENVIRONMENT=shell \
-go test ./sandbox/containerhub -run '^TestAdapterRunsAgainstRealContainerHub$' -v
+export ZENFORGE_CONTAINERHUB_URL=https://hub.example
+export ZENFORGE_CONTAINERHUB_TOKEN=replace-with-deployment-token # optional
+export ZENFORGE_CONTAINERHUB_ENVIRONMENT=shell
+./scripts/verify-containerhub-deployment.sh --run-session
 ```
+
+`TestAdapterRunsAgainstRealContainerHub` remains the opt-in Go integration test
+for a loopback or otherwise disposable endpoint.
 
 Set `ZENFORGE_CONTAINERHUB_TOKEN` when the Hub requires bearer authentication.
 
