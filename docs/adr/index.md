@@ -53,3 +53,4 @@ later ADRs supersede earlier ones, never edit.
 | [0037](0037-goals-and-ralph.md) | Goals and Ralph: a persisted objective and fresh-agent rounds |
 | [0038](0038-seatbelt-sandbox.md) | macOS Seatbelt sandbox: a generated SBPL profile per session |
 | [0039](0039-bubblewrap-sandbox.md) | Linux bubblewrap sandbox: the policy is the argument list |
+| [0040](0040-landlock-planner.md) | Landlock: an ABI-aware planner plus a Linux-only applier |

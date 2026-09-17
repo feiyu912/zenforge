@@ -668,6 +668,18 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
   new files need a same-run observed absence (a read that reported
   not-found), so a blind create is refused; `workspace.ErrPathNotFound` now
   also satisfies `errors.Is(err, fs.ErrNotExist)`.
+- Landlock planner (codex `linux-sandbox/src/landlock.rs`):
+  `sandbox/landlock` derives the access mask from the probed ABI (`REFER`
+  from 2, `TRUNCATE` from 3, `IOCTL_DEV` from 5), grants whole-filesystem
+  read plus read-write on the declared roots (or only the declared read
+  roots when `FullDiskRead` is false), and handles every right the ABI
+  supports so an unhandled right can never be mistaken for a denied one. A
+  read-only carve-out inside a writable root is rejected with
+  `ErrUnsupportedCarveOut`, because Landlock unions matching rules and has
+  no deny rule — silently ignoring it would grant more than the policy
+  promised. The planner is tested on every platform; the applier
+  (`create_ruleset`/`add_rule`/`restrict_self` + `Exec`) is build-tagged
+  and cross-compiled for Linux.
 - Sandbox wiring: `--sandbox <none|seatbelt|bwrap|docker>` (or
   `shell.sandbox.backend`) confines the shell tool in the chosen backend and
   keeps the session open so later calls reuse the layout, with

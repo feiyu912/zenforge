@@ -177,6 +177,7 @@ nav:
       - 0037 Goals and Ralph: adr/0037-goals-and-ralph.md
       - 0038 Seatbelt sandbox: adr/0038-seatbelt-sandbox.md
       - 0039 Bubblewrap sandbox: adr/0039-bubblewrap-sandbox.md
+      - 0040 Landlock planner: adr/0040-landlock-planner.md
 
 extra:
   social:
