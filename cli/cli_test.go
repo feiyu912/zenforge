@@ -1537,3 +1537,235 @@ func containsString(values []string, want string) bool {
 	}
 	return false
 }
+
+// layeredModelServer answers every request with a fixed text reply and
+// records the model name the request asked for.
+func layeredModelServer(t *testing.T) (*httptest.Server, *[]string) {
+	t.Helper()
+	var models []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var request struct {
+			Model string `json:"model"`
+		}
+		_ = json.Unmarshal(body, &request)
+		models = append(models, request.Model)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w,
+			"data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"ok\"}}]}\n\n"+
+				"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"+
+				"data: [DONE]\n\n",
+		)
+	}))
+	t.Cleanup(server.Close)
+	return server, &models
+}
+
+func writeConfigFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+}
+
+func TestConfigLayersApplyInPrecedenceOrder(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test")
+	userDir := t.TempDir()
+	t.Setenv("ZENFORGE_CONFIG_DIR", userDir)
+	writeConfigFile(t, filepath.Join(userDir, "zenforge.json"),
+		`{"model":{"name":"user-model","provider":"openai"}}`)
+
+	workspace := t.TempDir()
+	writeConfigFile(t, filepath.Join(workspace, ".zenforge", "zenforge.json"),
+		`{"model":{"name":"project-model"}}`)
+
+	explicitDir := t.TempDir()
+	explicit := filepath.Join(explicitDir, "explicit.json")
+	writeConfigFile(t, explicit, `{"model":{"name":"file-model"},"profiles":{"ci":{"model":{"name":"profile-model"}}}}`)
+
+	server, models := layeredModelServer(t)
+	runCLI := func(args ...string) (int, string) {
+		var stdout, stderr bytes.Buffer
+		base := []string{
+			"exec",
+			"--base-url", server.URL,
+			"--checkpoint-dir", t.TempDir(),
+			"--planning", "disabled",
+			"--no-shell",
+			"--workspace", workspace,
+		}
+		code := Main(context.Background(), append(base, args...), IO{Stdout: &stdout, Stderr: &stderr})
+		return code, stderr.String()
+	}
+
+	// The explicit --config layer outranks project, user, and system.
+	if code, stderr := runCLI("--config", explicit, "go"); code != 0 {
+		t.Fatalf("exec with --config = %d; stderr=%q", code, stderr)
+	}
+	if got := (*models)[len(*models)-1]; got != "file-model" {
+		t.Fatalf("model = %q, want the explicit file layer to win", got)
+	}
+
+	// --profile applies directly above the layer that defines it.
+	if code, stderr := runCLI("--config", explicit, "--profile", "ci", "go"); code != 0 {
+		t.Fatalf("exec with --profile = %d; stderr=%q", code, stderr)
+	}
+	if got := (*models)[len(*models)-1]; got != "profile-model" {
+		t.Fatalf("model = %q, want the selected profile to win", got)
+	}
+
+	// Without --config the project layer outranks the user layer.
+	if code, stderr := runCLI("go"); code != 0 {
+		t.Fatalf("exec without --config = %d; stderr=%q", code, stderr)
+	}
+	if got := (*models)[len(*models)-1]; got != "project-model" {
+		t.Fatalf("model = %q, want the project layer above the user layer", got)
+	}
+
+	// --ignore-user-config drops the user layer, leaving the project.
+	if code, stderr := runCLI("--ignore-user-config", "go"); code != 0 {
+		t.Fatalf("exec with --ignore-user-config = %d; stderr=%q", code, stderr)
+	}
+	if got := (*models)[len(*models)-1]; got != "project-model" {
+		t.Fatalf("model = %q", got)
+	}
+}
+
+func TestConfigLayerFailures(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test")
+	userDir := t.TempDir()
+	t.Setenv("ZENFORGE_CONFIG_DIR", userDir)
+	writeConfigFile(t, filepath.Join(userDir, "zenforge.json"),
+		`{"model":{"name":"user-model","provider":"openai"},"profiles":{"ci":{"model":{"name":"ci-model"}}}}`)
+
+	dir := t.TempDir()
+	var stdout, stderr bytes.Buffer
+
+	// An unknown profile lists what is available instead of silently
+	// running with the base configuration.
+	if code := Main(context.Background(), []string{"exec", "--profile", "nope", "go"},
+		IO{Stdout: &stdout, Stderr: &stderr}); code != exitInvalidUsage {
+		t.Fatalf("unknown profile exit = %d, want %d; stderr=%q", code, exitInvalidUsage, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "available: ci") {
+		t.Fatalf("stderr = %q, want the available profiles", stderr.String())
+	}
+
+	// Strict mode names the offending layer for a typo.
+	stderr.Reset()
+	typo := filepath.Join(dir, "typo.json")
+	writeConfigFile(t, typo, `{"agent":{"maxStepz":3}}`)
+	if code := Main(context.Background(), []string{"exec", "--config", typo, "--strict-config", "go"},
+		IO{Stdout: &stdout, Stderr: &stderr}); code != exitInvalidUsage {
+		t.Fatalf("strict config exit = %d, want %d; stderr=%q", code, exitInvalidUsage, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), `unknown config field "maxStepz"`) ||
+		!strings.Contains(stderr.String(), "file (") {
+		t.Fatalf("stderr = %q, want the field and its layer", stderr.String())
+	}
+	// Without --strict-config the unknown key is ignored.
+	stderr.Reset()
+	server, _ := layeredModelServer(t)
+	if code := Main(context.Background(), []string{
+		"exec", "--config", typo, "--base-url", server.URL,
+		"--checkpoint-dir", t.TempDir(), "--planning", "disabled", "--no-shell", "go",
+	}, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("relaxed config exit = %d; stderr=%q", code, stderr.String())
+	}
+}
+
+func TestRequirementsLayerEnforcesAndRestrictsValues(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test")
+	server, _ := layeredModelServer(t)
+	dir := t.TempDir()
+
+	requirements := filepath.Join(dir, "requirements.json")
+	writeConfigFile(t, requirements, `{"allowed":{"model.provider":["openai"]},"enforce":{"shell.enabled":false}}`)
+	configPath := filepath.Join(dir, "config.json")
+	writeConfigFile(t, configPath, `{"model":{"provider":"openai","name":"config-model"}}`)
+
+	run := func(args ...string) (int, string) {
+		var stdout, stderr bytes.Buffer
+		base := []string{
+			"exec", "--base-url", server.URL, "--checkpoint-dir", t.TempDir(),
+			"--planning", "disabled", "--no-shell",
+		}
+		code := Main(context.Background(), append(base, args...), IO{Stdout: &stdout, Stderr: &stderr})
+		return code, stderr.String()
+	}
+
+	if code, stderr := run("--config", configPath, "--requirements", requirements, "go"); code != 0 {
+		t.Fatalf("allowed config rejected: %d; stderr=%q", code, stderr)
+	}
+
+	// A value outside the allowed set fails closed and names the source.
+	bad := filepath.Join(dir, "bad.json")
+	writeConfigFile(t, bad, `{"model":{"provider":"anthropic"}}`)
+	code, stderr := run("--config", bad, "--requirements", requirements, "go")
+	if code != exitInvalidUsage {
+		t.Fatalf("disallowed provider exit = %d, want %d; stderr=%q", code, exitInvalidUsage, stderr)
+	}
+	for _, want := range []string{"invalid value for model.provider", "not in the allowed set", "requirements ("} {
+		if !strings.Contains(stderr, want) {
+			t.Fatalf("stderr %q does not contain %q", stderr, want)
+		}
+	}
+
+	// A missing explicit requirements file is an error, not a silent skip.
+	if code, stderr := run("--requirements", filepath.Join(dir, "absent.json"), "go"); code != exitInvalidUsage {
+		t.Fatalf("missing requirements exit = %d, want %d; stderr=%q", code, exitInvalidUsage, stderr)
+	}
+}
+
+func TestConfigInlineAPIKeyReachesTheProvider(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "")
+	var authorization string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authorization = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w,
+			"data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"ok\"}}]}\n\n"+
+				"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"+
+				"data: [DONE]\n\n",
+		)
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	writeConfigFile(t, configPath, `{"model":{"provider":"openai","name":"gpt-inline","apiKey":"sk-inline-secret"}}`)
+
+	var stdout, stderr bytes.Buffer
+	code := Main(context.Background(), []string{
+		"exec", "--config", configPath, "--base-url", server.URL,
+		"--checkpoint-dir", t.TempDir(), "--planning", "disabled", "--no-shell", "go",
+	}, IO{Stdout: &stdout, Stderr: &stderr})
+	if code != 0 {
+		t.Fatalf("exec = %d; stderr=%q", code, stderr.String())
+	}
+	if authorization != "Bearer sk-inline-secret" {
+		t.Fatalf("Authorization = %q", authorization)
+	}
+	if strings.Contains(stderr.String(), "sk-inline-secret") || strings.Contains(stdout.String(), "sk-inline-secret") {
+		t.Fatalf("the inline secret leaked into CLI output")
+	}
+}
+
+func TestLayeredConfigDoesNotLeakSecretsInErrors(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test")
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	writeConfigFile(t, configPath, `{"model":{"apiKey":"sk-leaky","provider":"nope"}}`)
+	var stdout, stderr bytes.Buffer
+	code := Main(context.Background(), []string{"exec", "--config", configPath, "go"},
+		IO{Stdout: &stdout, Stderr: &stderr})
+	if code != exitInvalidUsage {
+		t.Fatalf("exit = %d, want %d", code, exitInvalidUsage)
+	}
+	if strings.Contains(stderr.String(), "sk-leaky") {
+		t.Fatalf("error output leaked the key: %q", stderr.String())
+	}
+}

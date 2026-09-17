@@ -19,6 +19,7 @@ import (
 	checkpointjsonl "github.com/feiyu912/zenforge/checkpoint/jsonl"
 	checkpointsqlite "github.com/feiyu912/zenforge/checkpoint/sqlite"
 	"github.com/feiyu912/zenforge/compaction"
+	"github.com/feiyu912/zenforge/configlayer"
 	"github.com/feiyu912/zenforge/eventlog"
 	eventlogjsonl "github.com/feiyu912/zenforge/eventlog/jsonl"
 	eventlogsqlite "github.com/feiyu912/zenforge/eventlog/sqlite"
@@ -498,6 +499,8 @@ type options struct {
 	outputSchema        map[string]any
 	outputSchemaName    string
 	outputSchemaStrict  *bool
+	apiKey              string
+	configSources       []configlayer.Source
 	provider            string
 	model               string
 	apiKeyEnv           string
@@ -571,6 +574,11 @@ func bindOptions(fs *flag.FlagSet, opts *options) {
 	fs.StringVar(&opts.provider, "provider", opts.provider, "model provider: openai|anthropic")
 	fs.StringVar(&opts.model, "model", opts.model, "OpenAI-compatible model name")
 	fs.StringVar(&opts.apiKeyEnv, "api-key-env", opts.apiKeyEnv, "environment variable containing API key")
+	fs.StringVar(&opts.apiKey, "api-key", opts.apiKey, "inline API key; prefer --api-key-env or model.apiKeyEnv")
+	_ = fs.String("profile", "", "configuration profile from the `profiles` object")
+	_ = fs.String("requirements", "", "managed requirements file: `allowed` sets reject values, `enforce` overwrites them")
+	_ = fs.Bool("strict-config", false, "reject config fields this version does not recognize")
+	_ = fs.Bool("ignore-user-config", false, "skip the system and user configuration layers")
 	fs.StringVar(&opts.baseURL, "base-url", opts.baseURL, "OpenAI-compatible base URL")
 	fs.IntVar(&opts.contextWindow, "context-window", opts.contextWindow, "model context window in tokens; enables pressure compaction when positive")
 	fs.StringVar(&opts.checkpointType, "checkpoint-type", opts.checkpointType, "event/checkpoint store type: jsonl|sqlite")
@@ -585,15 +593,12 @@ func bindOptions(fs *flag.FlagSet, opts *options) {
 
 func optionsFromArgs(args []string) (options, error) {
 	opts := defaultOptions()
-	configPath := configPathFromArgs(args)
-	if configPath == "" {
-		return opts, nil
-	}
-	config, err := loadConfigFile(configPath)
+	config, sources, err := layeredSources(args)
 	if err != nil {
 		return opts, invalidUsage(err)
 	}
-	opts.configPath = configPath
+	opts.configPath = configPathFromArgs(args)
+	opts.configSources = sources
 	if err := applyConfig(&opts, config); err != nil {
 		return opts, invalidUsage(err)
 	}
@@ -854,6 +859,7 @@ func buildModel(opts options) (model.Model, error) {
 		Protocol:  opts.provider,
 		Model:     opts.model,
 		BaseURL:   opts.baseURL,
+		APIKey:    opts.apiKey,
 		APIKeyEnv: opts.apiKeyEnv,
 	})
 }

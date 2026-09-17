@@ -8,7 +8,9 @@ import (
 	"time"
 
 	"github.com/feiyu912/zenforge"
+	"github.com/feiyu912/zenforge/configlayer"
 	"github.com/feiyu912/zenforge/modelretry"
+	"github.com/feiyu912/zenforge/redact"
 )
 
 type configFile struct {
@@ -21,8 +23,11 @@ type configFile struct {
 }
 
 type modelConfig struct {
-	Provider      string           `json:"provider,omitempty"`
-	Name          string           `json:"name,omitempty"`
+	Provider string `json:"provider,omitempty"`
+	Name     string `json:"name,omitempty"`
+	// APIKey is an inline secret. Every formatting path redacts it; use
+	// apiKeyEnv to keep the secret out of the config file entirely.
+	APIKey        redact.String    `json:"apiKey,omitempty"`
 	APIKeyEnv     string           `json:"apiKeyEnv,omitempty"`
 	BaseURL       string           `json:"baseUrl,omitempty"`
 	ContextWindow int              `json:"contextWindow,omitempty"`
@@ -169,6 +174,9 @@ func applyConfig(opts *options, config configFile) error {
 	}
 	if config.Model.Name != "" {
 		opts.model = config.Model.Name
+	}
+	if !config.Model.APIKey.IsZero() {
+		opts.apiKey = config.Model.APIKey.Reveal()
 	}
 	if config.Model.APIKeyEnv != "" {
 		opts.apiKeyEnv = config.Model.APIKeyEnv
@@ -404,4 +412,188 @@ func planningString(value any) (string, bool, error) {
 	default:
 		return "", false, fmt.Errorf("agent.planning must be a string or boolean")
 	}
+}
+
+// layeredSources loads the configuration stack and returns the merged
+// typed config plus the layer provenance for diagnostics.
+//
+// Precedence, lowest first: system, user, the selected profile
+// (immediately above the layer that defined it), project
+// (`.zenforge/zenforge.json` found by walking up from the workspace),
+// the explicit `--config` file, and finally command-line flags, which
+// are applied by the caller. A managed requirements document is applied
+// last: its `allowed` sets reject values and its `enforce` section
+// overwrites them.
+func layeredSources(args []string) (configFile, []configlayer.Source, error) {
+	var sources []configlayer.Source
+	stack := configlayer.New()
+	if !boolFlagFromArgs(args, "ignore-user-config") {
+		if err := stack.AddFile(configlayer.KindSystem, configlayer.SystemConfigPath(), false); err != nil {
+			return configFile{}, nil, err
+		}
+		userPath, err := configlayer.UserConfigPath()
+		if err != nil {
+			return configFile{}, nil, err
+		}
+		if err := stack.AddFile(configlayer.KindUser, userPath, false); err != nil {
+			return configFile{}, nil, err
+		}
+	}
+	workspace := stringFlagFromArgs(args, "workspace")
+	if workspace == "" {
+		workspace, _ = os.Getwd()
+	}
+	if err := stack.AddFile(configlayer.KindProject, configlayer.ProjectConfigPath(workspace), false); err != nil {
+		return configFile{}, nil, err
+	}
+	explicit := configPathFromArgs(args)
+	if explicit != "" {
+		if err := stack.AddFile(configlayer.KindFile, explicit, true); err != nil {
+			return configFile{}, nil, err
+		}
+	}
+
+	merged, provenance, err := stack.Merge()
+	if err != nil {
+		return configFile{}, nil, err
+	}
+	if profile := stringFlagFromArgs(args, "profile"); profile != "" {
+		if _, ok := configlayer.Get(merged, "profiles"); !ok {
+			return configFile{}, nil, fmt.Errorf("profile %q is not defined (no configuration layer declares profiles)", profile)
+		}
+		overrides, err := configlayer.ExtractProfile(merged, profile)
+		if err != nil {
+			return configFile{}, nil, err
+		}
+		defining := provenance["profiles"]
+		stack.Add(configlayer.Source{
+			Kind:    configlayer.KindProfile,
+			Path:    defining.Path,
+			Profile: profile,
+			Rank:    defining.Precedence() + 1,
+		}, overrides)
+		merged, provenance, err = stack.Merge()
+		if err != nil {
+			return configFile{}, nil, err
+		}
+	}
+	merged = configlayer.WithoutProfiles(merged)
+
+	requirements, err := loadRequirements(args)
+	if err != nil {
+		return configFile{}, nil, err
+	}
+	merged, err = requirements.Apply(merged)
+	if err != nil {
+		return configFile{}, nil, err
+	}
+
+	if boolFlagFromArgs(args, "strict-config") {
+		unknown, err := configlayer.UnknownFields(merged, &configFile{})
+		if err != nil {
+			return configFile{}, nil, fmt.Errorf("config is invalid: %w", err)
+		}
+		if len(unknown) > 0 {
+			return configFile{}, nil, fmt.Errorf(
+				"unknown config field %q (set by %s); remove it or drop --strict-config",
+				unknown[0], sourceForField(provenance, unknown[0]).Label(),
+			)
+		}
+	}
+
+	data, err := json.Marshal(merged)
+	if err != nil {
+		return configFile{}, nil, fmt.Errorf("encode merged config: %w", err)
+	}
+	var config configFile
+	if err := json.Unmarshal(data, &config); err != nil {
+		return configFile{}, nil, fmt.Errorf("merged config is invalid: %w", err)
+	}
+	for _, layer := range stack.Layers() {
+		if layer.Disabled != "" {
+			continue
+		}
+		sources = append(sources, layer.Source)
+	}
+	return config, sources, nil
+}
+
+// loadRequirements reads the managed requirements document. An explicit
+// --requirements path must exist; the host-wide default path is
+// optional.
+func loadRequirements(args []string) (*configlayer.Requirements, error) {
+	path := stringFlagFromArgs(args, "requirements")
+	required := path != ""
+	if !required {
+		path = configlayer.RequirementsPath()
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) && !required {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read requirements %s: %w", path, err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(data, &document); err != nil {
+		return nil, fmt.Errorf("parse requirements %s: %w", path, err)
+	}
+	requirements, err := configlayer.ParseRequirements(
+		fmt.Sprintf("requirements (%s)", path), document,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return requirements, nil
+}
+
+// sourceForField finds the layer that supplied a field, using the
+// deepest provenance entry that ends with the reported name.
+func sourceForField(provenance map[string]configlayer.Source, field string) configlayer.Source {
+	if source, ok := provenance[field]; ok {
+		return source
+	}
+	suffix := "." + field
+	best := configlayer.Source{}
+	for path, source := range provenance {
+		if strings.HasSuffix(path, suffix) {
+			if best.Kind == "" || source.Precedence() > best.Precedence() {
+				best = source
+			}
+		}
+	}
+	if best.Kind == "" {
+		return configlayer.Source{}
+	}
+	return best
+}
+
+// stringFlagFromArgs peeks a string flag before flag parsing, because
+// configuration must be loaded before flags are bound.
+func stringFlagFromArgs(args []string, name string) string {
+	for i, arg := range args {
+		if arg == "--"+name || arg == "-"+name {
+			if i+1 < len(args) {
+				return args[i+1]
+			}
+			return ""
+		}
+		if strings.HasPrefix(arg, "--"+name+"=") {
+			return strings.TrimPrefix(arg, "--"+name+"=")
+		}
+	}
+	return ""
+}
+
+// boolFlagFromArgs peeks a boolean flag before flag parsing.
+func boolFlagFromArgs(args []string, name string) bool {
+	for _, arg := range args {
+		if arg == "--"+name || arg == "-"+name {
+			return true
+		}
+		if strings.HasPrefix(arg, "--"+name+"=") {
+			return strings.TrimPrefix(arg, "--"+name+"=") != "false"
+		}
+	}
+	return false
 }

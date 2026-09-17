@@ -15,6 +15,21 @@ zenforge init
 zenforge version
 ```
 
+## Configuration layers
+
+Configuration is composed from ordered layers (system, user, profile, project,
+`--config`, flags) with managed requirements applied last; see
+[`config-reference.md`](config-reference.md) for the precedence table and the
+`allowed`/`enforce` document. The flags that shape layering are:
+
+- `--profile <name>` selects a `profiles.<name>` fragment (unknown names list
+  what is available).
+- `--requirements <file>` applies a managed constraints document; the
+  host-wide `/etc/zenforge/requirements.json` is used when present.
+- `--strict-config` rejects fields this version does not recognize, naming the
+  layer that set them.
+- `--ignore-user-config` skips the system and user layers.
+
 ## `zenforge exec`
 
 `exec` is the headless entry point for scripts and editors. It shares every

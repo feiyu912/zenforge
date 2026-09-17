@@ -730,6 +730,8 @@ zenforge/
   model/                # openai, anthropic adapters (usage + rate-limit normalization)
   tools/                # workspace (read/list/glob/grep/write/edit, turn-diff store), shell, todo, task, askuser, contextinfo, present, toolsearch
   sessiontitle/         # terminal-safe session-title derivation (DSH parity)
+  configlayer/          # layered config stack, profiles, managed requirements, strict fields
+  redact/               # secret string that redacts every formatting path
   prompt/               # ordered system-prompt sections + strict variable interpolation
   diff/                 # Myers unified diff for turn-diff tracking
   subagent/             # sub-agent runtime

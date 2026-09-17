@@ -221,6 +221,71 @@ MiniMax Anthropic-compatible config example:
 }
 ```
 
+## Layers, profiles, and requirements
+
+Configuration is composed from ordered layers. A leaf key set by a
+higher-precedence layer wins; objects merge key by key and every other
+value replaces the previous one.
+
+| Precedence | Layer | Path |
+| ---: | --- | --- |
+| 10 | system | `/etc/zenforge/zenforge.json` |
+| 20 | user | `$ZENFORGE_CONFIG_DIR/zenforge.json`, `$XDG_CONFIG_HOME/zenforge/zenforge.json`, or `~/.config/zenforge/zenforge.json` |
+| 21 | profile | overrides from `profiles.<name>` in whichever layer defines it, applied directly above that layer |
+| 25 | project | `.zenforge/zenforge.json` found by walking up from the workspace |
+| 27 | file | the path passed to `--config` (must exist) |
+| 30 | flags | command-line flags |
+
+`--ignore-user-config` skips the system and user layers. `--profile <name>`
+selects a profile; an unknown name is a usage error that lists the available
+profiles instead of silently running with the base configuration.
+`--strict-config` rejects any field this version does not recognize and names
+the layer that set it.
+
+A profile is an ordinary config fragment::
+
+```json
+{
+  "model": { "name": "gpt-5" },
+  "profiles": {
+    "ci": { "agent": { "maxSteps": 8 }, "approval": { "policy": "never" } }
+  }
+}
+```
+
+```bash
+zenforge exec --profile ci "Run the test suite"
+```
+
+### Managed requirements
+
+`--requirements <file>` (or the host-wide `/etc/zenforge/requirements.json`
+when present) applies a managed constraints document after every other layer:
+
+```json
+{
+  "allowed": { "model.provider": ["openai"], "approval.policy": ["never", "on_request"] },
+  "enforce": { "shell.enabled": false }
+}
+```
+
+- `allowed` rejects a value outside the permitted set. The error names the key,
+  the rejected value, the allowed set, and the requirements file.
+- `enforce` overwrites the value regardless of any other layer, so an
+  administrator can pin a policy that a user config cannot loosen.
+
+Because a dotted path is used, `shell.enabled` addresses
+`{"shell": {"enabled": ...}}`. An explicitly passed `--requirements` file must
+exist; the host-wide default path is optional.
+
+### Secrets
+
+`model.apiKey` holds an inline key. Every formatting path (`%v`, `%s`, `%#v`,
+slog) renders `<redacted>`, so an accidental log line cannot leak it; JSON
+serialization stays transparent so the config file round-trips unchanged. Use
+`model.apiKeyEnv` or `--api-key-env` to keep the secret out of the file
+entirely; `--api-key` exists for one-off invocations.
+
 ## Current Limitations
 
 The CLI accepts JSON config only. `zenforge init` creates `zenforge.json`;
