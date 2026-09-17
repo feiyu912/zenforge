@@ -186,6 +186,7 @@ nav:
       - 0046 Landlock file rules: adr/0046-landlock-file-rules.md
       - 0047 Durable memories: adr/0047-durable-memories.md
       - 0048 Guardian review: adr/0048-guardian-review.md
+      - 0049 Commands and schedules: adr/0049-commands-and-schedules.md
 
 extra:
   social:

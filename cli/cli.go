@@ -18,6 +18,7 @@ import (
 	"github.com/feiyu912/zenforge/checkpoint"
 	checkpointjsonl "github.com/feiyu912/zenforge/checkpoint/jsonl"
 	checkpointsqlite "github.com/feiyu912/zenforge/checkpoint/sqlite"
+	"github.com/feiyu912/zenforge/commands"
 	"github.com/feiyu912/zenforge/compaction"
 	"github.com/feiyu912/zenforge/configlayer"
 	"github.com/feiyu912/zenforge/eventlog"
@@ -33,6 +34,7 @@ import (
 	"github.com/feiyu912/zenforge/modelretry"
 	"github.com/feiyu912/zenforge/policy"
 	"github.com/feiyu912/zenforge/sandbox/linuxsandbox"
+	"github.com/feiyu912/zenforge/schedule"
 	"github.com/feiyu912/zenforge/tool"
 	"github.com/feiyu912/zenforge/tools/askuser"
 	"github.com/feiyu912/zenforge/tools/contextinfo"
@@ -41,7 +43,6 @@ import (
 	patchtools "github.com/feiyu912/zenforge/tools/patch"
 	plantools "github.com/feiyu912/zenforge/tools/plan"
 	"github.com/feiyu912/zenforge/tools/present"
-	shelltool "github.com/feiyu912/zenforge/tools/shell"
 	"github.com/feiyu912/zenforge/tools/toolsearch"
 	webtools "github.com/feiyu912/zenforge/tools/web"
 	workspacetools "github.com/feiyu912/zenforge/tools/workspace"
@@ -193,6 +194,29 @@ func exec(ctx context.Context, args []string, ioStreams IO) error {
 	input, err := execInput(fs.Args(), ioStreams.Stdin)
 	if err != nil {
 		return err
+	}
+	catalog, err := buildCatalog(opts)
+	if err != nil {
+		return err
+	}
+	if opts.listCommands {
+		listing := catalog.List()
+		if listing == "" {
+			listing = "no commands are defined"
+		}
+		ioStreams.Stdout.Write([]byte(listing + "\n"))
+		return nil
+	}
+	input, err = resolveCommand(catalog, input, opts)
+	if err != nil {
+		return invalidUsage(err)
+	}
+	if strings.TrimSpace(opts.scheduleSpec) != "" {
+		spec, err := schedule.Parse(opts.scheduleSpec)
+		if err != nil {
+			return invalidUsage(err)
+		}
+		return runSchedule(ctx, opts, spec, input, ioStreams)
 	}
 	agent, err := buildAgent(ctx, opts, ioStreams)
 	if err != nil {
@@ -655,6 +679,9 @@ type options struct {
 	memoryScope   string
 	memoryDistill bool
 	reviewMode    string
+	commandsDir   string
+	scheduleSpec  string
+	listCommands  bool
 
 	sandboxBackend      string
 	sandboxRoots        multiFlag
@@ -737,6 +764,9 @@ func bindOptions(fs *flag.FlagSet, opts *options) {
 	fs.StringVar(&opts.memoryScope, "memory-scope", opts.memoryScope, "scope new memories get: user (default) or project")
 	fs.BoolVar(&opts.memoryDistill, "memory-distill", opts.memoryDistill, "distil each finished run into new memories with one model call")
 	fs.StringVar(&opts.reviewMode, "review", opts.reviewMode, "independent review of each finished run: off, report, or enforce")
+	fs.StringVar(&opts.commandsDir, "commands", opts.commandsDir, "directory of command definitions (default <workspace>/"+commands.DefaultDir+")")
+	fs.BoolVar(&opts.listCommands, "list-commands", opts.listCommands, "list the available commands and exit")
+	fs.StringVar(&opts.scheduleSpec, "schedule", opts.scheduleSpec, "repeat the task on a schedule, e.g. 'every 1h' or '0 3 * * *'")
 	fs.IntVar(&opts.goalMaxRounds, "goal-max-rounds", opts.goalMaxRounds, "default round budget for goals created in this session")
 	fs.StringVar(&opts.sandboxBackend, "sandbox", opts.sandboxBackend, "confine the shell in a sandbox: none, seatbelt (macOS), bwrap (Linux), or docker")
 	fs.Var(&opts.sandboxRoots, "sandbox-root", "writable root inside the sandbox (repeatable; defaults to the working directory)")
@@ -842,36 +872,7 @@ func buildAgent(ctx context.Context, opts options, ioStreams IO) (*zenforge.Agen
 		tools = append(tools, webTools...)
 	}
 	if !opts.noShell {
-		sandboxBackend, err := buildSandbox(sandboxOptions{
-			Backend:        opts.sandboxBackend,
-			Roots:          []string(opts.sandboxRoots),
-			AllowNetwork:   opts.sandboxAllowNetwork,
-			Restricted:     opts.sandboxRestricted,
-			Image:          opts.sandboxImage,
-			Timeout:        opts.sandboxTimeout,
-			ProtectedNames: []string(opts.sandboxProtected),
-		}, opts.shellWorkingDir, opts.shellTimeout)
-		if err != nil {
-			return nil, err
-		}
-		shellConfig := shelltool.Config{Policy: policy.ShellPolicy{
-			WorkingDir:      opts.shellWorkingDir,
-			AllowCommands:   []string(opts.shellAllow),
-			RequireApproval: opts.approve != "never",
-			MaxTimeout:      opts.shellTimeout,
-			MaxOutputBytes:  opts.shellMaxOutputBytes,
-		}}
-		if sandboxBackend != nil {
-			// Confined mode: the shell runs through the sandbox and the
-			// session stays open so later calls reuse the same layout,
-			// which is what makes escalation (and its checkpointed state)
-			// meaningful.
-			shellConfig.Backend = shelltool.ShellBackendSandbox
-			shellConfig.Sandbox = sandboxBackend
-			shellConfig.EnvironmentID = opts.sandboxImage
-			shellConfig.KeepSessionOpen = true
-		}
-		shell, err := shelltool.New(shellConfig)
+		shell, err := buildShellTool(opts)
 		if err != nil {
 			return nil, err
 		}

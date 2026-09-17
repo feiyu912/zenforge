@@ -668,6 +668,14 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
   new files need a same-run observed absence (a read that reported
   not-found), so a blind create is refused; `workspace.ErrPathNotFound` now
   also satisfies `errors.Is(err, fs.ErrNotExist)`.
+- Canned commands and schedules (DSH commands/schedule): `--commands
+  <dir>` loads `*.md` prompt templates invoked as `/name args`
+  (subdirectories namespace them as `/git:commit`), with `$ARGUMENTS`,
+  `$1..$9`, workspace-confined `@file` includes, and `!`cmd`` inline shell
+  that requires an explicit `run-bash: true` and still goes through the
+  shell policy. `--schedule 'every 1h'` (or a cron subset) repeats a task
+  in-process, surviving a failed firing and stopping cleanly on
+  cancellation.
 - A guardian review (`--review report|enforce`): one adversarial model call
   over the finished run — task, answer, changed files, real unified diffs
   read back from the run's turn-diff events, commands, failures. Report mode

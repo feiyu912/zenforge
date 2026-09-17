@@ -65,6 +65,33 @@ opts in. Paths are canonicalized and passed as `-D` parameters, and off
 macOS — or when `sandbox-exec` is missing — opening a session fails with
 `sandbox_unavailable` rather than running unsandboxed.
 
+## Commands
+
+`--commands <dir>` (default `<workspace>/.zenforge/commands`) loads one
+command per markdown file; a subdirectory namespaces its commands, so
+`git/commit.md` is invoked as `/git:commit`. A definition may carry front
+matter with `description`, `argument-hint`, `model`, `agent`,
+`allowed-tools`, and `run-bash`. The body supports `$ARGUMENTS` and `$1..$9`
+for arguments, `@path` for workspace-confined file includes, and
+`` !`cmd` `` for inline shell. Authoring features are expanded before
+arguments are substituted, so an argument cannot introduce an include or a
+shell expression, and inline shell requires `run-bash: true` and runs
+through the same shell policy as every other command. A task that starts
+with `/name` is resolved against the catalog: an unknown name that looks
+like a command is an error listing the catalog, while paths and URLs pass
+through unchanged. `--list-commands` prints the catalog and exits.
+
+## Schedules
+
+`--schedule 'every 30m'` repeats the resolved task. Intervals may also be
+written as `@hourly`, `@daily`, `@weekly`, `@monthly`, or as a five-field
+cron expression (minute hour day-of-month month weekday) supporting `*`,
+numbers, ranges, lists, and steps such as `*/15`. The next firing is
+computed from the start of each run, so a slow run delays the following one
+instead of causing it to be missed; a failed firing is reported and the
+schedule continues; the loop ends when the process is interrupted. Schedules
+are in-process: a schedule does not survive a restart.
+
 ## Reviews
 
 `--review off|report|enforce` runs an independent, adversarial review of each
