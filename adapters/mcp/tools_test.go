@@ -115,6 +115,10 @@ type fakeClient struct {
 	definitions []ToolDefinition
 	result      CallResult
 	calledWith  string
+	// calledName records the tool name the wrapper used, which is how the
+	// namespacing test checks that the remote name is the one sent.
+	calledName string
+	calls      []string
 }
 
 func (f *fakeClient) ListTools(ctx context.Context) ([]ToolDefinition, error) {
@@ -123,6 +127,8 @@ func (f *fakeClient) ListTools(ctx context.Context) ([]ToolDefinition, error) {
 
 func (f *fakeClient) CallTool(ctx context.Context, name string, arguments json.RawMessage) (CallResult, error) {
 	f.calledWith = string(arguments)
+	f.calledName = name
+	f.calls = append(f.calls, name)
 	return f.result, ctx.Err()
 }
 

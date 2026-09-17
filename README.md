@@ -674,7 +674,9 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
   `tools/call` with the protocol's own error taxonomy (a tool failure is
   `isError`, a malformed request is a JSON-RPC error, a notification is
   never answered). The client's stdio framing was corrected to the spec's
-  newline-delimited JSON while still reading `Content-Length` headers.
+  newline-delimited JSON while still reading `Content-Length` headers, and
+  remote tools are namespaced `mcp__<server>__<tool>` with their read-only
+  hints read into the definition so an approval decision can use them.
 - Images and reasoning (codex `view_image`, reasoning replay): the
   `view_image` tool shows the model an image from the workspace — confined
   like any other file read, format verified from magic bytes, and carried on

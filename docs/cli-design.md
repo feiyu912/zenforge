@@ -17,6 +17,16 @@ is never answered. Stdio messages are newline-delimited JSON as the spec
 requires, and the reader also tolerates `Content-Length` headers so an
 out-of-spec peer is not turned into a connection failure.
 
+Remote tools are namespaced as `mcp__<server>__<tool>` so two servers can both
+offer `read_file` without one shadowing the other; the namespace is what the
+model and the policy layer see, while the call itself uses the server's own
+name. Names are sanitized onto the MCP tool-name grammar and kept inside the
+64-character limit (a name the client rejects takes the whole catalog with
+it), and a colliding pair is refused rather than silently hiding a tool. The
+server's `readOnlyHint` is read into the definition — an absent hint is never
+treated as read-only — and travels in the call metadata so an approval
+decision can use it.
+
 ## Images and reasoning
 
 The `view_image` tool shows the model an image from the workspace: the path
