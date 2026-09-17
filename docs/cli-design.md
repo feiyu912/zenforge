@@ -29,8 +29,15 @@ is added only when at least one configured tool defers its definition, and
 ## Sandboxes
 
 The shell tool can escalate to a registered `sandbox.Sandbox`. Besides the
-Docker and container-hub backends, `sandbox/seatbelt` runs commands under
-macOS Seatbelt: each session gets a generated SBPL profile that is closed by
+Docker and container-hub backends, `sandbox/bwrap` runs commands on Linux
+under bubblewrap: the policy is built as an argument list (read-only or
+tmpfs root, approved read roots, writable roots bound shallowest-first,
+read-only rebinds for `.git` and explicit paths, user/pid/ipc namespaces,
+all capabilities dropped, no network unless requested, fresh `/proc`), so
+it is auditable and testable off Linux. Missing writable roots are dropped
+and missing protected paths are skipped (bubblewrap cannot bind a missing
+target), and no seccomp filter is applied yet. `sandbox/seatbelt` runs
+commands under macOS Seatbelt: each session gets a generated SBPL profile that is closed by
 default, grants write access only to the declared roots (pinning `.git` and
 `.zenforge` read-only inside them), allows reads of the writable roots and
 their ancestor chain, and denies network access unless the configuration

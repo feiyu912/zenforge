@@ -668,6 +668,16 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
   new files need a same-run observed absence (a read that reported
   not-found), so a blind create is refused; `workspace.ErrPathNotFound` now
   also satisfies `errors.Is(err, fs.ErrNotExist)`.
+- Linux bubblewrap sandbox (codex `linux-sandbox/src/bwrap.rs`):
+  `sandbox/bwrap` expresses the sandbox as a bubblewrap argument list — a
+  read-only root (or a tmpfs root plus the approved read roots), the
+  declared writable roots bound shallowest-first, `.git`/`.zenforge` bound
+  read-only over themselves, user/pid/ipc namespaces, all capabilities
+  dropped, no network unless requested, and a fresh `/proc`. Because the
+  policy is data, it is auditable and testable off Linux; missing writable
+  roots are dropped and missing protected paths are skipped, since
+  bubblewrap cannot bind a target that does not exist. Seccomp filtering
+  (a separate helper process in the reference) is not applied yet.
 - macOS Seatbelt sandbox (codex `sandboxing/seatbelt.rs`): `sandbox/seatbelt`
   generates an SBPL profile per session — closed by default, the reference's
   base/platform/network policies ported verbatim, write access only to the
