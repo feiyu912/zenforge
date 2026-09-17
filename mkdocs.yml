@@ -166,6 +166,7 @@ nav:
       - 0026 User questions and tool-result guardrails: adr/0026-user-questions-and-tool-result-guardrails.md
       - 0027 Token meter search caps and turn diffs: adr/0027-token-meter-search-caps-turn-diffs.md
       - 0028 Deliverables titles and write observation: adr/0028-deliverables-titles-and-write-observation.md
+      - 0029 Ordered prompt sections: adr/0029-ordered-prompt-sections.md
 
 extra:
   social:

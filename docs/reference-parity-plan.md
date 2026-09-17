@@ -62,6 +62,7 @@ all of them; the right column points at concrete evidence.
 | A20 | `present` tool: declare existing files as final deliverables with durable delivery records | DSH tool-present (1–8 files per call, regular-file validation, `deliverables/presented` session event) | `tools/present` validates paths through the workspace (missing files and directories rejected with DSH-style recoverable errors); the agent emits `deliverables.presented` with the tool-call id and validated files only for successful calls; ADR 0028 |
 | A21 | Session titles: explicit override plus deterministic first-prompt fallback, sanitized and log-only | DSH session-title (OSC/CSI/ESC + control + bidi stripping, whitespace collapse, word and byte caps, never in the model surface) | `sessiontitle/` package mirrors `cleanTitleText`/`normalizeSessionTitle`/`fallbackSessionTitle`; `applyRunContext` freezes the title into run-state meta and the `session.title` event is published right after `run.started`; CLI `--title` and `agent.sessionTitle`; ADR 0028 |
 | A22 | Observation policy completed: present-version CAS for existing files and observed-absence for new files | DSH fs-observation-policy (unseen/absent/present-version CAS) | `SnapshotStore.RecordAbsentForRun`/`AbsentObservedForRun`; `workspace_read` records absence when a read reports not-found; `workspace_write` refuses blind creates (`ErrSnapshotRequired`) and `workspace.ErrPathNotFound` now wraps `fs.ErrNotExist`; ADR 0028 |
+| A23 | System-prompt registry: ordered named sections, runtime contexts, strict `{{variable}}` interpolation | DSH system-prompt (SECTION_ORDERS table, complete-section rule, `renderPrompt`/`renderContextSnapshot`, `GROUP_AT`/`VARIABLE_NAME` grammar) | `prompt/` registry with DSH order slots; persona prefix/suffix sections interpolate strictly while discovered content (environment, instructions, skills) stays verbatim; `validatePrompt` fails a run before any model request when a reference is malformed or unknown; ADR 0029 |
 
 ## Part B — Already had (parity confirmed by this review)
 
@@ -99,7 +100,6 @@ ZenForge architecture. None blocks the shipped surface above.
 | C8 | Goals (persisted same-session objective, continuation rounds, blocked-reason gating) and Ralph fresh-agent loops | DSH goals + ralph; codex memories/goals | `goals/` store keyed by session; a driver that re-invokes `Agent.Resume` per round with a bounded report; Ralph = fresh-run loop over a shared workspace | M |
 | C9 | Workflow engine (JS orchestration script, agent()/pipeline()/parallel() hooks, schema-validated results) | DSH workflow tool | `workflow/` with an embedded JS runtime (goja), hooks mapping to subagent tasks, JSON-schema-validated returns | L |
 | C10 | Session format v3 hardening: rollout ordinals, fork/revert, writer locks, migrations, projections | codex rollout (ordinals, fork/revert, writer lock); DSH session v3 (migrations, projections, FTS) | Add monotonic ordinals + a writer lock file to the JSONL event store; checkpoint fork = new run id seeded from a chosen seq | M |
-| C11 | System-prompt registry with ordered sections, runtime contexts, `{{vars}}` fail-loud substitution | DSH system-prompt registry | Replace ad-hoc `systemPrefixMessages` with a section registry; each section typed + ordered; missing variables fail the run | S |
 | C12 | Plan mode as a first-class collaboration mode (read-only tools until plan approval, exit_plan_mode) | codex plan mode/collaboration modes; DSH plan mode | `PlanningModePlanOnly` preset: file-policy denies writes; a `present_plan` tool routes through approval; on approval, switch mode durably | M |
 | C13 | Review/guardian modes (second-model adversarial review of diffs/decisions) | codex review/guardian; DSH adversarial verification | Post-run middleware spawning a review subagent over `workspace.changed` paths + the turn-diff stream (A18) | M |
 | C15 | Layered config: admin requirements layer, profiles, secret redaction, server-driven model metadata | codex requirements.toml > user > project, profiles, RedactedString | `configfile` precedence chain + `requirements` overrides that can only tighten; `RedactedString` type for keys in dumps | M |
@@ -118,7 +118,7 @@ env GOTOOLCHAIN=local go test ./...
 ```
 
 Key suites: `compaction/`, `modelretry/`, `instructions/`, `diff/`,
-`sessiontitle/`, `tools/askuser/`, `tools/contextinfo/` and
+`sessiontitle/`, `prompt/`, `tools/askuser/`, `tools/contextinfo/` and
 `tools/present/` (via root agent tests), `tools/shell/`,
 `tools/workspace/` (glob, grep caps, turn-diff store, observation
 policy), `tool/` (spill store + repeat guard), `approval/cli/`, and the

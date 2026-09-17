@@ -116,7 +116,18 @@ For SQLite local storage:
   - `model.retry.streamIdleTimeout`: Go duration a model stream may
     produce no events before it is treated as a retryable timeout
     (default `5m0s`; `0s` disables the watchdog).
-- `agent.instructions`: system instructions for the harness.
+- `agent.instructions`: system instructions for the harness. Inserted
+  verbatim (no variable interpolation), because discovered and configured
+  instruction text is not treated as a template.
+- `agent.personaPrefix` and `agent.personaSuffix`: deployment-authored
+  sections placed before and after first-party guidance. Both support strict
+  `{{variable}}` references; a malformed or unknown reference fails the run at
+  its next model boundary before any model request. An empty string omits the
+  section.
+- `agent.promptVariables`: values for `{{variable}}` references in the persona
+  sections. Built-ins `workspace` (working directory) and `platform`
+  (`GOOS/GOARCH`) are available unless overridden here. Variable names must
+  match `^[a-z][a-z0-9_]*$`.
 - `agent.sessionTitle`: explicit session title stored as log-only run
   metadata (the `session.title` event and `zenforge.session_title` run-state
   key). Control, escape, and bidirectional characters are stripped and the

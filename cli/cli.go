@@ -368,6 +368,9 @@ type options struct {
 	workspaceWriteRoots multiFlag
 	instructions        string
 	sessionTitle        string
+	personaPrefix       string
+	personaSuffix       string
+	promptVariables     map[string]string
 	provider            string
 	model               string
 	apiKeyEnv           string
@@ -610,6 +613,9 @@ func buildAgent(ctx context.Context, opts options, ioStreams IO) (*zenforge.Agen
 	return zenforge.New(zenforge.Config{
 		Model:              modelAdapter,
 		Instructions:       opts.instructions,
+		PersonaPrefix:      opts.personaPrefix,
+		PersonaSuffix:      opts.personaSuffix,
+		PromptVariables:    opts.promptVariables,
 		Tools:              tools,
 		ToolRuntime:        toolRuntime,
 		Approval:           approvalBroker,

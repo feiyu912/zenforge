@@ -664,6 +664,13 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
   new files need a same-run observed absence (a read that reported
   not-found), so a blind create is refused; `workspace.ErrPathNotFound` now
   also satisfies `errors.Is(err, fs.ErrNotExist)`.
+- Ordered prompt registry with strict variables (DSH system-prompt): the
+  system prefix is assembled from named sections at DSH order slots, with
+  `agent.personaPrefix`/`agent.personaSuffix` interpolating `{{variables}}`
+  (`workspace` and `platform` built in) around first-party guidance. A
+  malformed or unknown reference fails the run before any model request,
+  while discovered instruction files stay verbatim so a `{{` in an AGENTS.md
+  cannot break a run.
 
 Verification before each release:
 
@@ -708,6 +715,7 @@ zenforge/
   model/                # openai, anthropic adapters (usage + rate-limit normalization)
   tools/                # workspace (read/list/glob/grep/write/edit, turn-diff store), shell, todo, task, askuser, contextinfo, present
   sessiontitle/         # terminal-safe session-title derivation (DSH parity)
+  prompt/               # ordered system-prompt sections + strict variable interpolation
   diff/                 # Myers unified diff for turn-diff tracking
   subagent/             # sub-agent runtime
   planner/              # todo manager + plan/execute preset

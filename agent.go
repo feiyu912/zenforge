@@ -20,6 +20,7 @@ import (
 	"github.com/feiyu912/zenforge/model"
 	"github.com/feiyu912/zenforge/modelretry"
 	"github.com/feiyu912/zenforge/planner"
+	"github.com/feiyu912/zenforge/prompt"
 	"github.com/feiyu912/zenforge/sandbox"
 	"github.com/feiyu912/zenforge/sessiontitle"
 	"github.com/feiyu912/zenforge/subagent"
@@ -1115,6 +1116,9 @@ func (a *Agent) registerApprovalRequest(ctx context.Context, req approval.Reques
 }
 
 func (a *Agent) callModel(ctx context.Context, emit eventEmitter, state harness.RunState, choice model.ToolChoice) (harness.MessageState, model.Usage, error) {
+	if err := a.validatePrompt(state); err != nil {
+		return harness.MessageState{}, model.Usage{}, err
+	}
 	stream, err := a.config.Model.Stream(ctx, model.Request{
 		Messages:   a.modelMessages(state),
 		Tools:      a.toolSpecs(),
@@ -1178,6 +1182,9 @@ func (a *Agent) callModelDurable(
 	state *harness.RunState,
 	choice model.ToolChoice,
 ) (harness.MessageState, model.Usage, error) {
+	if err := a.validatePrompt(*state); err != nil {
+		return harness.MessageState{}, model.Usage{}, err
+	}
 	if err := a.maybeInjectEnvironmentUpdate(ctx, emit, checkpointState, state); err != nil {
 		return harness.MessageState{}, model.Usage{}, err
 	}
@@ -2774,6 +2781,83 @@ func sandboxStateCleared(metadata map[string]any) bool {
 	return cleared
 }
 
+// systemPrefixMessages renders the system-message prefix through the
+// ordered section registry. A registry failure is impossible once
+// validatePrompt succeeded at the same model-call boundary; advisory
+// callers degrade to an empty prefix instead of aborting.
+func (a *Agent) systemPrefixMessages(state harness.RunState) []model.Message {
+	messages, err := a.assembleSystemPrefix(state)
+	if err != nil {
+		return nil
+	}
+	return messages
+}
+
+// assembleSystemPrefix builds the ordered prompt sections (DSH
+// system-prompt parity): the deployment persona prefix, first-party
+// guidance, the durable environment snapshot, discovered project
+// instructions, the skill catalog, and the persona suffix. Persona
+// sections interpolate strict {{variables}}; content that zenforge
+// discovered from disk (environment, instructions, skills) is inserted
+// verbatim, because a user-authored file containing "{{" must not fail
+// a run. Variables always include `workspace` and `platform` unless the
+// host registered its own values.
+func (a *Agent) assembleSystemPrefix(state harness.RunState) ([]model.Message, error) {
+	registry := prompt.New()
+	hostVariables := map[string]string{
+		"workspace": a.config.WorkingDir,
+		"platform":  runtime.GOOS + "/" + runtime.GOARCH,
+	}
+	if hostVariables["workspace"] == "" {
+		hostVariables["workspace"] = "."
+	}
+	for name, value := range a.config.PromptVariables {
+		hostVariables[name] = value
+	}
+	if err := registry.Variables(hostVariables); err != nil {
+		return nil, err
+	}
+	sections := []prompt.Section{
+		{Name: "deployment:persona-prefix", Order: prompt.OrderPersonaPrefix, Text: a.config.PersonaPrefix, Interpolate: true},
+		{Name: "deployment:instructions", Order: prompt.OrderDeploymentPolicy, Text: a.config.Instructions},
+		{Name: "runtime:environment", Order: prompt.OrderRuntimeContext, Text: stringMeta(state.Meta, metaEnvironmentContext)},
+		{Name: "runtime:project-instructions", Order: prompt.OrderProjectRules, Text: stringMeta(state.Meta, metaProjectInstructions)},
+		{Name: "runtime:skill-catalog", Order: prompt.OrderSkillCatalog, Text: a.skillCatalogPrompt},
+		{Name: "deployment:persona-suffix", Order: prompt.OrderPersonaSuffix, Text: a.config.PersonaSuffix, Interpolate: true},
+	}
+	for _, section := range sections {
+		if err := registry.AddSection(section); err != nil {
+			return nil, err
+		}
+	}
+	rendered, err := registry.Sections()
+	if err != nil {
+		return nil, err
+	}
+	// One system message per section preserves the durable message
+	// surface and resume replay order; DSH joins them into one prompt
+	// because its message history is not the checkpoint format.
+	messages := make([]model.Message, 0, len(rendered))
+	for _, section := range rendered {
+		messages = append(messages, model.Message{Role: "system", Content: section.Text})
+	}
+	return messages, nil
+}
+
+// validatePrompt fails fast when the prompt cannot be assembled, before
+// any compaction work or model request happens for this boundary.
+func (a *Agent) validatePrompt(state harness.RunState) error {
+	if _, err := a.assembleSystemPrefix(state); err != nil {
+		return fmt.Errorf("assemble system prompt: %w", err)
+	}
+	return nil
+}
+
+func stringMeta(meta map[string]any, key string) string {
+	value, _ := meta[key].(string)
+	return value
+}
+
 func (a *Agent) modelMessages(state harness.RunState) []model.Message {
 	messages := a.systemPrefixMessages(state)
 	for _, message := range state.Messages {
@@ -2793,23 +2877,6 @@ func (a *Agent) modelMessages(state harness.RunState) []model.Message {
 // project instructions, and the skill catalog. The environment and project
 // blocks come from run-state Meta so a resumed run replays the exact
 // context it started with.
-func (a *Agent) systemPrefixMessages(state harness.RunState) []model.Message {
-	messages := make([]model.Message, 0, 4)
-	if a.config.Instructions != "" {
-		messages = append(messages, model.Message{Role: "system", Content: a.config.Instructions})
-	}
-	if environment, ok := state.Meta[metaEnvironmentContext].(string); ok && environment != "" {
-		messages = append(messages, model.Message{Role: "system", Content: environment})
-	}
-	if project, ok := state.Meta[metaProjectInstructions].(string); ok && project != "" {
-		messages = append(messages, model.Message{Role: "system", Content: project})
-	}
-	if a.skillCatalogPrompt != "" {
-		messages = append(messages, model.Message{Role: "system", Content: a.skillCatalogPrompt})
-	}
-	return messages
-}
-
 // applyRunContext discovers the per-run prompt context for a fresh run:
 // the environment-context snapshot and hierarchical project instructions.
 // Both are frozen into durable run-state Meta before the first checkpoint

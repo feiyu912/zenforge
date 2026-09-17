@@ -42,3 +42,4 @@ later ADRs supersede earlier ones, never edit.
 | [0026](0026-user-questions-and-tool-result-guardrails.md) | User questions and tool-result guardrails |
 | [0027](0027-token-meter-search-caps-turn-diffs.md) | Token meter, search discovery caps, and turn diffs |
 | [0028](0028-deliverables-titles-and-write-observation.md) | Deliverables, session titles, and the write observation policy |
+| [0029](0029-ordered-prompt-sections.md) | Ordered prompt sections with strict variable interpolation |

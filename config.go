@@ -89,7 +89,18 @@ type Config struct {
 	// words of the task input become a deterministic fallback title.
 	// Titles are log-only metadata (session.title event + run-state
 	// meta), never part of the model surface.
-	SessionTitle       string
+	SessionTitle string
+	// PersonaPrefix and PersonaSuffix wrap the system prompt around
+	// first-party guidance (DSH persona slots). Both support strict
+	// {{variable}} references resolved from PromptVariables plus the
+	// built-in `workspace` and `platform` values; an unknown or
+	// malformed reference fails the run at its next model boundary.
+	PersonaPrefix string
+	PersonaSuffix string
+	// PromptVariables are host-supplied interpolation values for
+	// PersonaPrefix and PersonaSuffix. Host values override the
+	// built-in `workspace` and `platform`.
+	PromptVariables    map[string]string
 	WorkingDir         string
 	EnvironmentContext bool
 	MaxSteps           int

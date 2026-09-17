@@ -1038,8 +1038,16 @@ func TestOptionsFromConfig(t *testing.T) {
 	configPath := filepath.Join(dir, "zenforge.json")
 	enabled := false
 	config := configFile{
-		Model:     modelConfig{Provider: "anthropic", Name: "claude-test", APIKeyEnv: "TEST_KEY", BaseURL: "https://api.example"},
-		Agent:     agentConfig{Instructions: "Be exact.", MaxSteps: 3, Planning: false},
+		Model: modelConfig{Provider: "anthropic", Name: "claude-test", APIKeyEnv: "TEST_KEY", BaseURL: "https://api.example"},
+		Agent: agentConfig{
+			Instructions:    "Be exact.",
+			SessionTitle:    "Config title",
+			PersonaPrefix:   "Persona {{team}}",
+			PersonaSuffix:   "End",
+			PromptVariables: map[string]string{"team": "safety"},
+			MaxSteps:        3,
+			Planning:        false,
+		},
 		Workspace: workspaceConfig{Root: "repo", MaxReadBytes: 7, MaxWriteBytes: 8, ReadRoots: []string{"docs"}, WriteRoots: []string{"generated"}},
 		Shell: shellConfig{
 			Enabled:        &enabled,
@@ -1067,6 +1075,10 @@ func TestOptionsFromConfig(t *testing.T) {
 	}
 	if opts.instructions != "Be exact." || opts.maxSteps != 3 || opts.planning != "disabled" {
 		t.Fatalf("agent opts not applied: %#v", opts)
+	}
+	if opts.sessionTitle != "Config title" || opts.personaPrefix != "Persona {{team}}" ||
+		opts.personaSuffix != "End" || opts.promptVariables["team"] != "safety" {
+		t.Fatalf("prompt opts not applied: %#v", opts)
 	}
 	if opts.workspace != "repo" || opts.shellWorkingDir != "shell-repo" || opts.workspaceMaxRead != 7 || opts.workspaceMaxWrite != 8 || !opts.noShell || opts.shellTimeout.String() != "5s" || opts.shellMaxOutputBytes != 99 {
 		t.Fatalf("tool opts not applied: %#v", opts)

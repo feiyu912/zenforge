@@ -46,6 +46,9 @@ type retryFileConfig struct {
 type agentConfig struct {
 	Instructions        string                         `json:"instructions,omitempty"`
 	SessionTitle        string                         `json:"sessionTitle,omitempty"`
+	PersonaPrefix       string                         `json:"personaPrefix,omitempty"`
+	PersonaSuffix       string                         `json:"personaSuffix,omitempty"`
+	PromptVariables     map[string]string              `json:"promptVariables,omitempty"`
 	MaxSteps            int                            `json:"maxSteps,omitempty"`
 	Mode                string                         `json:"mode,omitempty"`
 	Planning            any                            `json:"planning,omitempty"`
@@ -187,6 +190,15 @@ func applyConfig(opts *options, config configFile) error {
 	}
 	if config.Agent.SessionTitle != "" {
 		opts.sessionTitle = config.Agent.SessionTitle
+	}
+	if config.Agent.PersonaPrefix != "" {
+		opts.personaPrefix = config.Agent.PersonaPrefix
+	}
+	if config.Agent.PersonaSuffix != "" {
+		opts.personaSuffix = config.Agent.PersonaSuffix
+	}
+	if len(config.Agent.PromptVariables) > 0 {
+		opts.promptVariables = config.Agent.PromptVariables
 	}
 	if config.Agent.MaxSteps < 0 {
 		return fmt.Errorf("agent.maxSteps must be non-negative")
