@@ -668,6 +668,13 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
   new files need a same-run observed absence (a read that reported
   not-found), so a blind create is refused; `workspace.ErrPathNotFound` now
   also satisfies `errors.Is(err, fs.ErrNotExist)`.
+- MCP server mode (DSH MCP server): `adapters/mcp/server.go` exposes
+  ZenForge as an MCP server over any reader/writer pair — `initialize` with
+  version negotiation, `tools/list` with read-only annotations, and
+  `tools/call` with the protocol's own error taxonomy (a tool failure is
+  `isError`, a malformed request is a JSON-RPC error, a notification is
+  never answered). The client's stdio framing was corrected to the spec's
+  newline-delimited JSON while still reading `Content-Length` headers.
 - Images and reasoning (codex `view_image`, reasoning replay): the
   `view_image` tool shows the model an image from the workspace — confined
   like any other file read, format verified from magic bytes, and carried on

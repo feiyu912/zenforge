@@ -2,6 +2,21 @@
 
 ZenForge CLI is the fastest way to feel the runtime.
 
+## MCP server mode
+
+`adapters/mcp` speaks MCP in both directions. The client consumes external
+servers; the server exposes ZenForge itself, so another agent can call a run
+as a tool. The protocol layer is transport agnostic: `Server.Serve` drives any
+reader/writer pair and `Server.Handle` processes one raw message. Version
+negotiation echoes a protocol version the server knows and falls back to the
+newest it implements otherwise, rather than refusing a handshake from a newer
+client. A handler error comes back as a result with `isError` set, while a
+malformed request, unknown method, or unknown tool is a JSON-RPC error with
+the code the MCP schema names; a request without an id is a notification and
+is never answered. Stdio messages are newline-delimited JSON as the spec
+requires, and the reader also tolerates `Content-Length` headers so an
+out-of-spec peer is not turned into a connection failure.
+
 ## Images and reasoning
 
 The `view_image` tool shows the model an image from the workspace: the path

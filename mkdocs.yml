@@ -190,6 +190,7 @@ nav:
       - 0050 Images and reasoning replay: adr/0050-images-and-reasoning-replay.md
       - 0051 Seccomp errno and unix socketpairs: adr/0051-seccomp-errno-and-unix-socketpairs.md
       - 0052 Pinning Linux-only ABI numbers: adr/0052-pinning-linux-only-abi-numbers.md
+      - 0053 MCP server mode and stdio framing: adr/0053-mcp-server-mode-and-stdio-framing.md
 
 extra:
   social:

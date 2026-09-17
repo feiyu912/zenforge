@@ -240,13 +240,19 @@ type outputInput struct {
 }
 
 type outputOutput struct {
-	JobID         string `json:"jobId"`
-	Status        string `json:"status"`
-	Output        string `json:"output"`
-	Error         string `json:"error,omitempty"`
-	ExitCode      *int   `json:"exitCode,omitempty"`
-	Stdout        string `json:"stdout,omitempty"`
-	Stderr        string `json:"stderr,omitempty"`
+	JobID    string `json:"jobId"`
+	Status   string `json:"status"`
+	Output   string `json:"output"`
+	Error    string `json:"error,omitempty"`
+	ExitCode *int   `json:"exitCode,omitempty"`
+	// Stdout and Stderr are always present, even when empty. This is the
+	// polling result: a poll that found no new bytes must answer "zero bytes"
+	// rather than omit the field, or a client accumulating output cannot tell
+	// an empty poll from a response shape it does not understand. The
+	// offsets already say where the next read starts, and the status says
+	// whether the job is still running.
+	Stdout        string `json:"stdout"`
+	Stderr        string `json:"stderr"`
 	StdoutOffset  int64  `json:"stdoutOffset"`
 	StderrOffset  int64  `json:"stderrOffset"`
 	StdoutTotal   int64  `json:"stdoutTotal"`

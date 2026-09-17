@@ -78,7 +78,7 @@ func TestExecCommandForegroundReturnsOutputAndExitCode(t *testing.T) {
 	if out["jobId"] == "" || out["status"] != "exited" {
 		t.Fatalf("output = %#v", out)
 	}
-	if !strings.Contains(out["stdout"].(string), "hello") || !strings.Contains(out["stderr"].(string), "oops") {
+	if !strings.Contains(stringField(out, "stdout"), "hello") || !strings.Contains(stringField(out, "stderr"), "oops") {
 		t.Fatalf("output = %#v", out)
 	}
 	if code, ok := out["exitCode"].(float64); !ok || int(code) != 4 {
@@ -101,23 +101,87 @@ func TestExecCommandBackgroundThenPoll(t *testing.T) {
 	}
 	// Poll with the returned offsets until the job finishes; the bytes seen
 	// across polls must be exactly the command's output.
+	//
+	// The reads go through helpers rather than direct assertions: a poll that
+	// finds no new bytes is a normal answer while the job is still starting,
+	// and asserting its fields blindly turns that ordinary case into a panic
+	// on a slower machine.
 	seen := ""
 	stdoutOffset := int64(0)
-	deadline := time.Now().Add(5 * time.Second)
+	finished := false
+	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		out := h.call(t, OutputName, outputInput{
 			JobID:        id,
 			StdoutOffset: stdoutOffset,
 			WaitMs:       500,
 		})
-		seen += out["stdout"].(string)
-		stdoutOffset = int64(out["stdoutOffset"].(float64))
-		if out["running"] == false {
+		if _, ok := out["stdout"].(string); !ok {
+			t.Fatalf("a poll omitted its stdout field: %#v", out)
+		}
+		seen += stringField(out, "stdout")
+		stdoutOffset = intField(out, "stdoutOffset")
+		if running, ok := out["running"].(bool); ok && !running {
+			finished = true
 			break
 		}
 	}
+	if !finished {
+		t.Fatalf("the job did not finish within the deadline; seen = %q", seen)
+	}
 	if seen != "first\nsecond\n" {
 		t.Fatalf("seen = %q", seen)
+	}
+}
+
+// TestJobOutputKeepsStdoutPresentWhenThereIsNoNewOutput pins the invariant the
+// polling loop above depends on: a poll that found nothing new still answers
+// with an empty string and the same offset, so a client can tell "no output
+// yet" from a response it cannot parse.
+func TestJobOutputKeepsStdoutPresentWhenThereIsNoNewOutput(t *testing.T) {
+	h := newHarness(t)
+	started := h.call(t, ExecName, execInput{Command: "echo first; sleep 2", Background: true})
+	id, _ := started["jobId"].(string)
+	if id == "" {
+		t.Fatalf("output = %#v", started)
+	}
+	// Read everything available so the next poll has nothing new to return.
+	first := h.call(t, OutputName, outputInput{JobID: id, WaitMs: 500})
+	if !strings.Contains(stringField(first, "stdout"), "first") {
+		t.Fatalf("the first read did not see the output: %#v", first)
+	}
+	offset := intField(first, "stdoutOffset")
+	second := h.call(t, OutputName, outputInput{JobID: id, StdoutOffset: offset, WaitMs: 50})
+	stdout, ok := second["stdout"].(string)
+	if !ok {
+		t.Fatalf("a poll with no new output omitted stdout: %#v", second)
+	}
+	if stdout != "" {
+		t.Fatalf("a poll after the offset returned %q", stdout)
+	}
+	if got := intField(second, "stdoutOffset"); got != offset {
+		t.Fatalf("stdoutOffset = %d, want the offset that was passed (%d)", got, offset)
+	}
+	if running, ok := second["running"].(bool); !ok || !running {
+		t.Fatalf("the job should still be running: %#v", second)
+	}
+}
+
+// stringField reads a structured string field, tolerating its absence.
+func stringField(output map[string]any, key string) string {
+	value, _ := output[key].(string)
+	return value
+}
+
+// intField reads a structured numeric field, tolerating its absence.
+func intField(output map[string]any, key string) int64 {
+	switch value := output[key].(type) {
+	case float64:
+		return int64(value)
+	case int64:
+		return value
+	default:
+		return 0
 	}
 }
 
@@ -132,8 +196,8 @@ func TestWriteStdinFeedsAJob(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		out := h.call(t, OutputName, outputInput{JobID: id, WaitMs: 500})
-		if !out["running"].(bool) {
-			if !strings.Contains(out["stdout"].(string), "got:hello") {
+		if running, ok := out["running"].(bool); ok && !running {
+			if !strings.Contains(stringField(out, "stdout"), "got:hello") {
 				t.Fatalf("stdout = %q", out["stdout"])
 			}
 			return

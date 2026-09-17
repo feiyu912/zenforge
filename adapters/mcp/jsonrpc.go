@@ -207,7 +207,28 @@ func (e *rpcError) Error() string {
 	return fmt.Sprintf("mcp jsonrpc error %d: %s", e.Code, e.Message)
 }
 
+// writeFrame writes one message the way the MCP stdio transport defines it:
+// a single line of JSON terminated by a newline. The message must not contain
+// a newline of its own, which json.Marshal guarantees.
+//
+// Content-Length framing is not what the spec says for stdio, and a peer that
+// follows the spec (every real MCP server) reads a line, so writing headers
+// would make this client speak a private dialect. readFrame still accepts
+// both forms, because a peer that uses headers is not worth failing on.
 func writeFrame(w io.Writer, value any) error {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	if _, err := w.Write(append(data, '\n')); err != nil {
+		return err
+	}
+	return nil
+}
+
+// writeContentLengthFrame writes the header form. It exists for the tests
+// that pin the reader's tolerance for a header-framed peer.
+func writeContentLengthFrame(w io.Writer, value any) error {
 	data, err := json.Marshal(value)
 	if err != nil {
 		return err
@@ -220,8 +241,15 @@ func writeFrame(w io.Writer, value any) error {
 	return err
 }
 
+// readFrame reads one message, accepting both the spec's newline-delimited
+// form and the Content-Length header form.
+//
+// A line that starts a JSON object is the message. Anything else is the start
+// of a header block, which is read up to its blank line and followed by
+// exactly Content-Length bytes. Blank lines between messages are skipped,
+// which keeps a log that interleaves stray newlines readable rather than
+// fatal.
 func readFrame(r *bufio.Reader, value any) error {
-	var contentLength int
 	for {
 		line, err := r.ReadString('\n')
 		if err != nil {
@@ -229,27 +257,56 @@ func readFrame(r *bufio.Reader, value any) error {
 		}
 		line = strings.TrimRight(line, "\r\n")
 		if line == "" {
-			break
+			continue
+		}
+		if strings.HasPrefix(strings.TrimSpace(line), "{") {
+			return decodeMessage([]byte(line), value)
+		}
+		contentLength, err := readHeaders(r, line)
+		if err != nil {
+			return err
+		}
+		if contentLength <= 0 {
+			return fmt.Errorf("missing MCP content length")
+		}
+		data := make([]byte, contentLength)
+		if _, err := io.ReadFull(r, data); err != nil {
+			return err
+		}
+		return decodeMessage(data, value)
+	}
+}
+
+// readHeaders consumes a Content-Length header block whose first line has
+// already been read.
+func readHeaders(r *bufio.Reader, first string) (int, error) {
+	var contentLength int
+	for line := first; ; {
+		if line == "" {
+			return contentLength, nil
 		}
 		name, rawValue, ok := strings.Cut(line, ":")
 		if !ok {
-			return fmt.Errorf("invalid MCP header %q", line)
+			return 0, fmt.Errorf("invalid MCP header %q", line)
 		}
 		if strings.EqualFold(strings.TrimSpace(name), "Content-Length") {
 			n, err := strconv.Atoi(strings.TrimSpace(rawValue))
 			if err != nil {
-				return fmt.Errorf("invalid MCP content length %q: %w", rawValue, err)
+				return 0, fmt.Errorf("invalid MCP content length %q: %w", rawValue, err)
 			}
 			contentLength = n
 		}
+		next, err := r.ReadString('\n')
+		if err != nil {
+			return 0, err
+		}
+		line = strings.TrimRight(next, "\r\n")
 	}
-	if contentLength <= 0 {
-		return fmt.Errorf("missing MCP content length")
-	}
-	data := make([]byte, contentLength)
-	if _, err := io.ReadFull(r, data); err != nil {
-		return err
-	}
+}
+
+// decodeMessage decodes one JSON message, keeping numbers exact so an id or a
+// structured payload is not rounded on the way through.
+func decodeMessage(data []byte, value any) error {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
 	return decoder.Decode(value)

@@ -66,3 +66,4 @@ later ADRs supersede earlier ones, never edit.
 | [0050](0050-images-and-reasoning-replay.md) | Images as message content, and reasoning replayed with its signature |
 | [0051](0051-seccomp-errno-and-unix-socketpairs.md) | A denied syscall returns EPERM, and AF_UNIX means socketpair |
 | [0052](0052-pinning-linux-only-abi-numbers.md) | Linux-only ABI numbers are pinned on every platform |
+| [0053](0053-mcp-server-mode-and-stdio-framing.md) | An MCP server, and the stdio framing the spec actually uses |
