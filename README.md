@@ -435,6 +435,7 @@ Adapters and integrations:
 
 Design and operation:
 - [Architecture](docs/architecture.md) · [Harness State Machine](docs/harness-state-machine.md) · [Failure Modes](docs/failure-modes.md) · [Security Guide](docs/security-guide.md) · [Limitations](docs/limitations.md)
+- [Compaction Guide](docs/compaction-guide.md) · [Reference Parity Plan](docs/reference-parity-plan.md)
 - [MVP Validation](docs/mvp-validation.md) · [v0.1 Release Notes](docs/release-notes-v0.1.md) · [Release Checklist](docs/release-checklist.md)
 - [Vision](docs/vision.md) · [Product Roadmap](docs/product-roadmap.md)
 
@@ -575,6 +576,56 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
   approval events correlate to awaiting wire with snapshot recovery; and
   `ProjectStrict` enforces one run with v2/v1 state compatibility. This remains
   adapter behavior, not complete Chat Storage or platform wiring.
+- `compaction/`: context management modeled on DSH and codex — pressure
+  compaction at step boundaries (summarize shadowed history with a retain
+  budget, with optional library-level tool-result pruning via `Policy.Prune`),
+  forced overflow recovery on provider context-window errors, durable
+  `CompactionRecord` history, and `compaction.*` events. Opt-in via
+  `Config.Compaction`; the CLI always wires it, so overflow recovery works
+  without a configured window and pressure compaction activates once
+  `--context-window` / `model.contextWindow` is set.
+- `modelretry/`: fail-closed model-failure taxonomy (rate limit, server,
+  timeout, transport, empty response, context window, auth, quota), exponential
+  backoff with jitter, capped Retry-After support parsed from OpenAI/Anthropic
+  response headers, superseded model-attempt chaining, durable `model.retry`
+  events emitted before the wait, and a stream idle watchdog
+  (`Config.StreamIdleTimeout`, typed `model.StreamIdleError`).
+- `workspace_edit`: exact-match file editing with `replaceAll`, recoverable
+  ambiguous/not-found errors, and the same read-before-write snapshot CAS as
+  `workspace_write`, routed through the file-policy approval path.
+- `instructions/`: hierarchical AGENTS.md-compatible project instruction
+  discovery (root markers, root-to-cwd chain, override files, compat
+  filenames, user-global scope, 32 KiB merged budget dropping broader scopes
+  first) plus a frozen `<environment_context>` block; both persist into
+  `RunState.Meta` at run start so resume replays the exact prompting, with an
+  `instructions.loaded` event.
+- Shell sandbox escalation ladder: model-visible `sandboxPermissions` +
+  `justification` arguments exist only while the shell is confined, never
+  bypass the command allowlist, always require a fresh approval under a
+  namespaced fingerprint, and run the approved call locally once; a
+  conservative denial classifier (`policy.IsLikelySandboxDenied`) appends
+  DSH-grammar sandbox-denial markers and the escalation hint to confined
+  failures.
+- `tools/askuser`: durable ask-user tool with stable per-question ids echoed
+  in answers, structured options, multi-select, and a root-agent-only rule;
+  answers ride `approval.Decision.Payload` through the new
+  `approval.MetadataDecisionPayload` key, and the interactive CLI broker
+  renders questions and collects answers.
+- `tool.Spill` middleware: oversized tool output moves to a private 0700/0600
+  on-disk store with a UTF-8-safe head/tail preview and pointer inline
+  (50 KiB default cap), fail-soft to bounded truncation when the store is
+  unavailable; the CLI spills under `<workspace>/.zenforge/spill` so the read
+  tool can reach full outputs.
+- `tool.RepeatGuard` middleware: consecutive identical tool calls per run are
+  counted at thresholds 3/5/8 and answered with escalating in-result
+  reminders; the real result is never blocked or replaced.
+- CLI composes `RecoverPanic → RepeatGuard → Spill` as its tool runtime and
+  gained `--context-window`, `model.retry.*`, `agent.environmentContext`, and
+  `agent.projectInstructions` configuration, all covered by the generated
+  config reference.
+- `docs/reference-parity-plan.md` maps every observed DSH/codex capability to
+  its ZenForge status (shipped, already had, roadmap) with adoption sketches,
+  backed by ADRs 0023–0026 and the Compaction Guide.
 
 Verification before each release:
 
@@ -615,14 +666,17 @@ zenforge/
   checkpoint/           # memory, jsonl, sqlite stores
   eventlog/             # bus + fanout + memory, jsonl, sqlite stores
   cli/                  # command helpers and approval UX
-  tool/                 # core tool interfaces, middleware, budgets, redaction
+  tool/                 # core tool interfaces, middleware, budgets, redaction, spill, repeat guard
   model/                # openai, anthropic adapters
-  tools/                # workspace, shell, todo, task
+  tools/                # workspace, shell, todo, task, askuser
   subagent/             # sub-agent runtime
   planner/              # todo manager + plan/execute preset
-  sandbox/              # interface, fake/containerhub backends + State helpers
+  sandbox/              # interface, docker/fake/containerhub backends + State helpers
   workspace/            # workspace interface + local impl
-  policy/               # shell/workspace policy types
+  policy/               # shell/workspace policy types, sandbox-denial classifier
+  compaction/           # context pressure + overflow compaction
+  modelretry/           # model-failure taxonomy, backoff, Retry-After
+  instructions/         # hierarchical AGENTS.md-style instruction discovery
   trace/                # sinks: memory, stdout, jsonl, otel
   recorder/             # event recorder helpers
   server/               # harnesshttp + sse helpers

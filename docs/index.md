@@ -189,6 +189,9 @@ interface that you can satisfy, wrap, mock, or leave nil.
    covers the import paths, lifecycle, and edge cases.
 5. **Looking for code to copy?** → [Examples](examples.md) ships four
    reference agents you can read top-to-bottom.
+6. **Running long, tool-heavy conversations?** → [Compaction
+   guide](compaction-guide.md) covers retry, pressure compaction, and
+   overflow recovery.
 
 Source on [GitHub](https://github.com/feiyu912/zenforge) ·
 [godoc on pkg.go.dev](https://pkg.go.dev/github.com/feiyu912/zenforge) ·

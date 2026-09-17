@@ -119,11 +119,13 @@ nav:
       - Trace runs: trace-guide.md
       - Spawn subagents: subagent-guide.md
       - Plan then execute: planner-guide.md
+      - Manage long contexts: compaction-guide.md
       - Harden against attacks: security-guide.md
       - Deploy the HTTP runtime: deployment-guide.md
   - Reference:
       - API: api.md
       - Configuration: config-reference.md
+      - Reference parity plan: reference-parity-plan.md
       - Release Notes: release-notes-v0.1.md
       - Limitations: limitations.md
   - Integrations:
@@ -158,6 +160,10 @@ nav:
       - 0020 No silent sandbox fallback: adr/0020-no-silent-sandbox-fallback.md
       - 0021 MVP does not require subagents or sandbox: adr/0021-mvp-does-not-require-subagents-or-sandbox.md
       - 0022 Agent Skills use progressive disclosure: adr/0022-agent-skills-progressive-disclosure.md
+      - 0023 Context management retry and compaction: adr/0023-context-management-retry-and-compaction.md
+      - 0024 Hierarchical instructions and environment context: adr/0024-hierarchical-instructions-and-environment-context.md
+      - 0025 Sandbox escalation ladder: adr/0025-sandbox-escalation-ladder.md
+      - 0026 User questions and tool-result guardrails: adr/0026-user-questions-and-tool-result-guardrails.md
 
 extra:
   social:

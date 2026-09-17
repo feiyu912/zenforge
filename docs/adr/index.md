@@ -35,3 +35,8 @@ later ADRs supersede earlier ones, never edit.
 | [0019](0019-sandbox-is-adapter.md) | Sandbox is adapter |
 | [0020](0020-no-silent-sandbox-fallback.md) | No silent sandbox fallback |
 | [0021](0021-mvp-does-not-require-subagents-or-sandbox.md) | MVP does not require subagents or sandbox |
+| [0022](0022-agent-skills-progressive-disclosure.md) | Agent Skills use progressive disclosure |
+| [0023](0023-context-management-retry-and-compaction.md) | Context management: classified retry and durable compaction |
+| [0024](0024-hierarchical-instructions-and-environment-context.md) | Hierarchical instructions and environment context |
+| [0025](0025-sandbox-escalation-ladder.md) | Sandbox escalation ladder |
+| [0026](0026-user-questions-and-tool-result-guardrails.md) | User questions and tool-result guardrails |

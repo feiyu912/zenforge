@@ -19,12 +19,24 @@ zenforge runs --config zenforge.json
   "model": {
     "provider": "openai",
     "name": "gpt-4.1",
-    "apiKeyEnv": "OPENAI_API_KEY"
+    "apiKeyEnv": "OPENAI_API_KEY",
+    "retry": {
+      "enabled": true,
+      "maxRetries": 5,
+      "initialDelay": "500ms",
+      "maxDelay": "10s",
+      "jitter": 0.1,
+      "streamIdleTimeout": "5m0s"
+    }
   },
   "agent": {
     "instructions": "You are a senior Go backend engineer. Be concise, careful, and use tools when helpful.",
     "maxSteps": 20,
-    "mode": "plan_execute"
+    "mode": "plan_execute",
+    "environmentContext": true,
+    "projectInstructions": {
+      "enabled": true
+    }
   },
   "workspace": {
     "root": ".",
@@ -75,6 +87,35 @@ For SQLite local storage:
   for Anthropic-compatible Messages endpoints. Vendor-specific endpoints such
   as MiniMax should use the matching protocol adapter plus `model.baseUrl`
   instead of a new provider name.
+- `model.contextWindow`: model context window in tokens. When positive, the
+  agent compacts conversation history before a model call whose estimated
+  request exceeds 80% of the window: oversized tool results are pruned
+  first, then shadowed older messages are summarized by the configured
+  provider and replaced with a summary message. Even when unset, a provider
+  context-overflow rejection triggers the same compaction and one retried
+  attempt. Also settable with the `--context-window` flag. See the
+  [Compaction Guide](compaction-guide.md) for the full lifecycle and event
+  vocabulary.
+- `model.retry`: model-call retry policy. Retryable failures are rate
+  limits (HTTP 429), server errors (5xx), request/stream timeouts,
+  transport errors, stalled streams, and empty responses; authentication,
+  quota, and malformed-request failures are never retried, and context
+  overflow is owned by compaction instead. Backoff is
+  `initialDelay * 2^n` capped at `maxDelay` with symmetric `jitter`; a
+  provider `Retry-After` header raises the delay (capped internally). Each
+  retry supersedes the failed durable attempt and emits a `model.retry`
+  event before the wait, so resumed runs keep the full provenance.
+  - `model.retry.enabled`: `false` disables retries entirely.
+  - `model.retry.maxRetries`: retries after the first attempt; `0` also
+    disables retries. Negative values make config loading fail.
+  - `model.retry.initialDelay`: Go duration before the first retry
+    (default `500ms`).
+  - `model.retry.maxDelay`: backoff cap (default `10s`).
+  - `model.retry.jitter`: symmetric jitter fraction in `[0, 1)`
+    (default `0.1`).
+  - `model.retry.streamIdleTimeout`: Go duration a model stream may
+    produce no events before it is treated as a retryable timeout
+    (default `5m0s`; `0s` disables the watchdog).
 - `agent.instructions`: system instructions for the harness.
 - `agent.maxSteps`: maximum model/tool loop steps. Negative values make config
   loading fail.
@@ -84,6 +125,32 @@ For SQLite local storage:
 - `agent.planning`: `disabled`, `enabled`, `plan_execute`, or boolean. Invalid
   values make config loading fail instead of disabling planning silently. This
   remains a compatibility field; do not set it together with `agent.mode`.
+- `agent.environmentContext`: inject an `<environment_context>` system
+  snapshot (working directory, platform, date, execution mode, tool list) at
+  run start. The snapshot is frozen into durable run state, so a resumed run
+  replays the exact context it started with.
+- `agent.projectInstructions`: hierarchical instruction-file discovery,
+  modeled on codex AGENTS.md and DSH agent-instructions. From the nearest
+  project root marker down to the workspace root, the first existing
+  candidate file per directory is merged broad-to-specific under a byte
+  budget and injected as a system message; more specific files take
+  precedence, and broader files are dropped whole before specific ones are
+  truncated.
+  - `agent.projectInstructions.enabled`: `false` disables discovery.
+  - `agent.projectInstructions.fileNames`: per-directory candidates in
+    precedence order (default `AGENTS.override.md`, `AGENTS.md`,
+    `ZENFORGE.md`, `CLAUDE.md`). Entries must be plain filenames; path
+    syntax makes config loading fail before any filesystem probe.
+  - `agent.projectInstructions.rootMarkers`: names marking the project root
+    (default `.git`). An empty list disables traversal above the workspace
+    root.
+  - `agent.projectInstructions.globalPath`: optional user-level instruction
+    file, the broadest scope. Defaults to `~/.zenforge/AGENTS.md`; a
+    missing global file is skipped silently.
+  - `agent.projectInstructions.maxBytes`: merged budget in bytes
+    (default 32768).
+  Discovery warnings (skipped, truncated, or omitted files) are reported in
+  the `instructions.loaded` event payload.
 - `workspace.root`: local workspace root.
 - CLI workspace writes require a fresh `workspace_read` snapshot before
   overwriting an existing file.

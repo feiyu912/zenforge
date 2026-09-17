@@ -53,7 +53,9 @@ Recommended reading order:
 49. [tool-authoring-guide.md](./tool-authoring-guide.md)
 50. [agent-skills-spec.md](./agent-skills-spec.md)
 51. [deployment-guide.md](./deployment-guide.md)
-52. [api-sketch.md](./api-sketch.md) historical draft
+52. [compaction-guide.md](./compaction-guide.md)
+53. [reference-parity-plan.md](./reference-parity-plan.md)
+54. [api-sketch.md](./api-sketch.md) historical draft
 
 ## Architecture Decision Records
 
@@ -79,6 +81,10 @@ Recommended reading order:
 - [ADR 0020: No Silent Sandbox Fallback](./adr/0020-no-silent-sandbox-fallback.md)
 - [ADR 0021: MVP Does Not Require Sub-Agents Or Sandbox](./adr/0021-mvp-does-not-require-subagents-or-sandbox.md)
 - [ADR 0022: Agent Skills Use Progressive Disclosure](./adr/0022-agent-skills-progressive-disclosure.md)
+- [ADR 0023: Context Management Uses Classified Retry And Durable Compaction](./adr/0023-context-management-retry-and-compaction.md)
+- [ADR 0024: Project Instructions And Environment Context Are Frozen In Run State](./adr/0024-hierarchical-instructions-and-environment-context.md)
+- [ADR 0025: Sandbox Escalation Is A One-Shot Approval-Gated Ladder](./adr/0025-sandbox-escalation-ladder.md)
+- [ADR 0026: User Questions And Tool-Result Guardrails Ride Existing Runtime Channels](./adr/0026-user-questions-and-tool-result-guardrails.md)
 
 ## Current Direction
 
