@@ -43,7 +43,11 @@ const (
 	EventTurnDiff           EventType = "turn.diff"
 	EventSessionTitle       EventType = "session.title"
 	// EventHookCompleted reports a lifecycle hook's aggregate decision.
-	EventHookCompleted  EventType = "hook.completed"
+	EventHookCompleted EventType = "hook.completed"
+	// EventMemoryInjected reports the memory summary frozen into a run.
+	EventMemoryInjected EventType = "memory.injected"
+	// EventMemoryRecorded reports what run-end distillation stored.
+	EventMemoryRecorded EventType = "memory.recorded"
 	EventDeliverables   EventType = "deliverables.presented"
 	EventToolsActivated EventType = "tools.activated"
 	// EventPlanApproved marks the end of plan mode: the plan was approved

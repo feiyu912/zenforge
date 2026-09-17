@@ -27,7 +27,11 @@ const (
 	OrderSkillCatalog     = 850
 	// OrderHookContext is context injected by lifecycle hooks; it sits with
 	// the project rules and above the skill catalog.
-	OrderHookContext      = 820
+	OrderHookContext = 820
+	// OrderMemoryContext is the consolidated memory summary. It sits just
+	// below hook context: both are runtime-injected instructions, and a hook
+	// is about this run while a memory is about earlier ones.
+	OrderMemoryContext    = 815
 	OrderFileReference    = 900
 	OrderToolBase         = 1000
 	OrderToolsSDK         = 5000

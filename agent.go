@@ -19,6 +19,7 @@ import (
 	"github.com/feiyu912/zenforge/harness"
 	"github.com/feiyu912/zenforge/hooks"
 	"github.com/feiyu912/zenforge/instructions"
+	"github.com/feiyu912/zenforge/memory"
 	"github.com/feiyu912/zenforge/model"
 	"github.com/feiyu912/zenforge/modelretry"
 	"github.com/feiyu912/zenforge/planner"
@@ -43,6 +44,7 @@ import (
 const (
 	metaEnvironmentContext  = "zenforge.environment_context"
 	metaHookContext         = "zenforge.hook_context"
+	metaMemoryContext       = "zenforge.memory_context"
 	metaProjectInstructions = "zenforge.project_instructions"
 	// metaEnvironmentUpdate records the latest injected environment
 	// render so diff-only re-injection survives resume.
@@ -788,7 +790,12 @@ func (a *Agent) runHarnessLoop(ctx context.Context, out chan<- Event, state harn
 		state.Meta[tool.PlanModeMetadataKey] = tool.PlanModePlanning
 	}
 	var captured loopTerminal
+	// The digest is what run-end memory distillation sees; it is built from
+	// the events the runner emits, so memory costs no extra bookkeeping in
+	// the loop itself.
+	digest := memory.NewRunDigest(state.Input)
 	emit := eventEmitter(func(eventType EventType, data map[string]any) error {
+		digest.Observe(string(eventType), data)
 		if internal {
 			switch eventType {
 			case EventRunStarted, EventRunResumed:
@@ -895,7 +902,11 @@ func (a *Agent) runHarnessLoop(ctx context.Context, out chan<- Event, state harn
 	if result.Type == "" && captured.Type != "" {
 		return captured
 	}
-	return loopTerminal{Type: EventType(result.Type), Data: cloneMap(result.Data), Err: result.Err}
+	terminal := loopTerminal{Type: EventType(result.Type), Data: cloneMap(result.Data), Err: result.Err}
+	if terminal.Type == EventRunDone {
+		a.recordMemory(context.WithoutCancel(ctx), emit, runID, digest, stringValue(terminal.Data["output"]))
+	}
+	return terminal
 }
 
 func (a *Agent) latestCheckpointSeq(ctx context.Context, runID string) (int64, error) {
@@ -2887,6 +2898,7 @@ func (a *Agent) assembleSystemPrefix(state harness.RunState) ([]model.Message, e
 		{Name: "runtime:environment", Order: prompt.OrderRuntimeContext, Text: stringMeta(state.Meta, metaEnvironmentContext)},
 		{Name: "runtime:project-instructions", Order: prompt.OrderProjectRules, Text: stringMeta(state.Meta, metaProjectInstructions)},
 		{Name: "runtime:hook-context", Order: prompt.OrderHookContext, Text: stringMeta(state.Meta, metaHookContext)},
+		{Name: "runtime:memory", Order: prompt.OrderMemoryContext, Text: stringMeta(state.Meta, metaMemoryContext)},
 		{Name: "runtime:skill-catalog", Order: prompt.OrderSkillCatalog, Text: a.skillCatalogPrompt},
 		{Name: "deployment:persona-suffix", Order: prompt.OrderPersonaSuffix, Text: a.config.PersonaSuffix, Interpolate: true},
 	}
@@ -2995,6 +3007,11 @@ func (a *Agent) applyRunContext(ctx context.Context, emit eventEmitter, state *h
 			return err
 		}
 	}
+	if a.config.Memory != nil {
+		if err := a.injectMemoryContext(ctx, emit, state); err != nil {
+			return err
+		}
+	}
 	if !a.config.EnvironmentContext && a.config.InstructionFiles == nil {
 		return nil
 	}
@@ -3085,6 +3102,48 @@ func (a *Agent) applyLifecycleHooks(ctx context.Context, emit eventEmitter, stat
 		state.Meta[metaHookContext] = strings.Join(contexts, "\n\n")
 	}
 	return nil
+}
+
+// injectMemoryContext freezes the memory summary into durable Meta at run
+// start, like every other piece of prompt context: a resume replays the
+// memories the run began with rather than picking up memories written since.
+func (a *Agent) injectMemoryContext(ctx context.Context, emit eventEmitter, state *harness.RunState) error {
+	summary, err := a.config.Memory.Summary(ctx)
+	if err != nil {
+		return fmt.Errorf("load memories: %w", err)
+	}
+	trimmed := strings.TrimSpace(summary)
+	if trimmed == "" {
+		return nil
+	}
+	state.Meta[metaMemoryContext] = trimmed
+	return emit(EventMemoryInjected, map[string]any{
+		"bytes":   len(trimmed),
+		"project": a.config.WorkingDir,
+		"entries": strings.Count(trimmed, "\n- "),
+	})
+}
+
+// recordMemory distils a finished run into durable memories. Memory is an
+// optimization, so a failure is reported as an event and never fails the
+// run: a user whose distiller model is misconfigured still gets their
+// answer.
+func (a *Agent) recordMemory(ctx context.Context, emit eventEmitter, runID string, digest *memory.RunDigest, output string) {
+	if a.config.Memory == nil || digest == nil {
+		return
+	}
+	if output != "" {
+		digest.Output = output
+	}
+	summary := digest.Summary(runID, a.config.WorkingDir)
+	added, err := a.config.Memory.Record(ctx, summary)
+	payload := map[string]any{"runId": runID, "entries": added}
+	if err != nil {
+		payload["error"] = err.Error()
+	}
+	// The run is over, so the caller's context may already be cancelled;
+	// the event must still reach the log.
+	_ = emit(EventMemoryRecorded, payload)
 }
 
 // stopHookDecision is the runner's Stop hook: it may allow the run to

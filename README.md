@@ -668,6 +668,14 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
   new files need a same-run observed absence (a read that reported
   not-found), so a blind create is refused; `workspace.ErrPathNotFound` now
   also satisfies `errors.Is(err, fs.ErrNotExist)`.
+- Durable cross-run memories (codex memories): `--memory <dir>` keeps
+  learnings in two readable markdown files — an append-only raw file and a
+  consolidated summary that is injected as instructions (frozen into run
+  state, so a resume replays it). Identity is the content, so the same
+  learning found twice is one memory; `--memory-scope` decides visibility.
+  `--memory-distill` adds one model call per finished run to extract new
+  learnings; a distillation failure is reported and never costs the user
+  their answer.
 - Lifecycle hooks in the agent loop: `SessionStart` and `UserPromptSubmit`
   run once at run start, their context is frozen into durable run state and
   rendered as a system section, and a block fails the run before any model

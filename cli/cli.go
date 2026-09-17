@@ -650,7 +650,10 @@ type options struct {
 	jobsEnabled   bool
 	goalMaxRounds int
 
-	hooksPath string
+	hooksPath     string
+	memoryDir     string
+	memoryScope   string
+	memoryDistill bool
 
 	sandboxBackend      string
 	sandboxRoots        multiFlag
@@ -729,6 +732,9 @@ func bindOptions(fs *flag.FlagSet, opts *options) {
 	fs.BoolVar(&opts.goalsEnabled, "goals", opts.goalsEnabled, "register the create_goal/get_goal/update_goal tools")
 	fs.BoolVar(&opts.jobsEnabled, "jobs", opts.jobsEnabled, "register the exec_command/write_stdin/job_output/job_list/job_kill tools")
 	fs.StringVar(&opts.hooksPath, "hooks", opts.hooksPath, "JSON file of lifecycle hooks (PreToolUse/PostToolUse run around every tool call)")
+	fs.StringVar(&opts.memoryDir, "memory", opts.memoryDir, "directory of durable cross-run memories (injected as instructions)")
+	fs.StringVar(&opts.memoryScope, "memory-scope", opts.memoryScope, "scope new memories get: user (default) or project")
+	fs.BoolVar(&opts.memoryDistill, "memory-distill", opts.memoryDistill, "distil each finished run into new memories with one model call")
 	fs.IntVar(&opts.goalMaxRounds, "goal-max-rounds", opts.goalMaxRounds, "default round budget for goals created in this session")
 	fs.StringVar(&opts.sandboxBackend, "sandbox", opts.sandboxBackend, "confine the shell in a sandbox: none, seatbelt (macOS), bwrap (Linux), or docker")
 	fs.Var(&opts.sandboxRoots, "sandbox-root", "writable root inside the sandbox (repeatable; defaults to the working directory)")
@@ -1043,9 +1049,14 @@ func buildAgent(ctx context.Context, opts options, ioStreams IO) (*zenforge.Agen
 			return resolved, ok
 		}))
 	}
+	memoryProvider, err := buildMemory(opts, modelAdapter)
+	if err != nil {
+		return nil, err
+	}
 	return zenforge.New(zenforge.Config{
 		Model:              modelAdapter,
 		Hooks:              hookEngine,
+		Memory:             memoryProvider,
 		Instructions:       opts.instructions,
 		PersonaPrefix:      opts.personaPrefix,
 		PersonaSuffix:      opts.personaSuffix,

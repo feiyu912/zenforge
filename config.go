@@ -10,6 +10,7 @@ import (
 	"github.com/feiyu912/zenforge/harness"
 	"github.com/feiyu912/zenforge/hooks"
 	"github.com/feiyu912/zenforge/instructions"
+	"github.com/feiyu912/zenforge/memory"
 	"github.com/feiyu912/zenforge/model"
 	"github.com/feiyu912/zenforge/modelretry"
 	"github.com/feiyu912/zenforge/planner"
@@ -64,7 +65,12 @@ type Config struct {
 	// the agent back to work with the hook's reason as its next
 	// instruction. PreToolUse/PostToolUse are wired as tool middleware by
 	// the caller. Optional.
-	Hooks                 *hooks.Engine
+	Hooks *hooks.Engine
+	// Memory injects durable cross-run learnings into the system prompt and
+	// records new ones when a run finishes. The summary is frozen into
+	// durable Meta at run start, so a resume replays what the run saw.
+	// Optional; without it no memory work happens.
+	Memory                memory.Provider
 	Tools                 []tool.Tool
 	ToolInvoker           tool.Invoker
 	ToolRuntime           []tool.Middleware

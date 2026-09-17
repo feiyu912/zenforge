@@ -184,6 +184,7 @@ nav:
       - 0044 Hooks engine: adr/0044-hooks-engine.md
       - 0045 Hooks in the agent loop: adr/0045-hooks-in-the-agent-loop.md
       - 0046 Landlock file rules: adr/0046-landlock-file-rules.md
+      - 0047 Durable memories: adr/0047-durable-memories.md
 
 extra:
   social:

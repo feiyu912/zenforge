@@ -65,6 +65,20 @@ opts in. Paths are canonicalized and passed as `-D` parameters, and off
 macOS — or when `sandbox-exec` is missing — opening a session fails with
 `sandbox_unavailable` rather than running unsandboxed.
 
+## Memories
+
+`--memory <dir>` reads a memory summary into the system prompt at run start
+(frozen into run state, so a resume replays it) and, with
+`--memory-distill`, makes one model call at run end to extract durable
+learnings from that run into `<dir>/raw_memories.md`. The injected form is
+`<dir>/memory_summary.md`, rendered deterministically within a byte budget,
+so both files stay readable and editable by hand. `--memory-scope
+user|project` decides who sees a new memory; a project sees its own memories
+plus every user memory. Memory never blocks an answer: a distillation
+failure is reported as a `memory.recorded` event with the error, while an
+unreadable store fails the run before the model is called, because a run
+whose instructions cannot be read must not half-run on different ones.
+
 ## Hooks
 
 `--hooks <file>` loads a JSON hook configuration: event name to a list of

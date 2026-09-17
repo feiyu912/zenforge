@@ -128,6 +128,10 @@ func TestShellRunsWithApprovalMetadata(t *testing.T) {
 
 func TestShellTimeoutAndOutputCap(t *testing.T) {
 	root := t.TempDir()
+	// Two instances on purpose: the policy's MaxTimeout is a hard cap on the
+	// per-call budget, so a shell configured with a 10ms cap cannot also run
+	// the output-cap case reliably -- under load that case would time out
+	// rather than truncate, which is a test bug, not a tool bug.
 	shell := Must(Config{Policy: policy.ShellPolicy{
 		WorkingDir:     root,
 		AllowCommands:  []string{"sleep", "printf"},
@@ -138,11 +142,20 @@ func TestShellTimeoutAndOutputCap(t *testing.T) {
 	if !errors.Is(err, tool.ErrTimeout) {
 		t.Fatalf("expected ErrTimeout, got result=%#v err=%v", result, err)
 	}
+	// A per-call budget above the policy cap is clamped, not honoured: the
+	// caller cannot borrow more time than the policy allows.
+	result, err = shell.Call(context.Background(), json.RawMessage(`{"command":"sleep 1","description":"clamped","timeoutMs":60000}`), tool.Context{})
+	if !errors.Is(err, tool.ErrTimeout) {
+		t.Fatalf("a call above the policy cap was not clamped: result=%#v err=%v", result, err)
+	}
 
-	// A generous budget: this case asserts the output cap and the
-	// truncated flag, and a one-second budget made it fail under a fully
-	// loaded parallel test run on a busy machine.
-	result, err = shell.Call(context.Background(), json.RawMessage(`{"command":"printf abcdef","description":"cap output","timeoutMs":5000}`), tool.Context{})
+	capped := Must(Config{Policy: policy.ShellPolicy{
+		WorkingDir:     root,
+		AllowCommands:  []string{"printf"},
+		MaxTimeout:     time.Second,
+		MaxOutputBytes: 3,
+	}})
+	result, err = capped.Call(context.Background(), json.RawMessage(`{"command":"printf abcdef","description":"cap output","timeoutMs":5000}`), tool.Context{})
 	if err != nil {
 		t.Fatalf("Call returned error: %v", err)
 	}

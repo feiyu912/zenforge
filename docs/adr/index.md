@@ -60,3 +60,4 @@ later ADRs supersede earlier ones, never edit.
 | [0044](0044-hooks-engine.md) | Hooks: exit-code and JSON decisions, fail-open by default |
 | [0045](0045-hooks-in-the-agent-loop.md) | Hooks in the agent loop: frozen run context and bounded Stop refusals |
 | [0046](0046-landlock-file-rules.md) | Landlock rules for files, the safe device default, and syscall-based socket tests |
+| [0047](0047-durable-memories.md) | Durable memories: readable files, content identity, frozen injection |
