@@ -374,3 +374,159 @@ func TestShellSandboxTimeoutIncludesStructuredErrorCode(t *testing.T) {
 		t.Fatalf("expected structured timeout metadata, got %#v", result.Structured)
 	}
 }
+
+func TestShellSandboxDenialAddsEscalationMarker(t *testing.T) {
+	root := t.TempDir()
+	fake := &sandboxfake.Sandbox{Result: sandbox.ExecuteResult{ExitCode: 1, Stderr: "mkdir: /x: Operation not permitted"}}
+	shell := Must(Config{
+		Policy: policy.ShellPolicy{
+			WorkingDir:     root,
+			AllowCommands:  []string{"mkdir x"},
+			MaxTimeout:     time.Second,
+			MaxOutputBytes: 4096,
+		},
+		Backend: ShellBackendSandbox,
+		Sandbox: fake,
+	})
+	result, err := shell.Call(context.Background(), json.RawMessage(`{"command":"mkdir x","description":"denied write"}`), tool.Context{RunID: "run_1", ToolCallID: "call_1"})
+	if err != nil {
+		t.Fatalf("Call returned error: %v", err)
+	}
+	output, _ := result.Structured["output"].(string)
+	if !strings.Contains(output, "[sandbox: file access denied under sandbox mode]") {
+		t.Fatalf("denial marker missing: %q", output)
+	}
+	if !strings.Contains(output, `sandboxPermissions="danger-full-access"`) {
+		t.Fatalf("escalation hint missing: %q", output)
+	}
+	if escalated, _ := result.Structured["escalated"].(bool); escalated {
+		t.Fatalf("plain sandbox call reported escalated: %#v", result.Structured)
+	}
+}
+
+func TestShellEscalationValidation(t *testing.T) {
+	root := t.TempDir()
+	base := policy.ShellPolicy{WorkingDir: root, AllowCommands: []string{"printf ok"}, MaxTimeout: time.Second, MaxOutputBytes: 1024}
+	confined := Must(Config{Policy: base, Backend: ShellBackendSandbox, Sandbox: &sandboxfake.Sandbox{}})
+	unconfined := Must(Config{Policy: base})
+
+	cases := []struct {
+		name    string
+		tool    tool.Tool
+		args    string
+		message string
+	}{
+		{"justification alone", confined, `{"command":"printf ok","description":"d","justification":"because"}`, "only valid together with sandboxPermissions"},
+		{"mode without justification", confined, `{"command":"printf ok","description":"d","sandboxPermissions":"danger-full-access"}`, "requires a justification"},
+		{"unknown mode", confined, `{"command":"printf ok","description":"d","sandboxPermissions":"workspace-write","justification":"j"}`, "unknown sandboxPermissions mode"},
+		{"escalation while unconfined", unconfined, `{"command":"printf ok","description":"d","sandboxPermissions":"danger-full-access","justification":"j"}`, "only valid when the shell runs confined"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := tc.tool.Call(context.Background(), json.RawMessage(tc.args), tool.Context{RunID: "run_1", ToolCallID: "call_1"})
+			if !errors.Is(err, tool.ErrInvalidArguments) {
+				t.Fatalf("Call error = %v, want ErrInvalidArguments", err)
+			}
+			if !strings.Contains(err.Error(), tc.message) {
+				t.Fatalf("Call error = %q, want it to contain %q", err, tc.message)
+			}
+		})
+	}
+}
+
+func TestShellEscalationRequiresApprovalThenRunsLocally(t *testing.T) {
+	root := t.TempDir()
+	fake := &sandboxfake.Sandbox{Result: sandbox.ExecuteResult{ExitCode: 1, Stderr: "Operation not permitted"}}
+	shell := Must(Config{
+		Policy: policy.ShellPolicy{
+			WorkingDir:     root,
+			AllowCommands:  []string{"printf ok"},
+			MaxTimeout:     time.Second,
+			MaxOutputBytes: 4096,
+		},
+		Backend: ShellBackendSandbox,
+		Sandbox: fake,
+	})
+	args := json.RawMessage(`{"command":"printf ok","description":"escape hatch","sandboxPermissions":"danger-full-access","justification":"the sandbox denies the write"}`)
+	call := tool.Context{RunID: "run_1", ToolCallID: "call_1"}
+
+	result, err := shell.Call(context.Background(), args, call)
+	if !errors.Is(err, approval.ErrRequired) {
+		t.Fatalf("Call error = %v, want approval.ErrRequired", err)
+	}
+	request, ok := approval.RequestFromResult(result)
+	if !ok {
+		t.Fatalf("escalation result carried no approval request: %#v", result)
+	}
+	if request.Title != "Approve sandbox escalation" || request.Operation != "shell.escalate" {
+		t.Fatalf("unexpected escalation request: %+v", request)
+	}
+	fingerprint, _ := request.Payload["fingerprint"].(string)
+	if !strings.HasPrefix(fingerprint, "escalate\x00") {
+		t.Fatalf("escalation fingerprint not namespaced: %q", fingerprint)
+	}
+	if !strings.Contains(request.Description, "the sandbox denies the write") {
+		t.Fatalf("justification missing from request: %+v", request)
+	}
+	if len(fake.ExecuteCalls) != 0 {
+		t.Fatalf("command executed before escalation approval: %#v", fake.ExecuteCalls)
+	}
+
+	metadata := approval.ApprovedMetadata(nil, request, approval.Decision{Action: approval.DecisionApprove, Scope: approval.ScopeRun})
+	approvedCall := tool.Context{RunID: "run_1", ToolCallID: "call_1", Metadata: metadata}
+	result, err = shell.Call(context.Background(), args, approvedCall)
+	if err != nil {
+		t.Fatalf("approved escalation Call returned error: %v", err)
+	}
+	if result.Structured["backend"] != string(ShellBackendLocal) {
+		t.Fatalf("escalated call did not run locally: %#v", result.Structured)
+	}
+	if escalated, _ := result.Structured["escalated"].(bool); !escalated {
+		t.Fatalf("escalated flag missing: %#v", result.Structured)
+	}
+	if result.Structured["output"] != "ok" {
+		t.Fatalf("unexpected local output: %#v", result.Structured)
+	}
+	if len(fake.ExecuteCalls) != 0 {
+		t.Fatalf("escalated call still routed through the sandbox: %#v", fake.ExecuteCalls)
+	}
+}
+
+func TestShellEscalationDoesNotBypassBlockedCommand(t *testing.T) {
+	root := t.TempDir()
+	shell := Must(Config{
+		Policy: policy.ShellPolicy{
+			WorkingDir:      root,
+			DenyCommands:    []string{"rm"},
+			RequireApproval: true,
+			MaxTimeout:      time.Second,
+			MaxOutputBytes:  1024,
+		},
+		Backend: ShellBackendSandbox,
+		Sandbox: &sandboxfake.Sandbox{},
+	})
+	_, err := shell.Call(context.Background(), json.RawMessage(`{"command":"rm -rf tmp","description":"d","sandboxPermissions":"danger-full-access","justification":"j"}`), tool.Context{RunID: "run_1", ToolCallID: "call_1"})
+	if err == nil || !strings.Contains(err.Error(), "command blocked") {
+		t.Fatalf("escalation bypassed the block: %v", err)
+	}
+}
+
+func TestShellSchemaHidesEscalationWhenUnconfined(t *testing.T) {
+	base := policy.ShellPolicy{WorkingDir: t.TempDir(), MaxTimeout: time.Second, MaxOutputBytes: 1024}
+	unconfined := Must(Config{Policy: base})
+	props, _ := unconfined.Schema()["properties"].(map[string]any)
+	if _, ok := props["sandboxPermissions"]; ok {
+		t.Fatalf("unconfined schema exposes sandboxPermissions")
+	}
+	if _, ok := props["justification"]; ok {
+		t.Fatalf("unconfined schema exposes justification")
+	}
+	confined := Must(Config{Policy: base, Backend: ShellBackendSandbox})
+	props, _ = confined.Schema()["properties"].(map[string]any)
+	if _, ok := props["sandboxPermissions"]; !ok {
+		t.Fatalf("confined schema hides sandboxPermissions")
+	}
+	if _, ok := props["justification"]; !ok {
+		t.Fatalf("confined schema hides justification")
+	}
+}

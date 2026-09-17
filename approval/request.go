@@ -50,9 +50,13 @@ func NewAbortError(reason string) error {
 
 const (
 	MetadataDecisionAction = "approval.decisionAction"
-	MetadataFingerprint    = "approval.fingerprint"
-	MetadataRequestID      = "approval.requestId"
-	MetadataRuleKey        = "approval.ruleKey"
+	// MetadataDecisionPayload carries decision.Payload (the decider's
+	// structured response, e.g. answers to a user question) into the
+	// retried tool call's metadata.
+	MetadataDecisionPayload = "approval.decisionPayload"
+	MetadataFingerprint     = "approval.fingerprint"
+	MetadataRequestID       = "approval.requestId"
+	MetadataRuleKey         = "approval.ruleKey"
 )
 
 type RiskLevel string
@@ -245,6 +249,9 @@ func ApprovedMetadata(metadata map[string]any, req Request, decision Decision) m
 	out := cloneMetadata(metadata)
 	out[MetadataRequestID] = req.ID
 	out[MetadataDecisionAction] = string(decision.Action)
+	if len(decision.Payload) > 0 {
+		out[MetadataDecisionPayload] = cloneMetadata(decision.Payload)
+	}
 	if fingerprint, ok := stringFromPayload(req.Payload, "fingerprint"); ok {
 		out[MetadataFingerprint] = fingerprint
 	}

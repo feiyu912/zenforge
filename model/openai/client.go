@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/feiyu912/zenforge/model"
 )
@@ -104,10 +105,14 @@ func (c *Client) Stream(ctx context.Context, req model.Request) (<-chan model.Ev
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		defer resp.Body.Close()
 		data, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
-		return nil, model.NewHTTPStatusError(
+		statusErr := model.NewHTTPStatusError(
 			"openai", "chat completion", httpReq.URL.String(), resp.StatusCode, resp.Status,
 			model.RedactSecret(string(data), c.apiKey),
 		)
+		if retryAfter, ok := model.ParseRetryAfter(resp.Header.Get("Retry-After"), time.Now()); ok {
+			statusErr.RetryAfter = retryAfter
+		}
+		return nil, statusErr
 	}
 	events := make(chan model.Event, 32)
 	go func() {

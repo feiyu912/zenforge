@@ -46,6 +46,13 @@ const (
 	EventTaskError          EventType = "task.error"
 	EventTaskCancelled      EventType = "task.cancelled"
 	EventCheckpointCreated  EventType = "checkpoint.created"
+	EventCompactionStarted  EventType = "compaction.started"
+	EventCompactionPruned   EventType = "compaction.pruned"
+	EventCompactionSummary  EventType = "compaction.summary"
+	EventCompactionDone     EventType = "compaction.done"
+	EventCompactionError    EventType = "compaction.error"
+	EventModelRetry         EventType = "model.retry"
+	EventInstructionsLoaded EventType = "instructions.loaded"
 )
 
 type Event struct {

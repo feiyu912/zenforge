@@ -24,6 +24,13 @@ type Config struct {
 	Policy                 policy.FilePolicy
 }
 
+// Edit failures that the model can recover from by adjusting its
+// arguments: a missing match or an ambiguous (non-unique) match.
+var (
+	ErrEditNotFound  = errors.New("edit target not found")
+	ErrEditAmbiguous = errors.New("edit target is ambiguous")
+)
+
 func Tools(config Config) ([]tool.Tool, error) {
 	read, err := Read(config)
 	if err != nil {
@@ -41,7 +48,11 @@ func Tools(config Config) ([]tool.Tool, error) {
 	if err != nil {
 		return nil, err
 	}
-	return []tool.Tool{read, list, grep, write}, nil
+	edit, err := Edit(config)
+	if err != nil {
+		return nil, err
+	}
+	return []tool.Tool{read, list, grep, write, edit}, nil
 }
 
 func Read(config Config) (tool.Tool, error) {
@@ -167,6 +178,80 @@ func Write(config Config) (tool.Tool, error) {
 	return withFilePolicy(base, config.Policy, policy.FileWrite), nil
 }
 
+// Edit builds the exact-match text replacement tool. The contract follows
+// the reference harnesses: oldString must match the file content literally,
+// a single match is required unless replaceAll is set, and (under
+// RequireReadBeforeWrite) the file must have been read through
+// workspace_read at its current version — the snapshot check is a
+// compare-and-swap guard against external modification.
+func Edit(config Config) (tool.Tool, error) {
+	if config.Workspace == nil {
+		return nil, fmt.Errorf("%w: workspace is nil", tool.ErrInvalidTool)
+	}
+	base, err := tools.New("workspace_edit", "Edit a file in the configured workspace by replacing exact text matches.", func(ctx context.Context, in editInput, call tool.Context) (editOutput, error) {
+		if in.Description == "" {
+			return editOutput{}, fmt.Errorf("%w: description is required", tool.ErrInvalidArguments)
+		}
+		if in.OldString == "" {
+			return editOutput{}, fmt.Errorf("%w: oldString must be a non-empty string", tool.ErrInvalidArguments)
+		}
+		if in.OldString == in.NewString {
+			return editOutput{}, fmt.Errorf("%w: oldString and newString must differ", tool.ErrInvalidArguments)
+		}
+		info, err := config.Workspace.Stat(ctx, in.Path)
+		if err != nil {
+			return editOutput{}, err
+		}
+		if config.RequireReadBeforeWrite {
+			if config.Snapshots == nil {
+				return editOutput{}, ErrSnapshotRequired
+			}
+			if err := config.Snapshots.CheckForRun(call.RunID, info); err != nil {
+				return editOutput{}, err
+			}
+		}
+		data, err := config.Workspace.Read(ctx, in.Path)
+		if err != nil {
+			return editOutput{}, err
+		}
+		content := string(data)
+		matches := strings.Count(content, in.OldString)
+		if matches == 0 {
+			return editOutput{}, fmt.Errorf("%w: oldString was not found in %q", ErrEditNotFound, info.Path)
+		}
+		if matches > 1 && !in.ReplaceAll {
+			return editOutput{}, fmt.Errorf("%w: oldString matched %d times in %q; provide a more specific oldString or set replaceAll to true", ErrEditAmbiguous, matches, info.Path)
+		}
+		replacements := -1
+		if !in.ReplaceAll {
+			replacements = 1
+		}
+		updated := strings.Replace(content, in.OldString, in.NewString, replacements)
+		if err := config.Workspace.Write(ctx, in.Path, []byte(updated)); err != nil {
+			return editOutput{}, err
+		}
+		info, err = config.Workspace.Stat(ctx, in.Path)
+		if err != nil {
+			return editOutput{}, err
+		}
+		message := fmt.Sprintf("The file %s has been updated successfully.", info.Path)
+		if matches > 1 {
+			message = fmt.Sprintf("All %d occurrences in %s were successfully replaced.", matches, info.Path)
+		}
+		return editOutput{
+			Path:         info.Path,
+			Replacements: matches,
+			Bytes:        len(updated),
+			Message:      message,
+			Info:         info,
+		}, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return withFilePolicy(base, config.Policy, policy.FileWrite), nil
+}
+
 type filePolicyTool struct {
 	base      tool.Tool
 	policy    policy.FilePolicy
@@ -176,6 +261,8 @@ type filePolicyTool struct {
 type filePolicyInput struct {
 	Path        string `json:"path"`
 	Content     string `json:"content"`
+	OldString   string `json:"oldString"`
+	NewString   string `json:"newString"`
 	Description string `json:"description"`
 }
 
@@ -215,7 +302,13 @@ func (t filePolicyTool) Call(ctx context.Context, raw json.RawMessage, call tool
 		"accessPlan":  accessPlan,
 	}
 	if t.operation == policy.FileWrite {
-		writePlan := policy.PlanFileWrite(accessPlan, in.Content, in.Description)
+		writeContent := in.Content
+		if writeContent == "" && in.NewString != "" {
+			// Edits carry their payload in newString; the approval
+			// fingerprint must cover the actual mutation.
+			writeContent = in.NewString
+		}
+		writePlan := policy.PlanFileWrite(accessPlan, writeContent, in.Description)
 		fingerprint = writePlan.Fingerprint
 		ruleKey = writePlan.RuleKey
 		payload["fingerprint"] = fingerprint
@@ -314,6 +407,22 @@ type writeOutput struct {
 	Path  string                `json:"path"`
 	Bytes int                   `json:"bytes"`
 	Info  workspacepkg.FileInfo `json:"info"`
+}
+
+type editInput struct {
+	Path        string `json:"path" jsonschema:"required,description=Workspace-relative file path"`
+	OldString   string `json:"oldString" jsonschema:"required,description=Literal text to replace; must match the file exactly"`
+	NewString   string `json:"newString" jsonschema:"required,description=Replacement text; an empty string deletes the match"`
+	ReplaceAll  bool   `json:"replaceAll,omitempty" jsonschema:"description=Replace every occurrence; when false oldString must match exactly once"`
+	Description string `json:"description" jsonschema:"required,description=Why this edit is needed"`
+}
+
+type editOutput struct {
+	Path         string                `json:"path"`
+	Replacements int                   `json:"replacements"`
+	Bytes        int                   `json:"bytes"`
+	Message      string                `json:"message"`
+	Info         workspacepkg.FileInfo `json:"info"`
 }
 
 func ResultContent(result tool.Result) string {

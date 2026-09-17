@@ -6,8 +6,11 @@ import (
 
 	"github.com/feiyu912/zenforge/approval"
 	"github.com/feiyu912/zenforge/checkpoint"
+	"github.com/feiyu912/zenforge/compaction"
 	"github.com/feiyu912/zenforge/harness"
+	"github.com/feiyu912/zenforge/instructions"
 	"github.com/feiyu912/zenforge/model"
+	"github.com/feiyu912/zenforge/modelretry"
 	"github.com/feiyu912/zenforge/planner"
 	"github.com/feiyu912/zenforge/skill"
 	"github.com/feiyu912/zenforge/subagent"
@@ -72,6 +75,12 @@ type Config struct {
 	Checkpoints           checkpoint.Store
 	RunController         *harness.RunController
 	Trace                 trace.Sink
+	Compaction            *compaction.Config
+	Retry                 *modelretry.Config
+	StreamIdleTimeout     time.Duration
+	InstructionFiles      *instructions.Config
+	WorkingDir            string
+	EnvironmentContext    bool
 	MaxSteps              int
 	Mode                  AgentMode
 	Planning              PlanningMode

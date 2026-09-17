@@ -18,14 +18,18 @@ import (
 	"github.com/feiyu912/zenforge/checkpoint"
 	checkpointjsonl "github.com/feiyu912/zenforge/checkpoint/jsonl"
 	checkpointsqlite "github.com/feiyu912/zenforge/checkpoint/sqlite"
+	"github.com/feiyu912/zenforge/compaction"
 	"github.com/feiyu912/zenforge/eventlog"
 	eventlogjsonl "github.com/feiyu912/zenforge/eventlog/jsonl"
 	eventlogsqlite "github.com/feiyu912/zenforge/eventlog/sqlite"
 	"github.com/feiyu912/zenforge/harness"
+	"github.com/feiyu912/zenforge/instructions"
 	"github.com/feiyu912/zenforge/model"
 	"github.com/feiyu912/zenforge/model/provider"
+	"github.com/feiyu912/zenforge/modelretry"
 	"github.com/feiyu912/zenforge/policy"
 	"github.com/feiyu912/zenforge/tool"
+	"github.com/feiyu912/zenforge/tools/askuser"
 	shelltool "github.com/feiyu912/zenforge/tools/shell"
 	workspacetools "github.com/feiyu912/zenforge/tools/workspace"
 	workspacelocal "github.com/feiyu912/zenforge/workspace/local"
@@ -365,6 +369,13 @@ type options struct {
 	model               string
 	apiKeyEnv           string
 	baseURL             string
+	contextWindow       int
+	retryEnabled        bool
+	retryMaxRetries     int
+	retryInitialDelay   time.Duration
+	retryMaxDelay       time.Duration
+	retryJitter         float64
+	streamIdleTimeout   time.Duration
 	checkpointType      string
 	checkpointDir       string
 	maxSteps            int
@@ -376,6 +387,13 @@ type options struct {
 	shellMaxOutputBytes int64
 	shellAllow          multiFlag
 	shellWorkingDir     string
+
+	environmentContext      bool
+	instructionsEnabled     bool
+	instructionsGlobalPath  string
+	instructionsMaxBytes    int
+	instructionsFileNames   []string
+	instructionsRootMarkers []string
 }
 
 func defaultOptions() options {
@@ -389,6 +407,12 @@ func defaultOptions() options {
 		provider:            "openai",
 		model:               "gpt-4.1",
 		apiKeyEnv:           "OPENAI_API_KEY",
+		retryEnabled:        true,
+		retryMaxRetries:     modelretry.DefaultMaxRetries,
+		retryInitialDelay:   modelretry.DefaultInitialDelay,
+		retryMaxDelay:       modelretry.DefaultMaxDelay,
+		retryJitter:         modelretry.DefaultJitter,
+		streamIdleTimeout:   5 * time.Minute,
 		checkpointType:      "jsonl",
 		checkpointDir:       ".zenforge/runs",
 		maxSteps:            20,
@@ -398,6 +422,9 @@ func defaultOptions() options {
 		shellMaxOutputBytes: 256_000,
 		shellAllow:          multiFlag{"go test ./...", "go vet ./...", "grep", "find"},
 		shellWorkingDir:     ".",
+
+		environmentContext:  true,
+		instructionsEnabled: true,
 	}
 }
 
@@ -411,6 +438,7 @@ func bindOptions(fs *flag.FlagSet, opts *options) {
 	fs.StringVar(&opts.model, "model", opts.model, "OpenAI-compatible model name")
 	fs.StringVar(&opts.apiKeyEnv, "api-key-env", opts.apiKeyEnv, "environment variable containing API key")
 	fs.StringVar(&opts.baseURL, "base-url", opts.baseURL, "OpenAI-compatible base URL")
+	fs.IntVar(&opts.contextWindow, "context-window", opts.contextWindow, "model context window in tokens; enables pressure compaction when positive")
 	fs.StringVar(&opts.checkpointType, "checkpoint-type", opts.checkpointType, "event/checkpoint store type: jsonl|sqlite")
 	fs.StringVar(&opts.checkpointDir, "checkpoint-dir", opts.checkpointDir, "event/checkpoint directory")
 	fs.IntVar(&opts.maxSteps, "max-steps", opts.maxSteps, "max harness steps")
@@ -479,6 +507,14 @@ func buildAgent(ctx context.Context, opts options, ioStreams IO) (*zenforge.Agen
 		}
 		tools = append(tools, shell)
 	}
+	// ask_user rides the approval channel: the interactive CLI broker
+	// renders questions and collects answers; other brokers may approve
+	// without answers (the tool reports the dismissal) or deny.
+	askTool, err := askuser.New(askuser.Config{})
+	if err != nil {
+		return nil, err
+	}
+	tools = append(tools, askTool)
 	approvalBroker, err := approvalBroker(opts, ioStreams)
 	if err != nil {
 		return nil, err
@@ -497,16 +533,69 @@ func buildAgent(ctx context.Context, opts options, ioStreams IO) (*zenforge.Agen
 		_ = closeEvents()
 		return nil, err
 	}
+	// Context management follows the reference harnesses: retry with
+	// exponential backoff and an idle watchdog for transport failures, and
+	// compaction (prune + summarize) for context pressure and overflow.
+	// The summarizer reuses the configured provider; contextWindow 0 keeps
+	// overflow-triggered recovery without proactive pressure compaction.
+	var retryConfig *modelretry.Config
+	if opts.retryEnabled && opts.retryMaxRetries > 0 {
+		retryConfig = &modelretry.Config{
+			MaxRetries:   opts.retryMaxRetries,
+			InitialDelay: opts.retryInitialDelay,
+			MaxDelay:     opts.retryMaxDelay,
+			Jitter:       opts.retryJitter,
+		}
+	}
+	compactionConfig := &compaction.Config{
+		Policy:     compaction.Policy{ContextWindow: opts.contextWindow},
+		Summarizer: compaction.ModelSummarizer{Model: modelAdapter, Name: opts.model},
+	}
+	// Hierarchical project instructions (AGENTS.md-compatible) and the
+	// environment-context snapshot follow the reference harnesses: both are
+	// discovered once per run and frozen into durable run state so resume
+	// replays the exact prompting.
+	var instructionFiles *instructions.Config
+	if opts.instructionsEnabled {
+		instructionFiles = &instructions.Config{
+			GlobalPath:  opts.instructionsGlobalPath,
+			MaxBytes:    opts.instructionsMaxBytes,
+			FileNames:   opts.instructionsFileNames,
+			RootMarkers: opts.instructionsRootMarkers,
+		}
+		if instructionFiles.GlobalPath == "" {
+			if home, err := os.UserHomeDir(); err == nil {
+				instructionFiles.GlobalPath = filepath.Join(home, ".zenforge", "AGENTS.md")
+			}
+		}
+	}
+	// Tool-runtime guardrails follow the reference harnesses: recover
+	// panics, surface repeated identical calls to the model, and spill
+	// oversized results to a private on-disk store under the workspace
+	// so the read tool can reach the full output.
+	spillDir := filepath.Join(opts.workspace, ".zenforge", "spill")
+	toolRuntime := []tool.Middleware{
+		tool.RecoverPanic(),
+		tool.RepeatGuard(),
+		tool.Spill(tool.SpillConfig{Dir: spillDir}),
+	}
 	return zenforge.New(zenforge.Config{
-		Model:        modelAdapter,
-		Instructions: opts.instructions,
-		Tools:        tools,
-		Approval:     approvalBroker,
-		Events:       events,
-		Checkpoints:  checkpoints,
-		MaxSteps:     opts.maxSteps,
-		Mode:         executionMode,
-		Planning:     planningMode(opts.planning),
+		Model:              modelAdapter,
+		Instructions:       opts.instructions,
+		Tools:              tools,
+		ToolRuntime:        toolRuntime,
+		Approval:           approvalBroker,
+		Events:             events,
+		Checkpoints:        checkpoints,
+		Compaction:         compactionConfig,
+		Retry:              retryConfig,
+		StreamIdleTimeout:  opts.streamIdleTimeout,
+		InstructionFiles:   instructionFiles,
+		WorkingDir:         opts.workspace,
+		EnvironmentContext: opts.environmentContext,
+		MaxSteps:           opts.maxSteps,
+		Mode:               executionMode,
+		Planning:           planningMode(opts.planning),
 	}), nil
 }
 

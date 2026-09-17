@@ -5,15 +5,20 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/feiyu912/zenforge/approval"
 	"github.com/feiyu912/zenforge/checkpoint"
+	"github.com/feiyu912/zenforge/compaction"
 	"github.com/feiyu912/zenforge/harness"
+	"github.com/feiyu912/zenforge/instructions"
 	"github.com/feiyu912/zenforge/model"
+	"github.com/feiyu912/zenforge/modelretry"
 	"github.com/feiyu912/zenforge/planner"
 	"github.com/feiyu912/zenforge/sandbox"
 	"github.com/feiyu912/zenforge/subagent"
@@ -23,12 +28,24 @@ import (
 	"github.com/feiyu912/zenforge/trace"
 )
 
+// Run-state Meta keys carrying the per-run prompt context. Both are
+// checkpointed with the state so a resumed run replays the exact same
+// environment snapshot and project instructions it started with, instead
+// of silently picking up files that changed on disk mid-run.
+const (
+	metaEnvironmentContext  = "zenforge.environment_context"
+	metaProjectInstructions = "zenforge.project_instructions"
+)
+
 // Agent is the high-level batteries-included runtime entrypoint.
 type Agent struct {
 	config             Config
 	todos              planner.Manager
 	skillCatalogPrompt string
 	configErr          error
+	compactor          *compaction.Compactor
+	retry              *modelretry.Config
+	streamIdleTimeout  time.Duration
 }
 
 // New creates an Agent with the provided runtime configuration.
@@ -60,11 +77,35 @@ func New(config Config) *Agent {
 	if todos == nil && (config.Planning == PlanningEnabled || agentModeForConfig(config) == ModePlanExecute) {
 		todos = planner.NewMemoryManager(planner.MemoryConfig{})
 	}
+	var compactor *compaction.Compactor
+	if config.Compaction != nil {
+		built, err := compaction.New(*config.Compaction)
+		if err != nil {
+			configErr = fmt.Errorf("configure compaction: %w", err)
+		} else {
+			compactor = built
+		}
+	}
+	var retry *modelretry.Config
+	if config.Retry != nil {
+		resolved, err := config.Retry.WithDefaults()
+		if err != nil {
+			configErr = fmt.Errorf("configure model retry: %w", err)
+		} else {
+			retry = &resolved
+		}
+	}
+	if config.StreamIdleTimeout < 0 {
+		configErr = fmt.Errorf("configure model retry: streamIdleTimeout must be non-negative")
+	}
 	return &Agent{
 		config:             config,
 		todos:              todos,
 		skillCatalogPrompt: skillCatalogPrompt,
 		configErr:          configErr,
+		compactor:          compactor,
+		retry:              retry,
+		streamIdleTimeout:  config.StreamIdleTimeout,
 	}
 }
 
@@ -754,6 +795,20 @@ func (a *Agent) runHarnessLoop(ctx context.Context, out chan<- Event, state harn
 		return emit(EventCheckpointCreated, checkpointCreatedPayload(cp))
 	}
 
+	// Fresh runs discover the prompt context once at start and freeze it
+	// into durable Meta; resumed runs replay what was checkpointed, so a
+	// resume reproduces the exact prompting of the original run.
+	if !resumed {
+		if err := a.applyRunContext(ctx, emit, &state); err != nil {
+			message := fmt.Sprintf("prepare run context: %v", err)
+			_ = emit(EventRunError, map[string]any{"error": message})
+			if captured.Type != "" {
+				return captured
+			}
+			return loopTerminal{Type: EventRunError, Data: map[string]any{"error": message}}
+		}
+	}
+
 	runner := harness.Runner{
 		MaxSteps: a.config.MaxSteps,
 		Mode:     string(runStateMode(state, a.config)),
@@ -1082,7 +1137,137 @@ func (a *Agent) callModel(ctx context.Context, emit eventEmitter, state harness.
 	}, usage, nil
 }
 
+// callModelDurable runs one durable model step: step-boundary pressure
+// compaction, the durable streaming attempt, and bounded overflow recovery.
+// Overflow recovery follows the reference harnesses: a canonical provider
+// context-overflow failure supersedes the failed attempt, forces a maximal
+// compaction, and retries the same logical step. Transport-class failures
+// (rate limits, server errors, timeouts, empty responses) retry with
+// exponential backoff when a retry policy is configured; the durable
+// model.retry event is emitted before each wait so a resumed session can
+// see why the loop paused.
 func (a *Agent) callModelDurable(
+	ctx context.Context,
+	emit eventEmitter,
+	checkpointState func(context.Context, harness.RunState) error,
+	state *harness.RunState,
+	choice model.ToolChoice,
+) (harness.MessageState, model.Usage, error) {
+	if _, err := a.maybeCompact(ctx, emit, checkpointState, state, compaction.ReasonPressure, false); err != nil {
+		return harness.MessageState{}, model.Usage{}, err
+	}
+	overflowRemaining := 0
+	if a.compactor != nil {
+		overflowRemaining = a.compactor.Policy().MaxOverflowRetries
+	}
+	overflowRetry := 0
+	retriesDone := 0
+	for {
+		message, usage, err := a.callModelAttemptDurable(ctx, emit, checkpointState, state, choice)
+		empty := err == nil && message.Content == "" && len(message.ToolCalls) == 0
+		if err == nil && !empty {
+			return message, usage, nil
+		}
+		// Context overflow is owned by the compaction subsystem, never by
+		// the retry classifier: supersede, compact maximally, retry.
+		if err != nil && overflowRemaining > 0 && compaction.IsOverflowError(err) {
+			overflowRemaining--
+			overflowRetry++
+			if supersedeErr := a.supersedeActiveAttempt(ctx, emit, checkpointState, state); supersedeErr != nil {
+				return harness.MessageState{}, model.Usage{}, supersedeErr
+			}
+			compacted, compactErr := a.maybeCompact(ctx, emit, checkpointState, state, compaction.ReasonOverflow, true)
+			if compactErr != nil {
+				return harness.MessageState{}, model.Usage{}, fmt.Errorf("context overflow recovery failed: %w (provider error: %v)", compactErr, err)
+			}
+			if !compacted {
+				return harness.MessageState{}, model.Usage{}, err
+			}
+			if emitErr := emit(EventModelRetry, map[string]any{
+				"reason": "context_overflow",
+				"retry":  overflowRetry,
+				"step":   state.Step,
+				"error":  err.Error(),
+			}); emitErr != nil {
+				return harness.MessageState{}, model.Usage{}, emitErr
+			}
+			continue
+		}
+		// Transport-class failures retry with exponential backoff when a
+		// retry policy is configured; everything else fails the run.
+		failure := modelretry.Classify(err)
+		if empty {
+			failure = modelretry.EmptyResponseFailure()
+		}
+		if a.retry == nil || !a.retry.ShouldRetry(retriesDone, failure) {
+			return message, usage, err
+		}
+		if supersedeErr := a.supersedeActiveAttempt(ctx, emit, checkpointState, state); supersedeErr != nil {
+			return harness.MessageState{}, model.Usage{}, supersedeErr
+		}
+		delay := a.retry.Delay(retriesDone, failure)
+		retriesDone++
+		payload := map[string]any{
+			"reason":  string(failure.Code),
+			"retry":   retriesDone,
+			"step":    state.Step,
+			"delayMs": delay.Milliseconds(),
+		}
+		if err != nil {
+			payload["error"] = err.Error()
+		}
+		// The retry event is emitted and checkpointed BEFORE the wait so a
+		// crash during the backoff leaves a durable record of why the loop
+		// paused, mirroring the reference llm/retry-before-wait contract.
+		if emitErr := emit(EventModelRetry, payload); emitErr != nil {
+			return harness.MessageState{}, model.Usage{}, emitErr
+		}
+		if waitErr := sleepContext(ctx, delay); waitErr != nil {
+			return harness.MessageState{}, model.Usage{}, waitErr
+		}
+	}
+}
+
+// sleepContext waits for the given duration, returning early with the
+// context error when the run is canceled or interrupted.
+func sleepContext(ctx context.Context, delay time.Duration) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if delay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+// supersedeActiveAttempt durably marks an in-flight attempt as superseded so
+// the next attempt links to it exactly like the crash-resume path does.
+func (a *Agent) supersedeActiveAttempt(
+	ctx context.Context,
+	emit eventEmitter,
+	checkpointState func(context.Context, harness.RunState) error,
+	state *harness.RunState,
+) error {
+	if state.Model.Active == nil {
+		return nil
+	}
+	now := time.Now().UTC()
+	state.Model.Active.Status = harness.ModelAttemptSuperseded
+	state.Model.Active.CompletedAt = &now
+	if err := checkpointState(ctx, *state); err != nil {
+		return err
+	}
+	return emit(EventModelSuperseded, attemptEventData(state.Model.Active, 0))
+}
+
+func (a *Agent) callModelAttemptDurable(
 	ctx context.Context,
 	emit eventEmitter,
 	checkpointState func(context.Context, harness.RunState) error,
@@ -1123,7 +1308,38 @@ func (a *Agent) callModelDurable(
 		return harness.MessageState{}, model.Usage{}, err
 	}
 
-	for event := range stream {
+	// The idle watchdog bounds a stalled stream: a connection that stops
+	// producing events is a retryable timeout, not an infinite hang. It is
+	// armed only while waiting for the next event, so model think time
+	// between tokens counts but consumer processing time does not.
+	var idleTimer *time.Timer
+	var idleCh <-chan time.Time
+	if a.streamIdleTimeout > 0 {
+		idleTimer = time.NewTimer(a.streamIdleTimeout)
+		defer idleTimer.Stop()
+		idleCh = idleTimer.C
+	}
+streamLoop:
+	for {
+		var event model.Event
+		select {
+		case next, ok := <-stream:
+			if !ok {
+				break streamLoop
+			}
+			event = next
+		case <-idleCh:
+			return harness.MessageState{}, model.Usage{}, &model.StreamIdleError{Idle: a.streamIdleTimeout}
+		}
+		if idleTimer != nil {
+			if !idleTimer.Stop() {
+				select {
+				case <-idleTimer.C:
+				default:
+				}
+			}
+			idleTimer.Reset(a.streamIdleTimeout)
+		}
 		if event.Error != nil {
 			return harness.MessageState{}, model.Usage{}, event.Error
 		}
@@ -1189,6 +1405,186 @@ func (a *Agent) callModelDurable(
 
 func hasUsage(usage model.Usage) bool {
 	return usage.PromptTokens != 0 || usage.CompletionTokens != 0 || usage.TotalTokens != 0
+}
+
+// compactPressure measures the prospective model request for one run state.
+func (a *Agent) compactPressure(state *harness.RunState) compaction.Pressure {
+	estimator := a.compactor.Estimator()
+	systemTokens := 0
+	for _, message := range a.systemPrefixMessages(*state) {
+		systemTokens += estimator.EstimateText(message.Content)
+	}
+	return a.compactor.Evaluate(systemTokens, a.toolSpecs(), state.Messages)
+}
+
+// maybeCompact runs context maintenance at a model-call boundary. Pressure
+// compaction is fail-soft: the provider's canonical overflow signal remains
+// the hard backstop. Overflow compaction is forced and bypasses retention.
+// It reports whether at least one compaction or pruning pass landed; only
+// persistence failures return an error.
+func (a *Agent) maybeCompact(
+	ctx context.Context,
+	emit eventEmitter,
+	checkpointState func(context.Context, harness.RunState) error,
+	state *harness.RunState,
+	reason compaction.Reason,
+	force bool,
+) (bool, error) {
+	if a.compactor == nil {
+		return false, nil
+	}
+	rounds := 1
+	if !force {
+		rounds += a.compactor.Policy().CompactionRetries
+	}
+	compactedAny := false
+	for round := 0; round < rounds; round++ {
+		pressure := a.compactPressure(state)
+		if !force && !pressure.ShouldCompact {
+			return compactedAny, nil
+		}
+		compacted, err := a.runCompaction(ctx, emit, checkpointState, state, reason, pressure)
+		if err != nil {
+			return compactedAny, err
+		}
+		if !compacted {
+			return compactedAny, nil
+		}
+		compactedAny = true
+		force = false
+		reason = compaction.ReasonPressure
+	}
+	return compactedAny, nil
+}
+
+// summaryExcerptChars bounds the summary text carried inside events; the
+// full summary remains durable in the checkpointed replacement message.
+const summaryExcerptChars = 2000
+
+func (a *Agent) runCompaction(
+	ctx context.Context,
+	emit eventEmitter,
+	checkpointState func(context.Context, harness.RunState) error,
+	state *harness.RunState,
+	reason compaction.Reason,
+	pressure compaction.Pressure,
+) (bool, error) {
+	id := compaction.NewCompactionID()
+	if err := emit(EventCompactionStarted, map[string]any{
+		"compactionId":    id,
+		"reason":          string(reason),
+		"step":            state.Step,
+		"estimatedTokens": pressure.Estimated,
+		"windowTokens":    pressure.WindowTokens,
+		"ratio":           pressure.Ratio,
+		"threshold":       pressure.Threshold,
+	}); err != nil {
+		return false, err
+	}
+
+	// The model-free pruning pass runs first; pruning alone can bring the
+	// run back under the threshold and skip summarization entirely.
+	if a.compactor.Policy().Prune.Enabled {
+		pruned, stats := a.compactor.Prune(state.Messages)
+		if stats.Pruned > 0 {
+			state.Messages = pruned
+			if err := checkpointState(ctx, *state); err != nil {
+				return false, err
+			}
+			if err := emit(EventCompactionPruned, map[string]any{
+				"compactionId":  id,
+				"reason":        string(reason),
+				"prunedResults": stats.Pruned,
+				"charsRemoved":  stats.CharsRemoved,
+			}); err != nil {
+				return false, err
+			}
+			if reason == compaction.ReasonPressure {
+				pressure = a.compactPressure(state)
+				if !pressure.ShouldCompact {
+					if err := emit(EventCompactionDone, map[string]any{
+						"compactionId":    id,
+						"reason":          string(reason),
+						"outcome":         "pruned",
+						"estimatedTokens": pressure.Estimated,
+						"windowTokens":    pressure.WindowTokens,
+					}); err != nil {
+						return false, err
+					}
+					return true, nil
+				}
+			}
+		}
+	}
+
+	result, err := a.compactor.Compact(ctx, compaction.Request{
+		ID:       id,
+		RunID:    state.RunID,
+		RunInput: state.Input,
+		Step:     state.Step,
+		Reason:   reason,
+		Messages: state.Messages,
+	})
+	if err != nil {
+		soft := errors.Is(err, compaction.ErrNothingToCompact) ||
+			errors.Is(err, compaction.ErrNoReduction) ||
+			reason == compaction.ReasonPressure
+		if !soft {
+			return false, err
+		}
+		if emitErr := emit(EventCompactionError, map[string]any{
+			"compactionId": id,
+			"reason":       string(reason),
+			"error":        err.Error(),
+		}); emitErr != nil {
+			return false, emitErr
+		}
+		return false, nil
+	}
+	state.Messages = result.Messages
+	state.AppendCompaction(result.Record)
+	if err := checkpointState(ctx, *state); err != nil {
+		return false, err
+	}
+	if err := emit(EventCompactionSummary, map[string]any{
+		"compactionId":     id,
+		"reason":           string(reason),
+		"step":             state.Step,
+		"summary":          truncateSummaryForEvent(result.Summary.Text),
+		"summaryChars":     len(result.Summary.Text),
+		"summarizerModel":  result.Summary.Model,
+		"shadowedMessages": result.Record.ShadowedCount,
+		"prunedResults":    result.Record.PrunedResults,
+		"charsRemoved":     result.Record.CharsRemoved,
+		"summaryUsage": map[string]any{
+			"promptTokens":     result.Summary.Usage.PromptTokens,
+			"completionTokens": result.Summary.Usage.CompletionTokens,
+			"totalTokens":      result.Summary.Usage.TotalTokens,
+		},
+	}); err != nil {
+		return false, err
+	}
+	pressureAfter := a.compactPressure(state)
+	if err := emit(EventCompactionDone, map[string]any{
+		"compactionId":    id,
+		"reason":          string(reason),
+		"outcome":         "summarized",
+		"tokensBefore":    result.TokensBefore,
+		"tokensAfter":     result.TokensAfter,
+		"estimatedTokens": pressureAfter.Estimated,
+		"windowTokens":    pressureAfter.WindowTokens,
+	}); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func truncateSummaryForEvent(text string) string {
+	runes := []rune(text)
+	if len(runes) <= summaryExcerptChars {
+		return text
+	}
+	return string(runes[:summaryExcerptChars]) + "\n[... summary truncated in event; the checkpoint retains the full replacement message ...]"
 }
 
 func usageState(usage model.Usage) harness.UsageState {
@@ -2261,13 +2657,7 @@ func sandboxStateCleared(metadata map[string]any) bool {
 }
 
 func (a *Agent) modelMessages(state harness.RunState) []model.Message {
-	messages := make([]model.Message, 0, len(state.Messages)+2)
-	if a.config.Instructions != "" {
-		messages = append(messages, model.Message{Role: "system", Content: a.config.Instructions})
-	}
-	if a.skillCatalogPrompt != "" {
-		messages = append(messages, model.Message{Role: "system", Content: a.skillCatalogPrompt})
-	}
+	messages := a.systemPrefixMessages(state)
 	for _, message := range state.Messages {
 		messages = append(messages, model.Message{
 			Role:       message.Role,
@@ -2278,6 +2668,113 @@ func (a *Agent) modelMessages(state harness.RunState) []model.Message {
 		})
 	}
 	return messages
+}
+
+// systemPrefixMessages renders the system-message prefix: configured
+// instructions, the durable environment-context snapshot, discovered
+// project instructions, and the skill catalog. The environment and project
+// blocks come from run-state Meta so a resumed run replays the exact
+// context it started with.
+func (a *Agent) systemPrefixMessages(state harness.RunState) []model.Message {
+	messages := make([]model.Message, 0, 4)
+	if a.config.Instructions != "" {
+		messages = append(messages, model.Message{Role: "system", Content: a.config.Instructions})
+	}
+	if environment, ok := state.Meta[metaEnvironmentContext].(string); ok && environment != "" {
+		messages = append(messages, model.Message{Role: "system", Content: environment})
+	}
+	if project, ok := state.Meta[metaProjectInstructions].(string); ok && project != "" {
+		messages = append(messages, model.Message{Role: "system", Content: project})
+	}
+	if a.skillCatalogPrompt != "" {
+		messages = append(messages, model.Message{Role: "system", Content: a.skillCatalogPrompt})
+	}
+	return messages
+}
+
+// applyRunContext discovers the per-run prompt context for a fresh run:
+// the environment-context snapshot and hierarchical project instructions.
+// Both are frozen into durable run-state Meta before the first checkpoint
+// so resume replays them byte-identically. Discovery failures are fatal
+// for configuration problems and fail-open per unreadable file (recorded
+// as warnings in the instructions.loaded event).
+func (a *Agent) applyRunContext(ctx context.Context, emit eventEmitter, state *harness.RunState) error {
+	if !a.config.EnvironmentContext && a.config.InstructionFiles == nil {
+		return nil
+	}
+	if state.Meta == nil {
+		state.Meta = map[string]any{}
+	}
+	if a.config.EnvironmentContext {
+		state.Meta[metaEnvironmentContext] = a.renderEnvironmentContext()
+	}
+	if a.config.InstructionFiles != nil {
+		dir := a.config.WorkingDir
+		if dir == "" {
+			dir = "."
+		}
+		loaded, err := instructions.Discover(dir, *a.config.InstructionFiles)
+		if err != nil {
+			return err
+		}
+		if loaded.Empty() {
+			return nil
+		}
+		rendered := loaded.Render()
+		state.Meta[metaProjectInstructions] = rendered
+		paths := make([]string, 0, len(loaded.Entries))
+		for _, entry := range loaded.Entries {
+			paths = append(paths, entry.Path)
+		}
+		if emitErr := emit(EventInstructionsLoaded, map[string]any{
+			"projectRoot": loaded.ProjectRoot,
+			"files":       paths,
+			"bytes":       len(rendered),
+			"warnings":    loaded.Warnings,
+		}); emitErr != nil {
+			return emitErr
+		}
+	}
+	return nil
+}
+
+// renderEnvironmentContext builds the codex-style environment snapshot:
+// stable facts about where and how the run executes, tagged so the model
+// can distinguish them from conversation content.
+func (a *Agent) renderEnvironmentContext() string {
+	dir := a.config.WorkingDir
+	if dir == "" {
+		dir = "."
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		abs = dir
+	}
+	toolNames := make([]string, 0)
+	if configuredTools, err := a.configuredTools(); err == nil {
+		for _, current := range configuredTools {
+			toolNames = append(toolNames, current.Name())
+		}
+	}
+	var builder strings.Builder
+	builder.WriteString("<environment_context>\n")
+	builder.WriteString("<cwd>" + escapeTagContent(abs) + "</cwd>\n")
+	builder.WriteString("<platform>" + runtime.GOOS + "/" + runtime.GOARCH + "</platform>\n")
+	builder.WriteString("<today>" + time.Now().UTC().Format("2006-01-02") + "</today>\n")
+	builder.WriteString("<execution_mode>" + escapeTagContent(string(agentModeForConfig(a.config))) + "</execution_mode>\n")
+	if len(toolNames) > 0 {
+		builder.WriteString("<tools>" + escapeTagContent(strings.Join(toolNames, ", ")) + "</tools>\n")
+	}
+	builder.WriteString("</environment_context>")
+	return builder.String()
+}
+
+// escapeTagContent keeps repository-derived text from closing or forging
+// context tags in the rendered environment block.
+func escapeTagContent(value string) string {
+	value = strings.ReplaceAll(value, "&", "&amp;")
+	value = strings.ReplaceAll(value, "<", "&lt;")
+	return strings.ReplaceAll(value, ">", "&gt;")
 }
 
 func (a *Agent) toolSpecs() []model.ToolSpec {

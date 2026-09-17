@@ -36,7 +36,33 @@ type Config struct {
 }
 
 func New(config Config) (tool.Tool, error) {
-	return shellTool{config: config, schema: jsonschema.Infer(input{})}, nil
+	schema := jsonschema.Infer(input{})
+	if config.Backend != ShellBackendSandbox {
+		// Escalation arguments exist only while the shell is confined;
+		// an unconfined executor has nothing to widen.
+		schema = withoutEscalationFields(schema)
+	}
+	return shellTool{config: config, schema: schema}, nil
+}
+
+func withoutEscalationFields(schema map[string]any) map[string]any {
+	props, ok := schema["properties"].(map[string]any)
+	if !ok {
+		return schema
+	}
+	cloned := make(map[string]any, len(schema))
+	for key, value := range schema {
+		cloned[key] = value
+	}
+	filtered := make(map[string]any, len(props))
+	for key, value := range props {
+		if key == "sandboxPermissions" || key == "justification" {
+			continue
+		}
+		filtered[key] = value
+	}
+	cloned["properties"] = filtered
+	return cloned
 }
 
 func Must(config Config) tool.Tool {
@@ -52,7 +78,24 @@ type input struct {
 	CWD         string `json:"cwd,omitempty" jsonschema:"description=Workspace-relative working directory"`
 	TimeoutMs   int64  `json:"timeoutMs,omitempty" jsonschema:"description=Timeout in milliseconds"`
 	Description string `json:"description" jsonschema:"required,description=Why this command is needed"`
+	// Escalation ladder, modeled on codex sandbox_permissions and DSH
+	// one-shot retries: valid only as a retry of a command the sandbox
+	// just denied, always adjudicated by a user approval prompt, and
+	// stamped on exactly that one call.
+	SandboxPermissions string `json:"sandboxPermissions,omitempty" jsonschema:"description=One-shot confinement escalation. Set to danger-full-access to run this exact command outside the sandbox backend after the user approves; only valid when the shell is confined and paired with a justification."`
+	Justification      string `json:"justification,omitempty" jsonschema:"description=One-sentence user-facing reason for the requested sandbox escalation; required together with sandboxPermissions"`
 }
+
+// EscalationModeDangerFullAccess is the only wider mode: escaping the
+// sandbox backend entirely for one approved call.
+const EscalationModeDangerFullAccess = "danger-full-access"
+
+// sandboxDenialNotice and escalationHint follow the DSH marker grammar so
+// models trained on either reference harness recognize the pattern.
+const (
+	sandboxDenialNotice   = "[sandbox: file access denied under sandbox mode]"
+	sandboxEscalationHint = `[sandbox: escalation available — retry this exact command once with sandboxPermissions="danger-full-access" plus a justification; the approval prompt asks the user]`
+)
 
 type output struct {
 	Command      string               `json:"command"`
@@ -62,6 +105,7 @@ type output struct {
 	ExitCode     int                  `json:"exitCode"`
 	TimedOut     bool                 `json:"timedOut"`
 	Truncated    bool                 `json:"truncated"`
+	Escalated    bool                 `json:"escalated,omitempty"`
 	Review       policy.CommandReview `json:"review"`
 	Sandbox      *sandbox.State       `json:"sandbox,omitempty"`
 	SandboxError string               `json:"sandboxError,omitempty"`
@@ -117,13 +161,32 @@ func (t shellTool) run(ctx context.Context, in input, call tool.Context) (tool.R
 	if strings.TrimSpace(in.Description) == "" {
 		return tool.Result{}, fmt.Errorf("%w: description is required", tool.ErrInvalidArguments)
 	}
+	escalate, err := t.validateEscalation(in)
+	if err != nil {
+		return tool.Result{}, err
+	}
 	review := policy.ReviewCommand(t.config.Policy, in.Command)
 	if review.Decision == policy.ReviewBlock {
+		// Escalation widens confinement, never the allowlist: a blocked
+		// command stays blocked.
 		return tool.Result{}, fmt.Errorf("command blocked: %s", review.Reason)
 	}
 	cwd, err := policy.ResolveWorkingDir(t.config.Policy.WorkingDir, in.CWD)
 	if err != nil {
 		return tool.Result{}, err
+	}
+	if escalate {
+		// Leaving the sandbox always needs a fresh user decision, even
+		// for an allowlisted command. The escalation rides the ordinary
+		// single-approval channel under its own fingerprint so grants
+		// and resume metadata work unchanged.
+		review.Decision = policy.ReviewRequireApproval
+		review.Fingerprint = "escalate\x00" + review.Fingerprint
+		if review.RuleKey != "" {
+			review.RuleKey = "escalate\x00" + review.RuleKey
+		}
+		review.Reason = fmt.Sprintf("escalate sandbox to %s: %s", EscalationModeDangerFullAccess, strings.TrimSpace(in.Justification))
+		review.Risk = "escalation"
 	}
 	if review.Decision == policy.ReviewRequireApproval {
 		if approvedByMetadata(call.Metadata, review) {
@@ -146,8 +209,13 @@ func (t shellTool) run(ctx context.Context, in input, call tool.Context) (tool.R
 		timeout = t.config.Policy.MaxTimeout
 	}
 	maxOutput := t.config.Policy.MaxOutputBytes
-	stdout, stderr, exitCode, backend, sandboxState, clearSandbox, captureTruncated, err := t.execute(ctx, call, in.Command, cwd, timeout, maxOutput)
+	stdout, stderr, exitCode, backend, sandboxState, clearSandbox, captureTruncated, err := t.execute(ctx, call, in.Command, cwd, timeout, maxOutput, escalate)
 	combined, truncated := truncateOutput(joinOutput(stdout, stderr), maxOutput, captureTruncated)
+	if backend == ShellBackendSandbox && exitCode != 0 && policy.IsLikelySandboxDenied(exitCode, combined) {
+		// Advisory marker grammar from DSH: tell the model the failure
+		// looks confinement-caused and how the one-shot escape works.
+		combined = strings.TrimRight(combined, "\n") + "\n\n" + sandboxDenialNotice + "\n" + sandboxEscalationHint
+	}
 	out := output{
 		Command:      in.Command,
 		CWD:          cwd,
@@ -155,6 +223,7 @@ func (t shellTool) run(ctx context.Context, in input, call tool.Context) (tool.R
 		Backend:      backend,
 		ExitCode:     exitCode,
 		Truncated:    truncated,
+		Escalated:    escalate,
 		Review:       review,
 		Sandbox:      sandboxState,
 		ClearSandbox: clearSandbox,
@@ -173,15 +242,46 @@ func (t shellTool) run(ctx context.Context, in input, call tool.Context) (tool.R
 	return encodeOutput(out, err)
 }
 
+// validateEscalation checks the codex-style pairing and applicability
+// rules for a confinement-escape request before anything executes.
+func (t shellTool) validateEscalation(in input) (bool, error) {
+	mode := strings.TrimSpace(in.SandboxPermissions)
+	justification := strings.TrimSpace(in.Justification)
+	if mode == "" && justification != "" {
+		return false, fmt.Errorf("%w: justification is only valid together with sandboxPermissions", tool.ErrInvalidArguments)
+	}
+	if mode == "" {
+		return false, nil
+	}
+	if justification == "" {
+		return false, fmt.Errorf("%w: sandboxPermissions requires a justification", tool.ErrInvalidArguments)
+	}
+	if t.config.Backend != ShellBackendSandbox {
+		return false, fmt.Errorf("%w: sandboxPermissions is only valid when the shell runs confined by the sandbox backend", tool.ErrInvalidArguments)
+	}
+	if mode != EscalationModeDangerFullAccess {
+		return false, fmt.Errorf("%w: unknown sandboxPermissions mode %q; the only wider mode is %q", tool.ErrInvalidArguments, mode, EscalationModeDangerFullAccess)
+	}
+	return true, nil
+}
+
 func shellApprovalPlan(call tool.Context, in input, cwd string, review policy.CommandReview) approval.Plan {
+	title := "Approve shell command"
+	description := in.Description
+	operation := "shell.command"
+	if review.Risk == "escalation" {
+		title = "Approve sandbox escalation"
+		description = fmt.Sprintf("%s — %s", review.Reason, in.Description)
+		operation = "shell.escalate"
+	}
 	return approval.RequiredPlan(approval.Request{
 		ID:          approval.NewRequestID(call.RunID, call.ToolCallID, "shell_command"),
 		RunID:       call.RunID,
 		ToolCallID:  call.ToolCallID,
 		ToolName:    "shell",
-		Operation:   "shell.command",
-		Title:       "Approve shell command",
-		Description: in.Description,
+		Operation:   operation,
+		Title:       title,
+		Description: description,
 		Risk:        approval.RiskHigh,
 		Options:     approval.DefaultOptions(),
 		Payload: map[string]any{
@@ -195,9 +295,12 @@ func shellApprovalPlan(call tool.Context, in input, cwd string, review policy.Co
 	})
 }
 
-func (t shellTool) execute(ctx context.Context, call tool.Context, command, cwd string, timeout time.Duration, maxOutput int64) (string, string, int, ShellBackend, *sandbox.State, bool, bool, error) {
+func (t shellTool) execute(ctx context.Context, call tool.Context, command, cwd string, timeout time.Duration, maxOutput int64, forceLocal bool) (string, string, int, ShellBackend, *sandbox.State, bool, bool, error) {
 	backend := t.config.Backend
 	if backend == "" {
+		backend = ShellBackendLocal
+	}
+	if forceLocal {
 		backend = ShellBackendLocal
 	}
 	switch backend {

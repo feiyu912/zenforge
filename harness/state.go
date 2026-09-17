@@ -97,6 +97,28 @@ func ValidateRunState(state RunState) error {
 			return fmt.Errorf("historical superseded model attempt %q has no replacement", attempt.ID)
 		}
 	}
+	if len(state.Compactions) > CompactionHistoryLimit {
+		return fmt.Errorf("compaction history exceeds limit %d", CompactionHistoryLimit)
+	}
+	compactionIDs := make(map[string]struct{}, len(state.Compactions))
+	for i, record := range state.Compactions {
+		if record.ID == "" {
+			return fmt.Errorf("compaction record at index %d is missing an id", i)
+		}
+		if _, exists := compactionIDs[record.ID]; exists {
+			return fmt.Errorf("duplicate compaction record id %q", record.ID)
+		}
+		compactionIDs[record.ID] = struct{}{}
+		if record.Step < 0 || record.Step > state.Step {
+			return fmt.Errorf("compaction record %q step %d is outside run step %d", record.ID, record.Step, state.Step)
+		}
+		if record.TokensBefore < 0 || record.TokensAfter < 0 || record.ShadowedCount < 0 {
+			return fmt.Errorf("compaction record %q has negative counters", record.ID)
+		}
+		if record.CreatedAt.IsZero() {
+			return fmt.Errorf("compaction record %q is missing createdAt", record.ID)
+		}
+	}
 	return nil
 }
 
@@ -150,27 +172,28 @@ func validateModelAttempt(attempt ModelAttempt, historical bool, ids map[string]
 }
 
 type RunState struct {
-	Version     string          `json:"version"`
-	RunID       string          `json:"runId"`
-	ParentRunID string          `json:"parentRunId,omitempty"`
-	TaskID      string          `json:"taskId,omitempty"`
-	Input       string          `json:"input"`
-	Mode        string          `json:"mode,omitempty"`
-	Phase       RunPhase        `json:"phase"`
-	Step        int             `json:"step"`
-	CreatedAt   time.Time       `json:"createdAt"`
-	UpdatedAt   time.Time       `json:"updatedAt"`
-	Messages    []MessageState  `json:"messages,omitempty"`
-	Todos       []TodoState     `json:"todos,omitempty"`
-	Tool        ToolState       `json:"tool,omitempty"`
-	Approval    ApprovalState   `json:"approval,omitempty"`
-	Subtasks    []SubtaskState  `json:"subtasks,omitempty"`
-	Control     RunControlState `json:"control"`
-	Usage       UsageState      `json:"usage,omitempty"`
-	Workspace   WorkspaceState  `json:"workspace,omitempty"`
-	Sandbox     SandboxState    `json:"sandbox,omitempty"`
-	Model       ModelState      `json:"model,omitempty"`
-	Meta        map[string]any  `json:"meta,omitempty"`
+	Version     string             `json:"version"`
+	RunID       string             `json:"runId"`
+	ParentRunID string             `json:"parentRunId,omitempty"`
+	TaskID      string             `json:"taskId,omitempty"`
+	Input       string             `json:"input"`
+	Mode        string             `json:"mode,omitempty"`
+	Phase       RunPhase           `json:"phase"`
+	Step        int                `json:"step"`
+	CreatedAt   time.Time          `json:"createdAt"`
+	UpdatedAt   time.Time          `json:"updatedAt"`
+	Messages    []MessageState     `json:"messages,omitempty"`
+	Todos       []TodoState        `json:"todos,omitempty"`
+	Tool        ToolState          `json:"tool,omitempty"`
+	Approval    ApprovalState      `json:"approval,omitempty"`
+	Subtasks    []SubtaskState     `json:"subtasks,omitempty"`
+	Control     RunControlState    `json:"control"`
+	Usage       UsageState         `json:"usage,omitempty"`
+	Workspace   WorkspaceState     `json:"workspace,omitempty"`
+	Sandbox     SandboxState       `json:"sandbox,omitempty"`
+	Model       ModelState         `json:"model,omitempty"`
+	Compactions []CompactionRecord `json:"compactions,omitempty"`
+	Meta        map[string]any     `json:"meta,omitempty"`
 }
 
 type MessageState struct {
@@ -390,4 +413,32 @@ func (s *ModelState) AppendAttempt(attempt ModelAttempt) {
 	}
 	s.Attempts = append([]ModelAttempt(nil), s.Attempts[len(s.Attempts)-ModelAttemptHistoryLimit:]...)
 	s.Attempts[0].ReplacesID = ""
+}
+
+// CompactionRecord is the durable provenance of one context compaction that
+// replaced a shadowed message range with a summary message.
+type CompactionRecord struct {
+	ID              string     `json:"id"`
+	Step            int        `json:"step"`
+	Reason          string     `json:"reason"`
+	TokensBefore    int        `json:"tokensBefore"`
+	TokensAfter     int        `json:"tokensAfter,omitempty"`
+	ShadowedCount   int        `json:"shadowedMessages"`
+	PrunedResults   int        `json:"prunedResults,omitempty"`
+	CharsRemoved    int        `json:"charsRemoved,omitempty"`
+	SummarizerModel string     `json:"summarizerModel,omitempty"`
+	SummaryUsage    UsageState `json:"summaryUsage,omitempty"`
+	CreatedAt       time.Time  `json:"createdAt"`
+}
+
+// CompactionHistoryLimit bounds retained compaction provenance records.
+const CompactionHistoryLimit = 64
+
+// AppendCompaction retains a bounded compaction history.
+func (s *RunState) AppendCompaction(record CompactionRecord) {
+	s.Compactions = append(s.Compactions, record)
+	if len(s.Compactions) <= CompactionHistoryLimit {
+		return
+	}
+	s.Compactions = append([]CompactionRecord(nil), s.Compactions[len(s.Compactions)-CompactionHistoryLimit:]...)
 }
