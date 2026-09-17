@@ -96,6 +96,30 @@ type shellConfig struct {
 	Allow          []string `json:"allow,omitempty"`
 	Timeout        string   `json:"timeout,omitempty"`
 	MaxOutputBytes int64    `json:"maxOutputBytes,omitempty"`
+	// Sandbox confines the shell in an OS-level sandbox. When it is absent
+	// the shell runs directly on the host.
+	Sandbox *sandboxConfig `json:"sandbox,omitempty"`
+}
+
+// sandboxConfig configures the sandbox the shell runs inside.
+type sandboxConfig struct {
+	// Backend is none, seatbelt (macOS), bwrap (Linux), or docker.
+	Backend string `json:"backend,omitempty"`
+	// Roots are the writable roots inside the sandbox. Empty selects the
+	// shell working directory.
+	Roots []string `json:"roots,omitempty"`
+	// AllowNetwork grants the sandboxed shell network access.
+	AllowNetwork bool `json:"allowNetwork,omitempty"`
+	// Restricted starts the bubblewrap sandbox from an empty root instead
+	// of a read-only host root.
+	Restricted bool `json:"restricted,omitempty"`
+	// Image is the container image for the docker backend.
+	Image string `json:"image,omitempty"`
+	// Timeout bounds one sandboxed command; empty uses shell.timeout.
+	Timeout string `json:"timeout,omitempty"`
+	// ProtectedNames selects the basenames kept read-only inside writable
+	// roots. Empty selects .git and .zenforge.
+	ProtectedNames []string `json:"protectedNames,omitempty"`
 }
 
 // webConfig configures the web_search and web_fetch tools, mirroring the
@@ -336,6 +360,23 @@ func applyConfig(opts *options, config configFile) error {
 			return fmt.Errorf("parse shell.timeout: %w", err)
 		}
 		opts.shellTimeout = timeout
+	}
+	if config.Shell.Sandbox != nil {
+		opts.sandboxBackend = config.Shell.Sandbox.Backend
+		if len(config.Shell.Sandbox.Roots) > 0 {
+			opts.sandboxRoots = multiFlag(append([]string(nil), config.Shell.Sandbox.Roots...))
+		}
+		opts.sandboxAllowNetwork = config.Shell.Sandbox.AllowNetwork
+		opts.sandboxRestricted = config.Shell.Sandbox.Restricted
+		opts.sandboxImage = config.Shell.Sandbox.Image
+		opts.sandboxProtected = multiFlag(append([]string(nil), config.Shell.Sandbox.ProtectedNames...))
+		if config.Shell.Sandbox.Timeout != "" {
+			timeout, err := time.ParseDuration(config.Shell.Sandbox.Timeout)
+			if err != nil {
+				return fmt.Errorf("parse shell.sandbox.timeout: %w", err)
+			}
+			opts.sandboxTimeout = timeout
+		}
 	}
 	if config.Shell.MaxOutputBytes < 0 {
 		return fmt.Errorf("shell.maxOutputBytes must be non-negative")

@@ -323,7 +323,20 @@ development — it makes loopback, link-local, and private ranges reachable
 and should not be enabled in a shared deployment. `web.requireApproval`
 routes every search and fetch through the approval broker.
 
-### Secrets
+### Sandbox
+
+`shell.sandbox` confines the shell tool. `backend` is `none` (the default),
+`seatbelt` (macOS), `bwrap` (Linux), or `docker`; `roots` lists the writable
+roots (the shell working directory when empty); `allowNetwork` grants
+network access; `restricted` starts bubblewrap from an empty root plus the
+approved read roots instead of a read-only host root; `image` selects the
+container image; `timeout` bounds one sandboxed command (defaulting to
+`shell.timeout`); and `protectedNames` selects the basenames pinned
+read-only inside writable roots (`.git` and `.zenforge` by default). Since
+the default configuration does not set `shell.sandbox`, the block is
+omitted from the default file above and the shell stays local.
+
+## Secrets
 
 `model.apiKey` holds an inline key. Every formatting path (`%v`, `%s`, `%#v`,
 slog) renders `<redacted>`, so an accidental log line cannot leak it; JSON

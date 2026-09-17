@@ -668,6 +668,14 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
   new files need a same-run observed absence (a read that reported
   not-found), so a blind create is refused; `workspace.ErrPathNotFound` now
   also satisfies `errors.Is(err, fs.ErrNotExist)`.
+- Sandbox wiring: `--sandbox <none|seatbelt|bwrap|docker>` (or
+  `shell.sandbox.backend`) confines the shell tool in the chosen backend and
+  keeps the session open so later calls reuse the layout, with
+  `--sandbox-root`, `--sandbox-allow-network`, `--sandbox-restricted`,
+  `--sandbox-image`, `--sandbox-protected`, and `--sandbox-timeout` for the
+  details. An unavailable backend fails with `sandbox_unavailable` instead
+  of running unsandboxed. `--plan` and `--goals` are also real flags now,
+  matching the documented configuration keys.
 - Linux bubblewrap sandbox (codex `linux-sandbox/src/bwrap.rs`):
   `sandbox/bwrap` expresses the sandbox as a bubblewrap argument list — a
   read-only root (or a tmpfs root plus the approved read roots), the

@@ -28,6 +28,21 @@ is added only when at least one configured tool defers its definition, and
 
 ## Sandboxes
 
+`--sandbox <none|seatbelt|bwrap|docker>` (or `shell.sandbox.backend`)
+confines the shell in an OS-level sandbox: the backend is registered on the
+shell tool, the session stays open so later calls reuse the layout, and a
+denied command can be escalated per call through the existing approval
+flow. `--sandbox-root` (repeatable) sets the writable roots — the shell
+working directory by default — `--sandbox-allow-network` grants network
+access, `--sandbox-protected` selects the basenames pinned read-only
+inside writable roots, `--sandbox-restricted` switches bubblewrap from a
+read-only host root to an empty root plus approved read roots,
+`--sandbox-image` selects the container image, and `--sandbox-timeout`
+bounds one sandboxed command (defaulting to `shell.timeout`). An unknown
+backend is a usage error, and a backend that is unavailable on the host
+fails the command with `sandbox_unavailable` rather than running
+unsandboxed.
+
 The shell tool can escalate to a registered `sandbox.Sandbox`. Besides the
 Docker and container-hub backends, `sandbox/bwrap` runs commands on Linux
 under bubblewrap: the policy is built as an argument list (read-only or

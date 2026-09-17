@@ -638,6 +638,14 @@ type options struct {
 	goalsEnabled  bool
 	goalMaxRounds int
 
+	sandboxBackend      string
+	sandboxRoots        multiFlag
+	sandboxAllowNetwork bool
+	sandboxRestricted   bool
+	sandboxImage        string
+	sandboxTimeout      time.Duration
+	sandboxProtected    multiFlag
+
 	webEnabled         bool
 	webSearchEndpoint  string
 	webSearchAPIKey    string
@@ -703,6 +711,16 @@ func bindOptions(fs *flag.FlagSet, opts *options) {
 	_ = fs.String("requirements", "", "managed requirements file: `allowed` sets reject values, `enforce` overwrites them")
 	_ = fs.Bool("strict-config", false, "reject config fields this version does not recognize")
 	_ = fs.Bool("ignore-user-config", false, "skip the system and user configuration layers")
+	fs.BoolVar(&opts.planMode, "plan", opts.planMode, "start in plan mode: mutating tools are refused until exit_plan_mode is approved")
+	fs.BoolVar(&opts.goalsEnabled, "goals", opts.goalsEnabled, "register the create_goal/get_goal/update_goal tools")
+	fs.IntVar(&opts.goalMaxRounds, "goal-max-rounds", opts.goalMaxRounds, "default round budget for goals created in this session")
+	fs.StringVar(&opts.sandboxBackend, "sandbox", opts.sandboxBackend, "confine the shell in a sandbox: none, seatbelt (macOS), bwrap (Linux), or docker")
+	fs.Var(&opts.sandboxRoots, "sandbox-root", "writable root inside the sandbox (repeatable; defaults to the working directory)")
+	fs.BoolVar(&opts.sandboxAllowNetwork, "sandbox-allow-network", opts.sandboxAllowNetwork, "grant the sandboxed shell network access")
+	fs.BoolVar(&opts.sandboxRestricted, "sandbox-restricted", opts.sandboxRestricted, "start the bubblewrap sandbox from an empty root instead of a read-only host root")
+	fs.StringVar(&opts.sandboxImage, "sandbox-image", opts.sandboxImage, "container image for the docker backend")
+	fs.DurationVar(&opts.sandboxTimeout, "sandbox-timeout", opts.sandboxTimeout, "timeout for one sandboxed command (defaults to shell.timeout)")
+	fs.Var(&opts.sandboxProtected, "sandbox-protected", "basename kept read-only inside writable roots (repeatable; defaults to .git and .zenforge)")
 	fs.BoolVar(&opts.webEnabled, "web", opts.webEnabled, "enable the web_fetch and web_search tools")
 	fs.StringVar(&opts.webSearchEndpoint, "web-search-endpoint", opts.webSearchEndpoint, "JSON search API endpoint for web_search (enables the web tools)")
 	fs.StringVar(&opts.webSearchAPIKey, "web-search-api-key", opts.webSearchAPIKey, "inline search API key; prefer --web-search-api-key-env")
@@ -794,13 +812,36 @@ func buildAgent(ctx context.Context, opts options, ioStreams IO) (*zenforge.Agen
 		tools = append(tools, webTools...)
 	}
 	if !opts.noShell {
-		shell, err := shelltool.New(shelltool.Config{Policy: policy.ShellPolicy{
+		sandboxBackend, err := buildSandbox(sandboxOptions{
+			Backend:        opts.sandboxBackend,
+			Roots:          []string(opts.sandboxRoots),
+			AllowNetwork:   opts.sandboxAllowNetwork,
+			Restricted:     opts.sandboxRestricted,
+			Image:          opts.sandboxImage,
+			Timeout:        opts.sandboxTimeout,
+			ProtectedNames: []string(opts.sandboxProtected),
+		}, opts.shellWorkingDir, opts.shellTimeout)
+		if err != nil {
+			return nil, err
+		}
+		shellConfig := shelltool.Config{Policy: policy.ShellPolicy{
 			WorkingDir:      opts.shellWorkingDir,
 			AllowCommands:   []string(opts.shellAllow),
 			RequireApproval: opts.approve != "never",
 			MaxTimeout:      opts.shellTimeout,
 			MaxOutputBytes:  opts.shellMaxOutputBytes,
-		}})
+		}}
+		if sandboxBackend != nil {
+			// Confined mode: the shell runs through the sandbox and the
+			// session stays open so later calls reuse the same layout,
+			// which is what makes escalation (and its checkpointed state)
+			// meaningful.
+			shellConfig.Backend = shelltool.ShellBackendSandbox
+			shellConfig.Sandbox = sandboxBackend
+			shellConfig.EnvironmentID = opts.sandboxImage
+			shellConfig.KeepSessionOpen = true
+		}
+		shell, err := shelltool.New(shellConfig)
 		if err != nil {
 			return nil, err
 		}
@@ -1010,7 +1051,10 @@ func validateOptionEnums(opts options) error {
 	default:
 		return fmt.Errorf("unknown approval mode: %s", opts.approve)
 	}
-	return validateCheckpointType(opts.checkpointType)
+	if err := validateCheckpointType(opts.checkpointType); err != nil {
+		return err
+	}
+	return validateSandboxBackend(opts.sandboxBackend)
 }
 
 func validateCheckpointType(value string) error {
