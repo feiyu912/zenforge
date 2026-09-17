@@ -100,7 +100,18 @@ type Config struct {
 	// PromptVariables are host-supplied interpolation values for
 	// PersonaPrefix and PersonaSuffix. Host values override the
 	// built-in `workspace` and `platform`.
-	PromptVariables    map[string]string
+	PromptVariables map[string]string
+	// OutputSchema asks the provider to constrain the final response to
+	// a JSON Schema (codex exec --output-schema). Adapters that cannot
+	// enforce one fail the request with
+	// model.ErrUnsupportedOutputSchema.
+	OutputSchema map[string]any
+	// OutputSchemaName labels the schema; empty selects
+	// model.DefaultOutputSchemaName.
+	OutputSchemaName string
+	// OutputSchemaStrict requests strict provider validation. Nil means
+	// strict, matching the reference default.
+	OutputSchemaStrict *bool
 	WorkingDir         string
 	EnvironmentContext bool
 	MaxSteps           int

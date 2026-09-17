@@ -437,3 +437,13 @@ func TestClientAttachesRateLimitSnapshotToUsage(t *testing.T) {
 		t.Fatalf("reset = %v, want approximately 45s", limits.RequestsReset)
 	}
 }
+
+func TestClientRejectsOutputSchema(t *testing.T) {
+	client := New(Config{Model: "claude-test"})
+	_, err := client.Stream(context.Background(), model.Request{
+		OutputSchema: map[string]any{"type": "object"},
+	})
+	if !errors.Is(err, model.ErrUnsupportedOutputSchema) {
+		t.Fatalf("Stream error = %v, want ErrUnsupportedOutputSchema", err)
+	}
+}

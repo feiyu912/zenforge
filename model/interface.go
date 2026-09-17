@@ -16,7 +16,21 @@ type Request struct {
 	Tools      []ToolSpec
 	ToolChoice ToolChoice
 	Meta       map[string]any
+	// OutputSchema, when set, asks the provider to constrain the final
+	// response to a JSON Schema (codex exec --output-schema). Adapters
+	// that cannot enforce a schema fail with
+	// ErrUnsupportedOutputSchema instead of silently ignoring it.
+	OutputSchema map[string]any
+	// OutputSchemaName labels the schema for providers that require a
+	// name. Empty selects "final_output".
+	OutputSchemaName string
+	// OutputSchemaStrict requests strict provider validation. It only
+	// applies when OutputSchema is set.
+	OutputSchemaStrict bool
 }
+
+// DefaultOutputSchemaName labels a schema when the caller does not.
+const DefaultOutputSchemaName = "final_output"
 
 type Response struct {
 	Message Message

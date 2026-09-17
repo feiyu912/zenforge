@@ -111,6 +111,11 @@ func (c *Client) Stream(ctx context.Context, req model.Request) (<-chan model.Ev
 	if c.model == "" {
 		return nil, fmt.Errorf("anthropic model is required")
 	}
+	// The Messages API has no json_schema response format; refusing is
+	// better than silently returning unconstrained text.
+	if model.HasOutputSchema(req) {
+		return nil, fmt.Errorf("%w: anthropic messages api", model.ErrUnsupportedOutputSchema)
+	}
 	providerReq, err := c.messagesRequest(req)
 	if err != nil {
 		return nil, err

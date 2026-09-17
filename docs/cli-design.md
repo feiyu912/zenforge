@@ -6,6 +6,7 @@ ZenForge CLI is the fastest way to feel the runtime.
 
 ```text
 zenforge run
+zenforge exec
 zenforge code
 zenforge resume
 zenforge events
@@ -13,6 +14,32 @@ zenforge runs
 zenforge init
 zenforge version
 ```
+
+## `zenforge exec`
+
+`exec` is the headless entry point for scripts and editors. It shares every
+option with `run` and adds machine output:
+
+```bash
+# JSONL event stream on stdout
+zenforge exec --json "Summarize the failing tests"
+
+# Constrain the final response to a JSON Schema and keep the last message
+zenforge exec --output-schema answer.schema.json -o answer.json "Extract the risks"
+
+# Read the prompt from stdin
+echo "Summarize this diff" | zenforge exec -
+```
+
+- `--json` prints one `zenforge.Event` JSON object per line, the same record
+  `zenforge events --json` prints.
+- `--output-schema <file>` requires a non-empty JSON object; the schema is
+  forwarded to the provider as a strict `json_schema` response format. A
+  provider that cannot enforce a schema (Anthropic Messages API) fails with
+  `model.ErrUnsupportedOutputSchema` instead of returning unconstrained text.
+- `-o`, `--output-last-message <file>` writes the final assistant message.
+- The prompt comes from the arguments, from `-`, or from piped stdin (1 MiB
+  cap). Missing or blank input is a usage error (`exit 2`).
 
 ## `zenforge run`
 

@@ -44,3 +44,4 @@ later ADRs supersede earlier ones, never edit.
 | [0028](0028-deliverables-titles-and-write-observation.md) | Deliverables, session titles, and the write observation policy |
 | [0029](0029-ordered-prompt-sections.md) | Ordered prompt sections with strict variable interpolation |
 | [0030](0030-declared-tool-timeouts-and-deferred-loading.md) | Declared tool timeouts and deferred tool loading |
+| [0031](0031-headless-exec-protocol.md) | Headless exec protocol (`--json`, `--output-schema`) |

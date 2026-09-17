@@ -130,8 +130,12 @@ go run ./cmd/zenforge events --config zenforge.json run_123
 go run ./cmd/zenforge runs --config zenforge.json
 ```
 
-`run` executes a task in the configured workspace. `code <repo> <task>` binds
-workspace and shell execution to the resolved repository. `resume <runID>`
+`run` executes a task in the configured workspace. `exec [prompt]` is the
+headless one-shot entry point: `--json` streams the run as JSONL events, `-o`
+/`--output-last-message` writes the final message to a file, and
+`--output-schema <file>` constrains the final response to a JSON Schema (the
+prompt is read from `-` or piped stdin when omitted). `code <repo> <task>`
+binds workspace and shell execution to the resolved repository. `resume <runID>`
 continues a supported durable checkpoint, `events <runID>` prints its event
 history (`--json` for JSON), and `runs` lists durable run summaries (`--json`
 for JSON). Config is JSON and `init` creates `zenforge.json`; flags override

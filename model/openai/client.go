@@ -139,6 +139,16 @@ func (c *Client) chatRequest(req model.Request) chatRequest {
 		ToolChoice:  choice,
 		StreamUsage: map[string]bool{"include_usage": true},
 	}
+	if model.HasOutputSchema(req) {
+		out.ResponseFormat = map[string]any{
+			"type": "json_schema",
+			"json_schema": map[string]any{
+				"name":   model.OutputSchemaLabel(req),
+				"schema": req.OutputSchema,
+				"strict": req.OutputSchemaStrict,
+			},
+		}
+	}
 	for _, message := range req.Messages {
 		out.Messages = append(out.Messages, chatMessage{
 			Role:       message.Role,

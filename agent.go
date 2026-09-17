@@ -1125,10 +1125,13 @@ func (a *Agent) callModel(ctx context.Context, emit eventEmitter, state harness.
 		return harness.MessageState{}, model.Usage{}, err
 	}
 	stream, err := a.config.Model.Stream(ctx, model.Request{
-		Messages:   a.modelMessages(state),
-		Tools:      a.toolSpecs(state),
-		ToolChoice: choice,
-		Meta:       cloneMap(state.Meta),
+		Messages:           a.modelMessages(state),
+		Tools:              a.toolSpecs(state),
+		ToolChoice:         choice,
+		Meta:               cloneMap(state.Meta),
+		OutputSchema:       a.config.OutputSchema,
+		OutputSchemaName:   a.config.OutputSchemaName,
+		OutputSchemaStrict: outputSchemaStrict(a.config.OutputSchemaStrict),
 	})
 	if err != nil {
 		return harness.MessageState{}, model.Usage{}, err
@@ -1339,10 +1342,13 @@ func (a *Agent) callModelAttemptDurable(
 	}
 
 	stream, err := a.config.Model.Stream(ctx, model.Request{
-		Messages:   a.modelMessages(*state),
-		Tools:      a.toolSpecs(*state),
-		ToolChoice: choice,
-		Meta:       cloneMap(state.Meta),
+		Messages:           a.modelMessages(*state),
+		Tools:              a.toolSpecs(*state),
+		ToolChoice:         choice,
+		Meta:               cloneMap(state.Meta),
+		OutputSchema:       a.config.OutputSchema,
+		OutputSchemaName:   a.config.OutputSchemaName,
+		OutputSchemaStrict: outputSchemaStrict(a.config.OutputSchemaStrict),
 	})
 	if err != nil {
 		return harness.MessageState{}, model.Usage{}, err
@@ -2889,6 +2895,12 @@ func toolSearchMatches(value any) []string {
 		}
 	}
 	return names
+}
+
+// outputSchemaStrict resolves the tri-state strict flag: unset means
+// strict, matching the reference default.
+func outputSchemaStrict(value *bool) bool {
+	return value == nil || *value
 }
 
 func stringMeta(meta map[string]any, key string) string {

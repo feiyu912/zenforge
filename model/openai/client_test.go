@@ -218,3 +218,65 @@ func TestClientAttachesRateLimitSnapshotToUsage(t *testing.T) {
 		t.Fatalf("snapshot = %+v", limits)
 	}
 }
+
+func TestClientSendsJSONSchemaResponseFormat(t *testing.T) {
+	var gotReq map[string]any
+	httpClient := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if err := json.NewDecoder(r.Body).Decode(&gotReq); err != nil {
+			t.Fatalf("Decode request returned error: %v", err)
+		}
+		return sseResponse("data: [DONE]\n\n"), nil
+	})}
+
+	schema := map[string]any{
+		"type":       "object",
+		"properties": map[string]any{"answer": map[string]any{"type": "string"}},
+		"required":   []any{"answer"},
+	}
+	events, err := New(Config{Model: "gpt-test", HTTPClient: httpClient}).Stream(context.Background(), model.Request{
+		OutputSchema:       schema,
+		OutputSchemaStrict: true,
+	})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	for range events {
+	}
+
+	format, ok := gotReq["response_format"].(map[string]any)
+	if !ok {
+		t.Fatalf("response_format = %#v, want a json_schema format", gotReq["response_format"])
+	}
+	if format["type"] != "json_schema" {
+		t.Fatalf("response_format type = %v", format["type"])
+	}
+	js, _ := format["json_schema"].(map[string]any)
+	if js["name"] != model.DefaultOutputSchemaName {
+		t.Fatalf("schema name = %v, want %s", js["name"], model.DefaultOutputSchemaName)
+	}
+	if js["strict"] != true {
+		t.Fatalf("strict = %v, want true", js["strict"])
+	}
+	sent, _ := js["schema"].(map[string]any)
+	if sent["required"] == nil {
+		t.Fatalf("schema was not forwarded: %#v", js["schema"])
+	}
+
+	// A request without a schema carries no response_format at all.
+	var plain map[string]any
+	httpClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if err := json.NewDecoder(r.Body).Decode(&plain); err != nil {
+			t.Fatalf("Decode request returned error: %v", err)
+		}
+		return sseResponse("data: [DONE]\n\n"), nil
+	})}
+	events, err = New(Config{Model: "gpt-test", HTTPClient: httpClient}).Stream(context.Background(), model.Request{})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	for range events {
+	}
+	if _, present := plain["response_format"]; present {
+		t.Fatalf("unexpected response_format: %#v", plain["response_format"])
+	}
+}

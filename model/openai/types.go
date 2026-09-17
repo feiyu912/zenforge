@@ -15,6 +15,9 @@ type chatRequest struct {
 	ToolChoice  any           `json:"tool_choice,omitempty"`
 	Stream      bool          `json:"stream"`
 	StreamUsage any           `json:"stream_options,omitempty"`
+	// ResponseFormat carries a json_schema response_format when the
+	// caller asked for a constrained final response.
+	ResponseFormat any `json:"response_format,omitempty"`
 }
 
 type chatMessage struct {

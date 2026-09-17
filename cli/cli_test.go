@@ -1372,3 +1372,168 @@ func TestAgentModeParsing(t *testing.T) {
 		t.Fatal("expected invalid mode error")
 	}
 }
+
+func TestExecJSONEmitsJSONLAndForwardsOutputSchema(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test")
+	workspace := t.TempDir()
+	dir := t.TempDir()
+	schemaPath := filepath.Join(dir, "answer-schema.json")
+	if err := os.WriteFile(schemaPath, []byte(`{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"],"additionalProperties":false}`), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	var requests int
+	var firstRequest string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		body, _ := io.ReadAll(r.Body)
+		if requests == 1 {
+			firstRequest = string(body)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w,
+			"data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"{\\\"answer\\\":\\\"42\\\"}\"}}]}\n\n"+
+				"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"+
+				"data: [DONE]\n\n",
+		)
+	}))
+	defer server.Close()
+
+	lastMessage := filepath.Join(dir, "last-message.txt")
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := Main(context.Background(), []string{
+		"exec",
+		"--json",
+		"--base-url", server.URL,
+		"--checkpoint-dir", t.TempDir(),
+		"--planning", "disabled",
+		"--no-shell",
+		"--workspace", workspace,
+		"--output-schema", schemaPath,
+		"--output-last-message", lastMessage,
+		"answer the question",
+	}, IO{Stdout: &stdout, Stderr: &stderr})
+	if exitCode != 0 {
+		t.Fatalf("exec = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+	if requests != 1 {
+		t.Fatalf("requests = %d, want 1", requests)
+	}
+
+	// Every stdout line is a complete JSON event record.
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	if len(lines) < 3 {
+		t.Fatalf("stdout lines = %d, want several events: %q", len(lines), stdout.String())
+	}
+	var types []string
+	for _, line := range lines {
+		var record map[string]any
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatalf("stdout line is not JSON (%v): %s", err, line)
+		}
+		if record["type"] == nil {
+			t.Fatalf("event record has no type: %s", line)
+		}
+		types = append(types, record["type"].(string))
+	}
+	if !containsString(types, string(zenforge.EventRunStarted)) || !containsString(types, string(zenforge.EventRunDone)) {
+		t.Fatalf("event types = %v, want run.started and run.done", types)
+	}
+
+	// The JSONL stream carries no human rendering.
+	if strings.Contains(stdout.String(), "run started") {
+		t.Fatalf("--json leaked human output: %q", stdout.String())
+	}
+
+	// The schema is forwarded as a strict json_schema response format,
+	// labelled with the file stem.
+	if !strings.Contains(firstRequest, `"response_format"`) ||
+		!strings.Contains(firstRequest, `"name":"answer-schema"`) ||
+		!strings.Contains(firstRequest, `"strict":true`) ||
+		!strings.Contains(firstRequest, `"additionalProperties":false`) {
+		t.Fatalf("request did not carry the output schema: %s", firstRequest)
+	}
+
+	data, err := os.ReadFile(lastMessage)
+	if err != nil {
+		t.Fatalf("ReadFile returned error: %v", err)
+	}
+	if strings.TrimSpace(string(data)) != `{"answer":"42"}` {
+		t.Fatalf("last message = %q", string(data))
+	}
+}
+
+func TestExecReadsPromptFromStdin(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test")
+	var firstRequest string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if firstRequest == "" {
+			firstRequest = string(body)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w,
+			"data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"ok\"}}]}\n\n"+
+				"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"+
+				"data: [DONE]\n\n",
+		)
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := Main(context.Background(), []string{
+		"exec",
+		"--base-url", server.URL,
+		"--checkpoint-dir", t.TempDir(),
+		"--planning", "disabled",
+		"--no-shell",
+		"--workspace", t.TempDir(),
+		"-",
+	}, IO{Stdout: &stdout, Stderr: &stderr, Stdin: strings.NewReader("prompt from stdin")})
+	if exitCode != 0 {
+		t.Fatalf("exec = %d, want 0; stderr=%q", exitCode, stderr.String())
+	}
+	if !strings.Contains(firstRequest, "prompt from stdin") {
+		t.Fatalf("stdin prompt missing from the request: %s", firstRequest)
+	}
+}
+
+func TestExecRejectsInvalidOutputSchemaAndEmptyInput(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test")
+	dir := t.TempDir()
+	notObject := filepath.Join(dir, "array.json")
+	if err := os.WriteFile(notObject, []byte(`[1,2,3]`), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	invalid := filepath.Join(dir, "broken.json")
+	if err := os.WriteFile(invalid, []byte(`{`), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	if code := Main(context.Background(), []string{"exec", "--output-schema", notObject, "do it"},
+		IO{Stdout: &stdout, Stderr: &stderr}); code != exitInvalidUsage {
+		t.Fatalf("array schema exit = %d, want %d; stderr=%q", code, exitInvalidUsage, stderr.String())
+	}
+	stderr.Reset()
+	if code := Main(context.Background(), []string{"exec", "--output-schema", invalid, "do it"},
+		IO{Stdout: &stdout, Stderr: &stderr}); code != exitInvalidUsage {
+		t.Fatalf("broken schema exit = %d, want %d; stderr=%q", code, exitInvalidUsage, stderr.String())
+	}
+	stderr.Reset()
+	if code := Main(context.Background(), []string{"exec", "-"},
+		IO{Stdout: &stdout, Stderr: &stderr, Stdin: strings.NewReader("   ")}); code != exitInvalidUsage {
+		t.Fatalf("empty stdin exit = %d, want %d; stderr=%q", code, exitInvalidUsage, stderr.String())
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}

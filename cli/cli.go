@@ -79,6 +79,8 @@ func Main(ctx context.Context, args []string, ioStreams IO) int {
 	switch args[0] {
 	case "run":
 		err = run(ctx, args[1:], ioStreams)
+	case "exec":
+		err = exec(ctx, args[1:], ioStreams)
 	case "code":
 		err = code(ctx, args[1:], ioStreams)
 	case "resume":
@@ -124,6 +126,127 @@ func run(ctx context.Context, args []string, ioStreams IO) error {
 		return invalidUsage(errors.New("run input is required"))
 	}
 	return streamTask(ctx, opts, input, ioStreams)
+}
+
+// exec runs one headless task, printing either the human stream or one
+// JSON event per line (codex exec --json), optionally constraining the
+// final response to a JSON Schema and writing the last message to a
+// file.
+func exec(ctx context.Context, args []string, ioStreams IO) error {
+	fs := flag.NewFlagSet("exec", flag.ContinueOnError)
+	fs.SetOutput(ioStreams.Stderr)
+	opts, err := optionsFromArgs(args)
+	if err != nil {
+		return err
+	}
+	bindOptions(fs, &opts)
+	jsonOut := fs.Bool("json", false, "print events to stdout as JSONL")
+	outputSchemaPath := fs.String("output-schema", "", "path to a JSON Schema file describing the final response")
+	lastMessagePath := fs.String("output-last-message", "", "write the last agent message to this file")
+	lastMessageShort := fs.String("o", "", "alias for --output-last-message")
+	if err := fs.Parse(args); err != nil {
+		return invalidUsage(err)
+	}
+	if err := resolveExecutionFlags(fs, &opts); err != nil {
+		return invalidUsage(err)
+	}
+	if err := validateOptionEnums(opts); err != nil {
+		return invalidUsage(err)
+	}
+	if *lastMessagePath == "" {
+		*lastMessagePath = *lastMessageShort
+	}
+	if *outputSchemaPath != "" {
+		schema, err := loadOutputSchema(*outputSchemaPath)
+		if err != nil {
+			return invalidUsage(err)
+		}
+		opts.outputSchema = schema
+		opts.outputSchemaName = schemaNameFromPath(*outputSchemaPath)
+	}
+	input, err := execInput(fs.Args(), ioStreams.Stdin)
+	if err != nil {
+		return err
+	}
+	agent, err := buildAgent(ctx, opts, ioStreams)
+	if err != nil {
+		return err
+	}
+	events, err := agent.Stream(ctx, zenforge.Task{Input: input})
+	if err != nil {
+		return err
+	}
+	render := renderEvent
+	if *jsonOut {
+		render = renderEventJSON
+	}
+	finalOutput, streamErr := renderStreamCapturing(ioStreams.Stdout, events, render)
+	if streamErr == nil && *lastMessagePath != "" {
+		if err := os.WriteFile(*lastMessagePath, []byte(finalOutput), 0o644); err != nil {
+			return fmt.Errorf("write last message: %w", err)
+		}
+	}
+	return streamErr
+}
+
+// execInput reads the prompt from the arguments, or from stdin when the
+// argument is "-" or absent and stdin is not a terminal.
+func execInput(args []string, stdin io.Reader) (string, error) {
+	input := strings.TrimSpace(strings.Join(args, " "))
+	if input != "" && input != "-" {
+		return input, nil
+	}
+	if stdin == nil {
+		return "", invalidUsage(errors.New("exec input is required"))
+	}
+	data, err := io.ReadAll(io.LimitReader(stdin, maxExecInputBytes))
+	if err != nil {
+		return "", fmt.Errorf("read exec input: %w", err)
+	}
+	input = strings.TrimSpace(string(data))
+	if input == "" {
+		return "", invalidUsage(errors.New("exec input is required"))
+	}
+	return input, nil
+}
+
+const maxExecInputBytes = 1 << 20
+
+// loadOutputSchema reads a JSON Schema file, requiring a JSON object.
+func loadOutputSchema(path string) (map[string]any, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read output schema: %w", err)
+	}
+	var schema map[string]any
+	if err := json.Unmarshal(data, &schema); err != nil {
+		return nil, fmt.Errorf("output schema %s: %w", path, err)
+	}
+	if len(schema) == 0 {
+		return nil, fmt.Errorf("output schema %s: schema must be a non-empty JSON object", path)
+	}
+	return schema, nil
+}
+
+// schemaNameFromPath derives a provider-safe schema label: providers
+// require a name, and the file stem is the most useful stable choice.
+func schemaNameFromPath(path string) string {
+	base := filepath.Base(path)
+	stem := strings.TrimSuffix(base, filepath.Ext(base))
+	var builder strings.Builder
+	for _, r := range stem {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-':
+			builder.WriteRune(r)
+		default:
+			builder.WriteRune('_')
+		}
+	}
+	name := strings.Trim(builder.String(), "_")
+	if name == "" {
+		return ""
+	}
+	return name
 }
 
 func code(ctx context.Context, args []string, ioStreams IO) error {
@@ -372,6 +495,9 @@ type options struct {
 	personaPrefix       string
 	personaSuffix       string
 	promptVariables     map[string]string
+	outputSchema        map[string]any
+	outputSchemaName    string
+	outputSchemaStrict  *bool
 	provider            string
 	model               string
 	apiKeyEnv           string
@@ -644,6 +770,9 @@ func buildAgent(ctx context.Context, opts options, ioStreams IO) (*zenforge.Agen
 		PersonaPrefix:      opts.personaPrefix,
 		PersonaSuffix:      opts.personaSuffix,
 		PromptVariables:    opts.promptVariables,
+		OutputSchema:       opts.outputSchema,
+		OutputSchemaName:   opts.outputSchemaName,
+		OutputSchemaStrict: opts.outputSchemaStrict,
 		Tools:              tools,
 		ToolRuntime:        toolRuntime,
 		Approval:           approvalBroker,
@@ -822,11 +951,29 @@ func planningMode(value string) zenforge.PlanningMode {
 }
 
 func renderStream(out io.Writer, events <-chan zenforge.Event) error {
+	_, err := renderStreamCapturing(out, events, renderEvent)
+	return err
+}
+
+// renderEventJSON prints one event per line as JSON, matching the
+// `events --json` record shape.
+func renderEventJSON(out io.Writer, event zenforge.Event) {
+	data, err := json.Marshal(event)
+	if err != nil {
+		return
+	}
+	_, _ = fmt.Fprintln(out, string(data))
+}
+
+// renderStreamCapturing renders every event through render and returns
+// the final assistant output reported by the terminal run.done event.
+func renderStreamCapturing(out io.Writer, events <-chan zenforge.Event, render func(io.Writer, zenforge.Event)) (string, error) {
 	var finalErr error
 	var approvalRejected bool
 	var runCancelled bool
+	var finalOutput string
 	for event := range events {
-		renderEvent(out, event)
+		render(out, event)
 		switch event.Type {
 		case zenforge.EventApprovalResolved, zenforge.EventApprovalExpired:
 			if stringValue(event.Payload["action"]) == string(approval.DecisionReject) {
@@ -834,17 +981,19 @@ func renderStream(out io.Writer, events <-chan zenforge.Event) error {
 			}
 		case zenforge.EventRunCancelled:
 			runCancelled = true
+		case zenforge.EventRunDone:
+			finalOutput = stringValue(event.Payload["output"])
 		case zenforge.EventRunError:
 			finalErr = fmt.Errorf("%s", stringValue(event.Payload["error"]))
 		}
 	}
 	if runCancelled {
-		return fmt.Errorf("%w", errRunCancelled)
+		return finalOutput, fmt.Errorf("%w", errRunCancelled)
 	}
 	if approvalRejected {
-		return fmt.Errorf("%w", errApprovalRejected)
+		return finalOutput, fmt.Errorf("%w", errApprovalRejected)
 	}
-	return finalErr
+	return finalOutput, finalErr
 }
 
 func exitCode(err error) int {
@@ -996,7 +1145,7 @@ func stringValue(value any) string {
 }
 
 func printUsage(out io.Writer) {
-	_, _ = fmt.Fprintln(out, "usage: zenforge <run|code|resume|events|runs|init|version> [options]")
+	_, _ = fmt.Fprintln(out, "usage: zenforge <run|exec|code|resume|events|runs|init|version> [options]")
 }
 
 type multiFlag []string
