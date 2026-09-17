@@ -14,6 +14,7 @@ import (
 	"github.com/feiyu912/zenforge/model"
 	"github.com/feiyu912/zenforge/modelretry"
 	"github.com/feiyu912/zenforge/planner"
+	"github.com/feiyu912/zenforge/review"
 	"github.com/feiyu912/zenforge/skill"
 	"github.com/feiyu912/zenforge/subagent"
 	"github.com/feiyu912/zenforge/tool"
@@ -70,7 +71,12 @@ type Config struct {
 	// records new ones when a run finishes. The summary is frozen into
 	// durable Meta at run start, so a resume replays what the run saw.
 	// Optional; without it no memory work happens.
-	Memory                memory.Provider
+	Memory memory.Provider
+	// Review runs an independent reviewer over the finished run. In report
+	// mode its verdict is recorded; in enforce mode a request-changes
+	// verdict sends the agent back to work with the findings as its next
+	// instruction, sharing the Stop hook's bounded refusals. Optional.
+	Review                *review.Guardian
 	Tools                 []tool.Tool
 	ToolInvoker           tool.Invoker
 	ToolRuntime           []tool.Middleware

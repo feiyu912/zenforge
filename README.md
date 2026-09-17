@@ -668,6 +668,13 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
   new files need a same-run observed absence (a read that reported
   not-found), so a blind create is refused; `workspace.ErrPathNotFound` now
   also satisfies `errors.Is(err, fs.ErrNotExist)`.
+- A guardian review (`--review report|enforce`): one adversarial model call
+  over the finished run — task, answer, changed files, real unified diffs
+  read back from the run's turn-diff events, commands, failures. Report mode
+  records findings and finishes; enforce mode sends a `request_changes`
+  verdict back as the agent's next instruction, bounded by the same
+  three-refusal limit as Stop hooks. A malformed verdict is an error, never
+  an approval, and a broken reviewer can neither block nor approve.
 - Durable cross-run memories (codex memories): `--memory <dir>` keeps
   learnings in two readable markdown files — an append-only raw file and a
   consolidated summary that is injected as instructions (frozen into run

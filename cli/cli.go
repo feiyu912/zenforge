@@ -654,6 +654,7 @@ type options struct {
 	memoryDir     string
 	memoryScope   string
 	memoryDistill bool
+	reviewMode    string
 
 	sandboxBackend      string
 	sandboxRoots        multiFlag
@@ -735,6 +736,7 @@ func bindOptions(fs *flag.FlagSet, opts *options) {
 	fs.StringVar(&opts.memoryDir, "memory", opts.memoryDir, "directory of durable cross-run memories (injected as instructions)")
 	fs.StringVar(&opts.memoryScope, "memory-scope", opts.memoryScope, "scope new memories get: user (default) or project")
 	fs.BoolVar(&opts.memoryDistill, "memory-distill", opts.memoryDistill, "distil each finished run into new memories with one model call")
+	fs.StringVar(&opts.reviewMode, "review", opts.reviewMode, "independent review of each finished run: off, report, or enforce")
 	fs.IntVar(&opts.goalMaxRounds, "goal-max-rounds", opts.goalMaxRounds, "default round budget for goals created in this session")
 	fs.StringVar(&opts.sandboxBackend, "sandbox", opts.sandboxBackend, "confine the shell in a sandbox: none, seatbelt (macOS), bwrap (Linux), or docker")
 	fs.Var(&opts.sandboxRoots, "sandbox-root", "writable root inside the sandbox (repeatable; defaults to the working directory)")
@@ -1053,10 +1055,15 @@ func buildAgent(ctx context.Context, opts options, ioStreams IO) (*zenforge.Agen
 	if err != nil {
 		return nil, err
 	}
+	guardian, err := buildGuardian(opts, modelAdapter)
+	if err != nil {
+		return nil, err
+	}
 	return zenforge.New(zenforge.Config{
 		Model:              modelAdapter,
 		Hooks:              hookEngine,
 		Memory:             memoryProvider,
+		Review:             guardian,
 		Instructions:       opts.instructions,
 		PersonaPrefix:      opts.personaPrefix,
 		PersonaSuffix:      opts.personaSuffix,

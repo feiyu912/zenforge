@@ -61,3 +61,4 @@ later ADRs supersede earlier ones, never edit.
 | [0045](0045-hooks-in-the-agent-loop.md) | Hooks in the agent loop: frozen run context and bounded Stop refusals |
 | [0046](0046-landlock-file-rules.md) | Landlock rules for files, the safe device default, and syscall-based socket tests |
 | [0047](0047-durable-memories.md) | Durable memories: readable files, content identity, frozen injection |
+| [0048](0048-guardian-review.md) | A guardian review at the stop boundary: report by default, bounded enforcement |

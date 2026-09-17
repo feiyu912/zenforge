@@ -24,6 +24,7 @@ import (
 	"github.com/feiyu912/zenforge/modelretry"
 	"github.com/feiyu912/zenforge/planner"
 	"github.com/feiyu912/zenforge/prompt"
+	"github.com/feiyu912/zenforge/review"
 	"github.com/feiyu912/zenforge/sandbox"
 	"github.com/feiyu912/zenforge/sessiontitle"
 	"github.com/feiyu912/zenforge/subagent"
@@ -891,7 +892,7 @@ func (a *Agent) runHarnessLoop(ctx context.Context, out chan<- Event, state harn
 			return a.resumeTerminal(emit, current)
 		},
 		StopHook: func(callCtx context.Context, current *harness.RunState, output string) (harness.StopDecision, error) {
-			return a.stopHookDecision(callCtx, current, output)
+			return a.stopHookDecision(callCtx, current, output, emit)
 		},
 		IsPause: func(err error) bool {
 			return errors.Is(err, errApprovalPending)
@@ -3148,25 +3149,157 @@ func (a *Agent) recordMemory(ctx context.Context, emit eventEmitter, runID strin
 
 // stopHookDecision is the runner's Stop hook: it may allow the run to
 // finish, or refuse with a reason that becomes the agent's next instruction.
-func (a *Agent) stopHookDecision(ctx context.Context, state *harness.RunState, output string) (harness.StopDecision, error) {
-	if a.config.Hooks == nil || !a.config.Hooks.Configured(hooks.EventStop) {
+func (a *Agent) stopHookDecision(ctx context.Context, state *harness.RunState, output string, emit eventEmitter) (harness.StopDecision, error) {
+	allow := true
+	reason := ""
+	if a.config.Hooks != nil && a.config.Hooks.Configured(hooks.EventStop) {
+		outcome, err := a.config.Hooks.Run(ctx, hooks.Request{
+			Event:      hooks.EventStop,
+			SessionID:  state.RunID,
+			RunID:      state.RunID,
+			StopReason: output,
+		})
+		if err != nil {
+			return harness.StopDecision{}, fmt.Errorf("run Stop hooks: %w", err)
+		}
+		allow = !outcome.Blocked && outcome.Continue
+		reason = outcome.BlockMessage()
+		if reason == "" {
+			reason = outcome.StopReason
+		}
+	}
+	if !allow || a.config.Review == nil || !a.config.Review.Configured() {
+		return harness.StopDecision{AllowStop: allow, Reason: reason}, nil
+	}
+	// The reviewer runs only after the hooks allow the stop: it is the last
+	// gate before the run finishes, and a hook refusal should not pay for a
+	// review that cannot change the outcome.
+	verdict, reviewed := a.reviewRun(ctx, state, output, emit)
+	if !reviewed {
 		return harness.StopDecision{AllowStop: true}, nil
 	}
-	outcome, err := a.config.Hooks.Run(ctx, hooks.Request{
-		Event:      hooks.EventStop,
-		SessionID:  state.RunID,
-		RunID:      state.RunID,
-		StopReason: output,
-	})
+	if verdict.Enforced {
+		return harness.StopDecision{AllowStop: false, Reason: verdict.Instruction}, nil
+	}
+	return harness.StopDecision{AllowStop: true}, nil
+}
+
+// reviewRun reviews a finished run and records the verdict. Diffs come from
+// the run's own turn.diff events, so the reviewer sees exactly what the run
+// changed without the agent having to track anything new.
+func (a *Agent) reviewRun(ctx context.Context, state *harness.RunState, output string, emit eventEmitter) (review.Result, bool) {
+	request := a.reviewRequest(ctx, state, output)
+	result, reviewed := a.config.Review.Review(ctx, request)
+	if !reviewed {
+		return review.Result{}, false
+	}
+	payload := map[string]any{
+		"runId":    state.RunID,
+		"decision": string(result.Verdict.Decision),
+		"summary":  result.Verdict.Summary,
+		"enforced": result.Enforced,
+		"model":    result.Verdict.Model,
+	}
+	if counts := review.SeverityCounts(result.Verdict); len(counts) > 0 {
+		payload["severities"] = counts
+	}
+	if len(result.Verdict.Findings) > 0 {
+		payload["findings"] = result.Verdict.Findings
+	}
+	// The review happens at the stop boundary, where the caller's context
+	// may already be cancelled; the record must still reach the log and the
+	// run's event stream.
+	recordCtx := context.WithoutCancel(ctx)
+	if emit != nil {
+		if err := emit(EventReviewCompleted, payload); err != nil {
+			return result, true
+		}
+		return result, true
+	}
+	_ = a.emit(recordCtx, nil, EventReviewCompleted, state.RunID, payload)
+	return result, true
+}
+
+// reviewRequest assembles what the reviewer sees: the task, the answer, the
+// digest of what ran, and the unified diffs of what changed.
+func (a *Agent) reviewRequest(ctx context.Context, state *harness.RunState, output string) review.Request {
+	request := review.Request{
+		RunID:  state.RunID,
+		Task:   state.Input,
+		Output: output,
+	}
+	if a.config.Events == nil {
+		return request
+	}
+	readCtx := context.WithoutCancel(ctx)
+	events, err := a.config.Events.Read(readCtx, state.RunID, 0, 0)
 	if err != nil {
-		return harness.StopDecision{}, fmt.Errorf("run Stop hooks: %w", err)
+		return request
 	}
-	decision := harness.StopDecision{AllowStop: !outcome.Blocked && outcome.Continue}
-	decision.Reason = outcome.BlockMessage()
-	if decision.Reason == "" {
-		decision.Reason = outcome.StopReason
+	seenFiles := map[string]bool{}
+	var diffs []string
+	for _, event := range events {
+		switch event.Type {
+		case EventTurnDiff:
+			files, ok := event.Payload["files"].([]any)
+			if !ok {
+				continue
+			}
+			for _, raw := range files {
+				file, ok := raw.(map[string]any)
+				if !ok {
+					continue
+				}
+				path, _ := file["path"].(string)
+				if path != "" && !seenFiles[path] {
+					seenFiles[path] = true
+					request.Files = append(request.Files, path)
+				}
+				if diff, _ := file["diff"].(string); strings.TrimSpace(diff) != "" {
+					diffs = append(diffs, diff)
+				}
+			}
+		case EventWorkspaceChanged:
+			if path, ok := event.Payload["path"].(string); ok && path != "" && !seenFiles[path] {
+				seenFiles[path] = true
+				request.Files = append(request.Files, path)
+			}
+		case EventToolCall:
+			if arguments, ok := event.Payload["arguments"]; ok {
+				if command := commandFromToolArguments(arguments); command != "" {
+					request.Commands = append(request.Commands, command)
+				}
+			}
+		case EventToolError:
+			if message, ok := event.Payload["error"].(string); ok && message != "" {
+				request.Failures = append(request.Failures, message)
+			}
+		}
 	}
-	return decision, nil
+	request.Diff = strings.Join(diffs, "\n")
+	return request
+}
+
+// commandFromToolArguments extracts a shell command from a tool call's
+// arguments, covering this project's shell tool and the reference's exec
+// tools; anything else is ignored rather than guessed at.
+func commandFromToolArguments(raw any) string {
+	switch value := raw.(type) {
+	case map[string]any:
+		for _, key := range []string{"command", "cmd", "script"} {
+			if text, ok := value[key].(string); ok && strings.TrimSpace(text) != "" {
+				return text
+			}
+		}
+	case string:
+		var decoded map[string]any
+		if err := json.Unmarshal([]byte(value), &decoded); err == nil {
+			return commandFromToolArguments(decoded)
+		}
+	case json.RawMessage:
+		return commandFromToolArguments(string(value))
+	}
+	return ""
 }
 
 // renderEnvironmentContext builds the codex-style environment snapshot:

@@ -48,8 +48,10 @@ const (
 	EventMemoryInjected EventType = "memory.injected"
 	// EventMemoryRecorded reports what run-end distillation stored.
 	EventMemoryRecorded EventType = "memory.recorded"
-	EventDeliverables   EventType = "deliverables.presented"
-	EventToolsActivated EventType = "tools.activated"
+	// EventReviewCompleted reports an independent review of the run.
+	EventReviewCompleted EventType = "review.completed"
+	EventDeliverables    EventType = "deliverables.presented"
+	EventToolsActivated  EventType = "tools.activated"
 	// EventPlanApproved marks the end of plan mode: the plan was approved
 	// and the run switched to executing durably.
 	EventPlanApproved       EventType = "plan.approved"

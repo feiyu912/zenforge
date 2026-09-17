@@ -65,6 +65,21 @@ opts in. Paths are canonicalized and passed as `-D` parameters, and off
 macOS — or when `sandbox-exec` is missing — opening a session fails with
 `sandbox_unavailable` rather than running unsandboxed.
 
+## Reviews
+
+`--review off|report|enforce` runs an independent, adversarial review of each
+finished run. The reviewer sees the task, the final answer, the files the run
+changed, the unified diffs of those changes (taken from the run's existing
+turn-diff events), the commands it ran, and the failures it observed.
+`report` records a `review.completed` event with the decision, severity
+counts, and findings, and lets the run finish; `enforce` additionally turns a
+`request_changes` verdict into another turn, with the findings rendered as
+the agent's next instruction. Enforcement uses the same bounded refusal
+mechanism as Stop hooks (three refusals), so a reviewer cannot hold a run
+forever. A verdict must be valid JSON: a reviewer that errors, times out, or
+answers unparsably is reported as a failed review and is never treated as an
+approval.
+
 ## Memories
 
 `--memory <dir>` reads a memory summary into the system prompt at run start
