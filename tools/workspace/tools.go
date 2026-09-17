@@ -22,6 +22,19 @@ type Config struct {
 	Snapshots              *SnapshotStore
 	RequireReadBeforeWrite bool
 	Policy                 policy.FilePolicy
+	// Search limits follow the DSH tool-fs-search defaults when zero:
+	// glob keeps 100 paths inline, grep keeps 250 matches with
+	// 2000-byte line previews, and over-cap results carry footers (plus
+	// the complete glob list when SearchSpill is configured).
+	GlobMaxResults   int
+	GlobMaxVisited   int
+	GrepMaxMatches   int
+	GrepMaxLineBytes int
+	SearchSpill      SearchSpill
+	// TurnDiffs optionally receives per-mutation original/updated
+	// content from the Write and Edit tools so the agent can render
+	// per-turn unified diffs (codex TurnDiff parity).
+	TurnDiffs *TurnDiffStore
 }
 
 // Edit failures that the model can recover from by adjusting its
@@ -40,6 +53,10 @@ func Tools(config Config) ([]tool.Tool, error) {
 	if err != nil {
 		return nil, err
 	}
+	glob, err := Glob(config)
+	if err != nil {
+		return nil, err
+	}
 	grep, err := Grep(config)
 	if err != nil {
 		return nil, err
@@ -52,7 +69,7 @@ func Tools(config Config) ([]tool.Tool, error) {
 	if err != nil {
 		return nil, err
 	}
-	return []tool.Tool{read, list, grep, write, edit}, nil
+	return []tool.Tool{read, list, glob, grep, write, edit}, nil
 }
 
 func Read(config Config) (tool.Tool, error) {
@@ -122,15 +139,37 @@ func Grep(config Config) (tool.Tool, error) {
 		return nil, fmt.Errorf("%w: workspace is nil", tool.ErrInvalidTool)
 	}
 	base, err := tools.New("workspace_grep", "Search text files in the configured workspace.", func(ctx context.Context, in grepInput) (grepOutput, error) {
+		capMatches := config.GrepMaxMatches
+		if capMatches <= 0 {
+			capMatches = DefaultGrepMaxMatches
+		}
+		effective := capMatches
+		if in.MaxMatches > 0 && in.MaxMatches < effective {
+			effective = in.MaxMatches
+		}
+		// Ask for one extra match to learn whether the cap cut anything.
 		matches, err := config.Workspace.Grep(ctx, workspacepkg.GrepQuery{
 			Pattern:    in.Pattern,
 			Path:       in.Path,
-			MaxMatches: in.MaxMatches,
+			MaxMatches: effective + 1,
 		})
 		if err != nil {
 			return grepOutput{}, err
 		}
-		return grepOutput{Matches: matches}, nil
+		out := grepOutput{Matches: matches}
+		if len(matches) > effective {
+			out.Matches = matches[:effective]
+			out.Capped = true
+			out.Footer = fmt.Sprintf("Results limited to %d matches; more exist. Narrow the pattern or path.", effective)
+		}
+		lineCap := config.GrepMaxLineBytes
+		if lineCap <= 0 {
+			lineCap = DefaultGrepMaxLineBytes
+		}
+		for i := range out.Matches {
+			out.Matches[i].Text = truncatePreview(out.Matches[i].Text, lineCap)
+		}
+		return out, nil
 	})
 	if err != nil {
 		return nil, err
@@ -163,9 +202,21 @@ func Write(config Config) (tool.Tool, error) {
 				}
 			}
 		}
+		var turnOriginal string
+		turnExisted := false
+		if config.TurnDiffs != nil {
+			// Best-effort capture of the pre-write content for the
+			// turn-diff tracker; a missing or unreadable file simply
+			// reads as "created".
+			if data, readErr := config.Workspace.Read(ctx, in.Path); readErr == nil {
+				turnOriginal = string(data)
+				turnExisted = true
+			}
+		}
 		if err := config.Workspace.Write(ctx, in.Path, []byte(in.Content)); err != nil {
 			return writeOutput{}, err
 		}
+		config.TurnDiffs.RecordChange(call.RunID, in.Path, turnOriginal, turnExisted, in.Content)
 		info, err := config.Workspace.Stat(ctx, in.Path)
 		if err != nil {
 			return writeOutput{}, err
@@ -230,6 +281,7 @@ func Edit(config Config) (tool.Tool, error) {
 		if err := config.Workspace.Write(ctx, in.Path, []byte(updated)); err != nil {
 			return editOutput{}, err
 		}
+		config.TurnDiffs.RecordChange(call.RunID, in.Path, content, true, updated)
 		info, err = config.Workspace.Stat(ctx, in.Path)
 		if err != nil {
 			return editOutput{}, err
@@ -395,6 +447,8 @@ type grepInput struct {
 
 type grepOutput struct {
 	Matches []workspacepkg.Match `json:"matches"`
+	Capped  bool                 `json:"capped,omitempty"`
+	Footer  string               `json:"footer,omitempty"`
 }
 
 type writeInput struct {

@@ -3,6 +3,7 @@ package model
 import (
 	"context"
 	"encoding/json"
+	"time"
 )
 
 type Model interface {
@@ -74,4 +75,20 @@ type Usage struct {
 	PromptTokens     int
 	CompletionTokens int
 	TotalTokens      int
+	// RateLimits carries the provider-reported rate-limit snapshot for
+	// the call that produced this usage, normalized by the adapter from
+	// HTTP response headers. Nil when the provider reported none.
+	RateLimits *RateLimit
+}
+
+// RateLimit is a provider rate-limit snapshot. Zero fields mean the
+// provider did not report that dimension; adapters normalize their own
+// header formats into this shared shape.
+type RateLimit struct {
+	RequestsLimit     int
+	RequestsRemaining int
+	RequestsReset     time.Duration
+	TokensLimit       int
+	TokensRemaining   int
+	TokensReset       time.Duration
 }

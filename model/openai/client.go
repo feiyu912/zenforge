@@ -114,11 +114,12 @@ func (c *Client) Stream(ctx context.Context, req model.Request) (<-chan model.Ev
 		}
 		return nil, statusErr
 	}
+	limits := model.ParseRateLimits(resp.Header.Get, time.Now())
 	events := make(chan model.Event, 32)
 	go func() {
 		defer close(events)
 		defer resp.Body.Close()
-		if err := readSSE(resp.Body, events); err != nil && !errors.Is(err, io.EOF) {
+		if err := readSSE(resp.Body, events, limits); err != nil && !errors.Is(err, io.EOF) {
 			events <- model.Event{Type: model.EventError, Error: err}
 		}
 	}()
@@ -150,7 +151,7 @@ func (c *Client) chatRequest(req model.Request) chatRequest {
 	return out
 }
 
-func readSSE(body io.Reader, events chan<- model.Event) error {
+func readSSE(body io.Reader, events chan<- model.Event, limits *model.RateLimit) error {
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	acc := newAccumulator()
@@ -177,7 +178,9 @@ func readSSE(body io.Reader, events chan<- model.Event) error {
 			return providerError(chunk.Error)
 		}
 		if chunk.Usage != nil {
-			events <- model.Event{Type: model.EventUsage, Usage: usage(*chunk.Usage)}
+			usageValue := usage(*chunk.Usage)
+			usageValue.RateLimits = limits
+			events <- model.Event{Type: model.EventUsage, Usage: usageValue}
 		}
 		if len(chunk.Choices) == 0 && chunk.Usage == nil {
 			return fmt.Errorf("openai stream chunk contained neither choices nor usage")

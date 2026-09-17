@@ -24,6 +24,71 @@ const (
 	spillFileMode              = 0o600
 )
 
+// SpillStore persists oversized payloads in a private on-disk store,
+// mirroring the DSH spill-store seam: the store owns directory creation
+// (0700), file permissions (0600), and name sanitization, while callers
+// own naming and formatting. It is safe for concurrent use and idempotent
+// per suggested name — a retried call overwrites its own file.
+type SpillStore struct {
+	dir      string
+	once     sync.Once
+	resolved string
+	err      error
+}
+
+// NewSpillStore returns a store writing under dir. An empty dir selects
+// a private per-process directory under os.TempDir() on first save.
+func NewSpillStore(dir string) *SpillStore {
+	return &SpillStore{dir: dir}
+}
+
+// SaveText writes content to a sanitized file derived from suggestedName
+// and returns its absolute path.
+func (s *SpillStore) SaveText(suggestedName, content string) (string, error) {
+	if s == nil {
+		return "", fmt.Errorf("spill store is nil")
+	}
+	dir, err := s.ensureDir()
+	if err != nil {
+		return "", err
+	}
+	name := sanitizePathComponent(suggestedName)
+	if name == "" || name == "unscoped" {
+		name = "spill"
+	}
+	if filepath.Ext(name) == "" {
+		name += ".txt"
+	}
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte(content), spillFileMode); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+func (s *SpillStore) ensureDir() (string, error) {
+	s.once.Do(func() {
+		target := s.dir
+		if target == "" {
+			target, s.err = os.MkdirTemp("", "zenforge-spill-")
+			if s.err != nil {
+				return
+			}
+			if chmodErr := os.Chmod(target, spillDirMode); chmodErr != nil {
+				s.err = chmodErr
+				return
+			}
+			s.resolved = target
+			return
+		}
+		if s.err = os.MkdirAll(target, spillDirMode); s.err != nil {
+			return
+		}
+		s.resolved = target
+	})
+	return s.resolved, s.err
+}
+
 // SpillConfig configures the Spill middleware.
 type SpillConfig struct {
 	// MaxInlineBytes is the largest result output kept inline. Zero or
@@ -39,6 +104,9 @@ type SpillConfig struct {
 	// Point it inside the workspace (for example .zenforge/spill) so the
 	// model can read spilled files with the workspace read tool.
 	Dir string
+	// Store overrides Dir with a caller-provided store, letting tools
+	// and the middleware share one spill location.
+	Store *SpillStore
 }
 
 // Spill returns a Middleware that moves oversized tool output to a
@@ -65,30 +133,9 @@ func Spill(config SpillConfig) Middleware {
 	if tail > maxInline/4 {
 		tail = maxInline / 4
 	}
-	var dirOnce sync.Once
-	var dir string
-	var dirErr error
-	ensureDir := func() (string, error) {
-		dirOnce.Do(func() {
-			target := config.Dir
-			if target == "" {
-				target, dirErr = os.MkdirTemp("", "zenforge-spill-")
-				if dirErr != nil {
-					return
-				}
-				if chmodErr := os.Chmod(target, spillDirMode); chmodErr != nil {
-					dirErr = chmodErr
-					return
-				}
-				dir = target
-				return
-			}
-			if dirErr = os.MkdirAll(target, spillDirMode); dirErr != nil {
-				return
-			}
-			dir = target
-		})
-		return dir, dirErr
+	store := config.Store
+	if store == nil {
+		store = NewSpillStore(config.Dir)
 	}
 	return func(next Invoker) Invoker {
 		return InvokerFunc(func(ctx context.Context, call Call) (Result, error) {
@@ -97,7 +144,12 @@ func Spill(config SpillConfig) Middleware {
 				return result, err
 			}
 			originalBytes := len(result.Output)
-			path, writeErr := writeSpillFile(ensureDir, call, result.Output)
+			sum := sha256.Sum256([]byte(strings.TrimSpace(string(call.Arguments))))
+			name := fmt.Sprintf("%s-%s-%s.txt",
+				sanitizePathComponent(call.RunID),
+				sanitizePathComponent(call.ID),
+				hex.EncodeToString(sum[:8]))
+			path, writeErr := store.SaveText(name, result.Output)
 			if writeErr != nil {
 				// Fail soft: bounded inline truncation beats an
 				// unbounded result or a failed call.
@@ -123,23 +175,6 @@ func Spill(config SpillConfig) Middleware {
 			return result, err
 		})
 	}
-}
-
-func writeSpillFile(ensureDir func() (string, error), call Call, output string) (string, error) {
-	dir, err := ensureDir()
-	if err != nil {
-		return "", err
-	}
-	sum := sha256.Sum256([]byte(strings.TrimSpace(string(call.Arguments))))
-	name := fmt.Sprintf("%s-%s-%s.txt",
-		sanitizePathComponent(call.RunID),
-		sanitizePathComponent(call.ID),
-		hex.EncodeToString(sum[:8]))
-	path := filepath.Join(dir, name)
-	if err := os.WriteFile(path, []byte(output), spillFileMode); err != nil {
-		return "", err
-	}
-	return path, nil
 }
 
 func sanitizePathComponent(value string) string {

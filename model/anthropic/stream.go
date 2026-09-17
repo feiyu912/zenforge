@@ -23,16 +23,18 @@ type accumulator struct {
 	blocks       map[int]*blockState
 	usage        model.Usage
 	finishReason string
+	limits       *model.RateLimit
 }
 
 func newAccumulator() *accumulator {
 	return &accumulator{blocks: map[int]*blockState{}}
 }
 
-func parseStream(body io.Reader, events chan<- model.Event) error {
+func parseStream(body io.Reader, events chan<- model.Event, limits *model.RateLimit) error {
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	acc := newAccumulator()
+	acc.limits = limits
 	for scanner.Scan() {
 		line := scanner.Text()
 		if line == "" || strings.HasPrefix(line, ":") || strings.HasPrefix(line, "event:") {
@@ -77,6 +79,7 @@ func (a *accumulator) apply(event streamEvent, events chan<- model.Event) {
 	switch event.Type {
 	case "message_start":
 		a.usage = usageToModel(event.Message.Usage)
+		a.usage.RateLimits = a.limits
 	case "message_delta":
 		if event.Delta.StopReason != "" {
 			a.finishReason = event.Delta.StopReason

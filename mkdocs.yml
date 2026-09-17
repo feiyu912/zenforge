@@ -164,6 +164,7 @@ nav:
       - 0024 Hierarchical instructions and environment context: adr/0024-hierarchical-instructions-and-environment-context.md
       - 0025 Sandbox escalation ladder: adr/0025-sandbox-escalation-ladder.md
       - 0026 User questions and tool-result guardrails: adr/0026-user-questions-and-tool-result-guardrails.md
+      - 0027 Token meter search caps and turn diffs: adr/0027-token-meter-search-caps-turn-diffs.md
 
 extra:
   social:

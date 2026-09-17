@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/feiyu912/zenforge/model"
 )
 
 const (
@@ -348,11 +350,51 @@ type SteerState struct {
 }
 
 type UsageState struct {
-	InputTokens  int            `json:"inputTokens,omitempty"`
-	OutputTokens int            `json:"outputTokens,omitempty"`
-	TotalTokens  int            `json:"totalTokens,omitempty"`
-	CostUSD      float64        `json:"costUsd,omitempty"`
-	Meta         map[string]any `json:"meta,omitempty"`
+	InputTokens  int             `json:"inputTokens,omitempty"`
+	OutputTokens int             `json:"outputTokens,omitempty"`
+	TotalTokens  int             `json:"totalTokens,omitempty"`
+	CostUSD      float64         `json:"costUsd,omitempty"`
+	RateLimits   *RateLimitState `json:"rateLimits,omitempty"`
+	Meta         map[string]any  `json:"meta,omitempty"`
+}
+
+// RateLimitState persists the latest provider rate-limit snapshot
+// observed during a run. Reset fields are the remaining milliseconds at
+// observation time.
+type RateLimitState struct {
+	RequestsLimit     int   `json:"requestsLimit,omitempty"`
+	RequestsRemaining int   `json:"requestsRemaining,omitempty"`
+	RequestsResetMs   int64 `json:"requestsResetMs,omitempty"`
+	TokensLimit       int   `json:"tokensLimit,omitempty"`
+	TokensRemaining   int   `json:"tokensRemaining,omitempty"`
+	TokensResetMs     int64 `json:"tokensResetMs,omitempty"`
+}
+
+// NewRateLimitState converts a normalized model snapshot to durable state.
+func NewRateLimitState(limits model.RateLimit) *RateLimitState {
+	return &RateLimitState{
+		RequestsLimit:     limits.RequestsLimit,
+		RequestsRemaining: limits.RequestsRemaining,
+		RequestsResetMs:   limits.RequestsReset.Milliseconds(),
+		TokensLimit:       limits.TokensLimit,
+		TokensRemaining:   limits.TokensRemaining,
+		TokensResetMs:     limits.TokensReset.Milliseconds(),
+	}
+}
+
+// Model converts durable rate-limit state back to the normalized shape.
+func (s *RateLimitState) Model() model.RateLimit {
+	if s == nil {
+		return model.RateLimit{}
+	}
+	return model.RateLimit{
+		RequestsLimit:     s.RequestsLimit,
+		RequestsRemaining: s.RequestsRemaining,
+		RequestsReset:     time.Duration(s.RequestsResetMs) * time.Millisecond,
+		TokensLimit:       s.TokensLimit,
+		TokensRemaining:   s.TokensRemaining,
+		TokensReset:       time.Duration(s.TokensResetMs) * time.Millisecond,
+	}
 }
 
 type WorkspaceState struct {

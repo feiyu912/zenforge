@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/feiyu912/zenforge/model"
 )
@@ -186,5 +187,34 @@ func sseResponse(body string) *http.Response {
 		Status:     "200 OK",
 		Header:     make(http.Header),
 		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+}
+
+func TestClientAttachesRateLimitSnapshotToUsage(t *testing.T) {
+	httpClient := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		resp := sseResponse(
+			"data: {\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":2,\"total_tokens\":12}}\n\n" +
+				"data: [DONE]\n\n",
+		)
+		resp.Header.Set("x-ratelimit-limit-requests", "500")
+		resp.Header.Set("x-ratelimit-remaining-requests", "499")
+		resp.Header.Set("x-ratelimit-reset-requests", "1.5s")
+		resp.Header.Set("x-ratelimit-remaining-tokens", "149000")
+		return resp, nil
+	})}
+	client := New(Config{BaseURL: "https://example.test/v1", APIKey: "test-key", Model: "gpt-test", HTTPClient: httpClient})
+	response, err := client.Generate(context.Background(), model.Request{
+		Messages: []model.Message{{Role: "user", Content: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	limits := response.Usage.RateLimits
+	if limits == nil {
+		t.Fatal("usage carries no rate-limit snapshot")
+	}
+	if limits.RequestsLimit != 500 || limits.RequestsRemaining != 499 ||
+		limits.RequestsReset != 1500*time.Millisecond || limits.TokensRemaining != 149000 {
+		t.Fatalf("snapshot = %+v", limits)
 	}
 }

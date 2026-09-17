@@ -40,3 +40,4 @@ later ADRs supersede earlier ones, never edit.
 | [0024](0024-hierarchical-instructions-and-environment-context.md) | Hierarchical instructions and environment context |
 | [0025](0025-sandbox-escalation-ladder.md) | Sandbox escalation ladder |
 | [0026](0026-user-questions-and-tool-result-guardrails.md) | User questions and tool-result guardrails |
+| [0027](0027-token-meter-search-caps-turn-diffs.md) | Token meter, search discovery caps, and turn diffs |

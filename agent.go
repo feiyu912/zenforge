@@ -23,6 +23,7 @@ import (
 	"github.com/feiyu912/zenforge/sandbox"
 	"github.com/feiyu912/zenforge/subagent"
 	"github.com/feiyu912/zenforge/tool"
+	"github.com/feiyu912/zenforge/tools/contextinfo"
 	tasktool "github.com/feiyu912/zenforge/tools/task"
 	todotools "github.com/feiyu912/zenforge/tools/todo"
 	"github.com/feiyu912/zenforge/trace"
@@ -35,7 +36,15 @@ import (
 const (
 	metaEnvironmentContext  = "zenforge.environment_context"
 	metaProjectInstructions = "zenforge.project_instructions"
+	// metaEnvironmentUpdate records the latest injected environment
+	// render so diff-only re-injection survives resume.
+	metaEnvironmentUpdate = "zenforge.environment_update"
 )
+
+// turnDiffBudget bounds in-process unified-diff rendering at each turn
+// boundary, mirroring the codex turn-diff tracker's 100ms budget; files
+// that miss the budget degrade to path-only notes.
+const turnDiffBudget = 100 * time.Millisecond
 
 // Agent is the high-level batteries-included runtime entrypoint.
 type Agent struct {
@@ -1153,6 +1162,9 @@ func (a *Agent) callModelDurable(
 	state *harness.RunState,
 	choice model.ToolChoice,
 ) (harness.MessageState, model.Usage, error) {
+	if err := a.maybeInjectEnvironmentUpdate(ctx, emit, checkpointState, state); err != nil {
+		return harness.MessageState{}, model.Usage{}, err
+	}
 	if _, err := a.maybeCompact(ctx, emit, checkpointState, state, compaction.ReasonPressure, false); err != nil {
 		return harness.MessageState{}, model.Usage{}, err
 	}
@@ -1355,6 +1367,8 @@ streamLoop:
 		}
 		if hasUsage(event.Usage) {
 			attempt.ObservedUsage = usageState(event.Usage)
+		} else if event.Usage.RateLimits != nil {
+			attempt.ObservedUsage.RateLimits = harness.NewRateLimitState(*event.Usage.RateLimits)
 		}
 		if event.Message != nil {
 			if event.Message.Content != "" {
@@ -1383,6 +1397,18 @@ streamLoop:
 				return harness.MessageState{}, model.Usage{}, err
 			}
 		}
+		if event.Usage.RateLimits != nil {
+			limits := *event.Usage.RateLimits
+			if err := emit(EventModelRateLimits, map[string]any{
+				"attemptId": attempt.ID, "step": attempt.LogicalStep,
+				"requestsLimit": limits.RequestsLimit, "requestsRemaining": limits.RequestsRemaining,
+				"requestsResetMs": limits.RequestsReset.Milliseconds(),
+				"tokensLimit":     limits.TokensLimit, "tokensRemaining": limits.TokensRemaining,
+				"tokensResetMs": limits.TokensReset.Milliseconds(),
+			}); err != nil {
+				return harness.MessageState{}, model.Usage{}, err
+			}
+		}
 		if len(event.ToolCalls) > 0 || (event.Message != nil && len(event.Message.ToolCalls) > 0) {
 			data["toolCalls"] = append([]harness.ToolCallSpec(nil), attempt.ToolCallsDraft...)
 			if err := emit(EventModelToolCallDraft, data); err != nil {
@@ -1396,11 +1422,16 @@ streamLoop:
 		Content:   attempt.TextDraft,
 		ToolCalls: append([]harness.ToolCallSpec(nil), attempt.ToolCallsDraft...),
 	}
-	return message, model.Usage{
+	committed := model.Usage{
 		PromptTokens:     attempt.ObservedUsage.InputTokens,
 		CompletionTokens: attempt.ObservedUsage.OutputTokens,
 		TotalTokens:      attempt.ObservedUsage.TotalTokens,
-	}, nil
+	}
+	if attempt.ObservedUsage.RateLimits != nil {
+		limits := attempt.ObservedUsage.RateLimits.Model()
+		committed.RateLimits = &limits
+	}
+	return message, committed, nil
 }
 
 func hasUsage(usage model.Usage) bool {
@@ -1415,6 +1446,31 @@ func (a *Agent) compactPressure(state *harness.RunState) compaction.Pressure {
 		systemTokens += estimator.EstimateText(message.Content)
 	}
 	return a.compactor.Evaluate(systemTokens, a.toolSpecs(), state.Messages)
+}
+
+// contextTokensRemaining reports how many tokens still fit in the
+// configured context window, preferring provider-measured prompt tokens
+// from committed attempts over the heuristic estimate and clamping at
+// zero. It reports ok=false when no window is configured.
+func (a *Agent) contextTokensRemaining(state *harness.RunState) (int, bool) {
+	if a.compactor == nil {
+		return 0, false
+	}
+	pressure := a.compactPressure(state)
+	if pressure.WindowTokens <= 0 {
+		return 0, false
+	}
+	used := pressure.Estimated
+	for _, attempt := range state.Model.Attempts {
+		if attempt.Status == harness.ModelAttemptCommitted && attempt.ObservedUsage.InputTokens > used {
+			used = attempt.ObservedUsage.InputTokens
+		}
+	}
+	remaining := pressure.WindowTokens - used
+	if remaining < 0 {
+		remaining = 0
+	}
+	return remaining, true
 }
 
 // maybeCompact runs context maintenance at a model-call boundary. Pressure
@@ -1588,9 +1644,13 @@ func truncateSummaryForEvent(text string) string {
 }
 
 func usageState(usage model.Usage) harness.UsageState {
-	return harness.UsageState{
+	state := harness.UsageState{
 		InputTokens: usage.PromptTokens, OutputTokens: usage.CompletionTokens, TotalTokens: usage.TotalTokens,
 	}
+	if usage.RateLimits != nil {
+		state.RateLimits = harness.NewRateLimitState(*usage.RateLimits)
+	}
+	return state
 }
 
 func attemptEventData(attempt *harness.ModelAttempt, offset int) map[string]any {
@@ -1797,6 +1857,26 @@ func (a *Agent) runPendingTools(ctx context.Context, emit eventEmitter, checkpoi
 			"exitCode":   result.ExitCode,
 		}); err != nil {
 			return err
+		}
+	}
+	// The turn boundary renders this turn's workspace mutations as
+	// unified diffs, mirroring the codex TurnDiff tracker. The budget
+	// bounds in-process rendering; over-budget files degrade to
+	// path-only notes inside the event.
+	if a.config.TurnDiffs != nil {
+		diffs := a.config.TurnDiffs.Drain(state.RunID, turnDiffBudget)
+		if len(diffs) > 0 {
+			paths := make([]string, 0, len(diffs))
+			for _, entry := range diffs {
+				paths = append(paths, entry.Path)
+			}
+			if err := emit(EventTurnDiff, map[string]any{
+				"fileCount": len(diffs),
+				"paths":     paths,
+				"files":     diffs,
+			}); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -2282,12 +2362,22 @@ func (a *Agent) invokeTool(ctx context.Context, state harness.RunState, call har
 		}
 		invoker = tool.NewInvoker(registry, a.config.ToolRuntime...)
 	}
+	metadata := toolCallMetadata(state, call.Meta)
+	// The context meter rides tool-call metadata so stateless tools can
+	// report the live budget without touching run state (codex
+	// get_context_remaining parity).
+	if remaining, ok := a.contextTokensRemaining(&state); ok {
+		if metadata == nil {
+			metadata = map[string]any{}
+		}
+		metadata[contextinfo.TokensRemainingMetadataKey] = remaining
+	}
 	return invoker.Invoke(ctx, tool.Call{
 		ID:                   call.ID,
 		RunID:                state.RunID,
 		Name:                 call.Name,
 		Arguments:            call.Arguments,
-		Metadata:             toolCallMetadata(state, call.Meta),
+		Metadata:             metadata,
 		RedactedArgumentKeys: append([]string(nil), a.config.ToolArgumentRedaction...),
 	})
 }
@@ -2741,6 +2831,53 @@ func (a *Agent) applyRunContext(ctx context.Context, emit eventEmitter, state *h
 // renderEnvironmentContext builds the codex-style environment snapshot:
 // stable facts about where and how the run executes, tagged so the model
 // can distinguish them from conversation content.
+// maybeInjectEnvironmentUpdate implements the codex WorldState
+// diff-only re-injection: at each model-call boundary the live
+// environment facts are re-rendered and compared with the last render
+// the run has seen. Only a difference appends a compact
+// <environment_update> system message and persists the new baseline in
+// run-state metadata. The original frozen <environment_context> is
+// never rewritten, so resume still replays the run's starting snapshot.
+// Adapters that fold mid-conversation system messages into a provider
+// system block (Anthropic) keep the update visible with adjusted
+// positioning, which is acceptable for an advisory refresh.
+func (a *Agent) maybeInjectEnvironmentUpdate(
+	ctx context.Context,
+	emit eventEmitter,
+	checkpointState func(context.Context, harness.RunState) error,
+	state *harness.RunState,
+) error {
+	if !a.config.EnvironmentContext {
+		return nil
+	}
+	current := a.renderEnvironmentContext()
+	previous := stringValue(state.Meta[metaEnvironmentUpdate])
+	if previous == "" {
+		previous = stringValue(state.Meta[metaEnvironmentContext])
+	}
+	if state.Meta == nil {
+		state.Meta = map[string]any{}
+	}
+	if previous == "" {
+		// No frozen baseline exists (legacy state): adopt the current
+		// render silently instead of injecting a full-context update.
+		state.Meta[metaEnvironmentUpdate] = current
+		return nil
+	}
+	if current == previous {
+		return nil
+	}
+	state.Meta[metaEnvironmentUpdate] = current
+	state.Messages = append(state.Messages, harness.MessageState{
+		Role:    "system",
+		Content: "<environment_update>\nThe environment changed during this run. Current state:\n" + current + "\n</environment_update>",
+	})
+	if err := checkpointState(ctx, *state); err != nil {
+		return err
+	}
+	return emit(EventEnvironmentUpdated, map[string]any{"environmentContext": current})
+}
+
 func (a *Agent) renderEnvironmentContext() string {
 	dir := a.config.WorkingDir
 	if dir == "" {
@@ -2864,9 +3001,7 @@ func toolCallsToState(calls []harness.ToolCallSpec) []harness.ToolCallState {
 }
 
 func applyUsage(state *harness.RunState, usage model.Usage) {
-	state.Usage.InputTokens += usage.PromptTokens
-	state.Usage.OutputTokens += usage.CompletionTokens
-	state.Usage.TotalTokens += usage.TotalTokens
+	harness.ApplyUsage(state, usage)
 }
 
 func lastAssistantContent(state harness.RunState) string {

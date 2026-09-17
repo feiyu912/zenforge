@@ -625,7 +625,29 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
   config reference.
 - `docs/reference-parity-plan.md` maps every observed DSH/codex capability to
   its ZenForge status (shipped, already had, roadmap) with adoption sketches,
-  backed by ADRs 0023–0026 and the Compaction Guide.
+  backed by ADRs 0023–0027 and the Compaction Guide.
+- Token meter (ADR 0027): adapters normalize provider rate-limit headers
+  (`x-ratelimit-*`, `anthropic-ratelimit-*`) into `model.Usage.RateLimits`,
+  persisted as `UsageState.RateLimits` and emitted as `model.ratelimits`
+  events; the `get_context_remaining` tool reports the live remaining budget
+  the agent injects into tool-call metadata, or null without a configured
+  context window.
+- `workspace_glob` discovery tool: DSH-style `**` matcher, basename-at-any-
+  depth patterns, VCS excludes, newest-first ordering, visit budget; plus the
+  DSH search caps — glob keeps 100 paths inline with the complete sorted list
+  saved to a shared `tool.SpillStore`, grep caps at 250 matches with
+  2000-byte rune-safe line previews, and every over-cap result carries an
+  explicit footer.
+- Turn-diff tracker (codex TurnDiff): Write/Edit mutations are captured in
+  `tools/workspace.TurnDiffStore` and rendered at each turn boundary under a
+  100ms budget as unified diffs (new `diff/` package, bounded Myers with
+  coarse fallback) in `turn.diff` events; oversized or over-budget files
+  degrade to path-only notes and unchanged files are omitted.
+- Diff-only environment re-injection (codex WorldState): live environment
+  facts are re-rendered at each model-call boundary, and only a change
+  appends an `<environment_update>` system message plus an
+  `environment.updated` event; the frozen `<environment_context>` baseline
+  is never rewritten, so resume semantics are unchanged.
 
 Verification before each release:
 
@@ -666,9 +688,10 @@ zenforge/
   checkpoint/           # memory, jsonl, sqlite stores
   eventlog/             # bus + fanout + memory, jsonl, sqlite stores
   cli/                  # command helpers and approval UX
-  tool/                 # core tool interfaces, middleware, budgets, redaction, spill, repeat guard
-  model/                # openai, anthropic adapters
-  tools/                # workspace, shell, todo, task, askuser
+  tool/                 # core tool interfaces, middleware, budgets, redaction, spill store, repeat guard
+  model/                # openai, anthropic adapters (usage + rate-limit normalization)
+  tools/                # workspace (read/list/glob/grep/write/edit, turn-diff store), shell, todo, task, askuser, contextinfo
+  diff/                 # Myers unified diff for turn-diff tracking
   subagent/             # sub-agent runtime
   planner/              # todo manager + plan/execute preset
   sandbox/              # interface, docker/fake/containerhub backends + State helpers

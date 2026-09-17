@@ -55,6 +55,10 @@ all of them; the right column points at concrete evidence.
 | A13 | Repeat-tool reminder at thresholds [3,5,8], escalating text, never blocking | DSH repeat-tool-reminder (consecutive identical calls, injected as plugin user message, reset on human input) | `tool.RepeatGuard` middleware, per-run streaks; deviation: reminder rides the tool result (durable in history) and does not reset on steering; ADR 0026 |
 | A14 | Time/date context in the prompt | DSH time-context | `<today>` (UTC) inside the frozen environment context (A8) |
 | A15 | Panic recovery + output/call bounds as composable middleware | DSH bounded tool budgets | Pre-existing `tool.RecoverPanic/MaxCalls/MaxOutputBytes/Timeout`; CLI now composes `[RecoverPanic, RepeatGuard, Spill]` as `ToolRuntime` |
+| A16 | Token meter: provider rate-limit snapshots end to end + `get_context_remaining` tool | codex TokenUsageRecord/RateLimitSnapshot/`get_context_remaining`; DSH token-meter | `model.RateLimit` + `model.ParseRateLimits` (x-ratelimit-* and anthropic-ratelimit-* headers) riding `model.Usage`; durable `harness.RateLimitState` in `UsageState`; `model.ratelimits` event; the agent injects remaining tokens into tool-call metadata and `tools/contextinfo` reports them (`tokens_left` null without a configured window); ADR 0027 |
+| A17 | Search discovery caps: `workspace_glob` tool + grep match caps and line previews + over-cap footers | DSH tool-fs-search (glob 100 paths newest-first with the complete list saved, grep 250 matches, 2000-byte line previews, VCS excludes) | `tools/workspace/glob.go` (`**` matcher, basename-at-any-depth patterns, List-based walk with visit budget); shared `tool.SpillStore` (extracted from the Spill middleware) wired as `SearchSpill`; ADR 0027 |
+| A18 | Turn-diff tracker: per-turn unified diffs of workspace mutations | codex TurnDiff (100ms budget, path-list fallback) | `diff/` (Myers unified diff with bounded coarse fallback); `tools/workspace.TurnDiffStore` captured by Write/Edit at mutation time; the agent drains at each turn boundary under a 100ms budget into `turn.diff` events; ADR 0027 |
+| A19 | WorldState diff-only environment re-injection | codex WorldState environment updates | `maybeInjectEnvironmentUpdate` re-renders live environment facts at each model-call boundary and appends an `<environment_update>` system message plus `environment.updated` event only on change; the frozen baseline (A8) is never rewritten; ADR 0027 |
 
 ## Part B — Already had (parity confirmed by this review)
 
@@ -83,7 +87,6 @@ ZenForge architecture. None blocks the shipped surface above.
 
 | # | Capability | Reference source | Adoption sketch | Size |
 | --- | --- | --- | --- | --- |
-| C1 | Token meter from provider usage + `get_context_remaining` tool + rate-limit snapshots | codex TokenUsageRecord, RateLimitSnapshot (x-codex-* headers); DSH token-meter | Extend `model.Usage` capture into a per-run `TokenUsageRecord` in `RunState`; expose a read-only context-remaining tool; parse provider rate-limit headers in adapters | M |
 | C2 | Persistent PTY shell sessions (`unified_exec`: session ids, stdin writes, yield windows, head+tail buffers, proc caps, credential-scrubbed snapshots) + background jobs registry | codex unified_exec; DSH jobs/bash run_in_background | New `tools/exec` with a session registry keyed by run; reuse sandbox sessions; job ids + `job_output`/`job_kill` tools; scrub env in snapshots | L |
 | C3 | Hooks protocol/engine (lifecycle events, matchers, command/MCP handlers, exit-2 block, deny>ask>allow, managed-only lockdown) | DSH hooks (claude-code/codex dialects); codex hooks engine (12 events) | `hooks/` package with a typed event enum, matcher config, and a broker that can veto tool calls before the invoker; compose as outermost middleware | L |
 | C4 | Headless exec protocol (`--json` ThreadEvent stream, `--output-schema` structured final output) | codex exec --json/--output-schema; DSH headless api | CLI flag emitting the existing event stream as JSONL; final-answer schema validation via jsonschema before `run.done` | M |
@@ -95,16 +98,13 @@ ZenForge architecture. None blocks the shipped surface above.
 | C10 | Session format v3 hardening: rollout ordinals, fork/revert, writer locks, migrations, projections | codex rollout (ordinals, fork/revert, writer lock); DSH session v3 (migrations, projections, FTS) | Add monotonic ordinals + a writer lock file to the JSONL event store; checkpoint fork = new run id seeded from a chosen seq | M |
 | C11 | System-prompt registry with ordered sections, runtime contexts, `{{vars}}` fail-loud substitution | DSH system-prompt registry | Replace ad-hoc `systemPrefixMessages` with a section registry; each section typed + ordered; missing variables fail the run | S |
 | C12 | Plan mode as a first-class collaboration mode (read-only tools until plan approval, exit_plan_mode) | codex plan mode/collaboration modes; DSH plan mode | `PlanningModePlanOnly` preset: file-policy denies writes; a `present_plan` tool routes through approval; on approval, switch mode durably | M |
-| C13 | Review/guardian modes (second-model adversarial review of diffs/decisions) | codex review/guardian; DSH adversarial verification | Post-run middleware spawning a review subagent over `workspace.changed` paths + TurnDiff (needs C14) | M |
-| C14 | Turn-diff tracker (per-turn unified diff of workspace changes, in-process with timeout) | codex TurnDiff | Snapshot dirty paths per turn via `SnapshotStore`; emit `turn.diff` event; 100ms-style budget with fallback to file list | S |
+| C13 | Review/guardian modes (second-model adversarial review of diffs/decisions) | codex review/guardian; DSH adversarial verification | Post-run middleware spawning a review subagent over `workspace.changed` paths + the turn-diff stream (A18) | M |
 | C15 | Layered config: admin requirements layer, profiles, secret redaction, server-driven model metadata | codex requirements.toml > user > project, profiles, RedactedString | `configfile` precedence chain + `requirements` overrides that can only tighten; `RedactedString` type for keys in dumps | M |
 | C16 | Image input + view_image tool; reasoning effort/summary with encrypted replay | codex view_image + reasoning support | `model.Message` parts for images; adapter passthrough; reasoning items stored encrypted in run state and replayed verbatim | M |
 | C17 | Tool search / deferred tool loading for large registries | codex tool_search/defer_loading | Registry-level `Definitions(filter)`; a `tool_search` tool that activates deferred definitions per run | S |
 | C18 | present-tool deliverables (reference-not-copy final files) and session titles | DSH present tool (maxFiles 8), session titles | `present` tool validating paths exist + emitting a `deliverables` event; title = first-user-message summary stored in run meta | S |
 | C19 | Webhook/schedule triggers and slash commands | DSH webhook/schedule, commands | Server endpoints creating runs from signed webhooks; cron scheduler reusing RunManager; commands as canned tasks | M |
 | C20 | MCP server mode (expose ZenForge runs as an MCP server), elicitation, resources; MCP tool namespacing + read-only auto-approve | DSH MCP server; codex MCP namespaces/auto-approve | `mcp/server.go` exposing run tools; prefix `mcp__server__tool` on client-side names; auto-approve read-only annotations through the grants store | L |
-| C21 | glob/grep result caps with spill footers (100 paths / 250 matches, "complete list saved to …") | DSH fs tools caps + footers | Extend `workspace_list`/`workspace_grep` with caps + footer pointers into the spill store (A12) | S |
-| C22 | WorldState diff-only re-injection of environment changes mid-run | codex WorldState | Compare frozen env context against live values per step; inject a compact `<environment_update>` only on change | S |
 | C23 | Memories (cross-run distilled learnings) | codex memories; DSH cross-session | `adapters/memory` extension: run-end distillation into scoped entries injected as instructions (A7 channel) | M |
 
 ## Verification
@@ -115,9 +115,13 @@ Everything marked **Shipped** is covered by Go tests runnable with:
 env GOTOOLCHAIN=local go test ./...
 ```
 
-Key suites: `compaction/`, `modelretry/`, `instructions/`, `tools/askuser/`,
-`tools/shell/`, `tools/workspace/`, `tool/` (spill + repeat guard),
-`approval/cli/`, and the root-package agent tests
-(`compaction_agent_test.go`, `retry_agent_test.go`, `context_agent_test.go`).
+Key suites: `compaction/`, `modelretry/`, `instructions/`, `diff/`,
+`tools/askuser/`, `tools/contextinfo/` (via root agent tests),
+`tools/shell/`, `tools/workspace/` (glob, grep caps, turn-diff store),
+`tool/` (spill store + repeat guard), `approval/cli/`, and the
+root-package agent tests (`compaction_agent_test.go`,
+`retry_agent_test.go`, `context_agent_test.go`,
+`context_meter_test.go`, `turn_diff_test.go`,
+`environment_update_test.go`).
 Docs claims are policed by `docs/links_test.go`,
 `docs/schema_versions_test.go`, and `docs/mvp_validation_test.go`.

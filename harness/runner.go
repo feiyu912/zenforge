@@ -362,6 +362,10 @@ func ApplyUsage(state *RunState, usage model.Usage) {
 	if state.Usage.TotalTokens == 0 {
 		state.Usage.TotalTokens = state.Usage.InputTokens + state.Usage.OutputTokens
 	}
+	// Rate limits are a replace-on-observe snapshot, never accumulated.
+	if usage.RateLimits != nil {
+		state.Usage.RateLimits = NewRateLimitState(*usage.RateLimits)
+	}
 }
 
 func ToolCallsToState(calls []ToolCallSpec) []ToolCallState {

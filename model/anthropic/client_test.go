@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/feiyu912/zenforge/model"
 )
@@ -212,7 +213,7 @@ func TestParseStreamRejectsEOFBeforeMessageStop(t *testing.T) {
 		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
 		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}`,
 		``,
-	}, "\n")), events)
+	}, "\n")), events, nil)
 	if !errors.Is(err, io.ErrUnexpectedEOF) || !strings.Contains(err.Error(), "anthropic provider stream") {
 		t.Fatalf("parseStream error = %v, want anthropic provider unexpected EOF", err)
 	}
@@ -244,7 +245,7 @@ func TestParseStreamWrapsUnexpectedReadErrorAfterPartialContent(t *testing.T) {
 		}, "\n")),
 		err: io.ErrUnexpectedEOF,
 	}
-	err := parseStream(body, events)
+	err := parseStream(body, events, nil)
 	if !errors.Is(err, io.ErrUnexpectedEOF) || !strings.Contains(err.Error(), "anthropic provider stream") {
 		t.Fatalf("parseStream error = %v, want wrapped anthropic provider unexpected EOF", err)
 	}
@@ -318,7 +319,7 @@ func TestParseStreamEmitsUsageThenSingleDone(t *testing.T) {
 		`data: {"type":"message_stop"}`,
 		`data: not-json`,
 		``,
-	}, "\n")), events)
+	}, "\n")), events, nil)
 	if err != nil {
 		t.Fatalf("parseStream returned error: %v", err)
 	}
@@ -397,4 +398,42 @@ func (r *anthropicFailingReader) Read(p []byte) (int, error) {
 	n := copy(p, r.data)
 	r.data = r.data[n:]
 	return n, nil
+}
+
+func TestClientAttachesRateLimitSnapshotToUsage(t *testing.T) {
+	reset := time.Now().UTC().Add(45 * time.Second).Format(time.RFC3339)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("anthropic-ratelimit-requests-limit", "2000")
+		w.Header().Set("anthropic-ratelimit-requests-remaining", "1999")
+		w.Header().Set("anthropic-ratelimit-requests-reset", reset)
+		w.Header().Set("anthropic-ratelimit-tokens-remaining", "79000")
+		_, _ = w.Write([]byte(strings.Join([]string{
+			`data: {"type":"message_start","message":{"usage":{"input_tokens":3}}}`,
+			`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+			`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}`,
+			`data: {"type":"message_delta","usage":{"output_tokens":2}}`,
+			`data: {"type":"message_stop"}`,
+			``,
+		}, "\n")))
+	}))
+	defer server.Close()
+
+	client := New(Config{BaseURL: server.URL, APIKey: "test-key", Model: "claude-test"})
+	response, err := client.Generate(context.Background(), model.Request{
+		Messages: []model.Message{{Role: "user", Content: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	limits := response.Usage.RateLimits
+	if limits == nil {
+		t.Fatal("usage carries no rate-limit snapshot")
+	}
+	if limits.RequestsLimit != 2000 || limits.RequestsRemaining != 1999 || limits.TokensRemaining != 79000 {
+		t.Fatalf("snapshot = %+v", limits)
+	}
+	if limits.RequestsReset <= 40*time.Second || limits.RequestsReset > 45*time.Second {
+		t.Fatalf("reset = %v, want approximately 45s", limits.RequestsReset)
+	}
 }

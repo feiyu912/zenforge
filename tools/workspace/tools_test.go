@@ -505,7 +505,7 @@ func TestWorkspaceToolsIncludesEdit(t *testing.T) {
 	for _, current := range list {
 		names = append(names, current.Name())
 	}
-	want := []string{"workspace_read", "workspace_list", "workspace_grep", "workspace_write", "workspace_edit"}
+	want := []string{"workspace_read", "workspace_list", "workspace_glob", "workspace_grep", "workspace_write", "workspace_edit"}
 	if strings.Join(names, ",") != strings.Join(want, ",") {
 		t.Fatalf("tool names = %v, want %v", names, want)
 	}

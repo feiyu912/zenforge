@@ -30,6 +30,7 @@ import (
 	"github.com/feiyu912/zenforge/policy"
 	"github.com/feiyu912/zenforge/tool"
 	"github.com/feiyu912/zenforge/tools/askuser"
+	"github.com/feiyu912/zenforge/tools/contextinfo"
 	shelltool "github.com/feiyu912/zenforge/tools/shell"
 	workspacetools "github.com/feiyu912/zenforge/tools/workspace"
 	workspacelocal "github.com/feiyu912/zenforge/workspace/local"
@@ -484,11 +485,22 @@ func buildAgent(ctx context.Context, opts options, ioStreams IO) (*zenforge.Agen
 	if err != nil {
 		return nil, err
 	}
+	// One private spill store under the workspace serves both the
+	// tool-result spill middleware and the search tools' over-cap lists,
+	// and stays inside the configured read root so the model can read
+	// spilled files back.
+	spillStore := tool.NewSpillStore(filepath.Join(opts.workspace, ".zenforge", "spill"))
+	// The turn-diff store is shared between the workspace tools (which
+	// capture mutations) and the agent (which drains and emits
+	// turn.diff events at turn boundaries).
+	turnDiffs := workspacetools.NewTurnDiffStore()
 	workspaceTools, err := workspacetools.Tools(workspacetools.Config{
 		Workspace:              ws,
 		Snapshots:              workspacetools.NewSnapshotStore(),
 		RequireReadBeforeWrite: true,
 		Policy:                 workspaceFilePolicy(opts),
+		SearchSpill:            spillStore,
+		TurnDiffs:              turnDiffs,
 	})
 	if err != nil {
 		return nil, err
@@ -515,6 +527,14 @@ func buildAgent(ctx context.Context, opts options, ioStreams IO) (*zenforge.Agen
 		return nil, err
 	}
 	tools = append(tools, askTool)
+	// get_context_remaining reports the live token budget the agent
+	// injects into tool-call metadata; it answers null until a context
+	// window is configured.
+	contextTool, err := contextinfo.New()
+	if err != nil {
+		return nil, err
+	}
+	tools = append(tools, contextTool)
 	approvalBroker, err := approvalBroker(opts, ioStreams)
 	if err != nil {
 		return nil, err
@@ -571,13 +591,11 @@ func buildAgent(ctx context.Context, opts options, ioStreams IO) (*zenforge.Agen
 	}
 	// Tool-runtime guardrails follow the reference harnesses: recover
 	// panics, surface repeated identical calls to the model, and spill
-	// oversized results to a private on-disk store under the workspace
-	// so the read tool can reach the full output.
-	spillDir := filepath.Join(opts.workspace, ".zenforge", "spill")
+	// oversized results to the shared private store.
 	toolRuntime := []tool.Middleware{
 		tool.RecoverPanic(),
 		tool.RepeatGuard(),
-		tool.Spill(tool.SpillConfig{Dir: spillDir}),
+		tool.Spill(tool.SpillConfig{Store: spillStore}),
 	}
 	return zenforge.New(zenforge.Config{
 		Model:              modelAdapter,
@@ -593,6 +611,7 @@ func buildAgent(ctx context.Context, opts options, ioStreams IO) (*zenforge.Agen
 		InstructionFiles:   instructionFiles,
 		WorkingDir:         opts.workspace,
 		EnvironmentContext: opts.environmentContext,
+		TurnDiffs:          turnDiffs,
 		MaxSteps:           opts.maxSteps,
 		Mode:               executionMode,
 		Planning:           planningMode(opts.planning),

@@ -15,6 +15,7 @@ import (
 	"github.com/feiyu912/zenforge/skill"
 	"github.com/feiyu912/zenforge/subagent"
 	"github.com/feiyu912/zenforge/tool"
+	workspacetools "github.com/feiyu912/zenforge/tools/workspace"
 	"github.com/feiyu912/zenforge/trace"
 	"github.com/feiyu912/zenforge/workspace"
 )
@@ -71,20 +72,25 @@ type Config struct {
 	SubAgentRunner        subagent.Runner
 	SubAgentOptions       subagent.Options
 	Workspace             workspace.Workspace
-	Events                EventStore
-	Checkpoints           checkpoint.Store
-	RunController         *harness.RunController
-	Trace                 trace.Sink
-	Compaction            *compaction.Config
-	Retry                 *modelretry.Config
-	StreamIdleTimeout     time.Duration
-	InstructionFiles      *instructions.Config
-	WorkingDir            string
-	EnvironmentContext    bool
-	MaxSteps              int
-	Mode                  AgentMode
-	Planning              PlanningMode
-	SubAgents             SubAgentMode
+	// TurnDiffs receives per-mutation content captures from the
+	// workspace Write/Edit tools; the agent drains it at each turn
+	// boundary and emits turn.diff events with unified diffs (codex
+	// TurnDiff parity). Optional.
+	TurnDiffs          *workspacetools.TurnDiffStore
+	Events             EventStore
+	Checkpoints        checkpoint.Store
+	RunController      *harness.RunController
+	Trace              trace.Sink
+	Compaction         *compaction.Config
+	Retry              *modelretry.Config
+	StreamIdleTimeout  time.Duration
+	InstructionFiles   *instructions.Config
+	WorkingDir         string
+	EnvironmentContext bool
+	MaxSteps           int
+	Mode               AgentMode
+	Planning           PlanningMode
+	SubAgents          SubAgentMode
 }
 
 // Tool is re-exported for the high-level API.
