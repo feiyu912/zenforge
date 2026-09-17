@@ -44,6 +44,9 @@ const (
 	EventSessionTitle       EventType = "session.title"
 	EventDeliverables       EventType = "deliverables.presented"
 	EventToolsActivated     EventType = "tools.activated"
+	// EventPlanApproved marks the end of plan mode: the plan was approved
+	// and the run switched to executing durably.
+	EventPlanApproved       EventType = "plan.approved"
 	EventApprovalRequested  EventType = "approval.requested"
 	EventApprovalResolved   EventType = "approval.resolved"
 	EventApprovalExpired    EventType = "approval.expired"

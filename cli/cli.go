@@ -33,6 +33,7 @@ import (
 	"github.com/feiyu912/zenforge/tools/askuser"
 	"github.com/feiyu912/zenforge/tools/contextinfo"
 	patchtools "github.com/feiyu912/zenforge/tools/patch"
+	plantools "github.com/feiyu912/zenforge/tools/plan"
 	"github.com/feiyu912/zenforge/tools/present"
 	shelltool "github.com/feiyu912/zenforge/tools/shell"
 	"github.com/feiyu912/zenforge/tools/toolsearch"
@@ -627,6 +628,8 @@ type options struct {
 	shellAllow          multiFlag
 	shellWorkingDir     string
 
+	planMode bool
+
 	webEnabled         bool
 	webSearchEndpoint  string
 	webSearchAPIKey    string
@@ -907,6 +910,21 @@ func buildAgent(ctx context.Context, opts options, ioStreams IO) (*zenforge.Agen
 			return resolved, ok
 		}, 0),
 	}
+	// Plan mode refuses mutating tools until exit_plan_mode is approved.
+	// The resolver consults each tool's ReadOnlyDeclarer, and an
+	// undeclared tool counts as mutating.
+	if opts.planMode {
+		planTool, err := plantools.New()
+		if err != nil {
+			return nil, err
+		}
+		tools = append(tools, planTool)
+		toolsByName[planTool.Name()] = planTool
+		toolRuntime = append(toolRuntime, tool.PlanMode(func(name string) (tool.Tool, bool) {
+			resolved, ok := toolsByName[name]
+			return resolved, ok
+		}))
+	}
 	return zenforge.New(zenforge.Config{
 		Model:              modelAdapter,
 		Instructions:       opts.instructions,
@@ -932,6 +950,7 @@ func buildAgent(ctx context.Context, opts options, ioStreams IO) (*zenforge.Agen
 		MaxSteps:           opts.maxSteps,
 		Mode:               executionMode,
 		Planning:           planningMode(opts.planning),
+		PlanMode:           opts.planMode,
 	}), nil
 }
 

@@ -256,3 +256,19 @@ func valueError(value reflect.Value) error {
 	}
 	return value.Interface().(error)
 }
+
+// ReadOnly wraps a tool so it declares itself read-only for plan mode.
+// Tools whose New returns a TypedTool cannot add the method themselves,
+// so hosts and tool packages wrap them here instead of each tool growing
+// a bespoke wrapper type.
+func ReadOnly(inner tool.Tool) tool.Tool {
+	if inner == nil {
+		return nil
+	}
+	return readOnlyTool{Tool: inner}
+}
+
+type readOnlyTool struct{ tool.Tool }
+
+// ReadOnly reports that the wrapped tool mutates no state.
+func (readOnlyTool) ReadOnly() bool { return true }

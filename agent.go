@@ -27,6 +27,7 @@ import (
 	"github.com/feiyu912/zenforge/subagent"
 	"github.com/feiyu912/zenforge/tool"
 	"github.com/feiyu912/zenforge/tools/contextinfo"
+	planmode "github.com/feiyu912/zenforge/tools/plan"
 	"github.com/feiyu912/zenforge/tools/present"
 	tasktool "github.com/feiyu912/zenforge/tools/task"
 	todotools "github.com/feiyu912/zenforge/tools/todo"
@@ -775,6 +776,15 @@ func (a *Agent) runInternalLoop(ctx context.Context, out chan<- Event, state har
 
 func (a *Agent) runHarnessLoop(ctx context.Context, out chan<- Event, state harness.RunState, resumed, internal bool) loopTerminal {
 	runID := state.RunID
+	// Plan mode is recorded in run state only when it is not already
+	// decided, so a resumed run keeps the phase it reached instead of
+	// being pushed back into planning.
+	if a.config.PlanMode && !planModeDecided(state.Meta) {
+		if state.Meta == nil {
+			state.Meta = map[string]any{}
+		}
+		state.Meta[tool.PlanModeMetadataKey] = tool.PlanModePlanning
+	}
 	var captured loopTerminal
 	emit := eventEmitter(func(eventType EventType, data map[string]any) error {
 		if internal {
@@ -1873,6 +1883,20 @@ func (a *Agent) runPendingTools(ctx context.Context, emit eventEmitter, checkpoi
 				}
 			}
 		}
+		// An approved exit_plan_mode ends the planning phase: the run
+		// switches to executing durably (state.Meta is checkpointed), and
+		// the event records the approved plan.
+		if call.Name == planmode.Name {
+			if approved, _ := result.Structured["approved"].(bool); approved {
+				state.Meta[tool.PlanModeMetadataKey] = tool.PlanModeExecuting
+				if err := emit(EventPlanApproved, map[string]any{
+					"toolCallId": call.ID,
+					"plan":       result.Structured["plan"],
+				}); err != nil {
+					return err
+				}
+			}
+		}
 		// A successful present call publishes its validated files as
 		// durable deliverables, mirroring the DSH deliverables event.
 		if call.Name == present.Name {
@@ -2750,6 +2774,16 @@ func intFromMeta(value any) (int, bool) {
 	default:
 		return 0, false
 	}
+}
+
+// planModeDecided reports whether the run state already carries a plan
+// phase decision (planning or executing).
+func planModeDecided(meta map[string]any) bool {
+	if meta == nil {
+		return false
+	}
+	_, ok := meta[tool.PlanModeMetadataKey]
+	return ok
 }
 
 func toolCallMetadata(state harness.RunState, callMeta map[string]any) map[string]any {

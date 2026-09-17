@@ -63,7 +63,7 @@ func New(config Config) (tool.Tool, error) {
 	if maxFiles <= 0 {
 		maxFiles = DefaultMaxFiles
 	}
-	return tools.New(Name, Description, func(ctx context.Context, in input) (output, error) {
+	instance, err := tools.New(Name, Description, func(ctx context.Context, in input) (output, error) {
 		if len(in.Files) == 0 || len(in.Files) > maxFiles {
 			return output{}, fmt.Errorf("%w: present accepts 1 to %d files", tool.ErrInvalidArguments, maxFiles)
 		}
@@ -90,4 +90,10 @@ func New(config Config) (tool.Tool, error) {
 		}
 		return output{Files: files, Message: strings.Join(lines, "\n")}, nil
 	})
+	if err != nil {
+		return nil, err
+	}
+	// Declaring deliverables records state but mutates no files, so plan
+	// mode allows it.
+	return tools.ReadOnly(instance), nil
 }

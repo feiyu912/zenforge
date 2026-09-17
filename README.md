@@ -668,6 +668,13 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
   new files need a same-run observed absence (a read that reported
   not-found), so a blind create is refused; `workspace.ErrPathNotFound` now
   also satisfies `errors.Is(err, fs.ErrNotExist)`.
+- Plan mode (codex plan collaboration mode): `--plan` (or
+  `agent.planMode`) starts a run in a read-only phase where mutating tools
+  are refused with a structured `PLAN_MODE_READ_ONLY` result; read-only
+  tools declare themselves through `tool.ReadOnlyDeclarer` (undeclared
+  tools count as mutating, so classification fails closed). `exit_plan_mode`
+  presents the plan through the approval broker bound to that exact plan,
+  and approval switches the run to executing durably in run state.
 - Run time travel (codex rollout fork/revert + writer lock): every JSONL
   event carries a contiguous per-run ordinal written under an in-process
   mutex and a cross-process `flock`, and appends use a size-validated tail

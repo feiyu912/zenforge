@@ -23,6 +23,7 @@ import (
 	"github.com/feiyu912/zenforge/sandbox"
 	"github.com/feiyu912/zenforge/subagent"
 	"github.com/feiyu912/zenforge/tool"
+	plantools "github.com/feiyu912/zenforge/tools/plan"
 	workspacetools "github.com/feiyu912/zenforge/tools/workspace"
 	"github.com/feiyu912/zenforge/trace"
 	workspacelocal "github.com/feiyu912/zenforge/workspace/local"
@@ -4566,4 +4567,94 @@ func TestAgentRevertRewindsAndResumeContinuesFromIt(t *testing.T) {
 			t.Fatalf("resume replayed the abandoned branch: %v", contents)
 		}
 	}
+}
+
+// TestPlanModeRefusesWritesUntilThePlanIsApproved exercises the whole
+// plan-mode path: a mutating tool is refused while planning, an approved
+// exit_plan_mode flips the phase durably, and the same tool then runs.
+func TestPlanModeRefusesWritesUntilThePlanIsApproved(t *testing.T) {
+	ctx := context.Background()
+	checkpoints := checkpointmemory.New()
+	events := &runEventStore{}
+	writes := 0
+	write := &probeTool{name: "workspace_write", call: func(tool.Context) (tool.Result, error) {
+		writes++
+		return tool.Result{Output: "wrote"}, nil
+	}}
+	planTool, err := plantools.New()
+	if err != nil {
+		t.Fatalf("plan tool New returned error: %v", err)
+	}
+	resolve := func(name string) (tool.Tool, bool) {
+		switch name {
+		case write.Name():
+			return write, true
+		case planTool.Name():
+			return planTool, true
+		default:
+			return nil, false
+		}
+	}
+	broker := approval.AlwaysAllow()
+	toolCall := func(id, name, arguments string) model.Event {
+		return model.Event{Message: &model.Message{ToolCalls: []model.ToolCallSpec{{
+			ID: id, Name: name, Arguments: json.RawMessage(arguments),
+		}}}}
+	}
+	scripted := &scriptedModel{turns: []scriptedTurn{
+		{events: []model.Event{toolCall("call_1", "workspace_write", `{}`)}},
+		{events: []model.Event{toolCall("call_2", "exit_plan_mode", `{"plan":"# Plan\n\n1. write"}`)}},
+		{events: []model.Event{toolCall("call_3", "workspace_write", `{}`)}},
+		{events: []model.Event{{Delta: "done"}}},
+	}}
+	agent := New(Config{
+		Model:       scripted,
+		Tools:       []tool.Tool{write, planTool},
+		ToolRuntime: []tool.Middleware{tool.PlanMode(resolve)},
+		Approval:    broker,
+		Checkpoints: checkpoints,
+		Events:      events,
+		PlanMode:    true,
+	})
+	result, err := agent.Run(ctx, Task{RunID: "run_plan", Input: "change the code"})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if result.Output != "done" {
+		t.Fatalf("output = %q", result.Output)
+	}
+	// Only the post-approval write ran; the planning-phase attempt was
+	// refused by the middleware.
+	if writes != 1 {
+		t.Fatalf("writes = %d, want 1", writes)
+	}
+	state, err := checkpoints.Load(ctx, "run_plan")
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if state.State.Meta[tool.PlanModeMetadataKey] != tool.PlanModeExecuting {
+		t.Fatalf("plan phase = %#v", state.State.Meta)
+	}
+	approved := false
+	for _, event := range events.events {
+		if event.Type == EventPlanApproved {
+			approved = true
+		}
+	}
+	if !approved {
+		t.Fatal("plan.approved event was not emitted")
+	}
+}
+
+// probeTool is a named tool with an injected call function.
+type probeTool struct {
+	name string
+	call func(tool.Context) (tool.Result, error)
+}
+
+func (p *probeTool) Name() string           { return p.name }
+func (p *probeTool) Description() string    { return "probe tool" }
+func (p *probeTool) Schema() map[string]any { return map[string]any{"type": "object"} }
+func (p *probeTool) Call(_ context.Context, _ json.RawMessage, call tool.Context) (tool.Result, error) {
+	return p.call(call)
 }

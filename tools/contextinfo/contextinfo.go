@@ -31,13 +31,18 @@ type output struct {
 // metadata value the tool reports null, mirroring codex behavior when
 // the token budget is unknown.
 func New() (tool.Tool, error) {
-	return tools.New(Name, "Get the remaining tokens in the current context window.", func(_ context.Context, _ input, call tool.Context) (output, error) {
+	instance, err := tools.New(Name, "Get the remaining tokens in the current context window.", func(_ context.Context, _ input, call tool.Context) (output, error) {
 		out := output{}
 		if remaining, ok := tokensRemaining(call.Metadata); ok {
 			out.TokensLeft = &remaining
 		}
 		return out, nil
 	})
+	if err != nil {
+		return nil, err
+	}
+	// Reporting the budget mutates nothing, so plan mode allows it.
+	return tools.ReadOnly(instance), nil
 }
 
 func tokensRemaining(metadata map[string]any) (int, bool) {

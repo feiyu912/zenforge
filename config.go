@@ -116,8 +116,13 @@ type Config struct {
 	EnvironmentContext bool
 	MaxSteps           int
 	Mode               AgentMode
-	Planning           PlanningMode
-	SubAgents          SubAgentMode
+	// PlanMode starts the run in the read-only planning phase: mutating
+	// tools are refused until exit_plan_mode is approved, after which the
+	// run continues in Mode. The phase lives in run state, so a resumed
+	// run keeps whatever phase it reached.
+	PlanMode  bool
+	Planning  PlanningMode
+	SubAgents SubAgentMode
 }
 
 // Tool is re-exported for the high-level API.

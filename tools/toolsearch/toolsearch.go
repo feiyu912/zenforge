@@ -65,7 +65,7 @@ func New(config Config) (tool.Tool, error) {
 	if maxResults <= 0 {
 		maxResults = DefaultMaxResults
 	}
-	return tools.New(Name, Description, func(ctx context.Context, in input) (output, error) {
+	instance, err := tools.New(Name, Description, func(ctx context.Context, in input) (output, error) {
 		query := strings.ToLower(strings.TrimSpace(in.Query))
 		if query == "" {
 			return output{}, fmt.Errorf("%w: query is required", tool.ErrInvalidArguments)
@@ -91,6 +91,12 @@ func New(config Config) (tool.Tool, error) {
 		message := searchMessage(query, total, len(matched), limit)
 		return output{Matches: matched, Total: total, Message: message}, nil
 	})
+	if err != nil {
+		return nil, err
+	}
+	// Searching the catalog mutates nothing but the run's activation set,
+	// so plan mode allows it.
+	return tools.ReadOnly(instance), nil
 }
 
 func searchMessage(query string, total, returned, limit int) string {

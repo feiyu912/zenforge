@@ -318,3 +318,72 @@ func TestTimeoutBudgetOfIgnoresNegativeBudgets(t *testing.T) {
 		t.Fatalf("TimeoutBudgetOf = %v, want the declared budget", got)
 	}
 }
+
+func TestPlanModeRefusesMutatingToolsUntilApproved(t *testing.T) {
+	readTool := readOnlyProbe{name: "workspace_read"}
+	writeTool := plainTool{name: "workspace_write"}
+	resolve := func(name string) (Tool, bool) {
+		switch name {
+		case readTool.Name():
+			return readTool, true
+		case writeTool.Name():
+			return writeTool, true
+		default:
+			return nil, false
+		}
+	}
+	middleware := PlanMode(resolve)
+	invoke := func(name string, metadata map[string]any) (Result, error) {
+		invoker := middleware(InvokerFunc(func(ctx context.Context, call Call) (Result, error) {
+			if instance, ok := resolve(call.Name); ok {
+				return instance.Call(ctx, call.Arguments, Context{})
+			}
+			return Result{Output: "unknown tool"}, nil
+		}))
+		return invoker.Invoke(context.Background(), Call{Name: name, Metadata: metadata})
+	}
+
+	planning := map[string]any{PlanModeMetadataKey: PlanModePlanning}
+	result, err := invoke(readTool.Name(), planning)
+	if err != nil || result.Error != "" {
+		t.Fatalf("read-only tool in plan mode: %+v err=%v", result, err)
+	}
+
+	result, err = invoke(writeTool.Name(), planning)
+	if !errors.Is(err, ErrPlanModeReadOnly) {
+		t.Fatalf("mutating tool error = %v", err)
+	}
+	if result.Metadata["code"] != PlanModeCode {
+		t.Fatalf("result = %+v", result)
+	}
+	if result.Structured["code"] != PlanModeCode || result.Structured["message"] != PlanModeGuidance {
+		t.Fatalf("structured = %#v", result.Structured)
+	}
+
+	// An unknown tool is treated as mutating: classification fails closed.
+	if _, err := invoke("mystery_tool", planning); !errors.Is(err, ErrPlanModeReadOnly) {
+		t.Fatalf("unknown tool error = %v", err)
+	}
+
+	// Once the plan is approved the phase is executing and every tool runs.
+	executing := map[string]any{PlanModeMetadataKey: PlanModeExecuting}
+	if _, err := invoke(writeTool.Name(), executing); err != nil {
+		t.Fatalf("executing tool error = %v", err)
+	}
+	// Without the metadata key plan mode is inactive for hosts that never
+	// opt in.
+	if _, err := invoke(writeTool.Name(), nil); err != nil {
+		t.Fatalf("inactive plan mode error = %v", err)
+	}
+}
+
+// readOnlyProbe declares itself read-only.
+type readOnlyProbe struct{ name string }
+
+func (p readOnlyProbe) Name() string           { return p.name }
+func (p readOnlyProbe) Description() string    { return "read-only probe" }
+func (p readOnlyProbe) Schema() map[string]any { return map[string]any{"type": "object"} }
+func (p readOnlyProbe) ReadOnly() bool         { return true }
+func (p readOnlyProbe) Call(context.Context, json.RawMessage, Context) (Result, error) {
+	return Result{Output: "read"}, nil
+}

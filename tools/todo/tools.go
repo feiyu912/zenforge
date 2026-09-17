@@ -84,6 +84,11 @@ func newTool(config Config, name string, kind kind, description string) (tool.To
 	return todoTool{name: name, description: description, manager: config.Manager, kind: kind}, nil
 }
 
+// ReadOnly reports that todo bookkeeping touches run state only, never
+// the workspace, so plan mode keeps these tools available for sketching
+// the plan.
+func (t todoTool) ReadOnly() bool { return true }
+
 func (t todoTool) Name() string {
 	return t.name
 }

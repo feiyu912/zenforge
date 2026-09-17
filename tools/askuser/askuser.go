@@ -99,6 +99,10 @@ func (t askUserTool) Description() string {
 	return "Ask the user one or more concise questions when you need confirmation, a choice, or missing information before proceeding. Each answer echoes the question id; the run pauses until the user responds."
 }
 
+// ReadOnly reports that asking the user changes no state, so plan mode
+// allows the question.
+func (t askUserTool) ReadOnly() bool { return true }
+
 func (t askUserTool) Schema() map[string]any {
 	return t.schema
 }

@@ -61,6 +61,8 @@ type agentConfig struct {
 	Planning            any                            `json:"planning,omitempty"`
 	EnvironmentContext  *bool                          `json:"environmentContext,omitempty"`
 	ProjectInstructions *projectInstructionsFileConfig `json:"projectInstructions,omitempty"`
+	// PlanMode starts the run in the read-only planning phase.
+	PlanMode *bool `json:"planMode,omitempty"`
 }
 
 // projectInstructionsFileConfig controls hierarchical AGENTS.md-compatible
@@ -261,6 +263,9 @@ func applyConfig(opts *options, config configFile) error {
 			return fmt.Errorf("agent.mode and agent.planning cannot both be set")
 		}
 		opts.planning = planning
+	}
+	if config.Agent.PlanMode != nil {
+		opts.planMode = *config.Agent.PlanMode
 	}
 	if config.Agent.EnvironmentContext != nil {
 		opts.environmentContext = *config.Agent.EnvironmentContext

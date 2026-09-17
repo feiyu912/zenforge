@@ -335,6 +335,13 @@ func (t filePolicyTool) Name() string {
 	return t.base.Name()
 }
 
+// ReadOnly reports whether this tool cannot mutate the workspace. Reads
+// (read, list, glob, grep) are read-only; writes, edits, and deletes are
+// not, so plan mode refuses them.
+func (t filePolicyTool) ReadOnly() bool {
+	return t.operation == policy.FileRead
+}
+
 func (t filePolicyTool) Description() string {
 	return t.base.Description()
 }

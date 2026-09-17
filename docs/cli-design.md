@@ -26,6 +26,18 @@ is added only when at least one configured tool defers its definition, and
 `web.searchEndpoint` is set (a search endpoint also registers
 `web_search`).
 
+## Plan mode
+
+`--plan` (or `agent.planMode`) starts a run in the planning phase: mutating
+tools (write, edit, apply_patch, shell, subagents) are refused with a
+structured `PLAN_MODE_READ_ONLY` result while read tools, todo
+bookkeeping, `ask_user`, `present`, `get_context_remaining`,
+`tool_search`, and the web tools stay available. The model finishes by
+calling `exit_plan_mode` with the plan; the CLI's approval prompt shows the
+plan and, on approval, the run switches to executing durably (the phase is
+part of run state, so a resume keeps it). With `--approve always` the first
+plan is approved automatically, which is the sensible unattended default.
+
 ## Time travel
 
 `zenforge fork <parent-run-id> [--at <seq>]` starts a new run from the
