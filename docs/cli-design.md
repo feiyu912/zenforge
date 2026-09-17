@@ -65,6 +65,20 @@ opts in. Paths are canonicalized and passed as `-D` parameters, and off
 macOS — or when `sandbox-exec` is missing — opening a session fails with
 `sandbox_unavailable` rather than running unsandboxed.
 
+## Hooks
+
+`--hooks <file>` loads a JSON hook configuration: event name to a list of
+`{matcher, command, timeout, failClosed}` entries. `PreToolUse` and
+`PostToolUse` run around every tool call — a block prevents the call,
+`updatedInput` rewrites its arguments, and `additionalContext` is attached
+to the result — while `SessionStart`, `UserPromptSubmit`, and `Stop` are
+available to the engine (not yet wired into the agent loop). The payload
+arrives as JSON on stdin with both snake_case and camelCase keys; exit 0
+parses a JSON decision, exit 2 blocks with stderr as the reason, and any
+other code is a failure that fails open unless the hook sets
+`failClosed`. Unknown fields in the file are rejected, so a mistyped hook
+cannot be half-applied.
+
 ## Long-running commands
 
 `--jobs` (or `agent.jobs: true`) registers `exec_command`, `write_stdin`,

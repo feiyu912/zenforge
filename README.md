@@ -668,6 +668,13 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
   new files need a same-run observed absence (a read that reported
   not-found), so a blind create is refused; `workspace.ErrPathNotFound` now
   also satisfies `errors.Is(err, fs.ErrNotExist)`.
+- Lifecycle hooks (codex `hooks` crate): `--hooks <file>` runs user
+  commands at `PreToolUse`/`PostToolUse` (wired as tool middleware, so a
+  blocking hook prevents the call and `updatedInput` rewrites it) and the
+  engine also implements `SessionStart`/`UserPromptSubmit`/`Stop`. A JSON
+  payload goes to stdin, exit 0 parses a JSON decision, exit 2 blocks with
+  stderr as the reason, and a malformed decision is a failure rather than a
+  silent allow; failures fail open unless the hook sets `failClosed`.
 - Model-facing job tools: `--jobs` (or `agent.jobs`) registers
   `exec_command` (foreground or `background=true`), `write_stdin`,
   `job_output` (offset reads, `waitMs` long-polling, dropped-output flags,

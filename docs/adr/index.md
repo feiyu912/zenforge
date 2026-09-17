@@ -57,3 +57,4 @@ later ADRs supersede earlier ones, never edit.
 | [0041](0041-seccomp-filter.md) | Seccomp: a planned BPF program, verified by a test-local interpreter |
 | [0042](0042-restrict-then-exec-helper.md) | The Linux sandbox runs a restrict-then-exec helper (this binary) |
 | [0043](0043-background-jobs.md) | Background jobs: detached processes with offset-addressed output |
+| [0044](0044-hooks-engine.md) | Hooks: exit-code and JSON decisions, fail-open by default |

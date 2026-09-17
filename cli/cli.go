@@ -25,6 +25,7 @@ import (
 	eventlogsqlite "github.com/feiyu912/zenforge/eventlog/sqlite"
 	"github.com/feiyu912/zenforge/goals"
 	"github.com/feiyu912/zenforge/harness"
+	"github.com/feiyu912/zenforge/hooks"
 	"github.com/feiyu912/zenforge/instructions"
 	jobspkg "github.com/feiyu912/zenforge/jobs"
 	"github.com/feiyu912/zenforge/model"
@@ -649,6 +650,8 @@ type options struct {
 	jobsEnabled   bool
 	goalMaxRounds int
 
+	hooksPath string
+
 	sandboxBackend      string
 	sandboxRoots        multiFlag
 	sandboxAllowNetwork bool
@@ -725,6 +728,7 @@ func bindOptions(fs *flag.FlagSet, opts *options) {
 	fs.BoolVar(&opts.planMode, "plan", opts.planMode, "start in plan mode: mutating tools are refused until exit_plan_mode is approved")
 	fs.BoolVar(&opts.goalsEnabled, "goals", opts.goalsEnabled, "register the create_goal/get_goal/update_goal tools")
 	fs.BoolVar(&opts.jobsEnabled, "jobs", opts.jobsEnabled, "register the exec_command/write_stdin/job_output/job_list/job_kill tools")
+	fs.StringVar(&opts.hooksPath, "hooks", opts.hooksPath, "JSON file of lifecycle hooks (PreToolUse/PostToolUse run around every tool call)")
 	fs.IntVar(&opts.goalMaxRounds, "goal-max-rounds", opts.goalMaxRounds, "default round budget for goals created in this session")
 	fs.StringVar(&opts.sandboxBackend, "sandbox", opts.sandboxBackend, "confine the shell in a sandbox: none, seatbelt (macOS), bwrap (Linux), or docker")
 	fs.Var(&opts.sandboxRoots, "sandbox-root", "writable root inside the sandbox (repeatable; defaults to the working directory)")
@@ -766,6 +770,12 @@ func optionsFromArgs(args []string) (options, error) {
 }
 
 func buildAgent(ctx context.Context, opts options, ioStreams IO) (*zenforge.Agent, error) {
+	// The hook configuration is validated first: it decides what may run, so
+	// a typo in it must fail before anything else is constructed.
+	hookEngine, err := buildHookEngine(opts)
+	if err != nil {
+		return nil, err
+	}
 	var executionMode zenforge.AgentMode
 	if strings.TrimSpace(opts.mode) != "" {
 		mode, err := parseAgentMode(opts.mode)
@@ -1011,6 +1021,12 @@ func buildAgent(ctx context.Context, opts options, ioStreams IO) (*zenforge.Agen
 		for _, registered := range jobTools {
 			toolsByName[registered.Name()] = registered
 		}
+	}
+	if hookEngine != nil {
+		// Hooks observe and may refuse tool calls, so they wrap the whole
+		// runtime: a blocking PreToolUse hook returns before the tool runs,
+		// and a PostToolUse hook annotates the result.
+		toolRuntime = append(toolRuntime, hooks.Middleware(hookEngine, ""))
 	}
 	// Plan mode refuses mutating tools until exit_plan_mode is approved.
 	// The resolver consults each tool's ReadOnlyDeclarer, and an
