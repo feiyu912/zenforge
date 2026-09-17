@@ -677,6 +677,8 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
   newline-delimited JSON while still reading `Content-Length` headers, and
   remote tools are namespaced `mcp__<server>__<tool>` with their read-only
   hints read into the definition so an approval decision can use them.
+  `zenforge mcp-server` serves ZenForge itself the same way, exposing
+  `zenforge_runs` and `zenforge_version` as read-only tools.
 - Images and reasoning (codex `view_image`, reasoning replay): the
   `view_image` tool shows the model an image from the workspace — confined
   like any other file read, format verified from magic bytes, and carried on

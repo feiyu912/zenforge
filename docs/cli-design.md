@@ -17,6 +17,12 @@ is never answered. Stdio messages are newline-delimited JSON as the spec
 requires, and the reader also tolerates `Content-Length` headers so an
 out-of-spec peer is not turned into a connection failure.
 
+`zenforge mcp-server` serves ZenForge itself over stdio. It exposes
+`zenforge_runs` (the recorded runs, newest first) and `zenforge_version`, both
+declared read-only: a remote call has no operator in front of it, so the
+server offers only what cannot change anything until the approval path is
+wired for a run-starting tool.
+
 Remote tools are namespaced as `mcp__<server>__<tool>` so two servers can both
 offer `read_file` without one shadowing the other; the namespace is what the
 model and the policy layer see, while the call itself uses the server's own
