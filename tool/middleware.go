@@ -39,6 +39,59 @@ func Timeout(timeout time.Duration) Middleware {
 	}
 }
 
+// TimeoutPolicy enforces each tool's declared cooperative timeout
+// budget (TimeoutDeclarer), falling back to timeout for tools that
+// declare none. It mirrors the DSH tool-call timeout policy: the budget
+// is armed from the tool declaration rather than the model arguments,
+// and an expiry replaces the outcome with a structured TOOL_TIMEOUT
+// result carrying the budget in milliseconds. Resolution failures and
+// zero budgets keep the fallback; a non-positive fallback means no
+// deadline. A tool that ignores its context cannot be interrupted — the
+// wrapper reports the expiry once the call settles, exactly as the
+// reference wrapper awaits the tool promise instead of racing it.
+func TimeoutPolicy(resolve func(name string) (Tool, bool), fallback time.Duration) Middleware {
+	return func(next Invoker) Invoker {
+		return InvokerFunc(func(ctx context.Context, call Call) (Result, error) {
+			budget := fallback
+			if resolve != nil {
+				if resolved, ok := resolve(call.Name); ok {
+					if declared := TimeoutBudgetOf(resolved); declared > 0 {
+						budget = declared
+					}
+				}
+			}
+			if budget <= 0 {
+				return next.Invoke(ctx, call)
+			}
+			timeoutCtx, cancel := context.WithTimeout(ctx, budget)
+			defer cancel()
+			result, err := next.Invoke(timeoutCtx, call)
+			if timeoutCtx.Err() == context.DeadlineExceeded {
+				return timeoutResult(budget), ErrTimeout
+			}
+			return result, err
+		})
+	}
+}
+
+// timeoutResult is the structured outcome for an expired tool deadline.
+func timeoutResult(budget time.Duration) Result {
+	result := normalizeResult(Result{
+		Error:    fmt.Sprintf("%s after %s", ErrTimeout.Error(), budget),
+		ExitCode: 1,
+		Metadata: map[string]any{
+			"code":      TimeoutCode,
+			"timeoutMs": budget.Milliseconds(),
+		},
+	}, ErrTimeout)
+	if result.Metadata == nil {
+		result.Metadata = map[string]any{}
+	}
+	result.Metadata["code"] = TimeoutCode
+	result.Metadata["timeoutMs"] = budget.Milliseconds()
+	return result
+}
+
 func Retry(maxAttempts int) Middleware {
 	return func(next Invoker) Invoker {
 		return InvokerFunc(func(ctx context.Context, call Call) (Result, error) {

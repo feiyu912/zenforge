@@ -33,6 +33,7 @@ import (
 	"github.com/feiyu912/zenforge/tools/contextinfo"
 	"github.com/feiyu912/zenforge/tools/present"
 	shelltool "github.com/feiyu912/zenforge/tools/shell"
+	"github.com/feiyu912/zenforge/tools/toolsearch"
 	workspacetools "github.com/feiyu912/zenforge/tools/workspace"
 	workspacelocal "github.com/feiyu912/zenforge/workspace/local"
 )
@@ -548,6 +549,22 @@ func buildAgent(ctx context.Context, opts options, ioStreams IO) (*zenforge.Agen
 		return nil, err
 	}
 	tools = append(tools, presentTool)
+	// Deferred tools (for example MCP catalogs fetched through
+	// ToolsDeferred) only become callable after a tool_search, so the
+	// search tool is registered exactly when something is deferred. The
+	// source snapshot is built before the search tool is appended, so a
+	// search can never return tool_search itself.
+	if hasDeferredTools(tools) {
+		source, err := tool.NewRegistry(tools...)
+		if err != nil {
+			return nil, err
+		}
+		searchTool, err := toolsearch.New(toolsearch.Config{Source: source})
+		if err != nil {
+			return nil, err
+		}
+		tools = append(tools, searchTool)
+	}
 	approvalBroker, err := approvalBroker(opts, ioStreams)
 	if err != nil {
 		return nil, err
@@ -605,10 +622,21 @@ func buildAgent(ctx context.Context, opts options, ioStreams IO) (*zenforge.Agen
 	// Tool-runtime guardrails follow the reference harnesses: recover
 	// panics, surface repeated identical calls to the model, and spill
 	// oversized results to the shared private store.
+	toolsByName := make(map[string]tool.Tool, len(tools))
+	for _, registered := range tools {
+		toolsByName[registered.Name()] = registered
+	}
+	// The timeout policy arms each tool's declared cooperative budget
+	// (see tool.TimeoutDeclarer); tools that declare none run unbounded,
+	// matching the DSH default of no deadline.
 	toolRuntime := []tool.Middleware{
 		tool.RecoverPanic(),
 		tool.RepeatGuard(),
 		tool.Spill(tool.SpillConfig{Store: spillStore}),
+		tool.TimeoutPolicy(func(name string) (tool.Tool, bool) {
+			resolved, ok := toolsByName[name]
+			return resolved, ok
+		}, 0),
 	}
 	return zenforge.New(zenforge.Config{
 		Model:              modelAdapter,
@@ -980,4 +1008,15 @@ func (m *multiFlag) String() string {
 func (m *multiFlag) Set(value string) error {
 	*m = append(*m, value)
 	return nil
+}
+
+// hasDeferredTools reports whether any configured tool defers its
+// definition until a tool_search activates it.
+func hasDeferredTools(tools []tool.Tool) bool {
+	for _, registered := range tools {
+		if tool.IsDeferred(registered) {
+			return true
+		}
+	}
+	return false
 }

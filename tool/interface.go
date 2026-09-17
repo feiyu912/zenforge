@@ -13,6 +13,46 @@ type Tool interface {
 	Call(ctx context.Context, input json.RawMessage, call Context) (Result, error)
 }
 
+// TimeoutDeclarer is implemented by tools that declare a cooperative
+// per-call timeout budget, mirroring the DSH tool definition field
+// `timeoutMs`. The budget is runtime metadata and is never sent to the
+// model; schemas expose only name, description, and parameters. A tool
+// that declares a budget promises to forward the call context to a
+// cooperative implementation, so it can reach quiescence when the
+// deadline fires.
+type TimeoutDeclarer interface {
+	TimeoutBudget() time.Duration
+}
+
+// DeferredTool marks a tool whose full definition stays out of the model
+// surface until a tool search activates it, mirroring codex's
+// `defer_loading` flag. Deferral is opt-in: every tool that does not
+// implement this interface keeps its eager, always-visible schema.
+type DeferredTool interface {
+	DeferredLoading() bool
+}
+
+// IsDeferred reports whether a tool's definition is withheld until a
+// search activates it.
+func IsDeferred(t Tool) bool {
+	deferred, ok := t.(DeferredTool)
+	return ok && deferred != nil && deferred.DeferredLoading()
+}
+
+// TimeoutBudgetOf reports the declared cooperative budget for a tool;
+// zero means the tool declares none.
+func TimeoutBudgetOf(t Tool) time.Duration {
+	declarer, ok := t.(TimeoutDeclarer)
+	if !ok || declarer == nil {
+		return 0
+	}
+	budget := declarer.TimeoutBudget()
+	if budget < 0 {
+		return 0
+	}
+	return budget
+}
+
 type Definition struct {
 	Name        string         `json:"name"`
 	Description string         `json:"description"`

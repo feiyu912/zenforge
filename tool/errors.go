@@ -11,8 +11,12 @@ var (
 	ErrInvalidTool      = errors.New("invalid tool")
 	ErrInvalidArguments = errors.New("invalid arguments")
 	ErrTimeout          = errors.New("tool timeout")
-	ErrBudgetExceeded   = errors.New("tool budget exceeded")
-	ErrOutputTooLarge   = errors.New("tool output too large")
+	// TimeoutCode is the structured result code carried when a
+	// cooperative tool-call deadline expires, mirroring the DSH
+	// TOOL_TIMEOUT classification.
+	TimeoutCode       = "TOOL_TIMEOUT"
+	ErrBudgetExceeded = errors.New("tool budget exceeded")
+	ErrOutputTooLarge = errors.New("tool output too large")
 )
 
 type retryableError struct {

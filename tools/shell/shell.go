@@ -121,6 +121,14 @@ func (t shellTool) Name() string {
 	return "shell"
 }
 
+// TimeoutBudget declares the shell's cooperative budget: the configured
+// policy maximum, so even a model call that omits timeoutMs is bounded
+// at the chain level. The model-visible timeoutMs argument stays, and
+// the effective call timeout is still clamped to MaxTimeout.
+func (t shellTool) TimeoutBudget() time.Duration {
+	return t.config.Policy.MaxTimeout
+}
+
 func (t shellTool) Description() string {
 	return "Run an allowlisted shell command in the configured workspace."
 }

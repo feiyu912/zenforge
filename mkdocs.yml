@@ -167,6 +167,7 @@ nav:
       - 0027 Token meter search caps and turn diffs: adr/0027-token-meter-search-caps-turn-diffs.md
       - 0028 Deliverables titles and write observation: adr/0028-deliverables-titles-and-write-observation.md
       - 0029 Ordered prompt sections: adr/0029-ordered-prompt-sections.md
+      - 0030 Declared tool timeouts and deferred loading: adr/0030-declared-tool-timeouts-and-deferred-loading.md
 
 extra:
   social:

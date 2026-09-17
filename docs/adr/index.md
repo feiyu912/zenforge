@@ -43,3 +43,4 @@ later ADRs supersede earlier ones, never edit.
 | [0027](0027-token-meter-search-caps-turn-diffs.md) | Token meter, search discovery caps, and turn diffs |
 | [0028](0028-deliverables-titles-and-write-observation.md) | Deliverables, session titles, and the write observation policy |
 | [0029](0029-ordered-prompt-sections.md) | Ordered prompt sections with strict variable interpolation |
+| [0030](0030-declared-tool-timeouts-and-deferred-loading.md) | Declared tool timeouts and deferred tool loading |

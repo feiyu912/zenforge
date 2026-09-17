@@ -63,6 +63,30 @@ func isNilTool(value Tool) bool {
 	}
 }
 
+// DefinitionsMatching returns the definitions whose tools satisfy the
+// predicate, in definition order. A nil predicate returns everything.
+func (r *MemoryRegistry) DefinitionsMatching(include func(Tool) bool) []Definition {
+	r.mu.RLock()
+	tools := make([]Tool, 0, len(r.tools))
+	for _, registered := range r.tools {
+		tools = append(tools, registered)
+	}
+	r.mu.RUnlock()
+	sort.Slice(tools, func(i, j int) bool { return tools[i].Name() < tools[j].Name() })
+	definitions := make([]Definition, 0, len(tools))
+	for _, registered := range tools {
+		if include != nil && !include(registered) {
+			continue
+		}
+		definitions = append(definitions, Definition{
+			Name:        registered.Name(),
+			Description: registered.Description(),
+			Schema:      registered.Schema(),
+		})
+	}
+	return definitions
+}
+
 func (r *MemoryRegistry) Lookup(name string) (Tool, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

@@ -31,9 +31,25 @@ type Content struct {
 type Tool struct {
 	client     Client
 	definition ToolDefinition
+	deferred   bool
 }
 
+// DeferredLoading marks remote MCP definitions for lazy activation
+// through tool_search; see ToolsDeferred.
+func (t *Tool) DeferredLoading() bool { return t.deferred }
+
 func Tools(ctx context.Context, client Client) ([]tool.Tool, error) {
+	return toolsForClient(ctx, client, false)
+}
+
+// ToolsDeferred is Tools with every definition marked deferred, so a
+// large remote catalog stays out of the model's initial tool list until
+// a tool_search activates what the model needs.
+func ToolsDeferred(ctx context.Context, client Client) ([]tool.Tool, error) {
+	return toolsForClient(ctx, client, true)
+}
+
+func toolsForClient(ctx context.Context, client Client, deferred bool) ([]tool.Tool, error) {
 	if client == nil {
 		return nil, fmt.Errorf("mcp client is required")
 	}
@@ -49,6 +65,7 @@ func Tools(ctx context.Context, client Client) ([]tool.Tool, error) {
 		out = append(out, &Tool{
 			client:     client,
 			definition: definition,
+			deferred:   deferred,
 		})
 	}
 	return out, nil

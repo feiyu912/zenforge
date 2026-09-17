@@ -39,6 +39,7 @@ const (
 	EventTurnDiff           EventType = "turn.diff"
 	EventSessionTitle       EventType = "session.title"
 	EventDeliverables       EventType = "deliverables.presented"
+	EventToolsActivated     EventType = "tools.activated"
 	EventApprovalRequested  EventType = "approval.requested"
 	EventApprovalResolved   EventType = "approval.resolved"
 	EventApprovalExpired    EventType = "approval.expired"

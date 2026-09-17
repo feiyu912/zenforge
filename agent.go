@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -29,6 +30,7 @@ import (
 	"github.com/feiyu912/zenforge/tools/present"
 	tasktool "github.com/feiyu912/zenforge/tools/task"
 	todotools "github.com/feiyu912/zenforge/tools/todo"
+	"github.com/feiyu912/zenforge/tools/toolsearch"
 	"github.com/feiyu912/zenforge/trace"
 )
 
@@ -47,6 +49,9 @@ const (
 	// metaSessionTitleSource records whether the title came from the
 	// user or the deterministic fallback, for audit surfaces.
 	metaSessionTitleSource = "zenforge.session_title_source"
+	// metaActiveTools is the durable list of deferred tool names a
+	// tool_search activated for this run.
+	metaActiveTools = "zenforge.active_tools"
 )
 
 // turnDiffBudget bounds in-process unified-diff rendering at each turn
@@ -1121,7 +1126,7 @@ func (a *Agent) callModel(ctx context.Context, emit eventEmitter, state harness.
 	}
 	stream, err := a.config.Model.Stream(ctx, model.Request{
 		Messages:   a.modelMessages(state),
-		Tools:      a.toolSpecs(),
+		Tools:      a.toolSpecs(state),
 		ToolChoice: choice,
 		Meta:       cloneMap(state.Meta),
 	})
@@ -1335,7 +1340,7 @@ func (a *Agent) callModelAttemptDurable(
 
 	stream, err := a.config.Model.Stream(ctx, model.Request{
 		Messages:   a.modelMessages(*state),
-		Tools:      a.toolSpecs(),
+		Tools:      a.toolSpecs(*state),
 		ToolChoice: choice,
 		Meta:       cloneMap(state.Meta),
 	})
@@ -1468,7 +1473,7 @@ func (a *Agent) compactPressure(state *harness.RunState) compaction.Pressure {
 	for _, message := range a.systemPrefixMessages(*state) {
 		systemTokens += estimator.EstimateText(message.Content)
 	}
-	return a.compactor.Evaluate(systemTokens, a.toolSpecs(), state.Messages)
+	return a.compactor.Evaluate(systemTokens, a.toolSpecs(*state), state.Messages)
 }
 
 // contextTokensRemaining reports how many tokens still fit in the
@@ -1846,6 +1851,20 @@ func (a *Agent) runPendingTools(ctx context.Context, emit eventEmitter, checkpoi
 				"todos": result.Structured["todos"],
 			}); err != nil {
 				return err
+			}
+		}
+		// A successful tool_search activates its matches for the rest
+		// of the run, exactly like codex's loadable search results.
+		if call.Name == toolsearch.Name {
+			if activated := toolSearchMatches(result.Structured["matches"]); len(activated) > 0 {
+				if activateTools(state, activated) {
+					if err := emit(EventToolsActivated, map[string]any{
+						"tools":      activated,
+						"toolCallId": call.ID,
+					}); err != nil {
+						return err
+					}
+				}
 			}
 		}
 		// A successful present call publishes its validated files as
@@ -2853,6 +2872,25 @@ func (a *Agent) validatePrompt(state harness.RunState) error {
 	return nil
 }
 
+// toolSearchMatches extracts the tool names from a tool_search result.
+func toolSearchMatches(value any) []string {
+	entries, ok := value.([]any)
+	if !ok {
+		return nil
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		record, ok := entry.(map[string]any)
+		if !ok {
+			continue
+		}
+		if name, ok := record["name"].(string); ok && name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
 func stringMeta(meta map[string]any, key string) string {
 	value, _ := meta[key].(string)
 	return value
@@ -3054,20 +3092,88 @@ func escapeTagContent(value string) string {
 	return strings.ReplaceAll(value, ">", "&gt;")
 }
 
-func (a *Agent) toolSpecs() []model.ToolSpec {
-	configuredTools, err := a.configuredTools()
+// toolSpecs lists the definitions the model may call in this run.
+// Deferred tools (codex defer_loading) stay out of the list until a
+// tool_search activation recorded in run state, so a large catalog does
+// not consume prompt space up front.
+func (a *Agent) toolSpecs(state harness.RunState) []model.ToolSpec {
+	configured, err := a.configuredTools()
 	if err != nil {
-		configuredTools = a.config.Tools
+		configured = a.config.Tools
 	}
-	specs := make([]model.ToolSpec, 0, len(configuredTools))
-	for _, tool := range configuredTools {
+	active := activeToolNames(state.Meta)
+	specs := make([]model.ToolSpec, 0, len(configured))
+	for _, registered := range configured {
+		if tool.IsDeferred(registered) {
+			if _, ok := active[strings.ToLower(registered.Name())]; !ok {
+				continue
+			}
+		}
 		specs = append(specs, model.ToolSpec{
-			Name:        tool.Name(),
-			Description: tool.Description(),
-			Schema:      tool.Schema(),
+			Name:        registered.Name(),
+			Description: registered.Description(),
+			Schema:      registered.Schema(),
 		})
 	}
 	return specs
+}
+
+// activeToolNames reads the durable set of activated deferred tools.
+func activeToolNames(meta map[string]any) map[string]struct{} {
+	active := map[string]struct{}{}
+	names, _ := meta[metaActiveTools].([]any)
+	for _, name := range names {
+		if text, ok := name.(string); ok && text != "" {
+			active[strings.ToLower(text)] = struct{}{}
+		}
+	}
+	if typed, ok := meta[metaActiveTools].([]string); ok {
+		for _, name := range typed {
+			if name != "" {
+				active[strings.ToLower(name)] = struct{}{}
+			}
+		}
+	}
+	return active
+}
+
+// activateTools merges freshly searched tool names into the durable run
+// state and reports whether anything changed.
+func activateTools(state *harness.RunState, names []string) bool {
+	if len(names) == 0 {
+		return false
+	}
+	if state.Meta == nil {
+		state.Meta = map[string]any{}
+	}
+	existing := activeToolNames(state.Meta)
+	merged := make([]string, 0, len(existing)+len(names))
+	for name := range existing {
+		merged = append(merged, name)
+	}
+	sort.Strings(merged)
+	added := false
+	for _, name := range names {
+		if name == "" {
+			continue
+		}
+		if _, ok := existing[strings.ToLower(name)]; ok {
+			continue
+		}
+		existing[strings.ToLower(name)] = struct{}{}
+		merged = append(merged, strings.ToLower(name))
+		added = true
+	}
+	if !added {
+		return false
+	}
+	sort.Strings(merged)
+	values := make([]any, 0, len(merged))
+	for _, name := range merged {
+		values = append(values, name)
+	}
+	state.Meta[metaActiveTools] = values
+	return true
 }
 
 func (a *Agent) configuredTools() ([]tool.Tool, error) {

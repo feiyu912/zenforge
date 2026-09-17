@@ -83,6 +83,34 @@ func TestToolsRejectsMissingNames(t *testing.T) {
 	}
 }
 
+func TestToolsDeferredMarksEveryDefinitionLazy(t *testing.T) {
+	client := &fakeClient{definitions: []ToolDefinition{
+		{Name: "search", Description: "Search docs."},
+		{Name: "fetch", Description: "Fetch a doc."},
+	}}
+	eager, err := Tools(context.Background(), client)
+	if err != nil {
+		t.Fatalf("Tools returned error: %v", err)
+	}
+	for _, adapted := range eager {
+		if tool.IsDeferred(adapted) {
+			t.Fatalf("eager tool %s is deferred", adapted.Name())
+		}
+	}
+	deferred, err := ToolsDeferred(context.Background(), client)
+	if err != nil {
+		t.Fatalf("ToolsDeferred returned error: %v", err)
+	}
+	if len(deferred) != 2 {
+		t.Fatalf("deferred tool count = %d, want 2", len(deferred))
+	}
+	for _, adapted := range deferred {
+		if !tool.IsDeferred(adapted) {
+			t.Fatalf("ToolsDeferred left %s eager", adapted.Name())
+		}
+	}
+}
+
 type fakeClient struct {
 	definitions []ToolDefinition
 	result      CallResult

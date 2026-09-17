@@ -63,6 +63,8 @@ all of them; the right column points at concrete evidence.
 | A21 | Session titles: explicit override plus deterministic first-prompt fallback, sanitized and log-only | DSH session-title (OSC/CSI/ESC + control + bidi stripping, whitespace collapse, word and byte caps, never in the model surface) | `sessiontitle/` package mirrors `cleanTitleText`/`normalizeSessionTitle`/`fallbackSessionTitle`; `applyRunContext` freezes the title into run-state meta and the `session.title` event is published right after `run.started`; CLI `--title` and `agent.sessionTitle`; ADR 0028 |
 | A22 | Observation policy completed: present-version CAS for existing files and observed-absence for new files | DSH fs-observation-policy (unseen/absent/present-version CAS) | `SnapshotStore.RecordAbsentForRun`/`AbsentObservedForRun`; `workspace_read` records absence when a read reports not-found; `workspace_write` refuses blind creates (`ErrSnapshotRequired`) and `workspace.ErrPathNotFound` now wraps `fs.ErrNotExist`; ADR 0028 |
 | A23 | System-prompt registry: ordered named sections, runtime contexts, strict `{{variable}}` interpolation | DSH system-prompt (SECTION_ORDERS table, complete-section rule, `renderPrompt`/`renderContextSnapshot`, `GROUP_AT`/`VARIABLE_NAME` grammar) | `prompt/` registry with DSH order slots; persona prefix/suffix sections interpolate strictly while discovered content (environment, instructions, skills) stays verbatim; `validatePrompt` fails a run before any model request when a reference is malformed or unknown; ADR 0029 |
+| A24 | Cooperative per-tool timeout declarations with a structured `TOOL_TIMEOUT` outcome | DSH tool-call-timeout-policy (`timeoutMs` on the tool definition, never model-visible) | `tool.TimeoutDeclarer` + `tool.TimeoutBudgetOf`; `tool.TimeoutPolicy` policy middleware arms the declared budget (falling back to an optional default) and replaces an expired outcome with `Metadata{code: TOOL_TIMEOUT, timeoutMs}`; the shell declares its policy maximum and the CLI composes the policy; ADR 0030 |
+| A25 | Deferred tool loading (`tool_search`): large catalogs stay out of the prompt until searched | codex `tool_search` + `defer_loading` (default limit 8, loadable results) | `tool.DeferredTool` marker + `MemoryRegistry.DefinitionsMatching`; `tools/toolsearch` searches deferred names/descriptions and returns capped matches; the agent activates matches into durable `zenforge.active_tools` and emits `tools.activated`, and `toolSpecs(state)` hides unactivated definitions; MCP gains `ToolsDeferred`; ADR 0030 |
 
 ## Part B — Already had (parity confirmed by this review)
 
@@ -104,7 +106,6 @@ ZenForge architecture. None blocks the shipped surface above.
 | C13 | Review/guardian modes (second-model adversarial review of diffs/decisions) | codex review/guardian; DSH adversarial verification | Post-run middleware spawning a review subagent over `workspace.changed` paths + the turn-diff stream (A18) | M |
 | C15 | Layered config: admin requirements layer, profiles, secret redaction, server-driven model metadata | codex requirements.toml > user > project, profiles, RedactedString | `configfile` precedence chain + `requirements` overrides that can only tighten; `RedactedString` type for keys in dumps | M |
 | C16 | Image input + view_image tool; reasoning effort/summary with encrypted replay | codex view_image + reasoning support | `model.Message` parts for images; adapter passthrough; reasoning items stored encrypted in run state and replayed verbatim | M |
-| C17 | Tool search / deferred tool loading for large registries | codex tool_search/defer_loading | Registry-level `Definitions(filter)`; a `tool_search` tool that activates deferred definitions per run | S |
 | C19 | Webhook/schedule triggers and slash commands | DSH webhook/schedule, commands | Server endpoints creating runs from signed webhooks; cron scheduler reusing RunManager; commands as canned tasks | M |
 | C20 | MCP server mode (expose ZenForge runs as an MCP server), elicitation, resources; MCP tool namespacing + read-only auto-approve | DSH MCP server; codex MCP namespaces/auto-approve | `mcp/server.go` exposing run tools; prefix `mcp__server__tool` on client-side names; auto-approve read-only annotations through the grants store | L |
 | C23 | Memories (cross-run distilled learnings) | codex memories; DSH cross-session | `adapters/memory` extension: run-end distillation into scoped entries injected as instructions (A7 channel) | M |
@@ -118,13 +119,14 @@ env GOTOOLCHAIN=local go test ./...
 ```
 
 Key suites: `compaction/`, `modelretry/`, `instructions/`, `diff/`,
-`sessiontitle/`, `prompt/`, `tools/askuser/`, `tools/contextinfo/` and
+`sessiontitle/`, `prompt/`, `tools/askuser/`, `tools/toolsearch/`, `tools/contextinfo/` and
 `tools/present/` (via root agent tests), `tools/shell/`,
 `tools/workspace/` (glob, grep caps, turn-diff store, observation
 policy), `tool/` (spill store + repeat guard), `approval/cli/`, and the
 root-package agent tests (`compaction_agent_test.go`,
 `retry_agent_test.go`, `context_agent_test.go`,
 `context_meter_test.go`, `turn_diff_test.go`,
-`environment_update_test.go`, `session_metadata_test.go`).
+`environment_update_test.go`, `session_metadata_test.go`,
+`prompt_registry_test.go`, `tool_search_agent_test.go`).
 Docs claims are policed by `docs/links_test.go`,
 `docs/schema_versions_test.go`, and `docs/mvp_validation_test.go`.

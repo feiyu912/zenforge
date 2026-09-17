@@ -664,6 +664,17 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
   new files need a same-run observed absence (a read that reported
   not-found), so a blind create is refused; `workspace.ErrPathNotFound` now
   also satisfies `errors.Is(err, fs.ErrNotExist)`.
+- Declared tool timeouts (DSH tool-call-timeout-policy): a tool can declare a
+  cooperative per-call budget through `tool.TimeoutDeclarer`; the
+  `tool.TimeoutPolicy` middleware arms it without ever exposing it to the
+  model and maps expiry to a structured `TOOL_TIMEOUT` result carrying the
+  budget. The shell declares its policy maximum, and tools that declare
+  nothing stay unbounded.
+- Deferred tool loading (codex `tool_search`/`defer_loading`): tools marked
+  through `tool.DeferredTool` stay out of the request until `tool_search`
+  activates them; activations are durable in run state and emit
+  `tools.activated`, so a resumed run keeps the schemas it loaded.
+  `adapters/mcp.ToolsDeferred` opts an MCP catalog into lazy loading.
 - Ordered prompt registry with strict variables (DSH system-prompt): the
   system prefix is assembled from named sections at DSH order slots, with
   `agent.personaPrefix`/`agent.personaSuffix` interpolating `{{variables}}`
@@ -711,9 +722,9 @@ zenforge/
   checkpoint/           # memory, jsonl, sqlite stores
   eventlog/             # bus + fanout + memory, jsonl, sqlite stores
   cli/                  # command helpers and approval UX
-  tool/                 # core tool interfaces, middleware, budgets, redaction, spill store, repeat guard
+  tool/                 # core tool interfaces, middleware, budgets, redaction, spill store, repeat guard, timeout policy, deferred markers
   model/                # openai, anthropic adapters (usage + rate-limit normalization)
-  tools/                # workspace (read/list/glob/grep/write/edit, turn-diff store), shell, todo, task, askuser, contextinfo, present
+  tools/                # workspace (read/list/glob/grep/write/edit, turn-diff store), shell, todo, task, askuser, contextinfo, present, toolsearch
   sessiontitle/         # terminal-safe session-title derivation (DSH parity)
   prompt/               # ordered system-prompt sections + strict variable interpolation
   diff/                 # Myers unified diff for turn-diff tracking
