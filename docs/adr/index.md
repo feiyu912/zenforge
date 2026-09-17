@@ -51,3 +51,4 @@ later ADRs supersede earlier ones, never edit.
 | [0035](0035-run-time-travel.md) | Run time travel: checkpoint fork and append-only revert |
 | [0036](0036-plan-mode.md) | Plan mode: read-only until the plan is approved |
 | [0037](0037-goals-and-ralph.md) | Goals and Ralph: a persisted objective and fresh-agent rounds |
+| [0038](0038-seatbelt-sandbox.md) | macOS Seatbelt sandbox: a generated SBPL profile per session |

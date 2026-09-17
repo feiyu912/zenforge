@@ -668,6 +668,16 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
   new files need a same-run observed absence (a read that reported
   not-found), so a blind create is refused; `workspace.ErrPathNotFound` now
   also satisfies `errors.Is(err, fs.ErrNotExist)`.
+- macOS Seatbelt sandbox (codex `sandboxing/seatbelt.rs`): `sandbox/seatbelt`
+  generates an SBPL profile per session — closed by default, the reference's
+  base/platform/network policies ported verbatim, write access only to the
+  declared roots, `.git` and `.zenforge` pinned read-only inside every
+  writable root (as an exclusion on the allow rule, since a deny there would
+  match the complement), and paths passed as `-D` parameters so a hostile
+  path cannot rewrite the policy. Paths are canonicalized because the kernel
+  matches resolved vnodes, and each writable root's ancestors stay readable
+  so tools can resolve their working directory. Network is denied unless
+  requested, and the adapter refuses to run at all off darwin.
 - Goals and Ralph (DSH goal domain + `dsh-tool-ralph`): `--goals`
   registers `create_goal`/`get_goal`/`update_goal`, whose lifecycle
   (revision-checked transitions, round budget, and the rule that a goal

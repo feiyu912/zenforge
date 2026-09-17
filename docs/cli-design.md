@@ -26,6 +26,18 @@ is added only when at least one configured tool defers its definition, and
 `web.searchEndpoint` is set (a search endpoint also registers
 `web_search`).
 
+## Sandboxes
+
+The shell tool can escalate to a registered `sandbox.Sandbox`. Besides the
+Docker and container-hub backends, `sandbox/seatbelt` runs commands under
+macOS Seatbelt: each session gets a generated SBPL profile that is closed by
+default, grants write access only to the declared roots (pinning `.git` and
+`.zenforge` read-only inside them), allows reads of the writable roots and
+their ancestor chain, and denies network access unless the configuration
+opts in. Paths are canonicalized and passed as `-D` parameters, and off
+macOS — or when `sandbox-exec` is missing — opening a session fails with
+`sandbox_unavailable` rather than running unsandboxed.
+
 ## Goals and Ralph
 
 `--goals` (or `agent.goals`) registers `create_goal`, `get_goal`, and
