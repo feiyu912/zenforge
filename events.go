@@ -37,6 +37,8 @@ const (
 	EventWorkspaceChanged   EventType = "workspace.changed"
 	EventEnvironmentUpdated EventType = "environment.updated"
 	EventTurnDiff           EventType = "turn.diff"
+	EventSessionTitle       EventType = "session.title"
+	EventDeliverables       EventType = "deliverables.presented"
 	EventApprovalRequested  EventType = "approval.requested"
 	EventApprovalResolved   EventType = "approval.resolved"
 	EventApprovalExpired    EventType = "approval.expired"

@@ -648,6 +648,22 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
   appends an `<environment_update>` system message plus an
   `environment.updated` event; the frozen `<environment_context>` baseline
   is never rewritten, so resume semantics are unchanged.
+- `present` tool (DSH tool-present): the model declares existing workspace
+  files as final deliverables; a successful call emits a
+  `deliverables.presented` event carrying the tool-call id and the validated
+  workspace-relative paths, while missing files and directories are rejected
+  with recoverable errors before anything is announced.
+- Session titles (DSH session-title): OSC/CSI/ESC sequences, control
+  characters, and bidirectional marks are stripped and titles are capped on
+  rune boundaries; an explicit `--title`/`agent.sessionTitle` wins, otherwise
+  the first eight words of the task input become the deterministic fallback.
+  Titles live in run-state meta plus the `session.title` event and never
+  enter the model prompt.
+- Completed write observation policy (DSH fs-observation-policy): with
+  read-before-write enabled, existing files need a fresh same-run snapshot and
+  new files need a same-run observed absence (a read that reported
+  not-found), so a blind create is refused; `workspace.ErrPathNotFound` now
+  also satisfies `errors.Is(err, fs.ErrNotExist)`.
 
 Verification before each release:
 
@@ -690,7 +706,8 @@ zenforge/
   cli/                  # command helpers and approval UX
   tool/                 # core tool interfaces, middleware, budgets, redaction, spill store, repeat guard
   model/                # openai, anthropic adapters (usage + rate-limit normalization)
-  tools/                # workspace (read/list/glob/grep/write/edit, turn-diff store), shell, todo, task, askuser, contextinfo
+  tools/                # workspace (read/list/glob/grep/write/edit, turn-diff store), shell, todo, task, askuser, contextinfo, present
+  sessiontitle/         # terminal-safe session-title derivation (DSH parity)
   diff/                 # Myers unified diff for turn-diff tracking
   subagent/             # sub-agent runtime
   planner/              # todo manager + plan/execute preset

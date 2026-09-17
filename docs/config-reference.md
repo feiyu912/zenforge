@@ -117,6 +117,12 @@ For SQLite local storage:
     produce no events before it is treated as a retryable timeout
     (default `5m0s`; `0s` disables the watchdog).
 - `agent.instructions`: system instructions for the harness.
+- `agent.sessionTitle`: explicit session title stored as log-only run
+  metadata (the `session.title` event and `zenforge.session_title` run-state
+  key). Control, escape, and bidirectional characters are stripped and the
+  title is capped at 200 bytes; an explicit title that normalizes to empty
+  makes the run fail. When unset, the first eight words of the task input
+  become a deterministic fallback title. Titles never enter the model prompt.
 - `agent.maxSteps`: maximum model/tool loop steps. Negative values make config
   loading fail.
 - `agent.mode`: platform-compatible execution preset: `react`, `oneshot`, or
@@ -153,7 +159,10 @@ For SQLite local storage:
   the `instructions.loaded` event payload.
 - `workspace.root`: local workspace root.
 - CLI workspace writes require a fresh `workspace_read` snapshot before
-  overwriting an existing file.
+  overwriting an existing file, and require an observed absence (a
+  `workspace_read` that reported not-found) before creating a new one. A
+  write to a path the run has never looked at is refused with
+  `workspace read snapshot required`.
 - `workspace.maxReadBytes` and `workspace.maxWriteBytes`: local workspace byte
   limits. Negative values make config loading fail.
 - `workspace.readRoots` and `workspace.writeRoots`: optional

@@ -79,6 +79,11 @@ func Read(config Config) (tool.Tool, error) {
 	base, err := tools.New("workspace_read", "Read a file in the configured workspace.", func(ctx context.Context, in readInput, call tool.Context) (readOutput, error) {
 		data, err := config.Workspace.Read(ctx, in.Path)
 		if err != nil {
+			// A failed read observes the path as absent, which is what
+			// authorizes creating it later (see Write).
+			if errors.Is(err, workspacepkg.ErrPathNotFound) {
+				config.Snapshots.RecordAbsentForRun(call.RunID, normalizeSnapshotPath(in.Path))
+			}
 			return readOutput{}, err
 		}
 		offset := in.Offset
@@ -189,14 +194,18 @@ func Write(config Config) (tool.Tool, error) {
 			if config.Snapshots == nil {
 				return writeOutput{}, ErrSnapshotRequired
 			}
-			info, err := config.Workspace.Stat(ctx, in.Path)
-			if errors.Is(err, workspacepkg.ErrPathNotFound) {
-				err = nil
-			}
-			if err != nil {
-				return writeOutput{}, err
-			}
-			if info.Path != "" {
+			info, statErr := config.Workspace.Stat(ctx, in.Path)
+			switch {
+			case errors.Is(statErr, workspacepkg.ErrPathNotFound):
+				// Creating a file requires the run to have observed
+				// the path as absent first, so a write can never
+				// blindly create or clobber an unseen path.
+				if !config.Snapshots.AbsentObservedForRun(call.RunID, normalizeSnapshotPath(in.Path)) {
+					return writeOutput{}, fmt.Errorf("%w: %s does not exist; read it first so the run observes its absence before creating it", ErrSnapshotRequired, in.Path)
+				}
+			case statErr != nil:
+				return writeOutput{}, statErr
+			default:
 				if err := config.Snapshots.CheckForRun(call.RunID, info); err != nil {
 					return writeOutput{}, err
 				}

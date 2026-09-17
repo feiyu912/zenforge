@@ -510,3 +510,54 @@ func TestWorkspaceToolsIncludesEdit(t *testing.T) {
 		t.Fatalf("tool names = %v, want %v", names, want)
 	}
 }
+
+// TestWorkspaceWriteRequiresAbsenceObservationForNewFiles locks the
+// observation-policy rule: RequireReadBeforeWrite refuses to create a
+// file the run has never looked at, and a failed read (which observes
+// the path as absent) authorizes creation for that run only.
+func TestWorkspaceWriteRequiresAbsenceObservationForNewFiles(t *testing.T) {
+	root := t.TempDir()
+	ws, err := local.New(local.Config{Root: root, CreateParentDir: true})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	snapshots := NewSnapshotStore()
+	config := Config{Workspace: ws, Snapshots: snapshots, RequireReadBeforeWrite: true}
+	write, err := Write(config)
+	if err != nil {
+		t.Fatalf("Write returned error: %v", err)
+	}
+	read, err := Read(config)
+	if err != nil {
+		t.Fatalf("Read returned error: %v", err)
+	}
+	ctx := context.Background()
+	create := json.RawMessage(`{"path":"new.txt","content":"hello","description":"create"}`)
+
+	if _, err := write.Call(ctx, create, tool.Context{RunID: "run_1"}); !errors.Is(err, ErrSnapshotRequired) {
+		t.Fatalf("blind create = %v, want ErrSnapshotRequired", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "new.txt")); !os.IsNotExist(err) {
+		t.Fatalf("blind create created the file (stat err=%v)", err)
+	}
+
+	// A failed read observes absence, tolerating "./" prefixes.
+	if _, err := read.Call(ctx, json.RawMessage(`{"path":"./new.txt"}`), tool.Context{RunID: "run_1"}); !errors.Is(err, workspacepkg.ErrPathNotFound) {
+		t.Fatalf("read of missing file = %v, want ErrPathNotFound", err)
+	}
+	// Observations are run-scoped.
+	if _, err := write.Call(ctx, create, tool.Context{RunID: "run_2"}); !errors.Is(err, ErrSnapshotRequired) {
+		t.Fatalf("cross-run create = %v, want ErrSnapshotRequired", err)
+	}
+	if _, err := write.Call(ctx, create, tool.Context{RunID: "run_1"}); err != nil {
+		t.Fatalf("create after observing absence returned error: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "new.txt"))
+	if err != nil || string(data) != "hello" {
+		t.Fatalf("created file = %q err=%v", string(data), err)
+	}
+	// Now that the file exists, overwriting needs a fresh read again.
+	if _, err := write.Call(ctx, create, tool.Context{RunID: "run_1"}); !errors.Is(err, ErrSnapshotRequired) {
+		t.Fatalf("overwrite after create = %v, want ErrSnapshotRequired", err)
+	}
+}

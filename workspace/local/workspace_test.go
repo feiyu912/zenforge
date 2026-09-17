@@ -199,3 +199,23 @@ func TestLocalWorkspaceBlocksPlatformDeviceFiles(t *testing.T) {
 		t.Fatalf("expected ErrUnsupportedFile, got %v", err)
 	}
 }
+
+// TestLocalWorkspaceStatReportsMissingPathsWithSentinel locks the
+// contract callers rely on: workspace_write treats a not-found Stat as
+// "create a new file", so a missing path must surface the sentinel
+// rather than a raw lstat error.
+func TestLocalWorkspaceStatReportsMissingPathsWithSentinel(t *testing.T) {
+	ws, err := New(Config{Root: t.TempDir()})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	if _, err := ws.Stat(context.Background(), "missing.txt"); !errors.Is(err, workspace.ErrPathNotFound) {
+		t.Fatalf("Stat missing file = %v, want ErrPathNotFound", err)
+	}
+	if _, err := ws.Stat(context.Background(), "missing-dir/nested.txt"); !errors.Is(err, workspace.ErrPathNotFound) {
+		t.Fatalf("Stat under missing dir = %v, want ErrPathNotFound", err)
+	}
+	if _, err := ws.Read(context.Background(), "missing.txt"); !errors.Is(err, workspace.ErrPathNotFound) {
+		t.Fatalf("Read missing file = %v, want ErrPathNotFound", err)
+	}
+}

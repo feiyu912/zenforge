@@ -31,6 +31,7 @@ import (
 	"github.com/feiyu912/zenforge/tool"
 	"github.com/feiyu912/zenforge/tools/askuser"
 	"github.com/feiyu912/zenforge/tools/contextinfo"
+	"github.com/feiyu912/zenforge/tools/present"
 	shelltool "github.com/feiyu912/zenforge/tools/shell"
 	workspacetools "github.com/feiyu912/zenforge/tools/workspace"
 	workspacelocal "github.com/feiyu912/zenforge/workspace/local"
@@ -366,6 +367,7 @@ type options struct {
 	workspaceReadRoots  multiFlag
 	workspaceWriteRoots multiFlag
 	instructions        string
+	sessionTitle        string
 	provider            string
 	model               string
 	apiKeyEnv           string
@@ -435,6 +437,7 @@ func bindOptions(fs *flag.FlagSet, opts *options) {
 	fs.Var(&opts.workspaceReadRoots, "workspace-read-root", "workspace-relative readable root; repeatable")
 	fs.Var(&opts.workspaceWriteRoots, "workspace-write-root", "workspace-relative writable root; repeatable")
 	fs.StringVar(&opts.instructions, "instructions", opts.instructions, "agent instructions")
+	fs.StringVar(&opts.sessionTitle, "title", opts.sessionTitle, "session title stored as log-only run metadata (defaults to the first words of the task)")
 	fs.StringVar(&opts.provider, "provider", opts.provider, "model provider: openai|anthropic")
 	fs.StringVar(&opts.model, "model", opts.model, "OpenAI-compatible model name")
 	fs.StringVar(&opts.apiKeyEnv, "api-key-env", opts.apiKeyEnv, "environment variable containing API key")
@@ -535,6 +538,13 @@ func buildAgent(ctx context.Context, opts options, ioStreams IO) (*zenforge.Agen
 		return nil, err
 	}
 	tools = append(tools, contextTool)
+	// present declares final deliverables; the agent records validated
+	// files as deliverables.presented events.
+	presentTool, err := present.New(present.Config{Workspace: ws})
+	if err != nil {
+		return nil, err
+	}
+	tools = append(tools, presentTool)
 	approvalBroker, err := approvalBroker(opts, ioStreams)
 	if err != nil {
 		return nil, err
@@ -609,6 +619,7 @@ func buildAgent(ctx context.Context, opts options, ioStreams IO) (*zenforge.Agen
 		Retry:              retryConfig,
 		StreamIdleTimeout:  opts.streamIdleTimeout,
 		InstructionFiles:   instructionFiles,
+		SessionTitle:       opts.sessionTitle,
 		WorkingDir:         opts.workspace,
 		EnvironmentContext: opts.environmentContext,
 		TurnDiffs:          turnDiffs,

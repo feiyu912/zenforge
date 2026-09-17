@@ -59,6 +59,9 @@ all of them; the right column points at concrete evidence.
 | A17 | Search discovery caps: `workspace_glob` tool + grep match caps and line previews + over-cap footers | DSH tool-fs-search (glob 100 paths newest-first with the complete list saved, grep 250 matches, 2000-byte line previews, VCS excludes) | `tools/workspace/glob.go` (`**` matcher, basename-at-any-depth patterns, List-based walk with visit budget); shared `tool.SpillStore` (extracted from the Spill middleware) wired as `SearchSpill`; ADR 0027 |
 | A18 | Turn-diff tracker: per-turn unified diffs of workspace mutations | codex TurnDiff (100ms budget, path-list fallback) | `diff/` (Myers unified diff with bounded coarse fallback); `tools/workspace.TurnDiffStore` captured by Write/Edit at mutation time; the agent drains at each turn boundary under a 100ms budget into `turn.diff` events; ADR 0027 |
 | A19 | WorldState diff-only environment re-injection | codex WorldState environment updates | `maybeInjectEnvironmentUpdate` re-renders live environment facts at each model-call boundary and appends an `<environment_update>` system message plus `environment.updated` event only on change; the frozen baseline (A8) is never rewritten; ADR 0027 |
+| A20 | `present` tool: declare existing files as final deliverables with durable delivery records | DSH tool-present (1–8 files per call, regular-file validation, `deliverables/presented` session event) | `tools/present` validates paths through the workspace (missing files and directories rejected with DSH-style recoverable errors); the agent emits `deliverables.presented` with the tool-call id and validated files only for successful calls; ADR 0028 |
+| A21 | Session titles: explicit override plus deterministic first-prompt fallback, sanitized and log-only | DSH session-title (OSC/CSI/ESC + control + bidi stripping, whitespace collapse, word and byte caps, never in the model surface) | `sessiontitle/` package mirrors `cleanTitleText`/`normalizeSessionTitle`/`fallbackSessionTitle`; `applyRunContext` freezes the title into run-state meta and the `session.title` event is published right after `run.started`; CLI `--title` and `agent.sessionTitle`; ADR 0028 |
+| A22 | Observation policy completed: present-version CAS for existing files and observed-absence for new files | DSH fs-observation-policy (unseen/absent/present-version CAS) | `SnapshotStore.RecordAbsentForRun`/`AbsentObservedForRun`; `workspace_read` records absence when a read reports not-found; `workspace_write` refuses blind creates (`ErrSnapshotRequired`) and `workspace.ErrPathNotFound` now wraps `fs.ErrNotExist`; ADR 0028 |
 
 ## Part B — Already had (parity confirmed by this review)
 
@@ -102,7 +105,6 @@ ZenForge architecture. None blocks the shipped surface above.
 | C15 | Layered config: admin requirements layer, profiles, secret redaction, server-driven model metadata | codex requirements.toml > user > project, profiles, RedactedString | `configfile` precedence chain + `requirements` overrides that can only tighten; `RedactedString` type for keys in dumps | M |
 | C16 | Image input + view_image tool; reasoning effort/summary with encrypted replay | codex view_image + reasoning support | `model.Message` parts for images; adapter passthrough; reasoning items stored encrypted in run state and replayed verbatim | M |
 | C17 | Tool search / deferred tool loading for large registries | codex tool_search/defer_loading | Registry-level `Definitions(filter)`; a `tool_search` tool that activates deferred definitions per run | S |
-| C18 | present-tool deliverables (reference-not-copy final files) and session titles | DSH present tool (maxFiles 8), session titles | `present` tool validating paths exist + emitting a `deliverables` event; title = first-user-message summary stored in run meta | S |
 | C19 | Webhook/schedule triggers and slash commands | DSH webhook/schedule, commands | Server endpoints creating runs from signed webhooks; cron scheduler reusing RunManager; commands as canned tasks | M |
 | C20 | MCP server mode (expose ZenForge runs as an MCP server), elicitation, resources; MCP tool namespacing + read-only auto-approve | DSH MCP server; codex MCP namespaces/auto-approve | `mcp/server.go` exposing run tools; prefix `mcp__server__tool` on client-side names; auto-approve read-only annotations through the grants store | L |
 | C23 | Memories (cross-run distilled learnings) | codex memories; DSH cross-session | `adapters/memory` extension: run-end distillation into scoped entries injected as instructions (A7 channel) | M |
@@ -116,12 +118,13 @@ env GOTOOLCHAIN=local go test ./...
 ```
 
 Key suites: `compaction/`, `modelretry/`, `instructions/`, `diff/`,
-`tools/askuser/`, `tools/contextinfo/` (via root agent tests),
-`tools/shell/`, `tools/workspace/` (glob, grep caps, turn-diff store),
-`tool/` (spill store + repeat guard), `approval/cli/`, and the
+`sessiontitle/`, `tools/askuser/`, `tools/contextinfo/` and
+`tools/present/` (via root agent tests), `tools/shell/`,
+`tools/workspace/` (glob, grep caps, turn-diff store, observation
+policy), `tool/` (spill store + repeat guard), `approval/cli/`, and the
 root-package agent tests (`compaction_agent_test.go`,
 `retry_agent_test.go`, `context_agent_test.go`,
 `context_meter_test.go`, `turn_diff_test.go`,
-`environment_update_test.go`).
+`environment_update_test.go`, `session_metadata_test.go`).
 Docs claims are policed by `docs/links_test.go`,
 `docs/schema_versions_test.go`, and `docs/mvp_validation_test.go`.

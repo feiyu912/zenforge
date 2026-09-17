@@ -21,9 +21,11 @@ import (
 	"github.com/feiyu912/zenforge/modelretry"
 	"github.com/feiyu912/zenforge/planner"
 	"github.com/feiyu912/zenforge/sandbox"
+	"github.com/feiyu912/zenforge/sessiontitle"
 	"github.com/feiyu912/zenforge/subagent"
 	"github.com/feiyu912/zenforge/tool"
 	"github.com/feiyu912/zenforge/tools/contextinfo"
+	"github.com/feiyu912/zenforge/tools/present"
 	tasktool "github.com/feiyu912/zenforge/tools/task"
 	todotools "github.com/feiyu912/zenforge/tools/todo"
 	"github.com/feiyu912/zenforge/trace"
@@ -39,6 +41,11 @@ const (
 	// metaEnvironmentUpdate records the latest injected environment
 	// render so diff-only re-injection survives resume.
 	metaEnvironmentUpdate = "zenforge.environment_update"
+	// metaSessionTitle stores the run's derived or explicit title.
+	metaSessionTitle = "zenforge.session_title"
+	// metaSessionTitleSource records whether the title came from the
+	// user or the deterministic fallback, for audit surfaces.
+	metaSessionTitleSource = "zenforge.session_title_source"
 )
 
 // turnDiffBudget bounds in-process unified-diff rendering at each turn
@@ -516,6 +523,9 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 		if err := emit(EventRunStarted, map[string]any{"input": task.Input, "mode": string(ModePlanExecute), "preset": string(PlanningPlanExecute)}); err != nil {
 			return
 		}
+		if err := a.publishSessionTitle(emit, task.Input); err != nil {
+			return
+		}
 	}
 
 	todos, err := planExecuteTodos(ctx, a.todos, runID, resumeState)
@@ -822,7 +832,13 @@ func (a *Agent) runHarnessLoop(ctx context.Context, out chan<- Event, state harn
 		MaxSteps: a.config.MaxSteps,
 		Mode:     string(runStateMode(state, a.config)),
 		Emit: func(eventType harness.RuntimeEvent, data map[string]any) error {
-			return emit(EventType(eventType), data)
+			if err := emit(EventType(eventType), data); err != nil {
+				return err
+			}
+			if EventType(eventType) == EventRunStarted {
+				return a.publishSessionTitle(emit, state.Input)
+			}
+			return nil
 		},
 		Checkpoint: checkpointState,
 		CallModel: func(callCtx context.Context, current harness.RunState, choice model.ToolChoice) (harness.MessageState, model.Usage, error) {
@@ -1825,6 +1841,18 @@ func (a *Agent) runPendingTools(ctx context.Context, emit eventEmitter, checkpoi
 				return err
 			}
 		}
+		// A successful present call publishes its validated files as
+		// durable deliverables, mirroring the DSH deliverables event.
+		if call.Name == present.Name {
+			if files, ok := result.Structured["files"]; ok {
+				if err := emit(EventDeliverables, map[string]any{
+					"toolCallId": call.ID,
+					"files":      files,
+				}); err != nil {
+					return err
+				}
+			}
+		}
 		changedPath, workspaceChanged := workspaceChangedPath(call, result)
 		if workspaceChanged {
 			state.Workspace.DirtyPaths = appendDirtyPath(state.Workspace.DirtyPaths, changedPath)
@@ -2789,11 +2817,24 @@ func (a *Agent) systemPrefixMessages(state harness.RunState) []model.Message {
 // for configuration problems and fail-open per unreadable file (recorded
 // as warnings in the instructions.loaded event).
 func (a *Agent) applyRunContext(ctx context.Context, emit eventEmitter, state *harness.RunState) error {
-	if !a.config.EnvironmentContext && a.config.InstructionFiles == nil {
-		return nil
-	}
 	if state.Meta == nil {
 		state.Meta = map[string]any{}
+	}
+	// The session title is log-only metadata (DSH session-title parity):
+	// it never enters the model surface, and an explicit title that
+	// normalizes to empty fails the run instead of silently vanishing.
+	// The event is published right after run.started so run.started
+	// stays the log's first record even when the store is failing.
+	title, source, err := a.sessionTitle(state.Input)
+	if err != nil {
+		return err
+	}
+	if title != "" {
+		state.Meta[metaSessionTitle] = title
+		state.Meta[metaSessionTitleSource] = source
+	}
+	if !a.config.EnvironmentContext && a.config.InstructionFiles == nil {
+		return nil
 	}
 	if a.config.EnvironmentContext {
 		state.Meta[metaEnvironmentContext] = a.renderEnvironmentContext()
@@ -2876,6 +2917,38 @@ func (a *Agent) maybeInjectEnvironmentUpdate(
 		return err
 	}
 	return emit(EventEnvironmentUpdated, map[string]any{"environmentContext": current})
+}
+
+// publishSessionTitle emits the session.title event for a run's input,
+// once, immediately after run.started. Derivation failures already
+// failed the run during prompt-context preparation.
+func (a *Agent) publishSessionTitle(emit eventEmitter, input string) error {
+	title, source, err := a.sessionTitle(input)
+	if err != nil {
+		// An explicit title that normalizes to empty was already fatal
+		// in applyRunContext; stay silent here rather than emitting a
+		// second, duplicate failure.
+		return nil
+	}
+	if title == "" {
+		return nil
+	}
+	return emit(EventSessionTitle, map[string]any{"title": title, "source": source})
+}
+
+// sessionTitle derives the run's log-only title: an explicit
+// Config.SessionTitle (normalized, must survive normalization) wins,
+// otherwise the first words of the run input become a deterministic
+// fallback title. An empty result means no title was derivable.
+func (a *Agent) sessionTitle(input string) (string, string, error) {
+	if explicit := strings.TrimSpace(a.config.SessionTitle); explicit != "" {
+		normalized := sessiontitle.Normalize(explicit, sessiontitle.DefaultMaxTitleBytes)
+		if normalized == "" {
+			return "", "", fmt.Errorf("session title is empty after normalization")
+		}
+		return normalized, "user", nil
+	}
+	return sessiontitle.Fallback(input, sessiontitle.DefaultFallbackMaxWords, sessiontitle.DefaultFallbackMaxBytes), "fallback", nil
 }
 
 func (a *Agent) renderEnvironmentContext() string {

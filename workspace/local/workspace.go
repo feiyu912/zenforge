@@ -306,12 +306,16 @@ func (w *Workspace) resolve(raw string, mustExist bool) (string, string, error) 
 	checkPath := candidate
 	if mustExist || w.followSymlink {
 		resolved, err := filepath.EvalSymlinks(candidate)
-		if err != nil {
-			if mustExist || !errors.Is(err, os.ErrNotExist) {
-				return "", "", err
-			}
-		} else {
+		switch {
+		case err == nil:
 			checkPath = resolved
+		case errors.Is(err, os.ErrNotExist) && mustExist:
+			// Preserve the documented not-found sentinel: callers such
+			// as workspace_write distinguish "create a new file" from
+			// real failures with errors.Is(err, ErrPathNotFound).
+			return "", "", workspace.ErrPathNotFound
+		case mustExist || !errors.Is(err, os.ErrNotExist):
+			return "", "", err
 		}
 	} else if _, err := os.Lstat(candidate); err == nil {
 		resolved, err := filepath.EvalSymlinks(candidate)

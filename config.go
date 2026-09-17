@@ -76,15 +76,20 @@ type Config struct {
 	// workspace Write/Edit tools; the agent drains it at each turn
 	// boundary and emits turn.diff events with unified diffs (codex
 	// TurnDiff parity). Optional.
-	TurnDiffs          *workspacetools.TurnDiffStore
-	Events             EventStore
-	Checkpoints        checkpoint.Store
-	RunController      *harness.RunController
-	Trace              trace.Sink
-	Compaction         *compaction.Config
-	Retry              *modelretry.Config
-	StreamIdleTimeout  time.Duration
-	InstructionFiles   *instructions.Config
+	TurnDiffs         *workspacetools.TurnDiffStore
+	Events            EventStore
+	Checkpoints       checkpoint.Store
+	RunController     *harness.RunController
+	Trace             trace.Sink
+	Compaction        *compaction.Config
+	Retry             *modelretry.Config
+	StreamIdleTimeout time.Duration
+	InstructionFiles  *instructions.Config
+	// SessionTitle sets an explicit run title; when empty the first
+	// words of the task input become a deterministic fallback title.
+	// Titles are log-only metadata (session.title event + run-state
+	// meta), never part of the model surface.
+	SessionTitle       string
 	WorkingDir         string
 	EnvironmentContext bool
 	MaxSteps           int

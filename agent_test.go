@@ -523,7 +523,7 @@ func TestAgentStopsBeforeModelWhenInitialEventAppendFails(t *testing.T) {
 }
 
 func TestAgentStopsWhenModelDeltaEventAppendFails(t *testing.T) {
-	eventsStore := &failingEventStore{failAppendAt: 7}
+	eventsStore := &failingEventStore{failAppendAt: 8}
 	fakeModel := &scriptedModel{turns: []scriptedTurn{{events: []model.Event{{Delta: "partial"}}}}}
 	agent := New(Config{
 		Model:       fakeModel,
@@ -556,7 +556,7 @@ func TestAgentStopsWhenModelDeltaEventAppendFails(t *testing.T) {
 }
 
 func TestAgentDoesNotRetryEventStoreWhenCheckpointEventAppendFails(t *testing.T) {
-	eventsStore := &failingEventStore{failAppendAt: 3}
+	eventsStore := &failingEventStore{failAppendAt: 4}
 	fakeModel := &scriptedModel{turns: []scriptedTurn{{events: []model.Event{{Delta: "must not run"}}}}}
 	agent := New(Config{
 		Model:       fakeModel,
@@ -576,14 +576,14 @@ func TestAgentDoesNotRetryEventStoreWhenCheckpointEventAppendFails(t *testing.T)
 	if len(fakeModel.requests) != 0 {
 		t.Fatalf("model calls = %d, want 0", len(fakeModel.requests))
 	}
-	if eventsStore.appendCalls != 3 {
-		t.Fatalf("event append calls = %d, want 3", eventsStore.appendCalls)
+	if eventsStore.appendCalls != 4 {
+		t.Fatalf("event append calls = %d, want 4", eventsStore.appendCalls)
 	}
-	if len(got) != 3 || got[0].Type != EventRunStarted || got[1].Type != EventStepStarted || got[2].Type != EventRunError {
+	if len(got) != 4 || got[0].Type != EventRunStarted || got[1].Type != EventSessionTitle || got[2].Type != EventStepStarted || got[3].Type != EventRunError {
 		t.Fatalf("unexpected live events: %#v", got)
 	}
-	if !strings.Contains(stringValue(got[2].Payload["error"]), "append event checkpoint.created") {
-		t.Fatalf("run error = %q", stringValue(got[2].Payload["error"]))
+	if !strings.Contains(stringValue(got[3].Payload["error"]), "append event checkpoint.created") {
+		t.Fatalf("run error = %q", stringValue(got[3].Payload["error"]))
 	}
 }
 
