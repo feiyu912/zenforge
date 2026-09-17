@@ -668,6 +668,16 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
   new files need a same-run observed absence (a read that reported
   not-found), so a blind create is refused; `workspace.ErrPathNotFound` now
   also satisfies `errors.Is(err, fs.ErrNotExist)`.
+- Seccomp network filter (codex `linux-sandbox/src/landlock.rs`, seccomp
+  section): `sandbox/seccomp` plans the classic BPF program as data —
+  architecture guard (a foreign ABI is killed, otherwise the wrong syscall
+  table fails open), unconditional denies for the network syscalls,
+  `ptrace`, and `io_uring` (which can create sockets without `socket(2)`),
+  `AF_UNIX`-only `socket`/`socketpair`, `recvfrom` deliberately allowed for
+  subprocess tooling, and `EPERM` for everything matched. A test-local BPF
+  interpreter verifies the program's semantics rather than only its shape,
+  and `Available` probes `/proc/sys/kernel/seccomp/actions_avail` because a
+  filter cannot be uninstalled.
 - Landlock planner (codex `linux-sandbox/src/landlock.rs`):
   `sandbox/landlock` derives the access mask from the probed ABI (`REFER`
   from 2, `TRUNCATE` from 3, `IOCTL_DEV` from 5), grants whole-filesystem

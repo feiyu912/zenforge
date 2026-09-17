@@ -54,3 +54,4 @@ later ADRs supersede earlier ones, never edit.
 | [0038](0038-seatbelt-sandbox.md) | macOS Seatbelt sandbox: a generated SBPL profile per session |
 | [0039](0039-bubblewrap-sandbox.md) | Linux bubblewrap sandbox: the policy is the argument list |
 | [0040](0040-landlock-planner.md) | Landlock: an ABI-aware planner plus a Linux-only applier |
+| [0041](0041-seccomp-filter.md) | Seccomp: a planned BPF program, verified by a test-local interpreter |
