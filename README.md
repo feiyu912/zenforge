@@ -679,6 +679,21 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
   hints read into the definition so an approval decision can use them.
   `zenforge mcp-server` serves ZenForge itself the same way, exposing
   `zenforge_runs` and `zenforge_version` as read-only tools.
+- Configured MCP servers (DSH/codex MCP client): a `mcpServers` config section
+  starts stdio servers and exposes their tools as `mcp__<server>__<tool>`,
+  with `deferred: true` opting a server into `tool_search` activation. The
+  section is validated before anything is spawned and a server that cannot
+  start fails the command, because the file is the operator's own. A call the
+  server did not declare read-only goes through the approval broker with the
+  reference's rule (destructive asks, read-only runs, absent hints ask), and
+  the request carries a per-tool rule key plus an argument fingerprint so a
+  broad grant cannot be replayed for a different payload. Server processes get
+  the ambient environment minus credential-shaped names, are owned by the
+  command that started them, and are drained on every exit path — including a
+  repeated schedule, which drains per firing. The stdio client now dispatches
+  responses by id, so a declared per-call timeout really fires and the
+  connection survives it, and `Close` waits for both the process and the
+  reader goroutine.
 - Images and reasoning (codex `view_image`, reasoning replay): the
   `view_image` tool shows the model an image from the workspace — confined
   like any other file read, format verified from magic bytes, and carried on

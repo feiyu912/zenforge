@@ -155,7 +155,11 @@ func run(ctx context.Context, args []string, ioStreams IO) error {
 	if input == "" {
 		return invalidUsage(errors.New("run input is required"))
 	}
-	return streamTask(ctx, opts, input, ioStreams)
+	// The drain is registered before anything is built, so the resources
+	// buildAgent opens (MCP processes, stores) are released on every path
+	// out, including the error ones.
+	defer drainClosers(&opts, ioStreams)
+	return streamTask(ctx, &opts, input, ioStreams)
 }
 
 // exec runs one headless task, printing either the human stream or one
@@ -214,6 +218,7 @@ func exec(ctx context.Context, args []string, ioStreams IO) error {
 	if err != nil {
 		return invalidUsage(err)
 	}
+	defer drainClosers(&opts, ioStreams)
 	if strings.TrimSpace(opts.scheduleSpec) != "" {
 		spec, err := schedule.Parse(opts.scheduleSpec)
 		if err != nil {
@@ -221,7 +226,7 @@ func exec(ctx context.Context, args []string, ioStreams IO) error {
 		}
 		return runSchedule(ctx, opts, spec, input, ioStreams)
 	}
-	agent, err := buildAgent(ctx, opts, ioStreams)
+	agent, err := buildAgent(ctx, &opts, ioStreams)
 	if err != nil {
 		return err
 	}
@@ -335,7 +340,8 @@ func code(ctx context.Context, args []string, ioStreams IO) error {
 	}
 	opts.workspace = repository
 	opts.shellWorkingDir = repository
-	return streamTask(ctx, opts, input, ioStreams)
+	defer drainClosers(&opts, ioStreams)
+	return streamTask(ctx, &opts, input, ioStreams)
 }
 
 func resolveRepository(path string) (string, error) {
@@ -361,7 +367,7 @@ func resolveRepository(path string) (string, error) {
 	return filepath.Clean(realPath), nil
 }
 
-func streamTask(ctx context.Context, opts options, input string, ioStreams IO) error {
+func streamTask(ctx context.Context, opts *options, input string, ioStreams IO) error {
 	agent, err := buildAgent(ctx, opts, ioStreams)
 	if err != nil {
 		return err
@@ -400,7 +406,8 @@ func resume(ctx context.Context, args []string, ioStreams IO) error {
 	if err := validateResumeCheckpoint(ctx, opts, fs.Arg(0)); err != nil {
 		return err
 	}
-	agent, err := buildAgent(ctx, opts, ioStreams)
+	defer drainClosers(&opts, ioStreams)
+	agent, err := buildAgent(ctx, &opts, ioStreams)
 	if err != nil {
 		return err
 	}
@@ -446,7 +453,8 @@ func fork(ctx context.Context, args []string, ioStreams IO) error {
 	if *at < 0 {
 		return invalidUsage(errors.New("--at must be non-negative"))
 	}
-	agent, err := buildAgent(ctx, opts, ioStreams)
+	defer drainClosers(&opts, ioStreams)
+	agent, err := buildAgent(ctx, &opts, ioStreams)
 	if err != nil {
 		return err
 	}
@@ -710,6 +718,51 @@ type options struct {
 	instructionsMaxBytes    int
 	instructionsFileNames   []string
 	instructionsRootMarkers []string
+
+	// mcpServers is the ordered list of configured MCP servers, parsed from
+	// the `mcpServers` section before anything is started.
+	mcpServers []mcpServerSpec
+
+	// closers are the resources this command opened and has to release on
+	// the way out (MCP server processes, event and checkpoint stores).
+	// buildAgent appends to it, so a command registers its drain before it
+	// builds anything and the slice is still growing when the drain runs.
+	closers []resource
+}
+
+// resource is something a command opened that has to be released when the
+// command ends. The name is what a close failure is reported against.
+type resource struct {
+	name  string
+	close func() error
+}
+
+// addCloser registers a resource for the command's deferred drain.
+func (o *options) addCloser(name string, close func() error) {
+	if o == nil || close == nil {
+		return
+	}
+	o.closers = append(o.closers, resource{name: name, close: close})
+}
+
+// drainClosers releases everything the command opened, newest first. A close
+// failure is reported and does not change the command's outcome: the run has
+// already finished, and a server that exited badly on shutdown must not turn
+// a successful run into a failed one.
+func drainClosers(opts *options, ioStreams IO) {
+	if opts == nil {
+		return
+	}
+	for i := len(opts.closers) - 1; i >= 0; i-- {
+		closer := opts.closers[i]
+		if closer.close == nil {
+			continue
+		}
+		if err := closer.close(); err != nil && ioStreams.Stderr != nil {
+			_, _ = fmt.Fprintf(ioStreams.Stderr, "warning: closing %s: %v\n", closer.name, err)
+		}
+	}
+	opts.closers = nil
 }
 
 func defaultOptions() options {
@@ -810,10 +863,10 @@ func optionsFromArgs(args []string) (options, error) {
 	return opts, nil
 }
 
-func buildAgent(ctx context.Context, opts options, ioStreams IO) (*zenforge.Agent, error) {
+func buildAgent(ctx context.Context, opts *options, ioStreams IO) (*zenforge.Agent, error) {
 	// The hook configuration is validated first: it decides what may run, so
 	// a typo in it must fail before anything else is constructed.
-	hookEngine, err := buildHookEngine(opts)
+	hookEngine, err := buildHookEngine(*opts)
 	if err != nil {
 		return nil, err
 	}
@@ -852,7 +905,7 @@ func buildAgent(ctx context.Context, opts options, ioStreams IO) (*zenforge.Agen
 		Workspace:              ws,
 		Snapshots:              snapshots,
 		RequireReadBeforeWrite: true,
-		Policy:                 workspaceFilePolicy(opts),
+		Policy:                 workspaceFilePolicy(*opts),
 		SearchSpill:            spillStore,
 		TurnDiffs:              turnDiffs,
 	})
@@ -863,7 +916,7 @@ func buildAgent(ctx context.Context, opts options, ioStreams IO) (*zenforge.Agen
 		Workspace:              ws,
 		Snapshots:              snapshots,
 		RequireReadBeforeWrite: true,
-		FilePolicy:             workspaceFilePolicy(opts),
+		FilePolicy:             workspaceFilePolicy(*opts),
 		TurnDiffs:              turnDiffs,
 	})
 	if err != nil {
@@ -872,14 +925,14 @@ func buildAgent(ctx context.Context, opts options, ioStreams IO) (*zenforge.Agen
 	tools := append([]tool.Tool(nil), workspaceTools...)
 	tools = append(tools, patchTool)
 	if opts.webEnabled {
-		webTools, err := buildWebTools(opts)
+		webTools, err := buildWebTools(*opts)
 		if err != nil {
 			return nil, err
 		}
 		tools = append(tools, webTools...)
 	}
 	if !opts.noShell {
-		shell, err := buildShellTool(opts)
+		shell, err := buildShellTool(*opts)
 		if err != nil {
 			return nil, err
 		}
@@ -915,6 +968,15 @@ func buildAgent(ctx context.Context, opts options, ioStreams IO) (*zenforge.Agen
 		return nil, err
 	}
 	tools = append(tools, presentTool)
+	// Configured MCP servers are started here, before the deferred-tool
+	// decision below: a server marked deferred is what makes tool_search
+	// necessary, so its tools must already be part of the catalog when that
+	// decision is made.
+	mcpTools, err := buildMCPTools(ctx, opts, ioStreams)
+	if err != nil {
+		return nil, err
+	}
+	tools = append(tools, mcpTools...)
 	// Deferred tools (for example MCP catalogs fetched through
 	// ToolsDeferred) only become callable after a tool_search, so the
 	// search tool is registered exactly when something is deferred. The
@@ -931,7 +993,7 @@ func buildAgent(ctx context.Context, opts options, ioStreams IO) (*zenforge.Agen
 		}
 		tools = append(tools, searchTool)
 	}
-	approvalBroker, err := approvalBroker(opts, ioStreams)
+	approvalBroker, err := approvalBroker(*opts, ioStreams)
 	if err != nil {
 		return nil, err
 	}
@@ -939,14 +1001,14 @@ func buildAgent(ctx context.Context, opts options, ioStreams IO) (*zenforge.Agen
 	if err != nil {
 		return nil, err
 	}
-	checkpoints, _, err := openCheckpointStore(ctx, opts.checkpointType, opts.checkpointDir)
+	opts.addCloser("event store", closeEvents)
+	checkpoints, closeCheckpoints, err := openCheckpointStore(ctx, opts.checkpointType, opts.checkpointDir)
 	if err != nil {
-		_ = closeEvents()
 		return nil, err
 	}
-	modelAdapter, err := buildModel(opts)
+	opts.addCloser("checkpoint store", closeCheckpoints)
+	modelAdapter, err := buildModel(*opts)
 	if err != nil {
-		_ = closeEvents()
 		return nil, err
 	}
 	// Context management follows the reference harnesses: retry with
@@ -1066,11 +1128,11 @@ func buildAgent(ctx context.Context, opts options, ioStreams IO) (*zenforge.Agen
 			return resolved, ok
 		}))
 	}
-	memoryProvider, err := buildMemory(opts, modelAdapter)
+	memoryProvider, err := buildMemory(*opts, modelAdapter)
 	if err != nil {
 		return nil, err
 	}
-	guardian, err := buildGuardian(opts, modelAdapter)
+	guardian, err := buildGuardian(*opts, modelAdapter)
 	if err != nil {
 		return nil, err
 	}

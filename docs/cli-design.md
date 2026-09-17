@@ -33,6 +33,42 @@ server's `readOnlyHint` is read into the definition — an absent hint is never
 treated as read-only — and travels in the call metadata so an approval
 decision can use it.
 
+The `mcpServers` config section starts stdio servers for a run:
+
+```json
+{
+  "mcpServers": {
+    "files": {
+      "command": "mcp-server-files",
+      "args": ["--root", "."],
+      "env": { "FILES_TOKEN": "..." },
+      "deferred": true
+    }
+  }
+}
+```
+
+Servers start (and handshake) while the agent is built, in a deterministic
+name order, and their tools join the catalog before the `tool_search` decision
+so a `deferred` server is what makes lazy loading necessary. A server that
+cannot start, or whose `initialize`/`tools/list` does not answer within 30
+seconds, fails the command: this file is the operator's own configuration, and
+running silently without a tool set it asked for is the failure mode this
+repository refuses. The ambient environment is scrubbed of credential-shaped
+names (`KEY`, `PASSWORD`, `SECRET`, `TOKEN`) before it reaches a server, so
+`env` is the explicit way to forward one. One remote call is bounded by a
+declared 60-second budget, which the timeout policy arms without the model
+ever seeing it.
+
+A call to a tool the server did not declare read-only goes through the
+approval channel, carrying its server and remote name: `readOnlyHint: true`
+runs unattended, a `destructiveHint: true` always asks, and a tool with no
+useful hints asks as well — absent is not "safe". "Always" decisions are
+scoped to the tool (`mcp:<server>:<tool>`) while a run-scoped decision is
+scoped to the exact arguments, so a broad grant cannot be replayed for a
+different payload. Every server process is owned by the command that started
+it and is closed on the way out, including when the build fails halfway.
+
 ## Images and reasoning
 
 The `view_image` tool shows the model an image from the workspace: the path

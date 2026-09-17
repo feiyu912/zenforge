@@ -28,9 +28,9 @@ func TestToolsAdaptsMCPTool(t *testing.T) {
 			},
 		},
 	}
-	tools, err := Tools(context.Background(), client)
+	tools, err := ToolsWithOptions(context.Background(), client, ServerOptions{SkipApproval: true})
 	if err != nil {
-		t.Fatalf("Tools returned error: %v", err)
+		t.Fatalf("ToolsWithOptions returned error: %v", err)
 	}
 	if len(tools) != 1 {
 		t.Fatalf("tool count = %d, want 1", len(tools))
@@ -63,9 +63,9 @@ func TestToolReturnsMCPErrorAsToolError(t *testing.T) {
 			IsError: true,
 		},
 	}
-	tools, err := Tools(context.Background(), client)
+	tools, err := ToolsWithOptions(context.Background(), client, ServerOptions{SkipApproval: true})
 	if err != nil {
-		t.Fatalf("Tools returned error: %v", err)
+		t.Fatalf("ToolsWithOptions returned error: %v", err)
 	}
 	result, err := tools[0].Call(context.Background(), nil, toolContext())
 	if err != nil {
@@ -133,5 +133,5 @@ func (f *fakeClient) CallTool(ctx context.Context, name string, arguments json.R
 }
 
 func toolContext() tool.Context {
-	return tool.Context{}
+	return tool.Context{RunID: "run_test", ToolCallID: "call_test"}
 }

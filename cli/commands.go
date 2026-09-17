@@ -118,7 +118,11 @@ func buildCatalog(opts options) (*commands.Catalog, error) {
 // unattended schedule must not build a queue of overlapping runs.
 func runSchedule(ctx context.Context, opts options, spec schedule.Spec, task string, ioStreams IO) error {
 	return runScheduleWith(ctx, spec, ioStreams, func(runCtx context.Context) error {
-		return streamTask(runCtx, opts, task, ioStreams)
+		// Every firing builds its own agent, so every firing owns its own
+		// MCP processes and stores. Draining per firing is what keeps a
+		// repeated schedule from accumulating server processes.
+		defer drainClosers(&opts, ioStreams)
+		return streamTask(runCtx, &opts, task, ioStreams)
 	})
 }
 

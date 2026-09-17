@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -22,6 +23,30 @@ type configFile struct {
 	Approval   approvalConfig   `json:"approval"`
 	Web        webConfig        `json:"web"`
 	Checkpoint checkpointConfig `json:"checkpoint"`
+	// MCPServers declares the MCP servers this client starts over stdio and
+	// exposes as namespaced tools. It is always present in the generated
+	// default file (as an empty object) so the key is discoverable.
+	MCPServers mcpServersConfig `json:"mcpServers"`
+}
+
+// mcpServersConfig maps a server name to the stdio server that serves it.
+type mcpServersConfig map[string]mcpServerConfig
+
+// mcpServerConfig declares one MCP server.
+type mcpServerConfig struct {
+	// Command is the executable to start. Required: a server entry without a
+	// command names nothing to run.
+	Command string   `json:"command"`
+	Args    []string `json:"args,omitempty"`
+	// Env is what the server process is given on top of the scrubbed ambient
+	// environment (credential-shaped names are not inherited). Values are
+	// secrets by nature, so they redact in every formatting path and stay
+	// transparent in JSON.
+	Env map[string]redact.String `json:"env,omitempty"`
+	// Deferred keeps the server's tools out of the model's initial tool list
+	// until a tool_search activates them, which is what a large remote
+	// catalog wants.
+	Deferred bool `json:"deferred,omitempty"`
 }
 
 type modelConfig struct {
@@ -211,6 +236,7 @@ func defaultConfigFile() configFile {
 			MaxQueries:   webtools.DefaultMaxQueries,
 			MaxBodyChars: defaultWebMaxBodyChars,
 		},
+		MCPServers: mcpServersConfig{},
 	}
 }
 
@@ -259,6 +285,11 @@ func applyConfig(opts *options, config configFile) error {
 	if err := applyWebConfig(opts, config.Web); err != nil {
 		return err
 	}
+	specs, err := mcpServerSpecs(config.MCPServers)
+	if err != nil {
+		return err
+	}
+	opts.mcpServers = specs
 	if config.Agent.Instructions != "" {
 		opts.instructions = config.Agent.Instructions
 	}
@@ -410,6 +441,66 @@ func applyConfig(opts *options, config configFile) error {
 		opts.checkpointDir = config.Checkpoint.Path
 	}
 	return nil
+}
+
+// mcpServerSpecs validates the MCP server section and turns it into the
+// ordered list the CLI starts servers from.
+//
+// Validation is strict and happens before anything is spawned: a server
+// entry that names no command, a server name that cannot be recovered from
+// the namespaced tool name, or an environment name that cannot be passed to
+// a process is a configuration error, not a server that happens to be
+// unavailable. The map is sorted so two runs of the same file start (and
+// register) the servers in the same order.
+func mcpServerSpecs(config mcpServersConfig) ([]mcpServerSpec, error) {
+	if len(config) == 0 {
+		return nil, nil
+	}
+	names := make([]string, 0, len(config))
+	for name := range config {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	specs := make([]mcpServerSpec, 0, len(names))
+	for _, name := range names {
+		server := config[name]
+		if strings.TrimSpace(name) == "" {
+			return nil, fmt.Errorf("mcpServers has an entry with an empty server name")
+		}
+		if name != strings.TrimSpace(name) {
+			return nil, fmt.Errorf("mcpServers server name %q must not have surrounding whitespace", name)
+		}
+		// The model-visible name is `mcp__<server>__<tool>`; a server name
+		// containing the separator would make the two halves of that name
+		// unrecoverable.
+		if strings.Contains(name, "__") {
+			return nil, fmt.Errorf("mcpServers server name %q must not contain %q", name, "__")
+		}
+		command := strings.TrimSpace(server.Command)
+		if command == "" {
+			return nil, fmt.Errorf("mcpServers.%s.command is required", name)
+		}
+		env := make([]string, 0, len(server.Env))
+		envNames := make([]string, 0, len(server.Env))
+		for key := range server.Env {
+			envNames = append(envNames, key)
+		}
+		sort.Strings(envNames)
+		for _, key := range envNames {
+			if strings.TrimSpace(key) == "" || strings.Contains(key, "=") {
+				return nil, fmt.Errorf("mcpServers.%s.env has an invalid variable name %q", name, key)
+			}
+			env = append(env, key+"="+server.Env[key].Reveal())
+		}
+		specs = append(specs, mcpServerSpec{
+			Name:     name,
+			Command:  command,
+			Args:     append([]string(nil), server.Args...),
+			Env:      env,
+			Deferred: server.Deferred,
+		})
+	}
+	return specs, nil
 }
 
 // applyWebConfig maps the web section onto CLI options.

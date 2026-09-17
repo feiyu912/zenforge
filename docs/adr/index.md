@@ -67,3 +67,5 @@ later ADRs supersede earlier ones, never edit.
 | [0051](0051-seccomp-errno-and-unix-socketpairs.md) | A denied syscall returns EPERM, and AF_UNIX means socketpair |
 | [0052](0052-pinning-linux-only-abi-numbers.md) | Linux-only ABI numbers are pinned on every platform |
 | [0053](0053-mcp-server-mode-and-stdio-framing.md) | An MCP server, and the stdio framing the spec actually uses |
+| [0054](0054-configured-mcp-servers-and-approval.md) | Configured MCP servers, gated by what the server declares |
+| [0055](0055-mcp-stdio-dispatch-by-id.md) | The stdio client dispatches by id, so a deadline is real |

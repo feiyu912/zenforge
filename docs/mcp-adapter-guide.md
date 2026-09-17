@@ -6,7 +6,8 @@ ZenForge can adapt MCP tools into the core `tool.Tool` interface through
 The adapter keeps MCP at the edge:
 
 - core runtime still only sees ZenForge tools;
-- host services own MCP server discovery, auth, trust, and process lifecycle;
+- host services own MCP server discovery, auth, and trust; the CLI owns the
+  process lifecycle for the servers its own configuration declares;
 - tool calls stay visible as normal `tool.call` and `tool.result` events.
 
 ## Adapt Tools
@@ -26,7 +27,11 @@ if err := client.Initialize(ctx, mcp.InitializeParams{}); err != nil {
     return err
 }
 
-mcpTools, err := mcp.Tools(ctx, client)
+mcpTools, err := mcp.ToolsWithOptions(ctx, client, mcp.ServerOptions{
+    Server:          "files",
+    Deferred:        true,
+    ToolCallTimeout: time.Minute,
+})
 if err != nil {
     return err
 }
@@ -36,8 +41,35 @@ agent := zenforge.New(zenforge.Config{
 })
 ```
 
-`mcp.Tools` calls `tools/list` and wraps every remote MCP tool as a ZenForge
-tool. A model calling that tool causes the adapter to send `tools/call`.
+`ToolsWithOptions` calls `tools/list` and wraps every remote MCP tool as a
+ZenForge tool. A model calling that tool causes the adapter to send
+`tools/call`. `Server` namespaces the model-visible name
+(`mcp__files__read_file`), `Deferred` marks every definition for lazy
+activation through `tool_search`, and `ToolCallTimeout` declares the
+cooperative budget the timeout policy arms. `Tools` is the short form for a
+caller that only ever attaches one server.
+
+## Approval
+
+A remote call crosses a process and possibly a network boundary, so it is a
+side effect until the server says otherwise. Unless `ServerOptions.SkipApproval`
+is set, a call is gated behind the approval channel:
+
+- `readOnlyHint: true` runs without asking;
+- `destructiveHint: true` always asks;
+- anything else asks unless the server declared the tool both
+  non-destructive and closed-world (`destructiveHint: false` and
+  `openWorldHint: false`).
+
+An absent hint is never read as "safe": that is the same rule the reference
+harness applies, and it is the difference between a documented read and a
+remote delete with no annotations. The request carries the server, the remote
+tool name, the hints, and two keys — the rule key names the tool
+(`mcp:<server>:<tool>`, what a session-wide "always allow this tool" is
+scoped to) and the fingerprint covers the arguments (what a run-scoped
+approval is scoped to, so a broad grant cannot be replayed for a different
+payload). `ServerOptions.SkipApproval` exists for a caller that has already
+made the trust decision outside this package.
 
 ## Result Mapping
 
@@ -45,25 +77,32 @@ MCP text content is joined into `tool.Result.Output`.
 
 If the MCP result includes `structuredContent`, ZenForge copies it into
 `tool.Result.Structured`. If the MCP response sets `isError`, the ZenForge tool
-result uses `ExitCode: 1` and the text output as `Error`.
+result uses `ExitCode: 1` and the text output as `Error`. The result metadata
+carries `mcp.server`, `mcp.tool`, `mcp.readOnly`, and `mcp.isError`.
 
 ## Transport
 
-`mcp.NewJSONRPCClient` implements MCP's `Content-Length` JSON-RPC framing over
-any `io.Reader` and `io.Writer`.
+`mcp.NewJSONRPCClient` speaks newline-delimited JSON-RPC over any `io.Reader`
+and `io.Writer`. One goroutine reads the stream and routes each response to
+the call waiting for that id, so a call whose context ends is abandoned
+without stopping the reader: the late response is dropped by id and the
+connection stays usable. Server-initiated frames (notifications, and requests
+for capabilities this client never advertises) are ignored, and an id on such
+a frame is never mistaken for the response to a call in flight.
 
 `mcp.NewStdioClient` starts a local command and connects the JSON-RPC client to
 the process stdin/stdout. `StdioConfig.Stderr` optionally receives server
 diagnostics; it defaults to `io.Discard`, so hosts that need logs must provide
-an `io.Writer`.
+an `io.Writer`. The child environment is the ambient environment with
+credential-shaped names scrubbed, plus `StdioConfig.Env`.
 
 `StdioClient.Close` is safe to call repeatedly or concurrently. It closes the
 JSON-RPC client, unblocks outstanding RPC calls, closes stdin, allows a short
-graceful-exit window, then kills and reaps a process that has not exited.
-Calls after close, including calls unblocked by close, return an error matching
-`mcp.ErrClientClosed`. Normal process exit errors are returned by `Close`;
-forced shutdown and parent-context cancellation are treated as expected
-cleanup.
+graceful-exit window, then kills and reaps a process that has not exited, and
+waits for the reader to observe the closed stream. Calls after close, including
+calls unblocked by close, return an error matching `mcp.ErrClientClosed`.
+Normal process exit errors are returned by `Close`; forced shutdown and
+parent-context cancellation are treated as expected cleanup.
 
 ## Safety Boundary
 
@@ -76,8 +115,13 @@ does not treat MCP tools as inherently safe. Host platforms should:
 - run untrusted MCP servers behind OS or container isolation;
 - redact traces before exporting tool arguments or results.
 
+The CLI applies the first three: a server is started only because the
+operator's `mcpServers` section names it, its credentials come from that
+section's `env` rather than the ambient environment, and a tool that is not
+declared read-only goes through the approval broker.
+
 ## Deferred
 
 This adapter intentionally starts with tools. MCP resources, prompts, sampling,
-server discovery, and OAuth flows remain host/platform responsibilities until
-the public MCP integration surface is clearer.
+elicitation, and server discovery/`listChanged` remain host/platform
+responsibilities until the public MCP integration surface is clearer.

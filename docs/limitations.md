@@ -75,8 +75,13 @@ what is experimental, and what remains adapter territory.
 
 - Full platform memory extraction is not included. Retrieved memory can be
   adapted into normalized tasks through `adapters/memory`.
-- MCP tools can be adapted through `adapters/mcp`, but resources, prompts,
-  sampling, discovery, and OAuth flows remain host/platform responsibilities.
+- MCP tools can be adapted through `adapters/mcp`, and the CLI starts the
+  stdio servers its `mcpServers` section declares, but resources, prompts,
+  sampling, elicitation, discovery, `listChanged` notifications, and OAuth
+  flows remain host/platform responsibilities. MCP tool-call and handshake
+  timeouts are constants rather than per-server configuration, and a
+  session-wide MCP approval grant is not persisted from the CLI
+  (`Config.ApprovalGrants` is an SDK surface).
 - OpenTelemetry exporter setup is not included; host services provide tracer
   providers/exporters and can use `trace/otel` as the sink adapter.
 - YAML config is not included; the current CLI config format is JSON.

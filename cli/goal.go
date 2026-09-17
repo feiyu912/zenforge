@@ -45,7 +45,8 @@ func goalCommand(ctx context.Context, args []string, ioStreams IO) error {
 		return invalidUsage(errors.New("goal requires an objective"))
 	}
 	opts.goalsEnabled = true
-	agent, err := buildAgent(ctx, opts, ioStreams)
+	defer drainClosers(&opts, ioStreams)
+	agent, err := buildAgent(ctx, &opts, ioStreams)
 	if err != nil {
 		return err
 	}
@@ -160,7 +161,8 @@ func ralphCommand(ctx context.Context, args []string, ioStreams IO) error {
 	if *rounds < 1 {
 		return invalidUsage(errors.New("ralph --rounds must be positive"))
 	}
-	agent, err := buildAgent(ctx, opts, ioStreams)
+	defer drainClosers(&opts, ioStreams)
+	agent, err := buildAgent(ctx, &opts, ioStreams)
 	if err != nil {
 		return err
 	}

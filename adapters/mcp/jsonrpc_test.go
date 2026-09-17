@@ -4,8 +4,10 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"testing"
+	"time"
 )
 
 func TestJSONRPCClientListsAndCallsTools(t *testing.T) {
@@ -147,4 +149,96 @@ func TestDefaultInitializeParamsUseReleaseVersion(t *testing.T) {
 
 func rawJSON(s string) json.RawMessage {
 	return json.RawMessage(s)
+}
+
+func TestJSONRPCClientAbandonsACallWithoutLosingTheConnection(t *testing.T) {
+	serverRead, clientWrite := io.Pipe()
+	clientRead, serverWrite := io.Pipe()
+	defer serverRead.Close()
+	defer clientWrite.Close()
+	defer clientRead.Close()
+	defer serverWrite.Close()
+
+	answered := make(chan struct{})
+	go func() {
+		defer close(answered)
+		reader := bufio.NewReader(serverRead)
+		// The first call is never answered: the client has to give up on its
+		// own deadline.
+		var ignored request
+		if err := readFrame(reader, &ignored); err != nil {
+			return
+		}
+		var second request
+		if err := readFrame(reader, &second); err != nil {
+			return
+		}
+		_ = writeFrame(serverWrite, response{
+			JSONRPC: "2.0",
+			ID:      &second.ID,
+			Result:  rawJSON(`{"tools":[{"name":"after","description":"After the timeout."}]}`),
+		})
+	}()
+
+	client := NewJSONRPCClient(clientRead, clientWrite)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if _, err := client.ListTools(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("abandoned call error = %v, want DeadlineExceeded", err)
+	}
+	// The connection survives the abandoned call: the late response is
+	// dropped by id, and the next request is answered normally.
+	tools, err := client.ListTools(context.Background())
+	if err != nil {
+		t.Fatalf("call after an abandoned one returned error: %v", err)
+	}
+	if len(tools) != 1 || tools[0].Name != "after" {
+		t.Fatalf("unexpected tools: %#v", tools)
+	}
+	<-answered
+}
+
+func TestJSONRPCClientIgnoresServerInitiatedFrames(t *testing.T) {
+	serverRead, clientWrite := io.Pipe()
+	clientRead, serverWrite := io.Pipe()
+	defer serverRead.Close()
+	defer clientWrite.Close()
+	defer clientRead.Close()
+	defer serverWrite.Close()
+
+	go func() {
+		reader := bufio.NewReader(serverRead)
+		var req request
+		if err := readFrame(reader, &req); err != nil {
+			return
+		}
+		// A notification (no id), and a server request whose id collides with
+		// the id of the call in flight. Both must be ignored: treating the
+		// second as a response would resolve the call with the wrong frame.
+		_ = writeFrame(serverWrite, map[string]any{
+			"jsonrpc": "2.0",
+			"method":  "notifications/progress",
+			"params":  map[string]any{"progress": 1},
+		})
+		_ = writeFrame(serverWrite, map[string]any{
+			"jsonrpc": "2.0",
+			"id":      req.ID,
+			"method":  "sampling/createMessage",
+			"params":  map[string]any{},
+		})
+		_ = writeFrame(serverWrite, response{
+			JSONRPC: "2.0",
+			ID:      &req.ID,
+			Result:  rawJSON(`{"tools":[{"name":"real","description":"The real answer."}]}`),
+		})
+	}()
+
+	client := NewJSONRPCClient(clientRead, clientWrite)
+	tools, err := client.ListTools(context.Background())
+	if err != nil {
+		t.Fatalf("ListTools returned error: %v", err)
+	}
+	if len(tools) != 1 || tools[0].Name != "real" {
+		t.Fatalf("a server-initiated frame was read as the response: %#v", tools)
+	}
 }

@@ -2,11 +2,15 @@ package mcp
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"strings"
+	"time"
 
+	"github.com/feiyu912/zenforge/approval"
 	"github.com/feiyu912/zenforge/tool"
 )
 
@@ -15,8 +19,8 @@ type ToolDefinition struct {
 	Description string         `json:"description,omitempty"`
 	InputSchema map[string]any `json:"inputSchema,omitempty"`
 	// Annotations are the hints the spec defines for a tool. readOnlyHint is
-	// the one that matters here: it is the difference between a call that can
-	// be auto-approved and one that has to ask.
+	// the one that matters most here: it is the difference between a call that
+	// can be auto-approved and one that has to ask.
 	Annotations ToolAnnotations `json:"annotations,omitempty"`
 }
 
@@ -27,6 +31,10 @@ type ToolAnnotations struct {
 	// DestructiveHint is kept so a policy can treat it as a stronger signal
 	// than "not read-only": an absent hint is not the same as "harmless".
 	DestructiveHint *bool `json:"destructiveHint,omitempty"`
+	// OpenWorldHint means the tool interacts with an open world (anything
+	// outside the client's context), which the reference treats as a reason
+	// to ask even when the tool is not destructive.
+	OpenWorldHint *bool `json:"openWorldHint,omitempty"`
 	// Title is a human-readable label, used in approval prompts.
 	Title string `json:"title,omitempty"`
 }
@@ -42,6 +50,35 @@ func (d ToolDefinition) ReadOnly() bool {
 // Destructive reports whether the server declared the tool as destructive.
 func (d ToolDefinition) Destructive() bool {
 	return d.Annotations.DestructiveHint != nil && *d.Annotations.DestructiveHint
+}
+
+// OpenWorld reports whether the server declared the tool as reaching beyond
+// the client's context.
+func (d ToolDefinition) OpenWorld() bool {
+	return d.Annotations.OpenWorldHint != nil && *d.Annotations.OpenWorldHint
+}
+
+// RequiresApproval reports whether a call to this tool has to pass the
+// approval gate. It ports the reference's rule exactly:
+//
+//   - a destructive tool always asks;
+//   - a read-only tool never asks;
+//   - otherwise the tool asks unless the server explicitly declared it
+//     non-destructive *and* closed-world.
+//
+// The last clause is the part that is easy to get wrong: "no read-only hint"
+// is not "unknown, so probably safe", and the reference resolves it in the
+// asking direction for an absent hint. A server that means to be trusted
+// says so in both hints.
+func (d ToolDefinition) RequiresApproval() bool {
+	if d.Destructive() {
+		return true
+	}
+	if d.ReadOnly() {
+		return false
+	}
+	return d.Annotations.DestructiveHint == nil || *d.Annotations.DestructiveHint ||
+		d.Annotations.OpenWorldHint == nil || *d.Annotations.OpenWorldHint
 }
 
 type CallResult struct {
@@ -65,11 +102,24 @@ type Tool struct {
 	// one. It is what the model's tool name is namespaced with, and what the
 	// approval layer uses to tell two servers' "read_file" apart.
 	server string
+	// approvalGate gates a call behind the approval broker unless the server
+	// declared the tool safe to run unattended (see RequiresApproval).
+	approvalGate bool
+	// timeout is the declared cooperative budget for one remote call; zero
+	// declares none.
+	timeout time.Duration
 }
 
 // DeferredLoading marks remote MCP definitions for lazy activation
 // through tool_search; see ToolsDeferred.
 func (t *Tool) DeferredLoading() bool { return t.deferred }
+
+// TimeoutBudget is the per-call deadline this server was configured with,
+// mirroring the reference's per-server `toolCallTimeoutMs`. The client
+// dispatches responses by id, so an expired call is abandoned without
+// wedging the connection: the late response is dropped and the next call
+// still works.
+func (t *Tool) TimeoutBudget() time.Duration { return t.timeout }
 
 // NamespacePrefix is what every remote tool name starts with. The double
 // underscore is deliberate: a single one is a legal character in a tool name,
@@ -93,6 +143,17 @@ type ServerOptions struct {
 	// tool_search, so a large remote catalog stays out of the model's
 	// initial tool list until the model asks for it.
 	Deferred bool
+	// SkipApproval drops the approval gate for every tool of this server.
+	// The zero value keeps the gate: a server's tools ask unless the server
+	// declared them read-only, because a call that crosses a process and a
+	// network boundary is a side effect until the server says otherwise.
+	// It exists for a caller that has already made the trust decision
+	// outside this package (an in-process bridge, or a test).
+	SkipApproval bool
+	// ToolCallTimeout is the declared cooperative budget for one remote
+	// call, mirroring the reference's per-server tool-call timeout. Zero
+	// declares none, which leaves the call unbounded.
+	ToolCallTimeout time.Duration
 }
 
 // Tools exposes a client's tools without namespacing. It is the short form of
@@ -125,10 +186,12 @@ func ToolsWithOptions(ctx context.Context, client Client, options ServerOptions)
 		}
 		definition.Name = name
 		instance := &Tool{
-			client:     client,
-			definition: definition,
-			deferred:   options.Deferred,
-			server:     server,
+			client:       client,
+			definition:   definition,
+			deferred:     options.Deferred,
+			server:       server,
+			approvalGate: !options.SkipApproval,
+			timeout:      options.ToolCallTimeout,
 		}
 		// Two remote names can collapse onto one namespaced name (a 64-byte
 		// truncation, or a name sanitized to the same string). Letting that
@@ -250,6 +313,12 @@ func (t *Tool) Call(ctx context.Context, input json.RawMessage, call tool.Contex
 	if len(input) == 0 {
 		input = json.RawMessage(`{}`)
 	}
+	if t.approvalGate && t.definition.RequiresApproval() {
+		fingerprint, ruleKey := t.approvalIdentity(input)
+		if !approval.MatchesApprovedMetadata(call.Metadata, fingerprint, ruleKey) {
+			return approval.RequiredResult(t.approvalRequest(call, fingerprint, ruleKey)), approval.ErrRequired
+		}
+	}
 	result, err := t.client.CallTool(ctx, t.RemoteName(), input)
 	if err != nil {
 		return tool.Result{Error: err.Error(), ExitCode: 1}, err
@@ -273,6 +342,55 @@ func (t *Tool) Call(ctx context.Context, input json.RawMessage, call tool.Contex
 		out.ExitCode = 1
 	}
 	return out, nil
+}
+
+// approvalRequest builds the request that gates one remote call.
+//
+// The rule key is the tool's identity (`mcp:<server>:<tool>`), which is the
+// scope the reference persists a session approval against: "always allow this
+// server's tool", not "allow it once with these arguments". The fingerprint
+// additionally covers the arguments, so a broker offering a run-scoped
+// approval is offering exactly this call and nothing wider.
+func (t *Tool) approvalRequest(call tool.Context, fingerprint, ruleKey string) approval.Request {
+	description := strings.TrimSpace(t.definition.Description)
+	if description == "" {
+		description = "The server did not describe this tool."
+	}
+	risk := approval.RiskMedium
+	if t.definition.Destructive() {
+		risk = approval.RiskHigh
+	}
+	return approval.Request{
+		ID:          approval.NewRequestID(call.RunID, call.ToolCallID, "mcp.tool"),
+		RunID:       call.RunID,
+		ToolCallID:  call.ToolCallID,
+		ToolName:    t.Name(),
+		Operation:   "mcp.tool",
+		Title:       "Approve MCP tool " + t.Name(),
+		Description: description,
+		Risk:        risk,
+		Options:     approval.DefaultOptions(),
+		Payload: map[string]any{
+			"server":      t.server,
+			"tool":        t.RemoteName(),
+			"readOnly":    t.ReadOnly(),
+			"destructive": t.definition.Destructive(),
+			"openWorld":   t.definition.OpenWorld(),
+			"fingerprint": fingerprint,
+			"ruleKey":     ruleKey,
+		},
+		CreatedAt: time.Now().UTC(),
+	}
+}
+
+// approvalIdentity derives the two keys an approval decision is scoped by.
+// The fingerprint hashes the tool identity together with the arguments, so a
+// run-scoped approval cannot be replayed for a different call; the rule key
+// names the tool alone.
+func (t *Tool) approvalIdentity(input json.RawMessage) (fingerprint, ruleKey string) {
+	ruleKey = "mcp:" + t.server + ":" + t.RemoteName()
+	sum := sha256.Sum256(append([]byte(ruleKey+"\x00"), input...))
+	return ruleKey + ":" + hex.EncodeToString(sum[:8]), ruleKey
 }
 
 func resultText(result CallResult) string {

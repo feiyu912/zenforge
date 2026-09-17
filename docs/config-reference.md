@@ -67,7 +67,8 @@ zenforge runs --config zenforge.json
   "checkpoint": {
     "type": "jsonl",
     "path": ".zenforge/runs"
-  }
+  },
+  "mcpServers": {}
 }
 ```
 
@@ -199,6 +200,28 @@ For SQLite local storage:
 - `checkpoint.type`: `jsonl` or `sqlite`. Invalid values make config loading
   fail before opening stores.
 - `checkpoint.path`: JSONL event/checkpoint directory, or SQLite database file.
+- `mcpServers`: MCP servers this client starts over stdio, keyed by server
+  name. Each entry is exposed to the model as `mcp__<name>__<tool>`. The
+  section is validated before anything is started: an entry without a
+  `command`, a server name with surrounding whitespace or containing `__`
+  (the namespace separator), or an environment name that cannot be passed to
+  a process makes config loading fail.
+  - `mcpServers.<name>.command`: the executable to start. Required.
+  - `mcpServers.<name>.args`: argument list, passed through unchanged.
+  - `mcpServers.<name>.env`: extra environment entries for the server
+    process. The ambient environment is scrubbed of credential-shaped names
+    (`KEY`, `PASSWORD`, `SECRET`, `TOKEN`) before it reaches a server, so a
+    credential a server genuinely needs belongs here. Values redact in every
+    formatting path and stay transparent in JSON.
+  - `mcpServers.<name>.deferred`: keep this server's tools out of the model's
+    initial tool list until `tool_search` activates them. Any server with
+    `deferred: true` is what registers `tool_search`.
+
+  A server that cannot start, or whose handshake does not answer within 30
+  seconds, fails the command rather than leaving the run without the tools the
+  file asked for. A call to a tool the server did not declare `readOnlyHint`
+  goes through the approval channel, and one remote call is bounded by a
+  60-second budget. See the [MCP Adapter Guide](mcp-adapter-guide.md).
 
 Flags override values loaded from the config file.
 

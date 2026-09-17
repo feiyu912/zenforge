@@ -150,6 +150,62 @@ func TestStdioClientCloseUnblocksRPC(t *testing.T) {
 	}
 }
 
+func TestStdioClientDeadlineOnAWedgedServerKeepsTheConnection(t *testing.T) {
+	client, err := newTestStdioClient(context.Background(), "ignore-call", nil)
+	if err != nil {
+		t.Fatalf("NewStdioClient returned error: %v", err)
+	}
+	defer client.Close()
+	if err := client.Initialize(context.Background(), InitializeParams{}); err != nil {
+		t.Fatalf("Initialize returned error: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if _, err := client.CallTool(ctx, "echo", json.RawMessage(`{"text":"hello"}`)); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("wedged call error = %v, want DeadlineExceeded", err)
+	}
+	// The server never answered that call; a later request still gets its own
+	// response, because dispatch is by id and the abandoned one is dropped.
+	tools, err := client.ListTools(context.Background())
+	if err != nil {
+		t.Fatalf("ListTools after a wedged call returned error: %v", err)
+	}
+	if len(tools) != 1 || tools[0].Name != "echo" {
+		t.Fatalf("unexpected tools: %#v", tools)
+	}
+}
+
+func TestBuildChildEnvScrubsCredentialNames(t *testing.T) {
+	ambient := []string{
+		"PATH=/usr/bin",
+		"HOME=/home/user",
+		"OPENAI_API_KEY=sk-secret",
+		"GITHUB_TOKEN=gh-token",
+		"AWS_SECRET_ACCESS_KEY=aws",
+		"DB_PASSWORD=hunter2",
+		"LANG=en_US.UTF-8",
+	}
+	scrubbed := BuildChildEnv(ambient, []string{"PATH=/custom", "GITHUB_TOKEN=explicit"})
+	values := map[string]string{}
+	for _, entry := range scrubbed {
+		name, value, _ := strings.Cut(entry, "=")
+		values[name] = value
+	}
+	if values["OPENAI_API_KEY"] != "" || values["AWS_SECRET_ACCESS_KEY"] != "" || values["DB_PASSWORD"] != "" {
+		t.Fatalf("credential-shaped names survived the scrub: %#v", values)
+	}
+	if values["PATH"] != "/custom" {
+		t.Fatalf("explicit entry did not override the ambient one: %q", values["PATH"])
+	}
+	if values["GITHUB_TOKEN"] != "explicit" {
+		t.Fatalf("an explicitly configured credential was scrubbed: %q", values["GITHUB_TOKEN"])
+	}
+	if values["HOME"] != "/home/user" || values["LANG"] != "en_US.UTF-8" {
+		t.Fatalf("ordinary variables were dropped: %#v", values)
+	}
+}
+
 func newTestStdioClient(ctx context.Context, mode string, stderr io.Writer) (*StdioClient, error) {
 	return NewStdioClient(ctx, StdioConfig{
 		Command: os.Args[0],
@@ -178,7 +234,10 @@ func TestMCPStdioHelperProcess(t *testing.T) {
 			time.Sleep(time.Hour)
 		}
 	case "serve":
-		runMCPStdioHelper()
+		runMCPStdioHelper(false)
+		os.Exit(0)
+	case "ignore-call":
+		runMCPStdioHelper(true)
 		os.Exit(0)
 	default:
 		fmt.Fprintln(os.Stderr, "unknown helper mode")
@@ -186,8 +245,10 @@ func TestMCPStdioHelperProcess(t *testing.T) {
 	}
 }
 
-func runMCPStdioHelper() {
-	fmt.Fprintln(os.Stderr, "helper stderr")
+func runMCPStdioHelper(dropCalls bool) {
+	if !dropCalls {
+		fmt.Fprintln(os.Stderr, "helper stderr")
+	}
 	reader := bufio.NewReader(os.Stdin)
 	for {
 		var req request
@@ -195,6 +256,11 @@ func runMCPStdioHelper() {
 			return
 		}
 		if req.ID == 0 {
+			continue
+		}
+		if dropCalls && req.Method == "tools/call" {
+			// A wedged tool: the request is read and never answered, while
+			// the server keeps serving everything else.
 			continue
 		}
 		var result json.RawMessage
