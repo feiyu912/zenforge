@@ -112,6 +112,21 @@ all of them; the right column points at concrete evidence.
 Deferred items are real gaps, sequenced by value-per-effort against the
 ZenForge architecture. None blocks the shipped surface above.
 
+Status when this line was written: C3 (hooks, A42/ADR 0048), C23 (memories,
+A43/ADR 0047), C13 (guardian review, A44), C19 (commands and schedules,
+A45/ADR 0049), C16 (images and reasoning, A46/ADR 0050) and C20's MCP server,
+framing, namespacing and `zenforge mcp-server` halves (ADR 0053) have since
+shipped, and each batch carries its own ADR and verification run. What is
+genuinely still open is **C9** (the workflow JS engine), **C20's leftovers**
+(client-side `mcpServers` wiring: config → `StdioClient` → namespaced tools
+registered with the agent, client lifecycle cleanup, a run-starting server
+tool, and read-only auto-approve through the grants store), and the gaps each
+ADR records under its Alternatives/Consequences section (webhook-triggered
+runs, durable schedules across restarts, per-user command directories, and the
+deliberately unported parts of each capability). The rows below are kept as
+the original sketches so a later reader can see what was planned against what
+was built.
+
 | # | Capability | Reference source | Adoption sketch | Size |
 | --- | --- | --- | --- | --- |
 | C2 | Persistent PTY shell sessions (`unified_exec`: session ids, stdin writes, yield windows, head+tail buffers, proc caps, credential-scrubbed snapshots) + background jobs registry | codex unified_exec; DSH jobs/bash run_in_background | New `tools/exec` with a session registry keyed by run; reuse sandbox sessions; job ids + `job_output`/`job_kill` tools; scrub env in snapshots | L |
