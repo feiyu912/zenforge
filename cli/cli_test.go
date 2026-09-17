@@ -173,6 +173,24 @@ func TestCLIReportsUsefulArgumentErrors(t *testing.T) {
 			wantCode:   2,
 			wantStderr: "--revert-to must be non-negative",
 		},
+		{
+			name:       "goal requires an objective",
+			args:       []string{"goal"},
+			wantCode:   2,
+			wantStderr: "goal requires an objective",
+		},
+		{
+			name:       "ralph requires an objective",
+			args:       []string{"ralph"},
+			wantCode:   2,
+			wantStderr: "ralph requires an objective",
+		},
+		{
+			name:       "ralph rejects a non-positive round count",
+			args:       []string{"ralph", "--rounds", "0", "ship it"},
+			wantCode:   2,
+			wantStderr: "ralph --rounds must be positive",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

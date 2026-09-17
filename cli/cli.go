@@ -23,6 +23,7 @@ import (
 	"github.com/feiyu912/zenforge/eventlog"
 	eventlogjsonl "github.com/feiyu912/zenforge/eventlog/jsonl"
 	eventlogsqlite "github.com/feiyu912/zenforge/eventlog/sqlite"
+	"github.com/feiyu912/zenforge/goals"
 	"github.com/feiyu912/zenforge/harness"
 	"github.com/feiyu912/zenforge/instructions"
 	"github.com/feiyu912/zenforge/model"
@@ -32,6 +33,7 @@ import (
 	"github.com/feiyu912/zenforge/tool"
 	"github.com/feiyu912/zenforge/tools/askuser"
 	"github.com/feiyu912/zenforge/tools/contextinfo"
+	goaltools "github.com/feiyu912/zenforge/tools/goal"
 	patchtools "github.com/feiyu912/zenforge/tools/patch"
 	plantools "github.com/feiyu912/zenforge/tools/plan"
 	"github.com/feiyu912/zenforge/tools/present"
@@ -94,6 +96,10 @@ func Main(ctx context.Context, args []string, ioStreams IO) int {
 		err = fork(ctx, args[1:], ioStreams)
 	case "revert":
 		err = revert(ctx, args[1:], ioStreams)
+	case "goal":
+		err = goalCommand(ctx, args[1:], ioStreams)
+	case "ralph":
+		err = ralphCommand(ctx, args[1:], ioStreams)
 	case "events":
 		err = events(ctx, args[1:], ioStreams)
 	case "runs":
@@ -628,7 +634,9 @@ type options struct {
 	shellAllow          multiFlag
 	shellWorkingDir     string
 
-	planMode bool
+	planMode      bool
+	goalsEnabled  bool
+	goalMaxRounds int
 
 	webEnabled         bool
 	webSearchEndpoint  string
@@ -909,6 +917,19 @@ func buildAgent(ctx context.Context, opts options, ioStreams IO) (*zenforge.Agen
 			resolved, ok := toolsByName[name]
 			return resolved, ok
 		}, 0),
+	}
+	if opts.goalsEnabled {
+		goalTools, err := goaltools.Tools(goaltools.Config{
+			Store:     goals.NewFileStore(filepath.Join(opts.checkpointDir, "goals")),
+			MaxRounds: opts.goalMaxRounds,
+		})
+		if err != nil {
+			return nil, err
+		}
+		tools = append(tools, goalTools...)
+		for _, registered := range goalTools {
+			toolsByName[registered.Name()] = registered
+		}
 	}
 	// Plan mode refuses mutating tools until exit_plan_mode is approved.
 	// The resolver consults each tool's ReadOnlyDeclarer, and an
@@ -1357,7 +1378,7 @@ func stringValue(value any) string {
 }
 
 func printUsage(out io.Writer) {
-	_, _ = fmt.Fprintln(out, "usage: zenforge <run|exec|code|resume|fork|revert|events|runs|init|version> [options]")
+	_, _ = fmt.Fprintln(out, "usage: zenforge <run|exec|code|resume|fork|revert|goal|ralph|events|runs|init|version> [options]")
 }
 
 type multiFlag []string

@@ -63,6 +63,10 @@ type agentConfig struct {
 	ProjectInstructions *projectInstructionsFileConfig `json:"projectInstructions,omitempty"`
 	// PlanMode starts the run in the read-only planning phase.
 	PlanMode *bool `json:"planMode,omitempty"`
+	// Goals registers the create_goal/get_goal/update_goal tools.
+	Goals *bool `json:"goals,omitempty"`
+	// GoalMaxRounds is the default round budget for a new goal.
+	GoalMaxRounds *int `json:"goalMaxRounds,omitempty"`
 }
 
 // projectInstructionsFileConfig controls hierarchical AGENTS.md-compatible
@@ -266,6 +270,12 @@ func applyConfig(opts *options, config configFile) error {
 	}
 	if config.Agent.PlanMode != nil {
 		opts.planMode = *config.Agent.PlanMode
+	}
+	if config.Agent.Goals != nil {
+		opts.goalsEnabled = *config.Agent.Goals
+	}
+	if config.Agent.GoalMaxRounds != nil {
+		opts.goalMaxRounds = *config.Agent.GoalMaxRounds
 	}
 	if config.Agent.EnvironmentContext != nil {
 		opts.environmentContext = *config.Agent.EnvironmentContext

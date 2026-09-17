@@ -26,6 +26,24 @@ is added only when at least one configured tool defers its definition, and
 `web.searchEndpoint` is set (a search endpoint also registers
 `web_search`).
 
+## Goals and Ralph
+
+`--goals` (or `agent.goals`) registers `create_goal`, `get_goal`, and
+`update_goal`. The lifecycle lives in the `goals` store (per session, under
+`<checkpointDir>/goals`), so a goal survives a resume: revision-checked
+transitions, a round budget, and the rule that a goal may only be reported
+blocked after the same condition has persisted for three consecutive
+rounds.
+
+`zenforge goal "<objective>"` creates one goal and drives it round by
+round, resuming the same run so the model keeps its conversation; the loop
+stops as soon as the stored goal is complete or blocked. `zenforge ralph
+"<objective>" --rounds N` instead runs a fresh agent per round over the
+shared workspace: only the previous round's bounded structured report
+crosses over, each report is validated and written to
+`<checkpointDir>/ralph/<loop>/round-N.json`, and the loop stops on
+`complete`, `blocked`, or the round limit.
+
 ## Plan mode
 
 `--plan` (or `agent.planMode`) starts a run in the planning phase: mutating

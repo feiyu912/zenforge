@@ -668,6 +668,15 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
   new files need a same-run observed absence (a read that reported
   not-found), so a blind create is refused; `workspace.ErrPathNotFound` now
   also satisfies `errors.Is(err, fs.ErrNotExist)`.
+- Goals and Ralph (DSH goal domain + `dsh-tool-ralph`): `--goals`
+  registers `create_goal`/`get_goal`/`update_goal`, whose lifecycle
+  (revision-checked transitions, round budget, and the rule that a goal
+  may only be reported blocked after the same condition survives three
+  consecutive rounds) lives in `goals/`. `zenforge goal "<objective>"`
+  drives a persisted goal round by round by resuming the same run, so the
+  model owns the lifecycle; `zenforge ralph "<objective>"` runs fresh
+  agents over the shared workspace with only a bounded structured report
+  crossing rounds, persisting each report under the checkpoint directory.
 - Plan mode (codex plan collaboration mode): `--plan` (or
   `agent.planMode`) starts a run in a read-only phase where mutating tools
   are refused with a structured `PLAN_MODE_READ_ONLY` result; read-only

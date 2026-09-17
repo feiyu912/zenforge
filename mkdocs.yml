@@ -174,6 +174,7 @@ nav:
       - 0034 Web tools and SSRF defense: adr/0034-web-tools-and-ssrf-defense.md
       - 0035 Run time travel: adr/0035-run-time-travel.md
       - 0036 Plan mode: adr/0036-plan-mode.md
+      - 0037 Goals and Ralph: adr/0037-goals-and-ralph.md
 
 extra:
   social:
