@@ -4,24 +4,26 @@ import (
 	"bytes"
 	"context"
 	"flag"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/feiyu912/zenforge/sandbox/bwrap"
 	"github.com/feiyu912/zenforge/sandbox/docker"
+	"github.com/feiyu912/zenforge/sandbox/linuxsandbox"
 	"github.com/feiyu912/zenforge/sandbox/seatbelt"
 )
 
 func TestValidateSandboxBackend(t *testing.T) {
 	// Surrounding whitespace and case are normalized, so a configuration
 	// written by hand is not rejected for formatting.
-	for _, backend := range []string{"", "none", "seatbelt", "bwrap", "docker", "BWRAP", " seatbelt "} {
+	for _, backend := range []string{"", "none", "seatbelt", "bwrap", "docker", "landlock", "BWRAP", " seatbelt "} {
 		if err := validateSandboxBackend(backend); err != nil {
 			t.Fatalf("backend %q rejected: %v", backend, err)
 		}
 	}
-	for _, backend := range []string{"landlock", "chroot", "bwrap2"} {
+	for _, backend := range []string{"chroot", "bwrap2", "seatbelt2"} {
 		if err := validateSandboxBackend(backend); err == nil {
 			t.Fatalf("backend %q was accepted", backend)
 		}
@@ -39,6 +41,7 @@ func TestBuildSandboxSelectsTheConfiguredBackend(t *testing.T) {
 		{"seatbelt", "seatbelt"},
 		{"bwrap", "bwrap"},
 		{"docker", "docker"},
+		{"landlock", "landlock"},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.backend, func(t *testing.T) {
@@ -68,18 +71,28 @@ func TestBuildSandboxSelectsTheConfiguredBackend(t *testing.T) {
 				if _, ok := built.(*docker.Adapter); !ok {
 					t.Fatalf("backend %q produced %T", testCase.backend, built)
 				}
+			case "landlock":
+				if _, ok := built.(*linuxsandbox.Adapter); !ok {
+					t.Fatalf("backend %q produced %T", testCase.backend, built)
+				}
 			}
 		})
 	}
-	if _, err := buildSandbox(sandboxOptions{Backend: "landlock"}, dir, time.Second); err == nil {
+	if _, err := buildSandbox(sandboxOptions{Backend: "chroot"}, dir, time.Second); err == nil {
 		t.Fatal("an unknown backend was accepted")
+	}
+	// A protected-name policy cannot be expressed by the landlock backend,
+	// so it is refused when the backend is built rather than at the first
+	// command.
+	if _, err := buildSandbox(sandboxOptions{Backend: "landlock", ProtectedNames: []string{".git"}}, dir, time.Second); err == nil {
+		t.Fatal("the landlock backend accepted a protected-name policy")
 	}
 }
 
 func TestSandboxFlagsParseAndValidate(t *testing.T) {
 	t.Run("unknown backend", func(t *testing.T) {
 		var stderr bytes.Buffer
-		code := Main(context.Background(), []string{"run", "--sandbox", "landlock", "hello"}, IO{Stderr: &stderr})
+		code := Main(context.Background(), []string{"run", "--sandbox", "chroot", "hello"}, IO{Stderr: &stderr})
 		if code != exitInvalidUsage {
 			t.Fatalf("code = %d, want %d", code, exitInvalidUsage)
 		}
@@ -125,4 +138,20 @@ func TestSandboxFlagsParseAndValidate(t *testing.T) {
 			t.Fatalf("validateOptionEnums returned error: %v", err)
 		}
 	})
+}
+func TestLinuxSandboxHelperSubcommandIsWired(t *testing.T) {
+	// The helper subcommand exists and reports why it cannot run here. It is
+	// deliberately not exercised on Linux in-process: a successful helper
+	// execs, which would replace the test process.
+	if runtime.GOOS == "linux" {
+		t.Skip("the helper replaces the process on success")
+	}
+	var stderr bytes.Buffer
+	code := Main(context.Background(), []string{"linux-sandbox", "--policy", `{"fullDiskRead":true}`, "--", "/bin/true"}, IO{Stdout: &bytes.Buffer{}, Stderr: &stderr})
+	if code == 0 {
+		t.Fatalf("the helper succeeded off Linux: %q", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "landlock") {
+		t.Fatalf("the failure does not explain the missing layer: %q", stderr.String())
+	}
 }

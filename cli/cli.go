@@ -30,6 +30,7 @@ import (
 	"github.com/feiyu912/zenforge/model/provider"
 	"github.com/feiyu912/zenforge/modelretry"
 	"github.com/feiyu912/zenforge/policy"
+	"github.com/feiyu912/zenforge/sandbox/linuxsandbox"
 	"github.com/feiyu912/zenforge/tool"
 	"github.com/feiyu912/zenforge/tools/askuser"
 	"github.com/feiyu912/zenforge/tools/contextinfo"
@@ -100,6 +101,13 @@ func Main(ctx context.Context, args []string, ioStreams IO) int {
 		err = goalCommand(ctx, args[1:], ioStreams)
 	case "ralph":
 		err = ralphCommand(ctx, args[1:], ioStreams)
+	case linuxsandbox.HelperCommand:
+		// Hidden helper: the landlock+seccomp backend re-invokes this
+		// binary to apply the ruleset and filter, then exec the command. A
+		// Landlock or seccomp restriction cannot be installed from outside
+		// the process that execs, so this indirection is the only correct
+		// shape.
+		err = linuxSandboxHelper(ctx, args[1:], ioStreams)
 	case "events":
 		err = events(ctx, args[1:], ioStreams)
 	case "runs":

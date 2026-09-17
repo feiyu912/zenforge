@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -8,6 +9,7 @@ import (
 	"github.com/feiyu912/zenforge/sandbox"
 	"github.com/feiyu912/zenforge/sandbox/bwrap"
 	"github.com/feiyu912/zenforge/sandbox/docker"
+	"github.com/feiyu912/zenforge/sandbox/linuxsandbox"
 	"github.com/feiyu912/zenforge/sandbox/seatbelt"
 )
 
@@ -17,6 +19,9 @@ const (
 	SandboxSeatbelt = "seatbelt"
 	SandboxBwrap    = "bwrap"
 	SandboxDocker   = "docker"
+	// SandboxLandlock is the in-process Linux sandbox: Landlock for the
+	// filesystem and seccomp for the network, applied by a helper process.
+	SandboxLandlock = "landlock"
 )
 
 // sandboxOptions is the resolved sandbox configuration.
@@ -40,10 +45,10 @@ type sandboxOptions struct {
 // validateSandboxBackend checks the backend name before anything is built.
 func validateSandboxBackend(backend string) error {
 	switch strings.ToLower(strings.TrimSpace(backend)) {
-	case "", SandboxNone, SandboxSeatbelt, SandboxBwrap, SandboxDocker:
+	case "", SandboxNone, SandboxSeatbelt, SandboxBwrap, SandboxDocker, SandboxLandlock:
 		return nil
 	default:
-		return fmt.Errorf("unknown sandbox backend %q (want none, seatbelt, bwrap, or docker)", backend)
+		return fmt.Errorf("unknown sandbox backend %q (want none, seatbelt, bwrap, docker, or landlock)", backend)
 	}
 }
 
@@ -90,7 +95,27 @@ func buildSandbox(opts sandboxOptions, defaultWorkingDir string, fallbackTimeout
 			DefaultTimeout:    timeout,
 			NetworkMode:       network,
 		})
+	case SandboxLandlock:
+		// The landlock backend reads the whole filesystem unless the
+		// restricted layout is requested, matching the bwrap backend.
+		landlockFullRead := !opts.Restricted
+		return linuxsandbox.New(linuxsandbox.Config{
+			WritableRoots:     roots,
+			AllowNetwork:      opts.AllowNetwork,
+			ProtectedNames:    opts.ProtectedNames,
+			DefaultTimeout:    timeout,
+			DefaultWorkingDir: defaultWorkingDir,
+			FullDiskRead:      &landlockFullRead,
+		})
 	default:
-		return nil, fmt.Errorf("unknown sandbox backend %q (want none, seatbelt, bwrap, or docker)", opts.Backend)
+		return nil, fmt.Errorf("unknown sandbox backend %q (want none, seatbelt, bwrap, docker, or landlock)", opts.Backend)
 	}
+}
+
+// linuxSandboxHelper is the hidden helper subcommand. It parses the policy,
+// applies Landlock and seccomp, and execs the command; on success it never
+// returns.
+func linuxSandboxHelper(ctx context.Context, args []string, ioStreams IO) error {
+	_, err := linuxsandbox.RunHelper(ctx, args, ioStreams.Stdout, ioStreams.Stderr, linuxsandbox.HelperOptions{})
+	return err
 }

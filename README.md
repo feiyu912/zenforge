@@ -668,6 +668,15 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
   new files need a same-run observed absence (a read that reported
   not-found), so a blind create is refused; `workspace.ErrPathNotFound` now
   also satisfies `errors.Is(err, fs.ErrNotExist)`.
+- Landlock + seccomp sandbox backend: `sandbox/linuxsandbox` binds the two
+  in-process layers into a `sandbox.Sandbox` by re-invoking this binary as
+  `zenforge linux-sandbox --policy <json> -- <command>`; the helper decodes
+  the policy (rejecting unknown fields), probes the Landlock ABI, plans
+  both layers before applying either, then applies and execs. The policy
+  JSON and its SHA-256 are recorded on the session, and a policy Landlock
+  cannot express is refused when the backend is built. Select it with
+  `--sandbox landlock`; the helper is hidden from the usage text but is a
+  real subcommand.
 - Seccomp network filter (codex `linux-sandbox/src/landlock.rs`, seccomp
   section): `sandbox/seccomp` plans the classic BPF program as data —
   architecture guard (a foreign ABI is killed, otherwise the wrong syscall
