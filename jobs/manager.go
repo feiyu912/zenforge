@@ -235,6 +235,10 @@ func (m *Manager) Output(id string, sinceStdout, sinceStderr int64, max int) (Re
 		m.mu.Unlock()
 		return Result{}, &ErrNotFound{ID: id}
 	}
+	// The job view is taken while the lock is held: the reaper writes the
+	// job's status and exit code under the same lock, so reading it after
+	// unlocking would race with a job that is finishing right now.
+	view := m.viewLocked(rec)
 	m.mu.Unlock()
 	if max == 0 {
 		max = DefaultReadMaxBytes
@@ -243,7 +247,7 @@ func (m *Manager) Output(id string, sinceStdout, sinceStderr int64, max int) (Re
 		max = int(^uint(0) >> 1)
 	}
 	return Result{
-		Job:    m.snapshotLocked(rec),
+		Job:    view,
 		Stdout: rec.stdout.Read(sinceStdout, max),
 		Stderr: rec.stderr.Read(sinceStderr, max),
 	}, nil
@@ -258,8 +262,9 @@ func (m *Manager) Write(id string, data []byte) error {
 		return &ErrNotFound{ID: id}
 	}
 	stdin := rec.stdin
+	view := m.viewLocked(rec)
 	m.mu.Unlock()
-	if m.snapshotLocked(rec).Status.Terminal() {
+	if view.Status.Terminal() {
 		return fmt.Errorf("job %s has already finished", id)
 	}
 	if stdin == nil {
@@ -330,11 +335,16 @@ func (m *Manager) Close() {
 	for _, rec := range m.jobs {
 		records = append(records, rec)
 	}
+	// A record that is already terminal is skipped; the status is read
+	// through the manager's own snapshot, which takes the lock, because the
+	// reaper may be finishing a job concurrently.
 	m.mu.Unlock()
 	for _, rec := range records {
-		if !m.snapshotLocked(rec).Status.Terminal() {
-			_ = m.kill(rec.job.ID, "manager closed")
+		view, err := m.snapshot(rec.job.ID)
+		if err == nil && view.Status.Terminal() {
+			continue
 		}
+		_ = m.kill(rec.job.ID, "manager closed")
 	}
 }
 
@@ -449,9 +459,6 @@ func (m *Manager) snapshot(id string) (Job, error) {
 	}
 	return m.viewLocked(rec), nil
 }
-
-// snapshotLocked copies one job without taking the lock.
-func (m *Manager) snapshotLocked(rec *record) Job { return m.viewLocked(rec) }
 
 // viewLocked builds the immutable view of a record.
 func (m *Manager) viewLocked(rec *record) Job {

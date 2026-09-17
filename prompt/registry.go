@@ -25,6 +25,9 @@ const (
 	OrderRuntimeContext   = 700
 	OrderProjectRules     = 800
 	OrderSkillCatalog     = 850
+	// OrderHookContext is context injected by lifecycle hooks; it sits with
+	// the project rules and above the skill catalog.
+	OrderHookContext      = 820
 	OrderFileReference    = 900
 	OrderToolBase         = 1000
 	OrderToolsSDK         = 5000

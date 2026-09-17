@@ -668,6 +668,13 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
   new files need a same-run observed absence (a read that reported
   not-found), so a blind create is refused; `workspace.ErrPathNotFound` now
   also satisfies `errors.Is(err, fs.ErrNotExist)`.
+- Lifecycle hooks in the agent loop: `SessionStart` and `UserPromptSubmit`
+  run once at run start, their context is frozen into durable run state and
+  rendered as a system section, and a block fails the run before any model
+  call; a `Stop` hook can refuse to let the agent finish, sending it back to
+  work with the hook's reason as its next instruction, bounded at three
+  refusals per terminal path so a hook that never relents cannot hold the
+  agent hostage.
 - Lifecycle hooks (codex `hooks` crate): `--hooks <file>` runs user
   commands at `PreToolUse`/`PostToolUse` (wired as tool middleware, so a
   blocking hook prevents the call and `updatedInput` rewrites it) and the

@@ -182,6 +182,8 @@ nav:
       - 0042 Restrict-then-exec helper: adr/0042-restrict-then-exec-helper.md
       - 0043 Background jobs: adr/0043-background-jobs.md
       - 0044 Hooks engine: adr/0044-hooks-engine.md
+      - 0045 Hooks in the agent loop: adr/0045-hooks-in-the-agent-loop.md
+      - 0046 Landlock file rules: adr/0046-landlock-file-rules.md
 
 extra:
   social:

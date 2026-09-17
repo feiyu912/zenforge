@@ -17,6 +17,7 @@ import (
 	"github.com/feiyu912/zenforge/checkpoint"
 	"github.com/feiyu912/zenforge/compaction"
 	"github.com/feiyu912/zenforge/harness"
+	"github.com/feiyu912/zenforge/hooks"
 	"github.com/feiyu912/zenforge/instructions"
 	"github.com/feiyu912/zenforge/model"
 	"github.com/feiyu912/zenforge/modelretry"
@@ -41,6 +42,7 @@ import (
 // of silently picking up files that changed on disk mid-run.
 const (
 	metaEnvironmentContext  = "zenforge.environment_context"
+	metaHookContext         = "zenforge.hook_context"
 	metaProjectInstructions = "zenforge.project_instructions"
 	// metaEnvironmentUpdate records the latest injected environment
 	// render so diff-only re-injection survives resume.
@@ -880,6 +882,9 @@ func (a *Agent) runHarnessLoop(ctx context.Context, out chan<- Event, state harn
 		},
 		ResumeTerminal: func(current harness.RunState) bool {
 			return a.resumeTerminal(emit, current)
+		},
+		StopHook: func(callCtx context.Context, current *harness.RunState, output string) (harness.StopDecision, error) {
+			return a.stopHookDecision(callCtx, current, output)
 		},
 		IsPause: func(err error) bool {
 			return errors.Is(err, errApprovalPending)
@@ -2881,6 +2886,7 @@ func (a *Agent) assembleSystemPrefix(state harness.RunState) ([]model.Message, e
 		{Name: "deployment:instructions", Order: prompt.OrderDeploymentPolicy, Text: a.config.Instructions},
 		{Name: "runtime:environment", Order: prompt.OrderRuntimeContext, Text: stringMeta(state.Meta, metaEnvironmentContext)},
 		{Name: "runtime:project-instructions", Order: prompt.OrderProjectRules, Text: stringMeta(state.Meta, metaProjectInstructions)},
+		{Name: "runtime:hook-context", Order: prompt.OrderHookContext, Text: stringMeta(state.Meta, metaHookContext)},
 		{Name: "runtime:skill-catalog", Order: prompt.OrderSkillCatalog, Text: a.skillCatalogPrompt},
 		{Name: "deployment:persona-suffix", Order: prompt.OrderPersonaSuffix, Text: a.config.PersonaSuffix, Interpolate: true},
 	}
@@ -2984,6 +2990,11 @@ func (a *Agent) applyRunContext(ctx context.Context, emit eventEmitter, state *h
 		state.Meta[metaSessionTitle] = title
 		state.Meta[metaSessionTitleSource] = source
 	}
+	if a.config.Hooks != nil {
+		if err := a.applyLifecycleHooks(ctx, emit, state); err != nil {
+			return err
+		}
+	}
 	if !a.config.EnvironmentContext && a.config.InstructionFiles == nil {
 		return nil
 	}
@@ -3018,6 +3029,85 @@ func (a *Agent) applyRunContext(ctx context.Context, emit eventEmitter, state *h
 		}
 	}
 	return nil
+}
+
+// applyLifecycleHooks runs the run-scoped hooks once, at start, and freezes
+// their result into durable Meta, exactly like the rest of the prompt
+// context: a resume replays what the original run saw instead of re-running
+// hooks that may since have changed.
+func (a *Agent) applyLifecycleHooks(ctx context.Context, emit eventEmitter, state *harness.RunState) error {
+	engine := a.config.Hooks
+	requests := []hooks.Request{
+		{Event: hooks.EventSessionStart},
+		{Event: hooks.EventUserPromptSubmit, Prompt: state.Input},
+	}
+	var contexts []string
+	for _, request := range requests {
+		if !engine.Configured(request.Event) {
+			continue
+		}
+		request.SessionID = state.RunID
+		request.RunID = state.RunID
+		outcome, err := engine.Run(ctx, request)
+		if err != nil {
+			return fmt.Errorf("run %s hooks: %w", request.Event, err)
+		}
+		failures := make([]string, 0, len(outcome.Entries))
+		for _, entry := range outcome.Failed() {
+			failures = append(failures, fmt.Sprintf("%s: %s", entry.Command, entry.Reason))
+		}
+		if err := emit(EventHookCompleted, map[string]any{
+			"event":         string(request.Event),
+			"blocked":       outcome.Blocked,
+			"continued":     outcome.Continue,
+			"reason":        outcome.BlockMessage(),
+			"systemMessage": outcome.SystemMessage,
+			"contextBytes":  len(outcome.AdditionalContext),
+			"failures":      failures,
+		}); err != nil {
+			return err
+		}
+		if outcome.Blocked {
+			return fmt.Errorf("%s hook refused to start the run: %s", request.Event, outcome.BlockMessage())
+		}
+		if !outcome.Continue {
+			reason := strings.TrimSpace(outcome.StopReason)
+			if reason == "" {
+				reason = "no reason given"
+			}
+			return fmt.Errorf("%s hook stopped the run: %s", request.Event, reason)
+		}
+		if outcome.AdditionalContext != "" {
+			contexts = append(contexts, outcome.AdditionalContext)
+		}
+	}
+	if len(contexts) > 0 {
+		state.Meta[metaHookContext] = strings.Join(contexts, "\n\n")
+	}
+	return nil
+}
+
+// stopHookDecision is the runner's Stop hook: it may allow the run to
+// finish, or refuse with a reason that becomes the agent's next instruction.
+func (a *Agent) stopHookDecision(ctx context.Context, state *harness.RunState, output string) (harness.StopDecision, error) {
+	if a.config.Hooks == nil || !a.config.Hooks.Configured(hooks.EventStop) {
+		return harness.StopDecision{AllowStop: true}, nil
+	}
+	outcome, err := a.config.Hooks.Run(ctx, hooks.Request{
+		Event:      hooks.EventStop,
+		SessionID:  state.RunID,
+		RunID:      state.RunID,
+		StopReason: output,
+	})
+	if err != nil {
+		return harness.StopDecision{}, fmt.Errorf("run Stop hooks: %w", err)
+	}
+	decision := harness.StopDecision{AllowStop: !outcome.Blocked && outcome.Continue}
+	decision.Reason = outcome.BlockMessage()
+	if decision.Reason == "" {
+		decision.Reason = outcome.StopReason
+	}
+	return decision, nil
 }
 
 // renderEnvironmentContext builds the codex-style environment snapshot:

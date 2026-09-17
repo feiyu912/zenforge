@@ -2,10 +2,14 @@ package seccomp
 
 import (
 	"errors"
+	"fmt"
+	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -260,21 +264,33 @@ func TestAvailableIsPlatformDependent(t *testing.T) {
 // because a filter cannot be installed from outside the process.
 const seccompHelperEnv = "ZENFORGE_SECCOMP_TEST_TARGET"
 
+// seccompSocketAttemptEnv marks the third process in the chain: the one that
+// makes the socket calls with the filter already installed.
+const seccompSocketAttemptEnv = "ZENFORGE_SECCOMP_TEST_SOCKET_ATTEMPT"
+
 func TestSeccompHelperProcess(t *testing.T) {
-	target := os.Getenv(seccompHelperEnv)
-	if target == "" {
+	if os.Getenv(seccompHelperEnv) == "" {
 		t.Skip("helper process for TestSeccompDeniesSockets")
 	}
 	filter, err := Build(Policy{}, runtime.GOARCH)
 	if err != nil {
 		t.Fatalf("Build returned error: %v", err)
 	}
-	if err := Exec(filter, "/bin/sh", []string{"/bin/sh", "-c", target}, os.Environ()); err != nil {
+	// Exec replaces this process, so the socket attempt must happen in a
+	// fresh process with the filter inherited.
+	env := append(os.Environ(), seccompSocketAttemptEnv+"=1")
+	if err := Exec(filter, os.Args[0], []string{os.Args[0], "-test.run=TestSeccompSocketAttemptProcess"}, env); err != nil {
 		t.Fatalf("Exec returned error: %v", err)
 	}
 }
 
 // TestSeccompDeniesSockets runs the helper on a kernel with seccomp.
+//
+// The attempt itself is made by this test binary (see
+// TestSeccompSocketAttemptProcess) rather than by a shell: `/dev/tcp` is a
+// bash extension, and on a host where /bin/sh is dash the redirection fails
+// before any syscall happens, which would make the test pass without
+// proving anything.
 func TestSeccompDeniesSockets(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("seccomp is Linux only")
@@ -285,33 +301,54 @@ func TestSeccompDeniesSockets(t *testing.T) {
 	if testing.Short() {
 		t.Skip("short mode")
 	}
-	run := func(command string) *exec.Cmd {
-		cmd := exec.Command(os.Args[0], "-test.run=TestSeccompHelperProcess")
-		cmd.Env = append(os.Environ(), seccompHelperEnv+"="+command)
-		return cmd
-	}
-	// An IP socket is denied with EPERM; the shell keeps running.
-	output, err := run("exec 3<>/dev/tcp/127.0.0.1/1 2>&1; echo status=$?").CombinedOutput()
+	cmd := exec.Command(os.Args[0], "-test.run=TestSeccompHelperProcess")
+	cmd.Env = append(os.Environ(), seccompHelperEnv+"=attempt")
+	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("the helper itself failed: %v (%s)", err, output)
 	}
-	if !strings.Contains(string(output), "status=") {
-		t.Fatalf("unexpected output: %s", output)
-	}
-	if strings.Contains(string(output), "status=0") {
-		t.Fatalf("an IP socket succeeded under the filter: %s", output)
+	// An IP socket is denied with EPERM, so the child reports the denial
+	// rather than a connection result.
+	if !strings.Contains(string(output), "ip-socket=denied") {
+		t.Fatalf("an IP socket was not denied with EPERM: %s", output)
 	}
 	// Unix sockets stay available, which is what keeps subprocess tooling
-	// working.
-	output, _ = run("python3 -c \"import socket,sys; socket.socket(socket.AF_UNIX); sys.stdout.write('unix-ok')\" 2>&1 || echo no-python").CombinedOutput()
-	if strings.Contains(string(output), "unix-ok") {
-		return
+	// working; a kernel that denies them would be a policy bug, so report
+	// it rather than passing silently.
+	if !strings.Contains(string(output), "unix-socket=allowed") {
+		t.Fatalf("a unix socket was not allowed: %s", output)
 	}
-	// No python3 available: fall back to checking that a plain command runs.
-	output, err = run("echo alive").CombinedOutput()
-	if err != nil || !strings.Contains(string(output), "alive") {
-		t.Fatalf("a plain command failed under the filter: %v (%s)", err, output)
+}
+
+// TestSeccompSocketAttemptProcess is the child that runs under the filter.
+func TestSeccompSocketAttemptProcess(t *testing.T) {
+	if os.Getenv(seccompSocketAttemptEnv) == "" {
+		t.Skip("child process for TestSeccompDeniesSockets")
 	}
+	fmt.Println(socketAttemptResult())
+}
+
+// socketAttemptResult attempts the two socket families and reports what the
+// kernel did, in a form the parent can assert on.
+func socketAttemptResult() string {
+	verdict := func(err error) string {
+		if err == nil {
+			return "allowed"
+		}
+		if errors.Is(err, syscall.EPERM) || strings.Contains(err.Error(), "operation not permitted") {
+			return "denied"
+		}
+		return "error:" + err.Error()
+	}
+	ip, ipErr := net.Dial("tcp", "127.0.0.1:1")
+	if ip != nil {
+		_ = ip.Close()
+	}
+	unixSocket, unixErr := net.Listen("unix", filepath.Join(os.TempDir(), fmt.Sprintf("zenforge-seccomp-%d.sock", os.Getpid())))
+	if unixSocket != nil {
+		_ = unixSocket.Close()
+	}
+	return fmt.Sprintf("ip-socket=%s unix-socket=%s", verdict(ipErr), verdict(unixErr))
 }
 
 // evaluate runs the program the way the kernel's classic BPF interpreter

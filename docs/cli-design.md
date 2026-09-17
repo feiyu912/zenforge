@@ -71,8 +71,13 @@ macOS — or when `sandbox-exec` is missing — opening a session fails with
 `{matcher, command, timeout, failClosed}` entries. `PreToolUse` and
 `PostToolUse` run around every tool call — a block prevents the call,
 `updatedInput` rewrites its arguments, and `additionalContext` is attached
-to the result — while `SessionStart`, `UserPromptSubmit`, and `Stop` are
-available to the engine (not yet wired into the agent loop). The payload
+to the result. `SessionStart` and `UserPromptSubmit` run once at run start:
+their context is frozen into the run state (a resume replays what the run
+started with) and rendered as a system section, and a block or
+`continue:false` fails the run before any model call. `Stop` runs whenever
+the run would finish: a refusal appends the hook's reason as the agent's
+newest instruction and keeps it working, bounded at three refusals per
+terminal path. The payload
 arrives as JSON on stdin with both snake_case and camelCase keys; exit 0
 parses a JSON decision, exit 2 blocks with stderr as the reason, and any
 other code is a failure that fails open unless the hook sets

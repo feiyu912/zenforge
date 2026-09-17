@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/feiyu912/zenforge/model"
@@ -24,6 +25,9 @@ const (
 	RuntimeModelRestarted   RuntimeEvent = "model.restarted"
 	RuntimeModelDone        RuntimeEvent = "model.done"
 	RuntimeCheckpoint       RuntimeEvent = "checkpoint.created"
+	// RuntimeStopBlocked is emitted when a Stop hook refused to let the
+	// run finish and sent the agent back to work.
+	RuntimeStopBlocked RuntimeEvent = "stop.blocked"
 )
 
 type Terminal struct {
@@ -32,9 +36,25 @@ type Terminal struct {
 	Err  error
 }
 
+// StopDecision is a Stop hook's answer to "may this run finish?".
+type StopDecision struct {
+	// AllowStop is true when the run may finish. False sends the agent
+	// back to work with Reason explaining what is still expected.
+	AllowStop bool
+	// Reason explains a refusal.
+	Reason string
+}
+
 type Runner struct {
 	MaxSteps int
 	Mode     string
+	// StopHook is consulted before the run finishes. A refusal appends its
+	// reason as a new instruction and keeps the agent working, bounded by
+	// MaxStopHookRetries so a hook that never relents cannot spin forever.
+	StopHook func(context.Context, *RunState, string) (StopDecision, error)
+	// MaxStopHookRetries bounds how many times StopHook may refuse, three
+	// by default.
+	MaxStopHookRetries int
 
 	Emit                  func(RuntimeEvent, map[string]any) error
 	Checkpoint            func(context.Context, RunState) error
@@ -125,6 +145,9 @@ func (r Runner) Run(ctx context.Context, state RunState, resumed bool) (terminal
 		mode = r.Mode
 	}
 	resumeFinalizing := resumed && state.Phase == RunPhaseFinalizing
+	// stopRetries counts Stop-hook refusals so a hook that never relents
+	// cannot spin the agent forever.
+	stopRetries := 0
 	if resumed {
 		if !emit(RuntimeRunResumed, map[string]any{"input": state.Input, "mode": mode}) {
 			return terminal
@@ -188,9 +211,24 @@ func (r Runner) Run(ctx context.Context, state RunState, resumed bool) (terminal
 					fail(err)
 					return terminal
 				}
-				terminal = Terminal{Type: RuntimeRunDone, Data: map[string]any{"output": assistant.Content}}
-				emit(RuntimeRunDone, terminal.Data)
-				return terminal
+				// A Stop hook may refuse to let this resumed run finish; the
+				// finalize flag is cleared so execution falls into the loop
+				// below with the hook's reason as the newest instruction.
+				blocked, hookErr := r.stopHookRefuses(ctx, &state, assistant.Content)
+				if hookErr != nil {
+					fail(hookErr)
+					return terminal
+				}
+				if !blocked {
+					terminal = Terminal{Type: RuntimeRunDone, Data: map[string]any{"output": assistant.Content}}
+					emit(RuntimeRunDone, terminal.Data)
+					return terminal
+				}
+				stopRetries++
+				if !emit(RuntimeStopBlocked, map[string]any{"reason": lastUserMessage(state), "attempt": stopRetries}) {
+					return terminal
+				}
+				resumeFinalizing = false
 			}
 		}
 	} else if !emit(RuntimeRunStarted, map[string]any{"input": state.Input, "mode": mode}) {
@@ -287,52 +325,137 @@ func (r Runner) Run(ctx context.Context, state RunState, resumed bool) (terminal
 				fail(err)
 				return terminal
 			}
+			blocked, hookErr := r.stopHookRefuses(ctx, &state, assistant.Content)
+			if hookErr != nil {
+				fail(hookErr)
+				return terminal
+			}
+			if blocked && stopRetries < r.maxStopHookRetries() {
+				stopRetries++
+				if !emit(RuntimeStopBlocked, map[string]any{"reason": lastUserMessage(state), "attempt": stopRetries}) {
+					return terminal
+				}
+				if err := checkpointState(); err != nil {
+					fail(err)
+					return terminal
+				}
+				continue
+			}
 			terminal = Terminal{Type: RuntimeRunDone, Data: map[string]any{"output": assistant.Content}}
 			emit(RuntimeRunDone, terminal.Data)
 			return terminal
 		}
 	}
 
-	if !resumeFinalizing {
-		state.Phase = RunPhaseFinalizing
-		state.Control.Status = RunStatusModelStreaming
-		state.Messages = append(state.Messages, MessageState{
-			Role:    "user",
-			Content: "You have reached the tool-use limit. Provide the best final answer using the available context.",
-		})
+	finalizeAsked := false
+	for {
+		if !finalizeAsked && !resumeFinalizing {
+			finalizeAsked = true
+			state.Phase = RunPhaseFinalizing
+			state.Control.Status = RunStatusModelStreaming
+			state.Messages = append(state.Messages, MessageState{
+				Role:    "user",
+				Content: "You have reached the tool-use limit. Provide the best final answer using the available context.",
+			})
+			if err := checkpointState(); err != nil {
+				fail(err)
+				return terminal
+			}
+		}
+		var assistant MessageState
+		var usage model.Usage
+		var err error
+		if r.DurableCallModel != nil {
+			assistant, usage, err = r.DurableCallModel(ctx, &state, model.ToolChoiceNone)
+		} else {
+			assistant, usage, err = r.CallModel(ctx, state, model.ToolChoiceNone)
+		}
+		if err != nil {
+			fail(err)
+			return terminal
+		}
+		if len(assistant.ToolCalls) > 0 {
+			fail(fmt.Errorf("final no-tool model turn returned tool calls"))
+			return terminal
+		}
+		state.Messages = append(state.Messages, assistant)
+		ApplyUsage(&state, usage)
+		commitActiveAttempt(&state)
+		state.Phase = RunPhaseCompleted
+		state.Control.Status = RunStatusCompleted
 		if err := checkpointState(); err != nil {
 			fail(err)
 			return terminal
 		}
+		// A Stop hook may refuse the final answer at the tool-use limit too;
+		// it gets the same bounded number of refusals as the in-loop path.
+		blocked, hookErr := r.stopHookRefuses(ctx, &state, assistant.Content)
+		if hookErr != nil {
+			fail(hookErr)
+			return terminal
+		}
+		if blocked && stopRetries < r.maxStopHookRetries() {
+			stopRetries++
+			// The hook's reason is now the newest instruction; the
+			// tool-use-limit notice is not repeated.
+			if !emit(RuntimeStopBlocked, map[string]any{"reason": lastUserMessage(state), "attempt": stopRetries}) {
+				return terminal
+			}
+			if err := checkpointState(); err != nil {
+				fail(err)
+				return terminal
+			}
+			continue
+		}
+		terminal = Terminal{Type: RuntimeRunDone, Data: map[string]any{"output": assistant.Content}}
+		emit(RuntimeRunDone, terminal.Data)
+		return terminal
 	}
-	var assistant MessageState
-	var usage model.Usage
-	var err error
-	if r.DurableCallModel != nil {
-		assistant, usage, err = r.DurableCallModel(ctx, &state, model.ToolChoiceNone)
-	} else {
-		assistant, usage, err = r.CallModel(ctx, state, model.ToolChoiceNone)
+}
+
+// lastUserMessage is the newest user instruction, which after a Stop-hook
+// refusal is the hook's reason. It is reported in the stop.blocked event so
+// the log shows why the agent is still working.
+func lastUserMessage(state RunState) string {
+	for index := len(state.Messages) - 1; index >= 0; index-- {
+		if state.Messages[index].Role == "user" {
+			return state.Messages[index].Content
+		}
 	}
+	return ""
+}
+
+// maxStopHookRetries is the configured refusal bound.
+func (r Runner) maxStopHookRetries() int {
+	if r.MaxStopHookRetries > 0 {
+		return r.MaxStopHookRetries
+	}
+	return 3
+}
+
+// stopHookRefuses asks the Stop hook whether the run may finish. A refusal
+// appends the hook's reason as a new instruction and puts the run back in
+// the model phase, so the agent keeps working instead of stopping.
+func (r Runner) stopHookRefuses(ctx context.Context, state *RunState, output string) (bool, error) {
+	if r.StopHook == nil {
+		return false, nil
+	}
+	decision, err := r.StopHook(ctx, state, output)
 	if err != nil {
-		fail(err)
-		return terminal
+		return false, err
 	}
-	if len(assistant.ToolCalls) > 0 {
-		fail(fmt.Errorf("final no-tool model turn returned tool calls"))
-		return terminal
+	if decision.AllowStop {
+		return false, nil
 	}
-	state.Messages = append(state.Messages, assistant)
-	ApplyUsage(&state, usage)
-	commitActiveAttempt(&state)
-	state.Phase = RunPhaseCompleted
-	state.Control.Status = RunStatusCompleted
-	if err := checkpointState(); err != nil {
-		fail(err)
-		return terminal
+	reason := strings.TrimSpace(decision.Reason)
+	if reason == "" {
+		reason = "a Stop hook refused to let the run finish but gave no reason"
 	}
-	terminal = Terminal{Type: RuntimeRunDone, Data: map[string]any{"output": assistant.Content}}
-	emit(RuntimeRunDone, terminal.Data)
-	return terminal
+	state.Messages = append(state.Messages, MessageState{Role: "user", Content: reason})
+	state.Phase = RunPhaseModel
+	state.Control.Status = RunStatusRunning
+	state.Tool.Pending = nil
+	return true, nil
 }
 
 func modelAttemptData(attempt *ModelAttempt) map[string]any {

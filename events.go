@@ -42,8 +42,10 @@ const (
 	EventEnvironmentUpdated EventType = "environment.updated"
 	EventTurnDiff           EventType = "turn.diff"
 	EventSessionTitle       EventType = "session.title"
-	EventDeliverables       EventType = "deliverables.presented"
-	EventToolsActivated     EventType = "tools.activated"
+	// EventHookCompleted reports a lifecycle hook's aggregate decision.
+	EventHookCompleted  EventType = "hook.completed"
+	EventDeliverables   EventType = "deliverables.presented"
+	EventToolsActivated EventType = "tools.activated"
 	// EventPlanApproved marks the end of plan mode: the plan was approved
 	// and the run switched to executing durably.
 	EventPlanApproved       EventType = "plan.approved"

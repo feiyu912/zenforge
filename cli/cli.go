@@ -1045,6 +1045,7 @@ func buildAgent(ctx context.Context, opts options, ioStreams IO) (*zenforge.Agen
 	}
 	return zenforge.New(zenforge.Config{
 		Model:              modelAdapter,
+		Hooks:              hookEngine,
 		Instructions:       opts.instructions,
 		PersonaPrefix:      opts.personaPrefix,
 		PersonaSuffix:      opts.personaSuffix,

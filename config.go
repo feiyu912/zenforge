@@ -8,6 +8,7 @@ import (
 	"github.com/feiyu912/zenforge/checkpoint"
 	"github.com/feiyu912/zenforge/compaction"
 	"github.com/feiyu912/zenforge/harness"
+	"github.com/feiyu912/zenforge/hooks"
 	"github.com/feiyu912/zenforge/instructions"
 	"github.com/feiyu912/zenforge/model"
 	"github.com/feiyu912/zenforge/modelretry"
@@ -54,9 +55,16 @@ type EventStore interface {
 
 // Config describes the default high-level ZenForge agent.
 type Config struct {
-	Model                 model.Model
-	Instructions          string
-	Skills                *skill.Bundle
+	Model        model.Model
+	Instructions string
+	Skills       *skill.Bundle
+	// Hooks runs user-configured commands at lifecycle points: SessionStart
+	// and UserPromptSubmit once at run start (their context is frozen into
+	// durable Meta), and Stop before the run finishes, where a refusal sends
+	// the agent back to work with the hook's reason as its next
+	// instruction. PreToolUse/PostToolUse are wired as tool middleware by
+	// the caller. Optional.
+	Hooks                 *hooks.Engine
 	Tools                 []tool.Tool
 	ToolInvoker           tool.Invoker
 	ToolRuntime           []tool.Middleware

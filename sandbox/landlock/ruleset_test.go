@@ -110,6 +110,48 @@ func TestBuildRestrictedPolicyGrantsOnlyTheReadRoots(t *testing.T) {
 	}
 }
 
+func TestFileAccessExcludesDirectoryRights(t *testing.T) {
+	// The kernel rejects a file rule that carries directory rights, so the
+	// file mask must never contain them.
+	for _, abi := range []int{1, 2, 3, 4, 5, 99} {
+		access := FileAccessAt(abi)
+		if access&(AccessReadDir|AccessRemoveDir|AccessRemoveFile|AccessMakeChar|AccessMakeDir|AccessMakeReg|AccessMakeSock|AccessMakeFifo|AccessMakeBlock|AccessMakeSym|AccessRefer) != 0 {
+			t.Fatalf("FileAccessAt(%d) = %d carries directory rights", abi, access)
+		}
+		if access&(AccessReadFile|AccessWriteFile|AccessExecute) == 0 {
+			t.Fatalf("FileAccessAt(%d) = %d is missing the basic file rights", abi, access)
+		}
+	}
+	if FileAccessAt(2)&AccessTruncate != 0 || FileAccessAt(3)&AccessTruncate == 0 {
+		t.Fatal("truncate must follow ABI 3")
+	}
+	if FileAccessAt(4)&AccessIoctlDev != 0 || FileAccessAt(5)&AccessIoctlDev == 0 {
+		t.Fatal("ioctl-dev must follow ABI 5")
+	}
+}
+
+func TestBuildGrantsTheSafeDeviceByDefault(t *testing.T) {
+	// A plan that did not ask for /dev/null still gets it, because a sandbox
+	// that cannot write there breaks `cmd >/dev/null`.
+	root := t.TempDir()
+	ruleset, err := Build(Policy{WritableRoots: []string{root}, FullDiskRead: true}, 5)
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+	found := false
+	for _, rule := range ruleset.Rules {
+		if rule.Path == DefaultDevicePath {
+			found = true
+			if rule.Access != FileAccessAt(5) {
+				t.Fatalf("/dev/null access = %d, want the file mask", rule.Access)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("the default device was not granted: %#v", ruleset.Rules)
+	}
+}
+
 func TestBuildGrantsReadWritePathsAndDevices(t *testing.T) {
 	root := t.TempDir()
 	ruleset, err := Build(Policy{WritableRoots: []string{root}, ReadWritePaths: []string{"/dev/null"}, FullDiskRead: true}, 5)
@@ -118,7 +160,7 @@ func TestBuildGrantsReadWritePathsAndDevices(t *testing.T) {
 	}
 	found := false
 	for _, rule := range ruleset.Rules {
-		if rule.Path == "/dev/null" && rule.Access == AllAccessAt(5) {
+		if rule.Path == "/dev/null" && rule.Access == FileAccessAt(5) {
 			found = true
 		}
 	}

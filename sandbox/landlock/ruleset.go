@@ -14,6 +14,7 @@ package landlock
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -82,6 +83,23 @@ const ReadAccess = AccessExecute | AccessReadFile | AccessReadDir
 const WriteAccess = AccessWriteFile | AccessRemoveDir | AccessRemoveFile |
 	AccessMakeChar | AccessMakeDir | AccessMakeReg | AccessMakeSock |
 	AccessMakeFifo | AccessMakeBlock | AccessMakeSym
+
+// FileAccessAt returns the rights that may be granted on a non-directory
+// path. The kernel rejects a path-beneath rule on a file that also carries
+// directory rights (landlock_add_rule returns EINVAL), so a rule for a
+// device node or a single file must be masked down to these bits; passing
+// the full directory set would fail the whole ruleset and leave the command
+// unsandboxed or unable to start.
+func FileAccessAt(abi int) Access {
+	access := AccessExecute | AccessReadFile | AccessWriteFile
+	if abi >= 3 {
+		access |= AccessTruncate
+	}
+	if abi >= 5 {
+		access |= AccessIoctlDev
+	}
+	return access
+}
 
 // AllAccessAt returns every right the kernel supports at abi. An ABI above
 // MaxSupportedABI is treated as MaxSupportedABI, which is the safe
@@ -155,6 +173,12 @@ type Policy struct {
 	ReadWritePaths []string
 }
 
+// DefaultDevicePath is granted read-write by every landlock plan. The
+// reference does the same: a sandbox that denies writing to /dev/null
+// breaks every command that discards output (`cmd >/dev/null`), which is
+// most of them.
+const DefaultDevicePath = "/dev/null"
+
 // ErrUnsupportedCarveOut reports a policy Landlock cannot express.
 type ErrUnsupportedCarveOut struct {
 	Feature string
@@ -216,15 +240,46 @@ func Build(policy Policy, abi int) (Ruleset, error) {
 		}
 	}
 	// Individual files that need write access (a device node such as
-	// /dev/null) are granted the full write set.
-	for _, path := range readWrite {
-		ruleset.Rules = append(ruleset.Rules, Rule{Path: path, Access: full})
+	// /dev/null) are granted the write set that applies to files. The safe
+	// device is granted even when the caller did not ask for it, because a
+	// sandbox that cannot write to /dev/null breaks ordinary shell use.
+	fileAccess := FileAccessAt(known)
+	devices := readWrite
+	if !containsPath(devices, DefaultDevicePath) {
+		if _, err := os.Stat(DefaultDevicePath); err == nil {
+			devices = append(devices, DefaultDevicePath)
+			sort.Strings(devices)
+		}
+	}
+	for _, path := range devices {
+		ruleset.Rules = append(ruleset.Rules, Rule{Path: path, Access: accessForPath(path, full, fileAccess)})
 	}
 	for _, root := range writable {
-		ruleset.Rules = append(ruleset.Rules, Rule{Path: root, Access: full})
+		ruleset.Rules = append(ruleset.Rules, Rule{Path: root, Access: accessForPath(root, full, fileAccess)})
 		ruleset.WritableRoots = append(ruleset.WritableRoots, root)
 	}
 	return ruleset, nil
+}
+
+// accessForPath picks the mask the kernel accepts for a path: a
+// non-directory may only carry the file rights, while a directory takes the
+// full set.
+func accessForPath(path string, directory, file Access) Access {
+	info, err := os.Stat(path)
+	if err == nil && !info.IsDir() {
+		return file
+	}
+	return directory
+}
+
+// containsPath reports whether a path list already names path.
+func containsPath(paths []string, path string) bool {
+	for _, candidate := range paths {
+		if candidate == path {
+			return true
+		}
+	}
+	return false
 }
 
 // normalizePaths validates, canonicalizes, deduplicates, and sorts a path

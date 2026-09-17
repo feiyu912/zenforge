@@ -3,12 +3,15 @@ package linuxsandbox
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -444,12 +447,61 @@ func TestLinuxSandboxActuallyConfines(t *testing.T) {
 		t.Fatalf("write outside the writable root succeeded: %s", output)
 	}
 	// The network is denied by seccomp even though Landlock grants read
-	// access to the whole filesystem.
-	output, err := run("exec 3<>/dev/tcp/127.0.0.1/1 2>&1; echo status=$?").CombinedOutput()
-	if err != nil {
+	// access to the whole filesystem. The attempt runs in this test binary,
+	// not in a shell: `/dev/tcp` is a bash extension and dash (the /bin/sh
+	// on Debian-family hosts) fails the redirection before any syscall, so
+	// a shell-based check can pass without exercising the filter at all.
+	if output, err := runLinuxSandboxSocketAttempt(t, run); err != nil {
 		t.Fatalf("the helper failed: %v (%s)", err, output)
+	} else if !strings.Contains(string(output), "ip-socket=denied") {
+		t.Fatalf("a socket was not denied under the sandbox: %s", output)
 	}
-	if strings.Contains(string(output), "status=0") {
-		t.Fatalf("a socket succeeded under the sandbox: %s", output)
+}
+
+// linuxSandboxSocketAttemptEnv marks the re-exec'ed process that makes the
+// socket call with the sandbox installed.
+const linuxSandboxSocketAttemptEnv = "ZENFORGE_LINUXSANDBOX_TEST_SOCKET_ATTEMPT"
+
+// TestLinuxSandboxSocketAttemptProcess makes the socket call under the
+// sandbox applied by TestLinuxSandboxHelperProcess.
+func TestLinuxSandboxSocketAttemptProcess(t *testing.T) {
+	if os.Getenv(linuxSandboxSocketAttemptEnv) == "" {
+		t.Skip("child process for TestLinuxSandboxActuallyConfines")
 	}
+	fmt.Println(socketAttemptVerdict())
+}
+
+// socketAttemptVerdict reports what the kernel did with an IP socket.
+func socketAttemptVerdict() string {
+	connection, err := net.Dial("tcp", "127.0.0.1:1")
+	if connection != nil {
+		_ = connection.Close()
+	}
+	switch {
+	case err == nil:
+		return "ip-socket=allowed"
+	case errors.Is(err, syscall.EPERM), strings.Contains(err.Error(), "operation not permitted"):
+		return "ip-socket=denied"
+	default:
+		return "ip-socket=error:" + err.Error()
+	}
+}
+
+// shellQuote quotes a path for /bin/sh.
+func shellQuote(path string) string {
+	return "'" + strings.ReplaceAll(path, "'", `'\''`) + "'"
+}
+
+// runLinuxSandboxSocketAttempt re-execs the helper so the socket attempt
+// happens with Landlock and seccomp both installed.
+func runLinuxSandboxSocketAttempt(t *testing.T, run func(string) *exec.Cmd) ([]byte, error) {
+	t.Helper()
+	// The helper's target is ")the test binary in socket-attempt mode": the
+	// helper applies the layers and execs the target, so naming the child
+	// through the environment keeps the layering identical to a real run.
+	// The helper's command line is interpreted by /bin/sh, so the path is
+	// quoted: a test binary under a path with spaces must still work.
+	cmd := run(shellQuote(os.Args[0]) + " -test.run=TestLinuxSandboxSocketAttemptProcess")
+	cmd.Env = append(cmd.Env, linuxSandboxSocketAttemptEnv+"=1")
+	return cmd.CombinedOutput()
 }
