@@ -47,3 +47,4 @@ later ADRs supersede earlier ones, never edit.
 | [0031](0031-headless-exec-protocol.md) | Headless exec protocol (`--json`, `--output-schema`) |
 | [0032](0032-layered-configuration-and-redaction.md) | Layered configuration, managed requirements, and redacted secrets |
 | [0033](0033-apply-patch-envelope-tool.md) | The `apply_patch` envelope tool |
+| [0034](0034-web-tools-and-ssrf-defense.md) | Web tools and the SSRF-safe fetch transport |

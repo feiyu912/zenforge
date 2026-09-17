@@ -11,6 +11,7 @@ import (
 	"github.com/feiyu912/zenforge/configlayer"
 	"github.com/feiyu912/zenforge/modelretry"
 	"github.com/feiyu912/zenforge/redact"
+	webtools "github.com/feiyu912/zenforge/tools/web"
 )
 
 type configFile struct {
@@ -19,6 +20,7 @@ type configFile struct {
 	Workspace  workspaceConfig  `json:"workspace"`
 	Shell      shellConfig      `json:"shell"`
 	Approval   approvalConfig   `json:"approval"`
+	Web        webConfig        `json:"web"`
 	Checkpoint checkpointConfig `json:"checkpoint"`
 }
 
@@ -90,6 +92,23 @@ type shellConfig struct {
 	MaxOutputBytes int64    `json:"maxOutputBytes,omitempty"`
 }
 
+// webConfig configures the web_search and web_fetch tools, mirroring the
+// reference web provider configuration. Both tools stay unregistered
+// until `enabled` is true (or a search endpoint is set), so a deployment
+// opts into network access explicitly; the fetch transport additionally
+// refuses non-public addresses unless `allowPrivate` is set.
+type webConfig struct {
+	Enabled         *bool         `json:"enabled,omitempty"`
+	SearchEndpoint  string        `json:"searchEndpoint,omitempty"`
+	SearchAPIKey    redact.String `json:"searchApiKey,omitempty"`
+	SearchAPIKeyEnv string        `json:"searchApiKeyEnv,omitempty"`
+	MaxResults      int           `json:"maxResults,omitempty"`
+	MaxQueries      int           `json:"maxQueries,omitempty"`
+	MaxBodyChars    int           `json:"maxBodyChars,omitempty"`
+	AllowPrivate    bool          `json:"allowPrivate,omitempty"`
+	RequireApproval bool          `json:"requireApproval,omitempty"`
+}
+
 type approvalConfig struct {
 	Mode string `json:"mode,omitempty"`
 }
@@ -99,8 +118,13 @@ type checkpointConfig struct {
 	Path string `json:"path,omitempty"`
 }
 
+// defaultWebMaxBodyChars is the default model-visible page cap, matching
+// the reference fetch provider.
+const defaultWebMaxBodyChars = 100_000
+
 func defaultConfigFile() configFile {
 	enabled := true
+	disabled := false
 	defaults := defaultOptions()
 	retryEnabled := true
 	maxRetries := modelretry.DefaultMaxRetries
@@ -148,6 +172,12 @@ func defaultConfigFile() configFile {
 			Type: defaults.checkpointType,
 			Path: defaults.checkpointDir,
 		},
+		Web: webConfig{
+			Enabled:      &disabled,
+			MaxResults:   webtools.DefaultMaxResults,
+			MaxQueries:   webtools.DefaultMaxQueries,
+			MaxBodyChars: defaultWebMaxBodyChars,
+		},
 	}
 }
 
@@ -191,6 +221,9 @@ func applyConfig(opts *options, config configFile) error {
 		opts.contextWindow = config.Model.ContextWindow
 	}
 	if err := applyRetryConfig(opts, config.Model.Retry); err != nil {
+		return err
+	}
+	if err := applyWebConfig(opts, config.Web); err != nil {
 		return err
 	}
 	if config.Agent.Instructions != "" {
@@ -314,6 +347,38 @@ func applyConfig(opts *options, config configFile) error {
 	if config.Checkpoint.Path != "" {
 		opts.checkpointDir = config.Checkpoint.Path
 	}
+	return nil
+}
+
+// applyWebConfig maps the web section onto CLI options.
+func applyWebConfig(opts *options, config webConfig) error {
+	if config.Enabled != nil {
+		opts.webEnabled = *config.Enabled
+	}
+	if config.SearchEndpoint != "" {
+		opts.webEnabled = true
+		opts.webSearchEndpoint = config.SearchEndpoint
+	}
+	if !config.SearchAPIKey.IsZero() {
+		opts.webSearchAPIKey = config.SearchAPIKey.Reveal()
+	}
+	if config.SearchAPIKeyEnv != "" {
+		opts.webSearchAPIKeyEnv = config.SearchAPIKeyEnv
+	}
+	if config.MaxResults < 0 || config.MaxQueries < 0 || config.MaxBodyChars < 0 {
+		return fmt.Errorf("web limits must be non-negative")
+	}
+	if config.MaxResults > 0 {
+		opts.webMaxResults = config.MaxResults
+	}
+	if config.MaxQueries > 0 {
+		opts.webMaxQueries = config.MaxQueries
+	}
+	if config.MaxBodyChars > 0 {
+		opts.webMaxBodyChars = config.MaxBodyChars
+	}
+	opts.webAllowPrivate = config.AllowPrivate
+	opts.webRequireApproval = config.RequireApproval
 	return nil
 }
 

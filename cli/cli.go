@@ -36,7 +36,9 @@ import (
 	"github.com/feiyu912/zenforge/tools/present"
 	shelltool "github.com/feiyu912/zenforge/tools/shell"
 	"github.com/feiyu912/zenforge/tools/toolsearch"
+	webtools "github.com/feiyu912/zenforge/tools/web"
 	workspacetools "github.com/feiyu912/zenforge/tools/workspace"
+	"github.com/feiyu912/zenforge/web"
 	workspacelocal "github.com/feiyu912/zenforge/workspace/local"
 )
 
@@ -525,6 +527,16 @@ type options struct {
 	shellAllow          multiFlag
 	shellWorkingDir     string
 
+	webEnabled         bool
+	webSearchEndpoint  string
+	webSearchAPIKey    string
+	webSearchAPIKeyEnv string
+	webMaxResults      int
+	webMaxQueries      int
+	webMaxBodyChars    int
+	webAllowPrivate    bool
+	webRequireApproval bool
+
 	environmentContext      bool
 	instructionsEnabled     bool
 	instructionsGlobalPath  string
@@ -580,6 +592,12 @@ func bindOptions(fs *flag.FlagSet, opts *options) {
 	_ = fs.String("requirements", "", "managed requirements file: `allowed` sets reject values, `enforce` overwrites them")
 	_ = fs.Bool("strict-config", false, "reject config fields this version does not recognize")
 	_ = fs.Bool("ignore-user-config", false, "skip the system and user configuration layers")
+	fs.BoolVar(&opts.webEnabled, "web", opts.webEnabled, "enable the web_fetch and web_search tools")
+	fs.StringVar(&opts.webSearchEndpoint, "web-search-endpoint", opts.webSearchEndpoint, "JSON search API endpoint for web_search (enables the web tools)")
+	fs.StringVar(&opts.webSearchAPIKey, "web-search-api-key", opts.webSearchAPIKey, "inline search API key; prefer --web-search-api-key-env")
+	fs.StringVar(&opts.webSearchAPIKeyEnv, "web-search-api-key-env", opts.webSearchAPIKeyEnv, "environment variable containing the search API key")
+	fs.IntVar(&opts.webMaxResults, "web-max-results", opts.webMaxResults, "maximum sources returned by web_search (default 8)")
+	fs.BoolVar(&opts.webAllowPrivate, "web-allow-private", opts.webAllowPrivate, "allow web_fetch to reach loopback and private addresses (dangerous; local development only)")
 	fs.StringVar(&opts.baseURL, "base-url", opts.baseURL, "OpenAI-compatible base URL")
 	fs.IntVar(&opts.contextWindow, "context-window", opts.contextWindow, "model context window in tokens; enables pressure compaction when positive")
 	fs.StringVar(&opts.checkpointType, "checkpoint-type", opts.checkpointType, "event/checkpoint store type: jsonl|sqlite")
@@ -657,6 +675,13 @@ func buildAgent(ctx context.Context, opts options, ioStreams IO) (*zenforge.Agen
 	}
 	tools := append([]tool.Tool(nil), workspaceTools...)
 	tools = append(tools, patchTool)
+	if opts.webEnabled {
+		webTools, err := buildWebTools(opts)
+		if err != nil {
+			return nil, err
+		}
+		tools = append(tools, webTools...)
+	}
 	if !opts.noShell {
 		shell, err := shelltool.New(shelltool.Config{Policy: policy.ShellPolicy{
 			WorkingDir:      opts.shellWorkingDir,
@@ -855,6 +880,53 @@ func validateCheckpointType(value string) error {
 	default:
 		return fmt.Errorf("unknown checkpoint type: %s", value)
 	}
+}
+
+// buildWebTools assembles the web_search and web_fetch tools. A search
+// endpoint is optional: without one only web_fetch is registered, and
+// without web.enabled neither is.
+func buildWebTools(opts options) ([]tool.Tool, error) {
+	fetchPolicy := web.Policy{
+		MaxBodyChars: opts.webMaxBodyChars,
+		AllowPrivate: opts.webAllowPrivate,
+	}
+	fetchTool, err := webtools.Fetch(webtools.FetchConfig{
+		Policy:          fetchPolicy,
+		MaxBodyChars:    opts.webMaxBodyChars,
+		RequireApproval: opts.webRequireApproval,
+	})
+	if err != nil {
+		return nil, err
+	}
+	built := []tool.Tool{fetchTool}
+	if strings.TrimSpace(opts.webSearchEndpoint) != "" {
+		searcher := &webtools.HTTPSearcher{
+			Endpoint: opts.webSearchEndpoint,
+			APIKey:   webSearchKey(opts),
+		}
+		searchTool, err := webtools.Search(webtools.SearchConfig{
+			Searcher:        searcher,
+			MaxResults:      opts.webMaxResults,
+			MaxQueries:      opts.webMaxQueries,
+			RequireApproval: opts.webRequireApproval,
+		})
+		if err != nil {
+			return nil, err
+		}
+		built = append([]tool.Tool{searchTool}, built...)
+	}
+	return built, nil
+}
+
+// webSearchKey resolves the search API key, preferring the environment
+// variable so the secret need not live in the config file.
+func webSearchKey(opts options) string {
+	if opts.webSearchAPIKeyEnv != "" {
+		if value := os.Getenv(opts.webSearchAPIKeyEnv); value != "" {
+			return value
+		}
+	}
+	return opts.webSearchAPIKey
 }
 
 func workspaceFilePolicy(opts options) policy.FilePolicy {

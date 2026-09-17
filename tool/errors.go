@@ -17,6 +17,9 @@ var (
 	TimeoutCode       = "TOOL_TIMEOUT"
 	ErrBudgetExceeded = errors.New("tool budget exceeded")
 	ErrOutputTooLarge = errors.New("tool output too large")
+	// ErrToolFailed wraps a tool's own failure that is neither an
+	// argument error nor a policy denial (for example a network error).
+	ErrToolFailed = errors.New("tool failed")
 )
 
 type retryableError struct {

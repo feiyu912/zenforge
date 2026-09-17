@@ -21,7 +21,10 @@ The default tool set is `workspace_read`, `workspace_list`, `workspace_glob`,
 `workspace_grep`, `workspace_write`, `workspace_edit`, `apply_patch` (codex
 envelope: add, update, move, delete in one call), `shell` (unless `--no-shell`),
 `todo` tools, `ask_user`, `get_context_remaining`, and `present`. `tool_search`
-is added only when at least one configured tool defers its definition.
+is added only when at least one configured tool defers its definition, and
+`web_search`/`web_fetch` only when `web.enabled` is true or
+`web.searchEndpoint` is set (a search endpoint also registers
+`web_search`).
 
 ## Configuration layers
 

@@ -58,6 +58,12 @@ zenforge runs --config zenforge.json
   "approval": {
     "mode": "prompt"
   },
+  "web": {
+    "enabled": false,
+    "maxResults": 8,
+    "maxQueries": 4,
+    "maxBodyChars": 100000
+  },
   "checkpoint": {
     "type": "jsonl",
     "path": ".zenforge/runs"
@@ -277,6 +283,45 @@ when present) applies a managed constraints document after every other layer:
 Because a dotted path is used, `shell.enabled` addresses
 `{"shell": {"enabled": ...}}`. An explicitly passed `--requirements` file must
 exist; the host-wide default path is optional.
+
+### Web tools
+
+`web_search` and `web_fetch` stay unregistered unless the deployment opts
+in. Setting `web.enabled` to `true` registers `web_fetch`; setting
+`web.searchEndpoint` registers `web_search` as well (and implies
+`enabled`).
+
+```json
+{
+  "web": {
+    "enabled": true,
+    "searchEndpoint": "https://api.search.example/search?q={query}&count={limit}",
+    "searchApiKeyEnv": "SEARCH_API_KEY",
+    "maxResults": 8,
+    "maxQueries": 4,
+    "maxBodyChars": 100000,
+    "requireApproval": false
+  }
+}
+```
+
+`searchEndpoint` may contain `{query}` and `{limit}` placeholders; without
+them the query is appended as `q` and `count`. The response may be a
+generic `{"results": [{"title", "url", "description"}]}` object or Brave's
+`{"web": {"results": [...]}}` shape. `searchApiKey` is an inline secret
+with the same redaction as `model.apiKey`; `searchApiKeyEnv` is preferred.
+The remaining keys bound the tool: `maxResults` caps returned sources
+(default 8), `maxQueries` caps queries per call (default 4), and
+`maxBodyChars` caps the rendered page text (default 100000).
+
+`web_fetch` refuses to connect to a non-public address: the hostname is
+resolved once, every answer must be public unicast, and the connection is
+pinned to the validated addresses so a second resolution cannot reach a
+private service. Redirects are followed only within the same origin, up to
+five hops. `web.allowPrivate` disables that requirement for local
+development — it makes loopback, link-local, and private ranges reachable
+and should not be enabled in a shared deployment. `web.requireApproval`
+routes every search and fetch through the approval broker.
 
 ### Secrets
 
