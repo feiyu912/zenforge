@@ -62,8 +62,7 @@ const (
 
 // AFUnix is the socket domain the reference keeps available: Unix sockets
 // are used for subprocess management (language servers, `cargo clippy`) over
-// socketpair(2), and
-// do not reach the network.
+// socketpair(2), and socketpair(2) cannot reach the network.
 const AFUnix = 1
 
 // Arch is a Linux architecture with its audit value and syscall numbers.
