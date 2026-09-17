@@ -13,7 +13,10 @@ import (
 
 // TestMCPServerToolsAreReadOnly pins the deliberate shape of the exposed set:
 // a tool call arrives from another process with no approval prompt in front of
-// it, so every tool served this way must be one that cannot change anything.
+// it, so every tool served without an operator grant must be one that cannot
+// change anything. `--allow-run` is the grant, and the run tool it adds is
+// deliberately not read-only (see TestMCPRunToolIsNotReadOnlyAndRequiresAPrompt)
+// so a conforming client asks its own operator before calling it.
 func TestMCPServerToolsAreReadOnly(t *testing.T) {
 	tools, err := mcpServerTools(context.Background(), "jsonl", t.TempDir())
 	if err != nil {

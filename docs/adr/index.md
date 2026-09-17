@@ -69,3 +69,4 @@ later ADRs supersede earlier ones, never edit.
 | [0053](0053-mcp-server-mode-and-stdio-framing.md) | An MCP server, and the stdio framing the spec actually uses |
 | [0054](0054-configured-mcp-servers-and-approval.md) | Configured MCP servers, gated by what the server declares |
 | [0055](0055-mcp-stdio-dispatch-by-id.md) | The stdio client dispatches by id, so a deadline is real |
+| [0056](0056-run-starting-mcp-tool-and-served-run-approval.md) | A run-starting MCP tool is gated three times, and a served run never prompts |

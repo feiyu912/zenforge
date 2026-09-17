@@ -71,6 +71,20 @@ approval is scoped to, so a broad grant cannot be replayed for a different
 payload). `ServerOptions.SkipApproval` exists for a caller that has already
 made the trust decision outside this package.
 
+## Serving ZenForge
+
+The same package serves the other direction: `mcp.NewServer` (any reader/writer
+pair, plus `Handle` for one raw message) and `zenforge mcp-server` over stdio.
+A remote caller can list recorded runs and ask for the version; starting a run
+requires the operator's `--allow-run` grant, because the client's approval
+protects the client's human and not the machine the server runs on. Once
+granted, `zenforge_run` starts a run in the server's configured workspace and
+returns its final text, its run id, and its status, and the served run's own
+tool calls follow the server's `--approve` mode — with `prompt` downgraded to a
+refusal, because a stdio server has no keyboard and the interactive broker
+would read the protocol stream. Refused calls are reported with the run's
+outcome. See the [CLI Design](cli-design.md) for the full policy.
+
 ## Result Mapping
 
 MCP text content is joined into `tool.Result.Output`.

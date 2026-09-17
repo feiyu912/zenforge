@@ -1,0 +1,217 @@
+package cli
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/feiyu912/zenforge"
+	"github.com/feiyu912/zenforge/adapters/mcp"
+	"github.com/feiyu912/zenforge/approval"
+)
+
+// defaultMCPRunTimeout bounds one served run. A run holds the connection it
+// was asked for until it finishes (the server answers requests in order), so
+// an unbounded one could hold it for the life of the process.
+const defaultMCPRunTimeout = 15 * time.Minute
+
+// mcpRunToolName is the model-visible name of the run-starting tool.
+const mcpRunToolName = "zenforge_run"
+
+// newMCPRunTool builds the tool that starts a run for a remote caller.
+//
+// The agent is built here, before the protocol is served, for the same reason
+// `zenforge run` builds it before the first model call: a configuration that
+// cannot produce an agent must fail the command rather than the first
+// request. The run itself is configured entirely by the operator's flags --
+// workspace, tool set, sandbox, approval mode -- so the remote caller chooses
+// only the task.
+func newMCPRunTool(ctx context.Context, opts *options, ioStreams IO, timeout time.Duration) (mcp.ServerTool, error) {
+	served := *opts
+	refusals := &runApprovalRecorder{}
+	if served.approve != "always" {
+		// A served run has no operator at a keyboard, and the interactive
+		// broker reads the same streams the protocol is spoken on: answering
+		// a prompt would consume the next request. `prompt` is therefore
+		// downgraded to a refusal rather than left to corrupt the stream,
+		// and the refusal names what the operator has to change.
+		reason := "this MCP server serves runs without an operator, so it cannot prompt for approval; start it with --approve always to allow tools that need one"
+		if served.approve == "never" {
+			reason = "approval disabled"
+		}
+		refusals.reason = reason
+		served.approvalOverride = refusals
+	}
+	agent, err := buildAgent(ctx, &served, ioStreams)
+	if err != nil {
+		return mcp.ServerTool{}, err
+	}
+	// The command drains what buildAgent opened; the served copy's closers
+	// belong to the same command, so they are adopted here or they leak.
+	opts.closers = append(opts.closers, served.closers...)
+
+	// `Serve` answers one message at a time, so this slot is idle on the stdio
+	// path. `Handle` is exported, though, and a host that drives it from
+	// several goroutines must not overlap two runs on one agent: the slot
+	// serializes them, and a caller whose own deadline is shorter than the
+	// wait hears that the server was busy instead of being queued silently.
+	runSlot := make(chan struct{}, 1)
+
+	return mcp.ServerTool{
+		Name: mcpRunToolName,
+		// The description states the policy, because the caller's model is
+		// the one that decides whether to call this at all.
+		Description: "Start a ZenForge run in the workspace this MCP server was configured with and return the run's final answer. The server operator must have enabled it with --allow-run. Only the task is chosen here: the workspace, tools, sandbox, and approval mode come from how the server was started.",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"prompt": map[string]any{
+					"type":        "string",
+					"description": "The task for the run. It becomes the run's input message.",
+				},
+			},
+			"required": []string{"prompt"},
+		},
+		// Not read-only, and deliberately without a read-only hint: starting
+		// a run can change files, so a conforming MCP client has to ask its
+		// own operator before calling this. That is the client-side half of
+		// the approval path; --allow-run is the server-side half.
+		ReadOnly: false,
+		Handler: func(ctx context.Context, arguments json.RawMessage) (mcp.CallResult, error) {
+			select {
+			case runSlot <- struct{}{}:
+				defer func() { <-runSlot }()
+			case <-ctx.Done():
+				return mcp.CallResult{}, fmt.Errorf("another served run is in progress and this call was cancelled while waiting: %w", ctx.Err())
+			}
+			return serveMCPRun(ctx, agent, refusals, timeout, arguments)
+		},
+	}, nil
+}
+
+// serveMCPRun runs one task and projects the outcome onto an MCP result.
+//
+// A tool call that the served run refused for lack of an approver is reported
+// as part of the outcome, not as a failed call: the run finished, and its
+// answer already reflects the refusal. A run that errored, timed out, or was
+// cancelled is an `isError` result, and it still carries the run id so the
+// caller can inspect what happened in the durable log.
+func serveMCPRun(ctx context.Context, agent *zenforge.Agent, refusals *runApprovalRecorder, timeout time.Duration, arguments json.RawMessage) (mcp.CallResult, error) {
+	var input struct {
+		Prompt string `json:"prompt"`
+	}
+	if len(arguments) > 0 {
+		if err := json.Unmarshal(arguments, &input); err != nil {
+			return mcp.CallResult{}, fmt.Errorf("invalid arguments: %w", err)
+		}
+	}
+	prompt := strings.TrimSpace(input.Prompt)
+	if prompt == "" {
+		return mcp.CallResult{}, errors.New("prompt is required")
+	}
+	runCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	refusals.reset()
+
+	result, runErr := agent.Run(runCtx, zenforge.Task{Input: prompt})
+	refused := refusals.refused()
+	if result == nil {
+		result = &zenforge.Result{}
+	}
+	status := "completed"
+	text := result.Output
+	if runErr != nil {
+		switch {
+		case errors.Is(runErr, approval.ErrRequired):
+			status = "awaiting-approval"
+			text = "the served run stopped while an approval request was open, which this server cannot answer"
+		case errors.Is(runErr, context.DeadlineExceeded):
+			status = "timeout"
+			text = fmt.Sprintf("the served run was cancelled after %s", timeout)
+		case errors.Is(runErr, context.Canceled):
+			status = "cancelled"
+			text = "the served run was cancelled"
+		default:
+			status = "failed"
+			text = runErr.Error()
+		}
+		if result.RunID != "" {
+			text = fmt.Sprintf("run %s %s: %s", result.RunID, status, text)
+		}
+	}
+	if len(refused) > 0 && runErr == nil {
+		// The caller is told what was refused and what would change it: the
+		// refusal is a property of how this server was started, and the
+		// remote agent may be able to ask its operator to change that.
+		text = strings.TrimSpace(text) + fmt.Sprintf(
+			"\n\n%d tool call(s) were refused because this server cannot ask a human to approve them: %s (%s)",
+			len(refused), strings.Join(refused, ", "), refusals.reason,
+		)
+	}
+	structured := map[string]any{
+		"runId":  result.RunID,
+		"output": result.Output,
+		"status": status,
+	}
+	if len(refused) > 0 {
+		structured["refusedToolCalls"] = refused
+	}
+	return mcp.CallResult{
+		Content:           []mcp.Content{{Type: "text", Text: text}},
+		StructuredContent: structured,
+		// A failed run is a tool failure, and the structured outcome is kept
+		// with it: the caller can still report which run it was and why it
+		// ended. The server only synthesizes the error text when a handler
+		// returns an error, so the flag is set here rather than delegated.
+		IsError: runErr != nil,
+	}, nil
+}
+
+// runApprovalRecorder is the broker installed for a served run. It records
+// which tool calls asked for approval and refuses them: the point is not the
+// refusal (there is nothing else it could do) but telling the remote caller
+// which part of its task the server declined to perform.
+type runApprovalRecorder struct {
+	reason string
+
+	mu           sync.Mutex
+	refusedNames map[string]struct{}
+}
+
+func (b *runApprovalRecorder) Request(ctx context.Context, req approval.Request) (approval.Decision, error) {
+	name := strings.TrimSpace(req.ToolName)
+	if name == "" {
+		name = strings.TrimSpace(req.Operation)
+	}
+	if name != "" {
+		b.mu.Lock()
+		if b.refusedNames == nil {
+			b.refusedNames = map[string]struct{}{}
+		}
+		b.refusedNames[name] = struct{}{}
+		b.mu.Unlock()
+	}
+	return approval.AlwaysDeny(b.reason).Request(ctx, req)
+}
+
+func (b *runApprovalRecorder) reset() {
+	b.mu.Lock()
+	b.refusedNames = nil
+	b.mu.Unlock()
+}
+
+func (b *runApprovalRecorder) refused() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	names := make([]string, 0, len(b.refusedNames))
+	for name := range b.refusedNames {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}

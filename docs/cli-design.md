@@ -17,11 +17,40 @@ is never answered. Stdio messages are newline-delimited JSON as the spec
 requires, and the reader also tolerates `Content-Length` headers so an
 out-of-spec peer is not turned into a connection failure.
 
-`zenforge mcp-server` serves ZenForge itself over stdio. It exposes
-`zenforge_runs` (the recorded runs, newest first) and `zenforge_version`, both
-declared read-only: a remote call has no operator in front of it, so the
-server offers only what cannot change anything until the approval path is
-wired for a run-starting tool.
+`zenforge mcp-server` serves ZenForge itself over stdio. Without a grant it
+exposes `zenforge_runs` (the recorded runs, newest first) and
+`zenforge_version`, both declared read-only: a remote call has no operator in
+front of it, so the server offers only what cannot change anything.
+
+`--allow-run` adds `zenforge_run`, which starts a run in the workspace the
+server was configured with and answers with the run's final text, its id, and
+its status. Three things gate it, and they cover different operators:
+
+- the tool is advertised without a read-only hint, so a conforming MCP client
+  asks *its* operator before calling it (an absent hint asks);
+- it does not exist at all without `--allow-run`, which is the grant from
+  *this* machine's operator, because the client's approval protects the
+  client's human and not this host;
+- inside the served run, approval-required tools follow the server's
+  `--approve` mode. `always` allows them; `prompt` cannot be honored (there is
+  no keyboard on a stdio server, and the interactive broker reads the same
+  streams the protocol is spoken on), so it is downgraded to a refusal that
+  names what to change, and `never` refuses them by choice.
+
+So `--allow-run` alone grants a run that can read and write the configured
+workspace but cannot run arbitrary shell commands (`shell` needs approval) and
+cannot write outside the workspace roots, while `--approve always` adds those.
+A served run is configured entirely by the operator's flags — workspace, tool
+set, sandbox, hooks, checkpoint store — and the remote caller chooses only the
+prompt. Refused tool calls are reported as part of the outcome, not as a
+failed call: the run finished and its answer already accounts for the refusal.
+`--run-timeout` (default 15 minutes) bounds one run, because a run holds the
+connection until it answers; a run that outlives its caller's own tool-call
+budget is still recorded durably, so the caller can read it back with
+`zenforge_runs` and the `events` subcommand.
+
+A run that fails, times out, or is cancelled comes back as an `isError` result
+that still carries the run id.
 
 Remote tools are namespaced as `mcp__<server>__<tool>` so two servers can both
 offer `read_file` without one shadowing the other; the namespace is what the

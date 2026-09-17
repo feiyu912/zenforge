@@ -128,7 +128,13 @@ func (s *Store) Save(ctx context.Context, cp checkpoint.Checkpoint) error {
 	if err := atomicWriteFile(runDir, pendingFileName, append(txnData, '\n')); err != nil {
 		return err
 	}
-	return s.finishPending(ctx, runDir, txn, encoded)
+	// The pending record is durable: from here the save either completes or is
+	// completed by the next recovery, so a context that expires inside this
+	// window must not be reported as a failure. Reporting it would tell the
+	// caller the checkpoint was not written while the store (after recovery)
+	// has it, and a caller that keeps its own sequence counter would then
+	// collide with a checkpoint that is already there.
+	return s.finishPending(context.WithoutCancel(ctx), runDir, txn, encoded)
 }
 
 func (s *Store) Load(ctx context.Context, runID string) (*checkpoint.Checkpoint, error) {
@@ -375,7 +381,10 @@ func (s *Store) recoverPending(ctx context.Context, runID string) (*checkpoint.C
 	if err != nil {
 		return nil, err
 	}
-	if err := s.finishPending(ctx, runDir, txn, encoded); err != nil {
+	// Completing a pending save is a repair of a write that already has a
+	// durable intent, so it does not belong to the caller's context: a
+	// cancelled caller must not be able to leave the store half-applied.
+	if err := s.finishPending(context.WithoutCancel(ctx), runDir, txn, encoded); err != nil {
 		return nil, err
 	}
 	return &txn.Checkpoint, nil

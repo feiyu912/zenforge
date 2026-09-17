@@ -75,13 +75,21 @@ what is experimental, and what remains adapter territory.
 
 - Full platform memory extraction is not included. Retrieved memory can be
   adapted into normalized tasks through `adapters/memory`.
-- MCP tools can be adapted through `adapters/mcp`, and the CLI starts the
-  stdio servers its `mcpServers` section declares, but resources, prompts,
+- MCP tools can be adapted through `adapters/mcp`, the CLI starts the stdio
+  servers its `mcpServers` section declares, and `zenforge mcp-server
+  --allow-run` lets another agent start a run here, but resources, prompts,
   sampling, elicitation, discovery, `listChanged` notifications, and OAuth
   flows remain host/platform responsibilities. MCP tool-call and handshake
   timeouts are constants rather than per-server configuration, and a
   session-wide MCP approval grant is not persisted from the CLI
   (`Config.ApprovalGrants` is an SDK surface).
+- A served run answers the MCP call that started it: it is bounded by
+  `--run-timeout`, but this server has no detached-run registry and no
+  `zenforge_run_status` tool, so a caller whose own tool-call budget is shorter
+  than the run reads the result back from the durable log instead of waiting.
+  The run-starting grant itself is static (`--allow-run`): a stdio server has
+  no operator at the keyboard, so there is no interactive or pending approval
+  for it.
 - OpenTelemetry exporter setup is not included; host services provide tracer
   providers/exporters and can use `trace/otel` as the sink adapter.
 - YAML config is not included; the current CLI config format is JSON.

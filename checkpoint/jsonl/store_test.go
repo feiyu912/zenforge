@@ -429,6 +429,52 @@ func TestStoreHonorsCanceledContext(t *testing.T) {
 	}
 }
 
+// expiringAfterPendingContext reports a deadline only once the pending
+// record of a save exists, which is what a real deadline does when it lands
+// inside the window between the durable intent and the completion.
+type expiringAfterPendingContext struct {
+	context.Context
+	pendingPath string
+}
+
+func (c expiringAfterPendingContext) Err() error {
+	if _, err := os.Stat(c.pendingPath); err == nil {
+		return context.DeadlineExceeded
+	}
+	return nil
+}
+
+// TestStoreSaveCompletesAPendingTransactionDespiteAnExpiringContext pins the
+// atomicity of one save: a context that expires after the pending record is
+// written must not turn into a reported failure, because the checkpoint is
+// about to be completed by the next recovery. Reporting it leaves the caller
+// believing nothing was written while the store has the checkpoint, and a
+// caller that tracks its own sequence then collides with what is already
+// there -- which is how a cancelled run ends up reporting a checkpoint
+// conflict instead of the cancellation.
+func TestStoreSaveCompletesAPendingTransactionDespiteAnExpiringContext(t *testing.T) {
+	root := t.TempDir()
+	store := New(root)
+	cp := testCheckpoint("run_1", 1)
+	ctx := expiringAfterPendingContext{
+		Context:     context.Background(),
+		pendingPath: filepath.Join(root, cp.RunID, pendingFileName),
+	}
+	if err := store.Save(ctx, cp); err != nil {
+		t.Fatalf("Save returned error for a save whose pending record landed: %v", err)
+	}
+	loaded, err := store.Load(context.Background(), cp.RunID)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if loaded.Seq != cp.Seq {
+		t.Fatalf("loaded seq = %d, want %d", loaded.Seq, cp.Seq)
+	}
+	if _, err := os.Stat(ctx.pendingPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the pending record was not cleared: %v", err)
+	}
+}
+
 func testCheckpoint(runID string, seq int64) checkpoint.Checkpoint {
 	now := time.Now().UTC()
 	return checkpoint.Checkpoint{

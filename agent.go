@@ -924,6 +924,14 @@ func (a *Agent) runHarnessLoop(ctx context.Context, out chan<- Event, state harn
 		}
 		cp := a.newCheckpoint(current, checkpointSeq+1)
 		if err := a.saveCheckpoint(saveCtx, cp); err != nil {
+			// A failed save can still have recorded a durable intent: the
+			// store's pending record is completed by the next access, so the
+			// checkpoint may exist even though this call reported an error.
+			// Re-deriving the counter from the store keeps the next save from
+			// colliding with it and masking the real failure.
+			if latest, loadErr := a.latestCheckpointSeq(context.WithoutCancel(checkpointCtx), runID); loadErr == nil && latest > checkpointSeq {
+				checkpointSeq = latest
+			}
 			return fmt.Errorf("save checkpoint: %w", err)
 		}
 		checkpointSeq = cp.Seq

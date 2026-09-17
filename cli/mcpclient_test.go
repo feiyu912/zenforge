@@ -441,8 +441,8 @@ type openAISSEStub struct {
 
 func newOpenAISSEStub(t *testing.T, responses ...string) *openAISSEStub {
 	t.Helper()
-	if len(responses) < 2 {
-		t.Fatalf("the stub needs at least a tool call and an answer")
+	if len(responses) == 0 {
+		t.Fatalf("the stub needs at least one response")
 	}
 	stub := &openAISSEStub{responses: responses}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

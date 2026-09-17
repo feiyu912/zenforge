@@ -496,6 +496,12 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - Failure-mode, resume, and MVP docs cover final-turn provider contract errors.
 - Plan/execute checkpoints continue sequence numbers across stages and persist the terminal summary.
 - Resume and MVP docs map durable plan/execute summaries to a SQLite end-to-end test.
+- Served MCP runs are gated by `--allow-run`, never prompt on the protocol
+  streams, and report refused tool calls with the run's outcome; `--run-timeout`
+  bounds one run and a timed-out run still carries its id.
+- An interrupted checkpoint save no longer masks its own failure: the JSONL
+  store completes a durably-pending save under a context that cannot be
+  cancelled, and the loop re-derives its checkpoint counter after a failed save.
 - Plan/execute internal stages no longer leak terminal run lifecycle events or continue after stage failure.
 - Planner spec, guide, and MVP validation document the single top-level run lifecycle.
 - Plan/execute orchestration failures persist terminal checkpoints and resume without retrying completed work.
@@ -678,7 +684,14 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
   remote tools are namespaced `mcp__<server>__<tool>` with their read-only
   hints read into the definition so an approval decision can use them.
   `zenforge mcp-server` serves ZenForge itself the same way, exposing
-  `zenforge_runs` and `zenforge_version` as read-only tools.
+  `zenforge_runs` and `zenforge_version` as read-only tools. `--allow-run`
+  adds `zenforge_run`, which starts a run in the configured workspace and
+  returns its answer, id, and status: the tool is advertised without a
+  read-only hint so the calling client asks its own operator, it does not
+  exist without the grant from this host's operator, and inside the served run
+  `--approve always` is what allows approval-gated tools — the default
+  `prompt` cannot be honored on a stdio server, so it becomes a refusal that
+  the caller is told about along with the run's outcome.
 - Configured MCP servers (DSH/codex MCP client): a `mcpServers` config section
   starts stdio servers and exposes their tools as `mcp__<server>__<tool>`,
   with `deferred: true` opting a server into `tool_search` activation. The

@@ -728,6 +728,11 @@ type options struct {
 	// buildAgent appends to it, so a command registers its drain before it
 	// builds anything and the slice is still growing when the drain runs.
 	closers []resource
+
+	// approvalOverride replaces the broker built from `approve`. It is how a
+	// command that owns the decision (the MCP server, for a served run)
+	// installs a non-interactive broker without pretending to be a mode.
+	approvalOverride approval.Broker
 }
 
 // resource is something a command opened that has to be released when the
@@ -1354,6 +1359,13 @@ func mapSummaries[T any](in []T, convert func(T) runSummary) []runSummary {
 }
 
 func approvalBroker(opts options, ioStreams IO) (approval.Broker, error) {
+	// A caller that owns the decision supplies the broker directly. The MCP
+	// server uses it for a served run: a served run has no operator at a
+	// keyboard, and the interactive broker reads the same streams the
+	// protocol is spoken on.
+	if opts.approvalOverride != nil {
+		return opts.approvalOverride, nil
+	}
 	switch opts.approve {
 	case "", "prompt":
 		return approvalcli.New(ioStreams.Stdin, ioStreams.Stderr), nil
