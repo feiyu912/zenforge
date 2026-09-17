@@ -3,6 +3,7 @@ package anthropic
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -220,16 +221,54 @@ func messages(in []model.Message) (string, []message, error) {
 			}
 			out = append(out, message{Role: "user", Content: blocks})
 		default:
-			if item.Content != "" {
-				out = append(out, message{Role: "user", Content: []contentBlock{{Type: "text", Text: item.Content}}})
+			blocks, err := userMessage(item)
+			if err != nil {
+				return "", nil, err
+			}
+			if len(blocks) > 0 {
+				out = append(out, message{Role: "user", Content: blocks})
 			}
 		}
 	}
 	return strings.Join(system, "\n\n"), out, nil
 }
 
+// userMessage renders a user turn, including any images. An image the
+// provider cannot express is an error rather than a silently dropped
+// attachment.
+func userMessage(item model.Message) ([]contentBlock, error) {
+	blocks := make([]contentBlock, 0, 1+len(item.Images))
+	if item.Content != "" {
+		blocks = append(blocks, contentBlock{Type: "text", Text: item.Content})
+	}
+	for _, image := range item.Images {
+		if !model.SupportedImageMediaType(image.MediaType) {
+			return nil, fmt.Errorf("anthropic cannot send image media type %q", image.MediaType)
+		}
+		blocks = append(blocks, contentBlock{
+			Type: "image",
+			Source: &imageSource{
+				Type:      "base64",
+				MediaType: image.MediaType,
+				Data:      base64.StdEncoding.EncodeToString(image.Data),
+			},
+		})
+	}
+	return blocks, nil
+}
+
 func assistantMessage(item model.Message) (message, error) {
 	blocks := make([]contentBlock, 0, 1+len(item.ToolCalls))
+	// A thinking block is replayed first, verbatim and with its signature:
+	// the API requires the block it produced to be returned unchanged, so
+	// dropping either half makes the request invalid.
+	if item.Reasoning != "" && item.ReasoningSignature != "" {
+		blocks = append(blocks, contentBlock{
+			Type:      "thinking",
+			Text:      item.Reasoning,
+			Signature: item.ReasoningSignature,
+		})
+	}
 	if item.Content != "" {
 		blocks = append(blocks, contentBlock{Type: "text", Text: item.Content})
 	}

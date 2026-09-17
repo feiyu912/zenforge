@@ -187,6 +187,7 @@ nav:
       - 0047 Durable memories: adr/0047-durable-memories.md
       - 0048 Guardian review: adr/0048-guardian-review.md
       - 0049 Commands and schedules: adr/0049-commands-and-schedules.md
+      - 0050 Images and reasoning replay: adr/0050-images-and-reasoning-replay.md
 
 extra:
   social:

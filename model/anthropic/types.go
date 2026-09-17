@@ -23,6 +23,18 @@ type contentBlock struct {
 	Input     map[string]any `json:"input,omitempty"`
 	ToolUseID string         `json:"tool_use_id,omitempty"`
 	Content   string         `json:"content,omitempty"`
+	// Source carries an image, and Signature carries a thinking block's
+	// signature. Both must be replayed verbatim: a thinking block without
+	// its signature is rejected by the API.
+	Source    *imageSource `json:"source,omitempty"`
+	Signature string       `json:"signature,omitempty"`
+}
+
+// imageSource is Anthropic's base64 image payload.
+type imageSource struct {
+	Type      string `json:"type"`
+	MediaType string `json:"media_type"`
+	Data      string `json:"data"`
 }
 
 type toolDefinition struct {
@@ -51,6 +63,10 @@ type streamDelta struct {
 	Text        string `json:"text,omitempty"`
 	PartialJSON string `json:"partial_json,omitempty"`
 	StopReason  string `json:"stop_reason,omitempty"`
+	// Thinking carries a reasoning delta; Signature arrives at the end of
+	// a thinking block and must be replayed with it.
+	Thinking  string `json:"thinking,omitempty"`
+	Signature string `json:"signature,omitempty"`
 }
 
 type messagePayload struct {

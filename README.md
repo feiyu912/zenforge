@@ -668,6 +668,13 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
   new files need a same-run observed absence (a read that reported
   not-found), so a blind create is refused; `workspace.ErrPathNotFound` now
   also satisfies `errors.Is(err, fs.ErrNotExist)`.
+- Images and reasoning (codex `view_image`, reasoning replay): the
+  `view_image` tool shows the model an image from the workspace — confined
+  like any other file read, format verified from magic bytes, and carried on
+  the tool result so it is replayed on later turns and survives a resume.
+  Provider reasoning is captured with its signature and replayed verbatim
+  where the provider requires it (Anthropic thinking blocks), streaming on
+  its own `model.reasoning` event so it is never mistaken for answer text.
 - Canned commands and schedules (DSH commands/schedule): `--commands
   <dir>` loads `*.md` prompt templates invoked as `/name args`
   (subdirectories namespace them as `/git:commit`), with `$ARGUMENTS`,

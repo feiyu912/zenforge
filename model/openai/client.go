@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -152,13 +153,38 @@ func (c *Client) chatRequest(req model.Request) chatRequest {
 	for _, message := range req.Messages {
 		out.Messages = append(out.Messages, chatMessage{
 			Role:       message.Role,
-			Content:    message.Content,
+			Content:    chatContent(message),
 			Name:       message.Name,
 			ToolCallID: message.ToolCallID,
 			ToolCalls:  chatToolCalls(message.ToolCalls),
 		})
 	}
 	return out
+}
+
+// chatContent renders a message's text plus images. A message with images
+// becomes a multipart array; text-only messages keep the plain string form,
+// which is what providers and proxies expect in the common case.
+func chatContent(message model.Message) any {
+	if len(message.Images) == 0 {
+		return message.Content
+	}
+	parts := make([]contentPart, 0, len(message.Images)+1)
+	if message.Content != "" {
+		parts = append(parts, contentPart{Type: "text", Text: message.Content})
+	}
+	for _, image := range message.Images {
+		parts = append(parts, contentPart{
+			Type:     "image_url",
+			ImageURL: &imageURLPart{URL: dataURL(image), Detail: image.Detail},
+		})
+	}
+	return parts
+}
+
+// dataURL renders an image as the data URL the chat-completions API accepts.
+func dataURL(image model.Image) string {
+	return "data:" + image.MediaType + ";base64," + base64.StdEncoding.EncodeToString(image.Data)
 }
 
 func readSSE(body io.Reader, events chan<- model.Event, limits *model.RateLimit) error {
@@ -202,6 +228,13 @@ func readSSE(body io.Reader, events chan<- model.Event, limits *model.RateLimit)
 			if choice.Delta.Content != "" {
 				acc.content.WriteString(choice.Delta.Content)
 				events <- model.Event{Type: model.EventDelta, Delta: choice.Delta.Content}
+			}
+			// Reasoning is captured and streamed separately: it is not
+			// answer text, and a caller that renders it must be able to
+			// tell the difference.
+			if reasoning := choice.Delta.reasoningText(); reasoning != "" {
+				acc.reasoning.WriteString(reasoning)
+				events <- model.Event{Type: model.EventReasoning, Delta: reasoning}
 			}
 			for _, toolCall := range choice.Delta.ToolCalls {
 				acc.addToolCall(toolCall)

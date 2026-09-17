@@ -243,11 +243,29 @@ func encodeOutput(output any) (tool.Result, error) {
 	if err != nil {
 		return tool.Result{}, err
 	}
+	meta := toolMetadata(output)
 	var structured map[string]any
 	if err := json.Unmarshal(data, &structured); err != nil {
-		return tool.Result{Output: string(data)}, nil
+		return tool.Result{Output: string(data), Meta: meta}, nil
 	}
-	return tool.Result{Output: string(data), Structured: structured}, nil
+	return tool.Result{Output: string(data), Structured: structured, Meta: meta}, nil
+}
+
+// MetadataCarrier lets a typed tool output attach result metadata that is
+// not model-visible JSON. It exists for content that must travel beside the
+// text rather than inside it -- an image returned by view_image, for
+// instance, which the agent copies onto the next model message.
+type MetadataCarrier interface {
+	ToolMetadata() map[string]any
+}
+
+// toolMetadata reads a result's metadata through the carrier interface.
+func toolMetadata(output any) map[string]any {
+	carrier, ok := output.(MetadataCarrier)
+	if !ok {
+		return nil
+	}
+	return carrier.ToolMetadata()
 }
 
 func valueError(value reflect.Value) error {

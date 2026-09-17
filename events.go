@@ -50,8 +50,11 @@ const (
 	EventMemoryRecorded EventType = "memory.recorded"
 	// EventReviewCompleted reports an independent review of the run.
 	EventReviewCompleted EventType = "review.completed"
-	EventDeliverables    EventType = "deliverables.presented"
-	EventToolsActivated  EventType = "tools.activated"
+	// EventModelReasoning reports a reasoning delta. It is separate from
+	// model.delta so reasoning is never mistaken for answer text.
+	EventModelReasoning EventType = "model.reasoning"
+	EventDeliverables   EventType = "deliverables.presented"
+	EventToolsActivated EventType = "tools.activated"
 	// EventPlanApproved marks the end of plan mode: the plan was approved
 	// and the run switched to executing durably.
 	EventPlanApproved       EventType = "plan.approved"

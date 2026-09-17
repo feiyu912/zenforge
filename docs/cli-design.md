@@ -2,6 +2,22 @@
 
 ZenForge CLI is the fastest way to feel the runtime.
 
+## Images and reasoning
+
+The `view_image` tool shows the model an image from the workspace: the path
+goes through the same confinement as every other file read, the format is
+sniffed from the bytes (PNG, JPEG, GIF, WebP) rather than trusted from the
+extension, and the size is bounded. The image travels on the tool result and
+is replayed on every later request in the conversation, including after a
+resume; the model-visible tool result stays text so the bytes are not sent
+twice per turn. Reasoning reported by a provider is captured with its
+signature and streamed as `model.reasoning` events (never as answer text),
+and is replayed verbatim where the provider requires it — Anthropic thinking
+blocks must be returned unchanged with their signature. Reasoning without a
+signature is kept in the transcript but not replayed, and OpenAI reasoning is
+captured but not replayed, because the chat-completions API has no accepted
+assistant reasoning field.
+
 ## Commands
 
 ```text

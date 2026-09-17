@@ -44,6 +44,7 @@ import (
 	plantools "github.com/feiyu912/zenforge/tools/plan"
 	"github.com/feiyu912/zenforge/tools/present"
 	"github.com/feiyu912/zenforge/tools/toolsearch"
+	"github.com/feiyu912/zenforge/tools/viewimage"
 	webtools "github.com/feiyu912/zenforge/tools/web"
 	workspacetools "github.com/feiyu912/zenforge/tools/workspace"
 	"github.com/feiyu912/zenforge/web"
@@ -827,6 +828,10 @@ func buildAgent(ctx context.Context, opts options, ioStreams IO) (*zenforge.Agen
 		MaxReadBytes:    opts.workspaceMaxRead,
 		MaxWriteBytes:   opts.workspaceMaxWrite,
 		CreateParentDir: true,
+		// Images are binary by definition, so the workspace must allow
+		// binary reads for view_image to work. Text reads are unaffected:
+		// the file tools still refuse to treat binary data as text.
+		AllowBinaryRead: true,
 	})
 	if err != nil {
 		return nil, err
@@ -894,6 +899,13 @@ func buildAgent(ctx context.Context, opts options, ioStreams IO) (*zenforge.Agen
 		return nil, err
 	}
 	tools = append(tools, contextTool)
+	// view_image shows the model an image from the workspace; the image
+	// travels on the tool result and is replayed on later model calls.
+	viewImage, err := viewimage.New(viewimage.Config{Workspace: ws})
+	if err != nil {
+		return nil, err
+	}
+	tools = append(tools, viewImage)
 	// present declares final deliverables; the agent records validated
 	// files as deliverables.presented events.
 	presentTool, err := present.New(present.Config{Workspace: ws})

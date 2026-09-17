@@ -2,6 +2,7 @@ package zenforge
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -43,10 +44,19 @@ import (
 // environment snapshot and project instructions it started with, instead
 // of silently picking up files that changed on disk mid-run.
 const (
-	metaEnvironmentContext  = "zenforge.environment_context"
-	metaHookContext         = "zenforge.hook_context"
-	metaMemoryContext       = "zenforge.memory_context"
-	metaProjectInstructions = "zenforge.project_instructions"
+	metaEnvironmentContext = "zenforge.environment_context"
+	metaHookContext        = "zenforge.hook_context"
+	metaMemoryContext      = "zenforge.memory_context"
+	// metaMessageImages, metaMessageReasoning, and
+	// metaMessageReasoningSignature carry provider content that lives
+	// beside the message text: images a tool showed the model, and the
+	// reasoning (with its signature) that the provider requires replayed
+	// verbatim on the next turn. They ride in MessageState.Meta, which the
+	// run-state schema already defines, so no schema version changes.
+	metaMessageImages             = "zenforge.images"
+	metaMessageReasoning          = "zenforge.reasoning"
+	metaMessageReasoningSignature = "zenforge.reasoning_signature"
+	metaProjectInstructions       = "zenforge.project_instructions"
 	// metaEnvironmentUpdate records the latest injected environment
 	// render so diff-only re-injection survives resume.
 	metaEnvironmentUpdate = "zenforge.environment_update"
@@ -756,12 +766,92 @@ func newTaskRunState(runID, input string, initial []model.Message, meta map[stri
 }
 
 func modelMessageToHarness(message model.Message) harness.MessageState {
-	return harness.MessageState{
+	state := harness.MessageState{
 		Role:       message.Role,
 		Content:    message.Content,
 		Name:       message.Name,
 		ToolCallID: message.ToolCallID,
 		ToolCalls:  modelToolCallsToHarness(message.ToolCalls),
+	}
+	if len(message.Images) > 0 {
+		state.Meta = map[string]any{metaMessageImages: append([]model.Image(nil), message.Images...)}
+	}
+	if message.Reasoning != "" {
+		if state.Meta == nil {
+			state.Meta = map[string]any{}
+		}
+		state.Meta[metaMessageReasoning] = message.Reasoning
+		if message.ReasoningSignature != "" {
+			state.Meta[metaMessageReasoningSignature] = message.ReasoningSignature
+		}
+	}
+	return state
+}
+
+// messageImages reads the images attached to a stored message.
+func messageImages(message harness.MessageState) []model.Image {
+	return imagesFromMeta(message.Meta)
+}
+
+// imagesFromMeta reads images out of a message's or tool result's metadata.
+// Both a decoded []model.Image and the JSON-shaped []any are accepted,
+// because a tool result may have been through a checkpoint round trip.
+func imagesFromMeta(meta map[string]any) []model.Image {
+	if len(meta) == 0 {
+		return nil
+	}
+	switch value := meta[metaMessageImages].(type) {
+	case []model.Image:
+		if len(value) == 0 {
+			return nil
+		}
+		return value
+	case []any:
+		out := make([]model.Image, 0, len(value))
+		for _, item := range value {
+			image, ok := imageFromAny(item)
+			if ok {
+				out = append(out, image)
+			}
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func imageFromAny(value any) (model.Image, bool) {
+	switch typed := value.(type) {
+	case model.Image:
+		return typed, typed.MediaType != "" && len(typed.Data) > 0
+	case map[string]any:
+		// Both the tagged form and Go's default field names are accepted: a
+		// checkpoint written before the tags existed must still load.
+		image := model.Image{
+			MediaType: firstNonEmpty(stringValue(typed["mediaType"]), stringValue(typed["MediaType"])),
+			Path:      firstNonEmpty(stringValue(typed["path"]), stringValue(typed["Path"])),
+			Detail:    firstNonEmpty(stringValue(typed["detail"]), stringValue(typed["Detail"])),
+		}
+		data, present := typed["data"]
+		if !present {
+			data = typed["Data"]
+		}
+		switch value := data.(type) {
+		case []byte:
+			image.Data = value
+		case string:
+			decoded, err := base64.StdEncoding.DecodeString(value)
+			if err != nil {
+				return model.Image{}, false
+			}
+			image.Data = decoded
+		}
+		return image, image.MediaType != "" && len(image.Data) > 0
+	default:
+		return model.Image{}, false
 	}
 }
 
@@ -908,6 +998,25 @@ func (a *Agent) runHarnessLoop(ctx context.Context, out chan<- Event, state harn
 		a.recordMemory(context.WithoutCancel(ctx), emit, runID, digest, stringValue(terminal.Data["output"]))
 	}
 	return terminal
+}
+
+// firstNonEmpty returns the first non-empty value, preferring the tagged
+// JSON field name over Go's default spelling.
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+// toolResultImages collects images a tool attached to its result.
+func toolResultImages(result tool.Result) []model.Image {
+	if images := imagesFromMeta(result.Meta); len(images) > 0 {
+		return images
+	}
+	return imagesFromMeta(result.Metadata)
 }
 
 func (a *Agent) latestCheckpointSeq(ctx context.Context, runID string) (int64, error) {
@@ -1171,6 +1280,17 @@ func (a *Agent) callModel(ctx context.Context, emit eventEmitter, state harness.
 		if event.Error != nil {
 			return harness.MessageState{}, model.Usage{}, event.Error
 		}
+		// Reasoning is not answer text: it is streamed on its own event so a
+		// renderer can show it separately and a caller cannot mistake it for
+		// the answer.
+		if event.Type == model.EventReasoning {
+			if event.Delta != "" {
+				if err := emit(EventModelReasoning, map[string]any{"textDelta": event.Delta, "step": state.Step}); err != nil {
+					return harness.MessageState{}, model.Usage{}, err
+				}
+			}
+			continue
+		}
 		if event.Delta != "" {
 			content.WriteString(event.Delta)
 			if err := emit(EventModelDelta, map[string]any{"textDelta": event.Delta, "step": state.Step}); err != nil {
@@ -1194,11 +1314,18 @@ func (a *Agent) callModel(ctx context.Context, emit eventEmitter, state harness.
 		}
 		calls = append(calls, message.ToolCalls...)
 	}
-	return harness.MessageState{
+	state_ := harness.MessageState{
 		Role:      "assistant",
 		Content:   content.String(),
 		ToolCalls: modelToolCallsToHarness(calls),
-	}, usage, nil
+	}
+	// Reasoning and images travel in message metadata: the provider that
+	// produced them expects the reasoning (with its signature) replayed
+	// verbatim on the next turn.
+	if message != nil && (message.Reasoning != "" || len(message.Images) > 0) {
+		state_.Meta = modelMessageToHarness(*message).Meta
+	}
+	return state_, usage, nil
 }
 
 // callModelDurable runs one durable model step: step-boundary pressure
@@ -1392,6 +1519,10 @@ func (a *Agent) callModelAttemptDurable(
 		defer idleTimer.Stop()
 		idleCh = idleTimer.C
 	}
+	// finalMessage is the provider's terminal message for this attempt. It
+	// carries reasoning and its signature, which are not part of the
+	// persisted attempt draft.
+	var finalMessage *model.Message
 streamLoop:
 	for {
 		var event model.Event
@@ -1416,6 +1547,17 @@ streamLoop:
 		if event.Error != nil {
 			return harness.MessageState{}, model.Usage{}, event.Error
 		}
+		// Reasoning is streamed on its own event and never enters the text
+		// draft: it is not answer text, and mixing it in would both corrupt
+		// the answer and re-send reasoning as an assistant message.
+		if event.Type == model.EventReasoning {
+			if event.Delta != "" {
+				if err := emit(EventModelReasoning, map[string]any{"textDelta": event.Delta, "step": state.Step}); err != nil {
+					return harness.MessageState{}, model.Usage{}, err
+				}
+			}
+			continue
+		}
 		if event.Delta == "" && event.Message == nil && len(event.ToolCalls) == 0 && !hasUsage(event.Usage) {
 			continue
 		}
@@ -1432,6 +1574,7 @@ streamLoop:
 			attempt.ObservedUsage.RateLimits = harness.NewRateLimitState(*event.Usage.RateLimits)
 		}
 		if event.Message != nil {
+			finalMessage = event.Message
 			if event.Message.Content != "" {
 				attempt.TextDraft = event.Message.Content
 			}
@@ -1482,6 +1625,20 @@ streamLoop:
 		Role:      "assistant",
 		Content:   attempt.TextDraft,
 		ToolCalls: append([]harness.ToolCallSpec(nil), attempt.ToolCallsDraft...),
+	}
+	// The provider reports reasoning (and its signature) on the terminal
+	// message. It is carried in message metadata so the next turn can
+	// replay it verbatim, which is what a provider with signed thinking
+	// blocks requires. A turn interrupted mid-stream loses the reasoning,
+	// which is unavoidable: the signature only arrives with the block's
+	// end, so a partial block was never replayable anyway.
+	if final := finalMessage; final != nil {
+		if converted := modelMessageToHarness(*final); converted.Meta != nil {
+			message.Meta = converted.Meta
+		}
+		if final.Content != "" {
+			message.Content = final.Content
+		}
 	}
 	committed := model.Usage{
 		PromptTokens:     attempt.ObservedUsage.InputTokens,
@@ -1930,12 +2087,19 @@ func (a *Agent) runPendingTools(ctx context.Context, emit eventEmitter, checkpoi
 		if workspaceChanged {
 			state.Workspace.DirtyPaths = appendDirtyPath(state.Workspace.DirtyPaths, changedPath)
 		}
-		state.Messages = append(state.Messages, harness.MessageState{
+		toolMessage := harness.MessageState{
 			Role:       "tool",
 			Content:    a.toolResultContent(call.Name, result),
 			ToolCallID: call.ID,
 			Name:       call.Name,
-		})
+		}
+		// A tool that showed the model an image attaches it here. Images
+		// are replayed on every later request in the conversation, so a
+		// result that carried them is what makes view_image useful.
+		if images := toolResultImages(result); len(images) > 0 {
+			toolMessage.Meta = map[string]any{metaMessageImages: images}
+		}
+		state.Messages = append(state.Messages, toolMessage)
 		state.Control.Status = harness.RunStatusRunning
 		if err := checkpointState(); err != nil {
 			return err
@@ -2965,11 +3129,14 @@ func (a *Agent) modelMessages(state harness.RunState) []model.Message {
 	messages := a.systemPrefixMessages(state)
 	for _, message := range state.Messages {
 		messages = append(messages, model.Message{
-			Role:       message.Role,
-			Content:    message.Content,
-			Name:       message.Name,
-			ToolCallID: message.ToolCallID,
-			ToolCalls:  harnessToolCallsToModel(message.ToolCalls),
+			Role:               message.Role,
+			Content:            message.Content,
+			Name:               message.Name,
+			ToolCallID:         message.ToolCallID,
+			ToolCalls:          harnessToolCallsToModel(message.ToolCalls),
+			Images:             messageImages(message),
+			Reasoning:          stringMeta(message.Meta, metaMessageReasoning),
+			ReasoningSignature: stringMeta(message.Meta, metaMessageReasoningSignature),
 		})
 	}
 	return messages

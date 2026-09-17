@@ -21,11 +21,34 @@ type chatRequest struct {
 }
 
 type chatMessage struct {
-	Role       string                `json:"role"`
-	Content    string                `json:"content,omitempty"`
+	Role string `json:"role"`
+	// Content is a string for a plain message and a []contentPart for a
+	// multipart one (text plus images). omitting it entirely for an
+	// assistant turn that only called tools is what the API expects.
+	Content    any                   `json:"content,omitempty"`
 	Name       string                `json:"name,omitempty"`
 	ToolCallID string                `json:"tool_call_id,omitempty"`
 	ToolCalls  []chatMessageToolCall `json:"tool_calls,omitempty"`
+}
+
+// contentPart is one piece of a multipart message.
+type contentPart struct {
+	Type     string        `json:"type"`
+	Text     string        `json:"text,omitempty"`
+	ImageURL *imageURLPart `json:"image_url,omitempty"`
+}
+
+type imageURLPart struct {
+	URL    string `json:"url"`
+	Detail string `json:"detail,omitempty"`
+}
+
+// chatDelta also carries reasoning. Providers that expose reasoning in a
+// chat-completions stream use one of these field names; both are read so a
+// reasoning model's text is captured rather than silently dropped.
+type chatReasoningFields struct {
+	Reasoning        string `json:"reasoning,omitempty"`
+	ReasoningContent string `json:"reasoning_content,omitempty"`
 }
 
 type chatTool struct {
@@ -71,6 +94,7 @@ type chatDelta struct {
 	Role      string          `json:"role,omitempty"`
 	Content   string          `json:"content,omitempty"`
 	ToolCalls []chatToolDelta `json:"tool_calls,omitempty"`
+	chatReasoningFields
 }
 
 type chatToolDelta struct {
@@ -100,8 +124,17 @@ type toolCallAccumulator struct {
 type accumulator struct {
 	role         string
 	content      strings.Builder
+	reasoning    strings.Builder
 	toolCalls    map[int]*toolCallAccumulator
 	finishReason string
+}
+
+// reasoningText returns whichever reasoning field the provider populated.
+func (d chatDelta) reasoningText() string {
+	if d.ReasoningContent != "" {
+		return d.ReasoningContent
+	}
+	return d.Reasoning
 }
 
 func newAccumulator() *accumulator {
@@ -147,5 +180,6 @@ func (a *accumulator) message() model.Message {
 		Role:      a.role,
 		Content:   a.content.String(),
 		ToolCalls: calls,
+		Reasoning: a.reasoning.String(),
 	}
 }

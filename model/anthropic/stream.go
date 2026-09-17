@@ -17,6 +17,10 @@ type blockState struct {
 	name      string
 	text      strings.Builder
 	arguments strings.Builder
+	// signature is a thinking block's signature, delivered as the block
+	// ends. It must be replayed with the thinking text or the provider
+	// rejects the request.
+	signature string
 }
 
 type accumulator struct {
@@ -116,6 +120,11 @@ func (a *accumulator) apply(event streamEvent, events chan<- model.Event) {
 			events <- model.Event{Type: model.EventDelta, Delta: event.Delta.Text}
 		case "input_json_delta":
 			block.arguments.WriteString(event.Delta.PartialJSON)
+		case "thinking_delta":
+			block.text.WriteString(event.Delta.Thinking)
+			events <- model.Event{Type: model.EventReasoning, Delta: event.Delta.Thinking}
+		case "signature_delta":
+			block.signature = event.Delta.Signature
 		}
 	}
 }
@@ -131,6 +140,8 @@ func (a *accumulator) block(index int) *blockState {
 
 func (a *accumulator) message() model.Message {
 	var content strings.Builder
+	var reasoning strings.Builder
+	signature := ""
 	var calls []model.ToolCallSpec
 	indices := make([]int, 0, len(a.blocks))
 	for index := range a.blocks {
@@ -149,14 +160,23 @@ func (a *accumulator) message() model.Message {
 				Name:      block.name,
 				Arguments: json.RawMessage(block.arguments.String()),
 			})
+		case "thinking":
+			// Reasoning is kept out of Content: it is not answer text, and
+			// it is replayed separately with its signature.
+			reasoning.WriteString(block.text.String())
+			if block.signature != "" {
+				signature = block.signature
+			}
 		default:
 			content.WriteString(block.text.String())
 		}
 	}
 	return model.Message{
-		Role:      "assistant",
-		Content:   content.String(),
-		ToolCalls: calls,
+		Role:               "assistant",
+		Content:            content.String(),
+		ToolCalls:          calls,
+		Reasoning:          reasoning.String(),
+		ReasoningSignature: signature,
 	}
 }
 
