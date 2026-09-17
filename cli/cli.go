@@ -26,6 +26,7 @@ import (
 	"github.com/feiyu912/zenforge/goals"
 	"github.com/feiyu912/zenforge/harness"
 	"github.com/feiyu912/zenforge/instructions"
+	jobspkg "github.com/feiyu912/zenforge/jobs"
 	"github.com/feiyu912/zenforge/model"
 	"github.com/feiyu912/zenforge/model/provider"
 	"github.com/feiyu912/zenforge/modelretry"
@@ -35,6 +36,7 @@ import (
 	"github.com/feiyu912/zenforge/tools/askuser"
 	"github.com/feiyu912/zenforge/tools/contextinfo"
 	goaltools "github.com/feiyu912/zenforge/tools/goal"
+	jobtools "github.com/feiyu912/zenforge/tools/jobs"
 	patchtools "github.com/feiyu912/zenforge/tools/patch"
 	plantools "github.com/feiyu912/zenforge/tools/plan"
 	"github.com/feiyu912/zenforge/tools/present"
@@ -644,6 +646,7 @@ type options struct {
 
 	planMode      bool
 	goalsEnabled  bool
+	jobsEnabled   bool
 	goalMaxRounds int
 
 	sandboxBackend      string
@@ -721,6 +724,7 @@ func bindOptions(fs *flag.FlagSet, opts *options) {
 	_ = fs.Bool("ignore-user-config", false, "skip the system and user configuration layers")
 	fs.BoolVar(&opts.planMode, "plan", opts.planMode, "start in plan mode: mutating tools are refused until exit_plan_mode is approved")
 	fs.BoolVar(&opts.goalsEnabled, "goals", opts.goalsEnabled, "register the create_goal/get_goal/update_goal tools")
+	fs.BoolVar(&opts.jobsEnabled, "jobs", opts.jobsEnabled, "register the exec_command/write_stdin/job_output/job_list/job_kill tools")
 	fs.IntVar(&opts.goalMaxRounds, "goal-max-rounds", opts.goalMaxRounds, "default round budget for goals created in this session")
 	fs.StringVar(&opts.sandboxBackend, "sandbox", opts.sandboxBackend, "confine the shell in a sandbox: none, seatbelt (macOS), bwrap (Linux), or docker")
 	fs.Var(&opts.sandboxRoots, "sandbox-root", "writable root inside the sandbox (repeatable; defaults to the working directory)")
@@ -977,6 +981,34 @@ func buildAgent(ctx context.Context, opts options, ioStreams IO) (*zenforge.Agen
 		}
 		tools = append(tools, goalTools...)
 		for _, registered := range goalTools {
+			toolsByName[registered.Name()] = registered
+		}
+	}
+	if opts.jobsEnabled {
+		// Long-running commands: the manager owns the processes, and it is
+		// closed when the command's context ends so a cancelled or
+		// interrupted CLI does not leave a dev server behind.
+		manager := jobspkg.New(jobspkg.Config{
+			DefaultCWD:     opts.shellWorkingDir,
+			DefaultTimeout: opts.shellTimeout,
+		})
+		if ctx.Done() != nil {
+			go func() {
+				<-ctx.Done()
+				manager.Close()
+			}()
+		}
+		jobTools, err := jobtools.Tools(jobtools.Config{
+			Manager:        manager,
+			DefaultCWD:     opts.shellWorkingDir,
+			MaxOutputBytes: int(opts.shellMaxOutputBytes),
+		})
+		if err != nil {
+			manager.Close()
+			return nil, err
+		}
+		tools = append(tools, jobTools...)
+		for _, registered := range jobTools {
 			toolsByName[registered.Name()] = registered
 		}
 	}

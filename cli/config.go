@@ -65,6 +65,9 @@ type agentConfig struct {
 	PlanMode *bool `json:"planMode,omitempty"`
 	// Goals registers the create_goal/get_goal/update_goal tools.
 	Goals *bool `json:"goals,omitempty"`
+	// Jobs registers the long-running command tools (exec_command,
+	// write_stdin, job_output, job_list, job_kill).
+	Jobs *bool `json:"jobs,omitempty"`
 	// GoalMaxRounds is the default round budget for a new goal.
 	GoalMaxRounds *int `json:"goalMaxRounds,omitempty"`
 }
@@ -297,6 +300,9 @@ func applyConfig(opts *options, config configFile) error {
 	}
 	if config.Agent.Goals != nil {
 		opts.goalsEnabled = *config.Agent.Goals
+	}
+	if config.Agent.Jobs != nil {
+		opts.jobsEnabled = *config.Agent.Jobs
 	}
 	if config.Agent.GoalMaxRounds != nil {
 		opts.goalMaxRounds = *config.Agent.GoalMaxRounds

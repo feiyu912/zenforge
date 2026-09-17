@@ -115,6 +115,7 @@ func TestSandboxFlagsParseAndValidate(t *testing.T) {
 			"--sandbox-protected", ".git",
 			"--plan",
 			"--goals",
+			"--jobs",
 			"--goal-max-rounds", "5",
 		}
 		if err := fs.Parse(args); err != nil {
@@ -133,6 +134,9 @@ func TestSandboxFlagsParseAndValidate(t *testing.T) {
 		// previously reachable only through configuration.
 		if !opts.planMode || !opts.goalsEnabled || opts.goalMaxRounds != 5 {
 			t.Fatalf("plan/goal options = %#v", opts)
+		}
+		if !opts.jobsEnabled {
+			t.Fatalf("jobs options = %#v", opts)
 		}
 		if err := validateOptionEnums(opts); err != nil {
 			t.Fatalf("validateOptionEnums returned error: %v", err)

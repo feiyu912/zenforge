@@ -668,6 +668,12 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
   new files need a same-run observed absence (a read that reported
   not-found), so a blind create is refused; `workspace.ErrPathNotFound` now
   also satisfies `errors.Is(err, fs.ErrNotExist)`.
+- Model-facing job tools: `--jobs` (or `agent.jobs`) registers
+  `exec_command` (foreground or `background=true`), `write_stdin`,
+  `job_output` (offset reads, `waitMs` long-polling, dropped-output flags,
+  and a hint telling the model how to wait when a job is still running),
+  `job_list`, and `job_kill`. `job_list` is read-only, so plan mode allows
+  it while the state-changing tools stay refused.
 - Background jobs (codex `exec_command`/`write_stdin`): `jobs` starts a
   long-running command detached from the tool call, reads each stream from
   an absolute offset so polling never re-reads or silently skips bytes

@@ -84,6 +84,21 @@ Costs and limits:
 - the ring buffer is per stream, so interleaving between stdout and stderr
   is not preserved (each stream has its own offset).
 
+## Tool Surface
+
+`tools/jobs` follows the reference's naming: `exec_command` starts work
+(foreground by default, bounded by a timeout so a stuck command cannot hang
+a turn), `write_stdin` feeds it, `job_output` reads it, `job_list` reports
+it, and `job_kill` stops it. Two decisions are worth recording. First,
+`job_output` returns the next offsets and an explicit dropped-output flag,
+so the model's polling is idempotent and its view of the output is never
+silently incomplete; a running job with nothing new also returns a hint
+naming `waitMs`, because "no output" and "no output yet" are different
+facts and the model should not have to guess which one it is looking at.
+Second, only `job_list` is declared read-only: listing changes nothing, so
+plan mode allows it, while starting, feeding, and killing processes are
+exactly the kind of action plan mode must refuse.
+
 ## Alternatives Rejected
 
 ### Unbounded Output Collection

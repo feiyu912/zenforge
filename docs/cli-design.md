@@ -65,6 +65,17 @@ opts in. Paths are canonicalized and passed as `-D` parameters, and off
 macOS — or when `sandbox-exec` is missing — opening a session fails with
 `sandbox_unavailable` rather than running unsandboxed.
 
+## Long-running commands
+
+`--jobs` (or `agent.jobs: true`) registers `exec_command`, `write_stdin`,
+`job_output`, `job_list`, and `job_kill`, so a dev server, watch loop, or
+long test run stops blocking the turn: `exec_command` with
+`background=true` returns a job id, `job_output` reads each stream from the
+offsets it returns (and reports when the bounded buffer dropped output
+instead of hiding it), `write_stdin` feeds interactive programs, and
+`job_kill` stops a job. The manager is closed when the command's context
+ends, so interrupting the CLI does not leave a background process behind.
+
 ## Goals and Ralph
 
 `--goals` (or `agent.goals`) registers `create_goal`, `get_goal`, and
