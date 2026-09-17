@@ -188,6 +188,7 @@ nav:
       - 0048 Guardian review: adr/0048-guardian-review.md
       - 0049 Commands and schedules: adr/0049-commands-and-schedules.md
       - 0050 Images and reasoning replay: adr/0050-images-and-reasoning-replay.md
+      - 0051 Seccomp errno and unix socketpairs: adr/0051-seccomp-errno-and-unix-socketpairs.md
 
 extra:
   social:

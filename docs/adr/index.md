@@ -64,3 +64,4 @@ later ADRs supersede earlier ones, never edit.
 | [0048](0048-guardian-review.md) | A guardian review at the stop boundary: report by default, bounded enforcement |
 | [0049](0049-commands-and-schedules.md) | Canned commands and unattended schedules: ordered expansion, policy-bound shell |
 | [0050](0050-images-and-reasoning-replay.md) | Images as message content, and reasoning replayed with its signature |
+| [0051](0051-seccomp-errno-and-unix-socketpairs.md) | A denied syscall returns EPERM, and AF_UNIX means socketpair |

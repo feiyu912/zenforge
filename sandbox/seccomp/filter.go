@@ -40,8 +40,12 @@ const (
 	// architecture: without the check, a filter built for one ABI could be
 	// bypassed by a process running another, because syscall numbers differ.
 	RetKillProcess = 0x80000000
-	// ErrnoEPERM is the errno a denied syscall returns.
-	ErrnoEPERM = 22
+	// ErrnoEPERM is the errno a denied syscall returns. EPERM is 1 on
+	// Linux: it is spelled out here and pinned by a test because 22 (which
+	// this constant used to hold) is EINVAL, and a denied syscall that
+	// fails with the wrong errno is a bug that only shows up on a Linux
+	// host as "invalid argument" instead of "operation not permitted".
+	ErrnoEPERM = 1
 )
 
 // RetErrno returns the seccomp return value that fails a syscall with errno.
@@ -57,7 +61,8 @@ const (
 )
 
 // AFUnix is the socket domain the reference keeps available: Unix sockets
-// are used for subprocess management (language servers, `cargo clippy`) and
+// are used for subprocess management (language servers, `cargo clippy`) over
+// socketpair(2), and
 // do not reach the network.
 const AFUnix = 1
 
@@ -124,6 +129,10 @@ func archByName(name string) (Arch, error) {
 // recvfrom is deliberately absent: allowing it lets a toolchain that
 // manages subprocesses over a Unix socketpair keep working, and it cannot
 // reach the network on its own.
+//
+// bind, listen, and connect stay denied even for AF_UNIX: nothing should be
+// able to turn an inherited descriptor into a listening or dialing endpoint,
+// and the socketpair path subprocess tooling needs does not require them.
 var networkSyscalls = []string{
 	"connect", "accept", "accept4", "bind", "listen",
 	"getpeername", "getsockname", "shutdown", "sendto", "sendmmsg",

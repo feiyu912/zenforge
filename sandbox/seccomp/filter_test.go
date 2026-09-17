@@ -6,7 +6,6 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
@@ -307,16 +306,19 @@ func TestSeccompDeniesSockets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the helper itself failed: %v (%s)", err, output)
 	}
-	// An IP socket is denied with EPERM, so the child reports the denial
-	// rather than a connection result.
-	if !strings.Contains(string(output), "ip-socket=denied") {
-		t.Fatalf("an IP socket was not denied with EPERM: %s", output)
+	// An IP socket is refused with EPERM -- and specifically EPERM, not
+	// merely "an error": the filter returns EINVAL if its errno constant is
+	// wrong, which is indistinguishable from a broken probe.
+	for _, marker := range []string{"ip-socket=errno:EPERM", "ip-pair=errno:EPERM"} {
+		if !strings.Contains(string(output), marker) {
+			t.Fatalf("an IP socket was not denied with EPERM (want %s): %s", marker, output)
+		}
 	}
-	// Unix sockets stay available, which is what keeps subprocess tooling
-	// working; a kernel that denies them would be a policy bug, so report
-	// it rather than passing silently.
-	if !strings.Contains(string(output), "unix-socket=allowed") {
-		t.Fatalf("a unix socket was not allowed: %s", output)
+	// AF_UNIX socketpairs stay available, which is what keeps subprocess
+	// tooling working; a kernel that denies them would be a policy bug, so
+	// report it rather than passing silently.
+	if !strings.Contains(string(output), "unix-pair=allowed") {
+		t.Fatalf("a unix socketpair was not allowed: %s", output)
 	}
 }
 
@@ -330,13 +332,28 @@ func TestSeccompSocketAttemptProcess(t *testing.T) {
 
 // socketAttemptResult attempts the two socket families and reports what the
 // kernel did, in a form the parent can assert on.
+// socketAttemptResult probes the socket boundary from inside the filter and
+// reports the errno it saw, so the parent can assert the exact refusal
+// rather than "some error happened".
+//
+// Three probes, because they answer three different questions:
+//
+//   - dialect: dialing TCP must fail at socket(AF_INET) with EPERM.
+//   - pair: socketpair(AF_INET) must fail with EPERM.
+//   - unix: socketpair(AF_UNIX) must succeed. It is the capability the
+//     policy deliberately keeps, because subprocess tooling manages child
+//     processes over a socketpair. A unix *listener* is not expected to
+//     work: bind(2) and listen(2) are denied unconditionally, exactly as
+//     the reference denies them, so nothing can turn an inherited
+//     descriptor into a listening endpoint.
 func socketAttemptResult() string {
 	verdict := func(err error) string {
 		if err == nil {
 			return "allowed"
 		}
-		if errors.Is(err, syscall.EPERM) || strings.Contains(err.Error(), "operation not permitted") {
-			return "denied"
+		var errno syscall.Errno
+		if errors.As(err, &errno) {
+			return "errno:" + errnoName(errno)
 		}
 		return "error:" + err.Error()
 	}
@@ -344,11 +361,36 @@ func socketAttemptResult() string {
 	if ip != nil {
 		_ = ip.Close()
 	}
-	unixSocket, unixErr := net.Listen("unix", filepath.Join(os.TempDir(), fmt.Sprintf("zenforge-seccomp-%d.sock", os.Getpid())))
-	if unixSocket != nil {
-		_ = unixSocket.Close()
+	ipPair, ipPairErr := syscall.Socketpair(syscall.AF_INET, syscall.SOCK_STREAM, 0)
+	if ipPairErr == nil {
+		_ = syscall.Close(ipPair[0])
+		_ = syscall.Close(ipPair[1])
 	}
-	return fmt.Sprintf("ip-socket=%s unix-socket=%s", verdict(ipErr), verdict(unixErr))
+	unixPair, unixPairErr := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
+	if unixPairErr == nil {
+		_ = syscall.Close(unixPair[0])
+		_ = syscall.Close(unixPair[1])
+	}
+	return fmt.Sprintf("ip-socket=%s ip-pair=%s unix-pair=%s", verdict(ipErr), verdict(ipPairErr), verdict(unixPairErr))
+}
+
+// errnoName renders the errnos this boundary uses, so a failure says
+// "EPERM" instead of "invalid argument".
+func errnoName(errno syscall.Errno) string {
+	switch errno {
+	case syscall.EPERM:
+		return "EPERM"
+	case syscall.EINVAL:
+		return "EINVAL"
+	case syscall.EACCES:
+		return "EACCES"
+	case syscall.ENOSYS:
+		return "ENOSYS"
+	case syscall.EAFNOSUPPORT:
+		return "EAFNOSUPPORT"
+	default:
+		return errno.Error()
+	}
 }
 
 // evaluate runs the program the way the kernel's classic BPF interpreter
@@ -451,5 +493,77 @@ func TestProgramSemanticsDenyAllowAndKill(t *testing.T) {
 	}
 	if got := evaluate(t, arm, archARM64.AuditArch, 41, 2); got != RetAllow {
 		t.Fatalf("arm64 read returned %#x", got)
+	}
+}
+
+// TestErrnoEPERMIsTheLinuxValue pins the numeric errno. A wrong value here
+// is invisible on a host without seccomp and shows up on Linux as a denied
+// syscall failing with the wrong errno -- "invalid argument" instead of
+// "operation not permitted" -- which reads like a broken probe rather than
+// a policy decision.
+func TestErrnoEPERMIsTheLinuxValue(t *testing.T) {
+	if ErrnoEPERM != 1 {
+		t.Fatalf("ErrnoEPERM = %d, want 1 (EINVAL is 22)", ErrnoEPERM)
+	}
+	if got, want := RetErrno(ErrnoEPERM), uint32(0x00050001); got != want {
+		t.Fatalf("RetErrno(ErrnoEPERM) = %#x, want %#x", got, want)
+	}
+	// A denied syscall's return value carries the errno in the low bits and
+	// the SECCOMP_RET_ERRNO action in the high ones.
+	if action := RetErrno(ErrnoEPERM) & 0xffff0000; action != 0x00050000 {
+		t.Fatalf("action = %#x, want SECCOMP_RET_ERRNO", action)
+	}
+}
+
+// TestFilterDecisionsForTheSocketBoundary evaluates the program the way the
+// kernel interpreter does, so the bytes that actually reach a Linux host are
+// checked on any platform. The point is not just allow/deny: a denied
+// syscall must come back as SECCOMP_RET_ERRNO carrying EPERM, because
+// EINVAL (the value this constant used to hold) makes a real refusal look
+// like a broken probe.
+func TestFilterDecisionsForTheSocketBoundary(t *testing.T) {
+	filter, err := Build(Policy{}, "amd64")
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+	deny := RetErrno(ErrnoEPERM)
+	number := func(name string) uint32 {
+		nr, ok := archAMD64.Syscalls[name]
+		if !ok {
+			t.Fatalf("%s has no number on amd64", name)
+		}
+		return uint32(nr)
+	}
+	cases := []struct {
+		syscall string
+		arg0    uint32
+		want    uint32
+		why     string
+	}{
+		{"socket", uint32(syscall.AF_UNIX), RetAllow, "an AF_UNIX socket is the capability the policy keeps"},
+		{"socket", uint32(syscall.AF_INET), deny, "an IP socket is the network"},
+		{"socket", uint32(syscall.AF_INET6), deny, "IPv6 is still the network"},
+		{"socketpair", uint32(syscall.AF_UNIX), RetAllow, "subprocess tools manage children over a socketpair"},
+		{"socketpair", uint32(syscall.AF_INET), deny, "an IP socketpair is the network"},
+		{"connect", 0, deny, "an inherited descriptor must not reach the network"},
+		{"bind", 0, deny, "nothing may become a listening endpoint"},
+		{"listen", 0, deny, "nothing may become a listening endpoint"},
+		{"accept", 0, deny, "nothing may service a listening endpoint"},
+		{"sendto", 0, deny, "an inherited datagram descriptor must not send"},
+		{"setsockopt", 0, deny, "the reference denies it and the pair path does not need it"},
+		{"recvfrom", 0, RetAllow, "kept so a subprocess pair can be read"},
+		{"ptrace", 0, deny, "process inspection is denied unconditionally"},
+		{"io_uring_setup", 0, deny, "io_uring can create sockets without socket(2)"},
+		{"recvmsg", 0, RetAllow, "unrelated syscalls pass"},
+	}
+	for _, testCase := range cases {
+		got := evaluate(t, filter, archAMD64.AuditArch, number(testCase.syscall), testCase.arg0)
+		if got != testCase.want {
+			t.Fatalf("%s(arg0=%d) = %#x, want %#x (%s)", testCase.syscall, testCase.arg0, got, testCase.want, testCase.why)
+		}
+	}
+	// A foreign architecture is killed, not filtered with the wrong table.
+	if got := evaluate(t, filter, archARM64.AuditArch, number("socket"), uint32(syscall.AF_INET)); got != RetKillProcess {
+		t.Fatalf("a foreign architecture returned %#x, want RetKillProcess", got)
 	}
 }

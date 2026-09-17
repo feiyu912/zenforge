@@ -453,8 +453,8 @@ func TestLinuxSandboxActuallyConfines(t *testing.T) {
 	// a shell-based check can pass without exercising the filter at all.
 	if output, err := runLinuxSandboxSocketAttempt(t, run); err != nil {
 		t.Fatalf("the helper failed: %v (%s)", err, output)
-	} else if !strings.Contains(string(output), "ip-socket=denied") {
-		t.Fatalf("a socket was not denied under the sandbox: %s", output)
+	} else if !strings.Contains(string(output), "ip-socket=errno:EPERM") {
+		t.Fatalf("a socket was not denied with EPERM under the sandbox: %s", output)
 	}
 }
 
@@ -472,6 +472,10 @@ func TestLinuxSandboxSocketAttemptProcess(t *testing.T) {
 }
 
 // socketAttemptVerdict reports what the kernel did with an IP socket.
+// socketAttemptVerdict reports the errno the socket attempt saw, so the
+// parent asserts the exact refusal. "EPERM" and "EINVAL" are distinguished
+// on purpose: a filter with the wrong errno constant refuses the call but
+// looks like a broken probe.
 func socketAttemptVerdict() string {
 	connection, err := net.Dial("tcp", "127.0.0.1:1")
 	if connection != nil {
@@ -480,9 +484,11 @@ func socketAttemptVerdict() string {
 	switch {
 	case err == nil:
 		return "ip-socket=allowed"
-	case errors.Is(err, syscall.EPERM), strings.Contains(err.Error(), "operation not permitted"):
-		return "ip-socket=denied"
 	default:
+		var errno syscall.Errno
+		if errors.As(err, &errno) && errno == syscall.EPERM {
+			return "ip-socket=errno:EPERM"
+		}
 		return "ip-socket=error:" + err.Error()
 	}
 }
