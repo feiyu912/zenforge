@@ -15,6 +15,14 @@ zenforge init
 zenforge version
 ```
 
+## Tools
+
+The default tool set is `workspace_read`, `workspace_list`, `workspace_glob`,
+`workspace_grep`, `workspace_write`, `workspace_edit`, `apply_patch` (codex
+envelope: add, update, move, delete in one call), `shell` (unless `--no-shell`),
+`todo` tools, `ask_user`, `get_context_remaining`, and `present`. `tool_search`
+is added only when at least one configured tool defers its definition.
+
 ## Configuration layers
 
 Configuration is composed from ordered layers (system, user, profile, project,

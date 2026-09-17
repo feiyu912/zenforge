@@ -170,6 +170,7 @@ nav:
       - 0030 Declared tool timeouts and deferred loading: adr/0030-declared-tool-timeouts-and-deferred-loading.md
       - 0031 Headless exec protocol: adr/0031-headless-exec-protocol.md
       - 0032 Layered configuration and redaction: adr/0032-layered-configuration-and-redaction.md
+      - 0033 apply_patch envelope tool: adr/0033-apply-patch-envelope-tool.md
 
 extra:
   social:

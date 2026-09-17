@@ -10,6 +10,13 @@ type Workspace interface {
 	Stat(ctx context.Context, path string) (FileInfo, error)
 }
 
+// Deleter is implemented by workspaces that can remove a regular file.
+// It is optional so existing Workspace implementations keep compiling;
+// tools that need deletion (apply_patch) fail clearly when it is absent.
+type Deleter interface {
+	Delete(ctx context.Context, path string) error
+}
+
 type FileInfo struct {
 	Path    string
 	IsDir   bool

@@ -138,6 +138,40 @@ func (w *Workspace) Write(ctx context.Context, path string, data []byte) error {
 	return root.WriteFile(rel, data, 0o644)
 }
 
+// Delete removes a regular file confined to the workspace root.
+func (w *Workspace) Delete(ctx context.Context, path string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	_, rel, err := w.resolve(path, false)
+	if err != nil {
+		return err
+	}
+	root, err := os.OpenRoot(w.root)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	rel = filepath.FromSlash(rel)
+	info, err := root.Stat(rel)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return workspace.ErrPathNotFound
+		}
+		return err
+	}
+	if info.IsDir() || !info.Mode().IsRegular() {
+		return workspace.ErrUnsupportedFile
+	}
+	if err := root.Remove(rel); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return workspace.ErrPathNotFound
+		}
+		return err
+	}
+	return nil
+}
+
 func (w *Workspace) List(ctx context.Context, path string) ([]workspace.FileInfo, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

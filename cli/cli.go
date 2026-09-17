@@ -32,6 +32,7 @@ import (
 	"github.com/feiyu912/zenforge/tool"
 	"github.com/feiyu912/zenforge/tools/askuser"
 	"github.com/feiyu912/zenforge/tools/contextinfo"
+	patchtools "github.com/feiyu912/zenforge/tools/patch"
 	"github.com/feiyu912/zenforge/tools/present"
 	shelltool "github.com/feiyu912/zenforge/tools/shell"
 	"github.com/feiyu912/zenforge/tools/toolsearch"
@@ -632,9 +633,10 @@ func buildAgent(ctx context.Context, opts options, ioStreams IO) (*zenforge.Agen
 	// capture mutations) and the agent (which drains and emits
 	// turn.diff events at turn boundaries).
 	turnDiffs := workspacetools.NewTurnDiffStore()
+	snapshots := workspacetools.NewSnapshotStore()
 	workspaceTools, err := workspacetools.Tools(workspacetools.Config{
 		Workspace:              ws,
-		Snapshots:              workspacetools.NewSnapshotStore(),
+		Snapshots:              snapshots,
 		RequireReadBeforeWrite: true,
 		Policy:                 workspaceFilePolicy(opts),
 		SearchSpill:            spillStore,
@@ -643,7 +645,18 @@ func buildAgent(ctx context.Context, opts options, ioStreams IO) (*zenforge.Agen
 	if err != nil {
 		return nil, err
 	}
+	patchTool, err := patchtools.New(patchtools.Config{
+		Workspace:              ws,
+		Snapshots:              snapshots,
+		RequireReadBeforeWrite: true,
+		FilePolicy:             workspaceFilePolicy(opts),
+		TurnDiffs:              turnDiffs,
+	})
+	if err != nil {
+		return nil, err
+	}
 	tools := append([]tool.Tool(nil), workspaceTools...)
+	tools = append(tools, patchTool)
 	if !opts.noShell {
 		shell, err := shelltool.New(shelltool.Config{Policy: policy.ShellPolicy{
 			WorkingDir:      opts.shellWorkingDir,

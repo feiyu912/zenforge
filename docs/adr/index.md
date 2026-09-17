@@ -46,3 +46,4 @@ later ADRs supersede earlier ones, never edit.
 | [0030](0030-declared-tool-timeouts-and-deferred-loading.md) | Declared tool timeouts and deferred tool loading |
 | [0031](0031-headless-exec-protocol.md) | Headless exec protocol (`--json`, `--output-schema`) |
 | [0032](0032-layered-configuration-and-redaction.md) | Layered configuration, managed requirements, and redacted secrets |
+| [0033](0033-apply-patch-envelope-tool.md) | The `apply_patch` envelope tool |

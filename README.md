@@ -668,6 +668,18 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
   new files need a same-run observed absence (a read that reported
   not-found), so a blind create is refused; `workspace.ErrPathNotFound` now
   also satisfies `errors.Is(err, fs.ErrNotExist)`.
+- `apply_patch` envelope tool (codex apply-patch): one text patch adds,
+  updates, moves, and deletes files; the parser and the four-pass context
+  search (exact, trailing whitespace, surrounding whitespace, Unicode
+  punctuation) are ported from the reference, and the tool reuses the
+  workspace file policy, the same-run observation policy, and turn-diff
+  capture. `workspace.Deleter` adds optional deletion support.
+- Layered configuration (codex `ConfigLayerStack` + requirements): system,
+  user, profile, project, `--config`, and flag layers merge by precedence
+  with per-leaf provenance; `allowed`/`enforce` managed requirements
+  validate or pin values after merging; `--strict-config` rejects unknown
+  fields naming the layer; `redact.String` redacts every formatting path
+  while staying JSON-transparent.
 - Declared tool timeouts (DSH tool-call-timeout-policy): a tool can declare a
   cooperative per-call budget through `tool.TimeoutDeclarer`; the
   `tool.TimeoutPolicy` middleware arms it without ever exposing it to the
@@ -728,7 +740,8 @@ zenforge/
   cli/                  # command helpers and approval UX
   tool/                 # core tool interfaces, middleware, budgets, redaction, spill store, repeat guard, timeout policy, deferred markers
   model/                # openai, anthropic adapters (usage + rate-limit normalization)
-  tools/                # workspace (read/list/glob/grep/write/edit, turn-diff store), shell, todo, task, askuser, contextinfo, present, toolsearch
+  applypatch/           # codex apply-patch parser + applier (envelope, seek_sequence, summary)
+  tools/                # workspace (read/list/glob/grep/write/edit, turn-diff store), patch, shell, todo, task, askuser, contextinfo, present, toolsearch
   sessiontitle/         # terminal-safe session-title derivation (DSH parity)
   configlayer/          # layered config stack, profiles, managed requirements, strict fields
   redact/               # secret string that redacts every formatting path
