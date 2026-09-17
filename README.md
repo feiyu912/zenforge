@@ -668,6 +668,12 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
   new files need a same-run observed absence (a read that reported
   not-found), so a blind create is refused; `workspace.ErrPathNotFound` now
   also satisfies `errors.Is(err, fs.ErrNotExist)`.
+- Background jobs (codex `exec_command`/`write_stdin`): `jobs` starts a
+  long-running command detached from the tool call, reads each stream from
+  an absolute offset so polling never re-reads or silently skips bytes
+  (dropped bytes are reported, not hidden), feeds interactive programs
+  through stdin, and stops jobs by kill or timeout. The job limit fails
+  loudly instead of queueing behind a full slot.
 - Landlock + seccomp sandbox backend: `sandbox/linuxsandbox` binds the two
   in-process layers into a `sandbox.Sandbox` by re-invoking this binary as
   `zenforge linux-sandbox --policy <json> -- <command>`; the helper decodes

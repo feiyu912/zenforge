@@ -180,6 +180,7 @@ nav:
       - 0040 Landlock planner: adr/0040-landlock-planner.md
       - 0041 Seccomp filter: adr/0041-seccomp-filter.md
       - 0042 Restrict-then-exec helper: adr/0042-restrict-then-exec-helper.md
+      - 0043 Background jobs: adr/0043-background-jobs.md
 
 extra:
   social:

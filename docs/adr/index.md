@@ -56,3 +56,4 @@ later ADRs supersede earlier ones, never edit.
 | [0040](0040-landlock-planner.md) | Landlock: an ABI-aware planner plus a Linux-only applier |
 | [0041](0041-seccomp-filter.md) | Seccomp: a planned BPF program, verified by a test-local interpreter |
 | [0042](0042-restrict-then-exec-helper.md) | The Linux sandbox runs a restrict-then-exec helper (this binary) |
+| [0043](0043-background-jobs.md) | Background jobs: detached processes with offset-addressed output |

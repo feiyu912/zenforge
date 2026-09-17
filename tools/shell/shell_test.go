@@ -139,7 +139,10 @@ func TestShellTimeoutAndOutputCap(t *testing.T) {
 		t.Fatalf("expected ErrTimeout, got result=%#v err=%v", result, err)
 	}
 
-	result, err = shell.Call(context.Background(), json.RawMessage(`{"command":"printf abcdef","description":"cap output","timeoutMs":1000}`), tool.Context{})
+	// A generous budget: this case asserts the output cap and the
+	// truncated flag, and a one-second budget made it fail under a fully
+	// loaded parallel test run on a busy machine.
+	result, err = shell.Call(context.Background(), json.RawMessage(`{"command":"printf abcdef","description":"cap output","timeoutMs":5000}`), tool.Context{})
 	if err != nil {
 		t.Fatalf("Call returned error: %v", err)
 	}
