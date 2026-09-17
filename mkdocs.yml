@@ -172,6 +172,7 @@ nav:
       - 0032 Layered configuration and redaction: adr/0032-layered-configuration-and-redaction.md
       - 0033 apply_patch envelope tool: adr/0033-apply-patch-envelope-tool.md
       - 0034 Web tools and SSRF defense: adr/0034-web-tools-and-ssrf-defense.md
+      - 0035 Run time travel: adr/0035-run-time-travel.md
 
 extra:
   social:

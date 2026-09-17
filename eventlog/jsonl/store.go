@@ -24,6 +24,18 @@ const (
 type Store struct {
 	root string
 	mu   *sync.Mutex
+	// tails caches each run's last sequence and log size so an append is
+	// O(1) instead of a full rescan. The size check is what keeps the
+	// cache honest across processes: a concurrent writer changes the
+	// file size, which invalidates the entry, and the flock ensures no
+	// write is in flight while the cache is read.
+	tails sync.Map
+}
+
+// tailState is one run's cached log tail.
+type tailState struct {
+	seq  int64
+	size int64
 }
 
 // rootLocks coordinates Store instances that target the same on-disk log.
@@ -93,7 +105,11 @@ func (s *Store) Append(ctx context.Context, event zenforge.Event) error {
 	if _, err := file.Write(append(encoded, '\n')); err != nil {
 		return err
 	}
-	return file.Sync()
+	if err := file.Sync(); err != nil {
+		return err
+	}
+	s.rememberTail(runID, event.Seq)
+	return nil
 }
 
 func (s *Store) Read(ctx context.Context, runID string, afterSeq int64, limit int) ([]zenforge.Event, error) {
@@ -112,6 +128,12 @@ func (s *Store) Read(ctx context.Context, runID string, afterSeq int64, limit in
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if seq, ok := s.cachedTail(runID); ok && afterSeq >= seq {
+		// The log ends at or before the requested cursor: nothing new
+		// can be returned without reopening the file.
+		return nil, nil
+	}
 
 	var out []zenforge.Event
 	err := s.scanLocked(ctx, runID, func(event zenforge.Event) bool {
@@ -148,6 +170,9 @@ func (s *Store) LatestSeq(ctx context.Context, runID string) (int64, error) {
 }
 
 func (s *Store) latestSeqLocked(ctx context.Context, runID string) (int64, error) {
+	if seq, ok := s.cachedTail(runID); ok {
+		return seq, nil
+	}
 	var latest int64
 	err := s.scanLocked(ctx, runID, func(event zenforge.Event) bool {
 		latest = event.Seq
@@ -156,7 +181,40 @@ func (s *Store) latestSeqLocked(ctx context.Context, runID string) (int64, error
 	if err != nil {
 		return 0, err
 	}
+	s.rememberTail(runID, latest)
 	return latest, nil
+}
+
+// cachedTail returns the cached last sequence when the log file still
+// has the size it had when the entry was recorded.
+func (s *Store) cachedTail(runID string) (int64, bool) {
+	cached, ok := s.tails.Load(runID)
+	if !ok {
+		return 0, false
+	}
+	state, ok := cached.(tailState)
+	if !ok {
+		return 0, false
+	}
+	info, err := os.Stat(filepath.Join(s.root, runID, eventsFileName))
+	if err != nil {
+		return 0, false
+	}
+	if info.Size() != state.size {
+		return 0, false
+	}
+	return state.seq, true
+}
+
+// rememberTail records the tail for a run, reading the size after a
+// write. A missing file clears the entry.
+func (s *Store) rememberTail(runID string, seq int64) {
+	info, err := os.Stat(filepath.Join(s.root, runID, eventsFileName))
+	if err != nil {
+		s.tails.Delete(runID)
+		return
+	}
+	s.tails.Store(runID, tailState{seq: seq, size: info.Size()})
 }
 
 func (s *Store) scanLocked(ctx context.Context, runID string, visit func(zenforge.Event) bool) error {

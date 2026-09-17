@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -155,6 +156,81 @@ func (s *Store) Load(ctx context.Context, runID string) (*checkpoint.Checkpoint,
 		return nil, err
 	}
 	return s.loadLocked(ctx, runID)
+}
+
+// LoadAt implements checkpoint.HistoricalStore by scanning the
+// append-only checkpoints.jsonl history for the newest record at or
+// below seq. A seq of zero returns the newest record, including the
+// pending-save recovery the latest.json fast path performs.
+func (s *Store) LoadAt(ctx context.Context, runID string, seq int64) (*checkpoint.Checkpoint, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if s.root == "" {
+		return nil, fmt.Errorf("checkpoint root is required")
+	}
+	if runID == "" {
+		return nil, checkpoint.ErrNotFound
+	}
+	if err := validateRunID(runID); err != nil {
+		return nil, err
+	}
+	if seq <= 0 {
+		return s.Load(ctx, runID)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	lock, err := s.lockRoot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer unlockFile(lock)
+	if _, err := s.recoverPending(ctx, runID); err != nil {
+		return nil, err
+	}
+
+	path := filepath.Join(s.root, runID, checkpointsFileName)
+	file, err := os.Open(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, checkpoint.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	decoder := json.NewDecoder(file)
+	var best *checkpoint.Checkpoint
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		var candidate checkpoint.Checkpoint
+		if err := decoder.Decode(&candidate); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return nil, fmt.Errorf("parse %s: %w", path, err)
+		}
+		if candidate.RunID != runID {
+			return nil, fmt.Errorf("parse %s: runId mismatch %q", path, candidate.RunID)
+		}
+		if candidate.Seq > seq {
+			continue
+		}
+		if best == nil || candidate.Seq > best.Seq {
+			cloned := candidate
+			best = &cloned
+		}
+	}
+	if best == nil {
+		return nil, fmt.Errorf("%w: no checkpoint at or below seq %d for runId %q", checkpoint.ErrNotFound, seq, runID)
+	}
+	if err := checkpoint.ValidateForLoad(*best); err != nil {
+		return nil, err
+	}
+	return best, nil
 }
 
 func (s *Store) Delete(ctx context.Context, runID string) error {

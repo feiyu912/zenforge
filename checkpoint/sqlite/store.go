@@ -126,6 +126,35 @@ func (s *Store) Load(ctx context.Context, runID string) (*checkpoint.Checkpoint,
 	return decodeCheckpoint(raw)
 }
 
+// LoadAt implements checkpoint.HistoricalStore using the append-only
+// checkpoints table.
+func (s *Store) LoadAt(ctx context.Context, runID string, seq int64) (*checkpoint.Checkpoint, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := s.ready(); err != nil {
+		return nil, err
+	}
+	if runID == "" {
+		return nil, checkpoint.ErrNotFound
+	}
+	if seq <= 0 {
+		return s.Load(ctx, runID)
+	}
+
+	var raw []byte
+	err := s.db.QueryRowContext(ctx,
+		`SELECT checkpoint_json FROM checkpoints WHERE run_id = ? AND seq <= ? ORDER BY seq DESC LIMIT 1`,
+		runID, seq).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("%w: no checkpoint at or below seq %d for runId %q", checkpoint.ErrNotFound, seq, runID)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return decodeCheckpoint(raw)
+}
+
 func (s *Store) Delete(ctx context.Context, runID string) error {
 	if err := ctx.Err(); err != nil {
 		return err

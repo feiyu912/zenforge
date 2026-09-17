@@ -48,3 +48,4 @@ later ADRs supersede earlier ones, never edit.
 | [0032](0032-layered-configuration-and-redaction.md) | Layered configuration, managed requirements, and redacted secrets |
 | [0033](0033-apply-patch-envelope-tool.md) | The `apply_patch` envelope tool |
 | [0034](0034-web-tools-and-ssrf-defense.md) | Web tools and the SSRF-safe fetch transport |
+| [0035](0035-run-time-travel.md) | Run time travel: checkpoint fork and append-only revert |

@@ -26,6 +26,27 @@ is added only when at least one configured tool defers its definition, and
 `web.searchEndpoint` is set (a search endpoint also registers
 `web_search`).
 
+## Time travel
+
+`zenforge fork <parent-run-id> [--at <seq>]` starts a new run from the
+parent's newest checkpoint at or below `--at` (the latest checkpoint when
+`--at` is omitted or 0). The child's conversation, todos, and tool state
+come from the parent; its event log begins with its own `run.started`
+carrying `forkedFrom`, its state records `parentRunId`, and the parent log
+is untouched. The command prints `forked <parent> into <child>` on stderr
+and then streams the continued run.
+
+`zenforge revert --to <seq> <run-id>` rewinds a stored run without running
+it: it appends a `run.reverted` marker and saves the state at the newest
+checkpoint at or below `--to` as the run's newest checkpoint. History is
+never truncated, so the abandoned branch stays in the log. It needs only
+the checkpoint and event stores — no model or API key — and prints the
+marker sequence on stdout.
+
+`zenforge resume --revert-to <seq> <run-id>` performs the same rewind and
+then resumes, which is the shorthand for "undo the last few steps and
+continue".
+
 ## Configuration layers
 
 Configuration is composed from ordered layers (system, user, profile, project,

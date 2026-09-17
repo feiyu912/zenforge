@@ -89,6 +89,10 @@ func Main(ctx context.Context, args []string, ioStreams IO) int {
 		err = code(ctx, args[1:], ioStreams)
 	case "resume":
 		err = resume(ctx, args[1:], ioStreams)
+	case "fork":
+		err = fork(ctx, args[1:], ioStreams)
+	case "revert":
+		err = revert(ctx, args[1:], ioStreams)
 	case "events":
 		err = events(ctx, args[1:], ioStreams)
 	case "runs":
@@ -332,6 +336,7 @@ func resume(ctx context.Context, args []string, ioStreams IO) error {
 		return err
 	}
 	bindOptions(fs, &opts)
+	revertTo := fs.Int64("revert-to", 0, "rewind to the newest checkpoint at or below this event sequence before resuming")
 	if err := fs.Parse(args); err != nil {
 		return invalidUsage(err)
 	}
@@ -344,6 +349,9 @@ func resume(ctx context.Context, args []string, ioStreams IO) error {
 	if fs.NArg() != 1 {
 		return invalidUsage(errors.New("resume requires run id"))
 	}
+	if *revertTo < 0 {
+		return invalidUsage(errors.New("--revert-to must be non-negative"))
+	}
 	if err := validateResumeCheckpoint(ctx, opts, fs.Arg(0)); err != nil {
 		return err
 	}
@@ -351,11 +359,103 @@ func resume(ctx context.Context, args []string, ioStreams IO) error {
 	if err != nil {
 		return err
 	}
+	if *revertTo > 0 {
+		marker, err := agent.Revert(ctx, fs.Arg(0), *revertTo)
+		if err != nil {
+			return err
+		}
+		_, _ = fmt.Fprintf(ioStreams.Stderr, "reverted run %s to seq %d (marker seq %d)\n", fs.Arg(0), *revertTo, marker.Seq)
+	}
 	events, err := agent.Resume(ctx, fs.Arg(0))
 	if err != nil {
 		return err
 	}
 	return renderStream(ioStreams.Stdout, events)
+}
+
+// fork starts a new run from an existing run's checkpoint at or below
+// --at (default: the latest checkpoint) and streams the continued run.
+// The child's conversation, todos, and tool state come from the parent;
+// the parent's log is untouched and the child records its lineage.
+func fork(ctx context.Context, args []string, ioStreams IO) error {
+	fs := flag.NewFlagSet("fork", flag.ContinueOnError)
+	fs.SetOutput(ioStreams.Stderr)
+	opts, err := optionsFromArgs(args)
+	if err != nil {
+		return err
+	}
+	bindOptions(fs, &opts)
+	at := fs.Int64("at", 0, "parent checkpoint sequence to branch from (0 selects the latest)")
+	if err := fs.Parse(args); err != nil {
+		return invalidUsage(err)
+	}
+	if err := resolveExecutionFlags(fs, &opts); err != nil {
+		return invalidUsage(err)
+	}
+	if err := validateOptionEnums(opts); err != nil {
+		return invalidUsage(err)
+	}
+	if fs.NArg() != 1 {
+		return invalidUsage(errors.New("fork requires parent run id"))
+	}
+	if *at < 0 {
+		return invalidUsage(errors.New("--at must be non-negative"))
+	}
+	agent, err := buildAgent(ctx, opts, ioStreams)
+	if err != nil {
+		return err
+	}
+	runID, events, err := agent.Fork(ctx, fs.Arg(0), *at)
+	if err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(ioStreams.Stderr, "forked %s into %s\n", fs.Arg(0), runID)
+	return renderStream(ioStreams.Stdout, events)
+}
+
+// revert rewinds a run without running it: the next resume continues
+// from the rewound state, and the log keeps the abandoned branch behind
+// a run.reverted marker.
+func revert(ctx context.Context, args []string, ioStreams IO) error {
+	fs := flag.NewFlagSet("revert", flag.ContinueOnError)
+	fs.SetOutput(ioStreams.Stderr)
+	opts, err := optionsFromArgs(args)
+	if err != nil {
+		return err
+	}
+	bindOptions(fs, &opts)
+	to := fs.Int64("to", 0, "event sequence to rewind to")
+	if err := fs.Parse(args); err != nil {
+		return invalidUsage(err)
+	}
+	if err := resolveExecutionFlags(fs, &opts); err != nil {
+		return invalidUsage(err)
+	}
+	if fs.NArg() != 1 {
+		return invalidUsage(errors.New("revert requires run id"))
+	}
+	if *to <= 0 {
+		return invalidUsage(errors.New("revert requires --to with a positive sequence"))
+	}
+	checkpoints, closeCheckpoints, err := openCheckpointStore(ctx, opts.checkpointType, opts.checkpointDir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = closeCheckpoints() }()
+	events, closeEvents, err := openEventStore(ctx, opts.checkpointType, opts.checkpointDir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = closeEvents() }()
+	marker, err := zenforge.RevertRun(ctx, zenforge.TimeTravelStores{
+		Checkpoints: checkpoints,
+		Events:      events,
+	}, fs.Arg(0), *to)
+	if err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(ioStreams.Stdout, "reverted run %s to seq %d (marker seq %d)\n", fs.Arg(0), *to, marker.Seq)
+	return nil
 }
 
 func events(ctx context.Context, args []string, ioStreams IO) error {
@@ -1140,6 +1240,8 @@ func renderEvent(out io.Writer, event zenforge.Event) {
 		_, _ = fmt.Fprintf(out, "run %s started\n", event.RunID())
 	case zenforge.EventRunResumed:
 		_, _ = fmt.Fprintf(out, "run %s resumed\n", event.RunID())
+	case zenforge.EventRunReverted:
+		_, _ = fmt.Fprintf(out, "run %s reverted to seq %v\n", event.RunID(), event.Value("toSeq"))
 	case zenforge.EventModelDelta:
 		_, _ = fmt.Fprint(out, stringValue(event.Payload["textDelta"]))
 	case zenforge.EventToolCall:
@@ -1236,7 +1338,7 @@ func stringValue(value any) string {
 }
 
 func printUsage(out io.Writer) {
-	_, _ = fmt.Fprintln(out, "usage: zenforge <run|exec|code|resume|events|runs|init|version> [options]")
+	_, _ = fmt.Fprintln(out, "usage: zenforge <run|exec|code|resume|fork|revert|events|runs|init|version> [options]")
 }
 
 type multiFlag []string

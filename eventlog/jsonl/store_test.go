@@ -279,3 +279,105 @@ func TestStoreHonorsCanceledContext(t *testing.T) {
 		t.Fatalf("expected context.Canceled, got %v", err)
 	}
 }
+
+// TestTailCacheStaysCorrectAcrossStoreInstances proves the ordinal cache
+// is invalidated by another writer's append (the size check), so a second
+// Store instance never reuses a sequence.
+func TestTailCacheStaysCorrectAcrossStoreInstances(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	first := New(root)
+	second := New(root)
+	// New shares one mutex per root, so the test replaces them to force
+	// the file lock to do the coordinating.
+	first.mu = &sync.Mutex{}
+	second.mu = &sync.Mutex{}
+
+	for index := 1; index <= 5; index++ {
+		writer := first
+		if index%2 == 0 {
+			writer = second
+		}
+		event := zenforge.NewEvent(zenforge.EventModelDelta, "run_cache", map[string]any{"index": index})
+		if err := writer.Append(ctx, event); err != nil {
+			t.Fatalf("Append(%d) returned error: %v", index, err)
+		}
+	}
+	events, err := first.Read(ctx, "run_cache", 0, 0)
+	if err != nil {
+		t.Fatalf("Read returned error: %v", err)
+	}
+	if len(events) != 5 {
+		t.Fatalf("events = %d, want 5", len(events))
+	}
+	for index, event := range events {
+		if event.Seq != int64(index+1) {
+			t.Fatalf("event %d seq = %d", index, event.Seq)
+		}
+	}
+	// A cursor at the tail short-circuits without scanning and stays empty
+	// even after another instance appends.
+	latest, err := second.LatestSeq(ctx, "run_cache")
+	if err != nil || latest != 5 {
+		t.Fatalf("LatestSeq = %d err=%v", latest, err)
+	}
+	tail, err := first.Read(ctx, "run_cache", 5, 0)
+	if err != nil || len(tail) != 0 {
+		t.Fatalf("tail read = %v err=%v", tail, err)
+	}
+	if err := second.Append(ctx, zenforge.NewEvent(zenforge.EventModelDelta, "run_cache", map[string]any{"index": 6})); err != nil {
+		t.Fatalf("Append(6) returned error: %v", err)
+	}
+	after, err := first.Read(ctx, "run_cache", 5, 0)
+	if err != nil {
+		t.Fatalf("Read returned error: %v", err)
+	}
+	if len(after) != 1 || after[0].Seq != 6 {
+		t.Fatalf("after external append = %#v", after)
+	}
+}
+
+// TestConcurrentAppendsSerializeOnTheFileLock runs appends from distinct
+// Store instances (distinct in-process mutexes) so the flock, not the
+// mutex, must serialize them.
+func TestConcurrentAppendsSerializeOnTheFileLock(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	const writers = 4
+	const perWriter = 5
+
+	var wg sync.WaitGroup
+	errs := make(chan error, writers*perWriter)
+	for writer := 0; writer < writers; writer++ {
+		store := New(root)
+		store.mu = &sync.Mutex{}
+		wg.Add(1)
+		go func(index int, store *Store) {
+			defer wg.Done()
+			for appendIndex := 0; appendIndex < perWriter; appendIndex++ {
+				event := zenforge.NewEvent(zenforge.EventModelDelta, "run_lock", map[string]any{"writer": index, "index": appendIndex})
+				if err := store.Append(ctx, event); err != nil {
+					errs <- err
+				}
+			}
+		}(writer, store)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatalf("concurrent Append returned error: %v", err)
+	}
+
+	events, err := New(root).Read(ctx, "run_lock", 0, 0)
+	if err != nil {
+		t.Fatalf("Read returned error: %v", err)
+	}
+	if len(events) != writers*perWriter {
+		t.Fatalf("events = %d, want %d", len(events), writers*perWriter)
+	}
+	for index, event := range events {
+		if event.Seq != int64(index+1) {
+			t.Fatalf("seq at %d = %d, want %d", index, event.Seq, index+1)
+		}
+	}
+}

@@ -668,6 +668,15 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
   new files need a same-run observed absence (a read that reported
   not-found), so a blind create is refused; `workspace.ErrPathNotFound` now
   also satisfies `errors.Is(err, fs.ErrNotExist)`.
+- Run time travel (codex rollout fork/revert + writer lock): every JSONL
+  event carries a contiguous per-run ordinal written under an in-process
+  mutex and a cross-process `flock`, and appends use a size-validated tail
+  cache instead of rescanning the log. `checkpoint.LoadAt` reads the
+  newest checkpoint at or below a sequence; `zenforge fork <run>` starts a
+  child run from that state (child log begins with its own `run.started`,
+  lineage in `parentRunId`), and `zenforge revert --to <seq>` (or
+  `resume --revert-to <seq>`) appends a `run.reverted` marker and makes the
+  rewound state the newest checkpoint, so history is never truncated.
 - Web tools (DSH `web_search`/`web_fetch` + `dsh-web-fetch-http`):
   `web_fetch` resolves a hostname once, requires every answer to be public
   unicast, and pins the connection to those addresses so DNS rebinding

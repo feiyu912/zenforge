@@ -13,11 +13,15 @@ type EventType string
 type EventData map[string]any
 
 const (
-	EventRunStarted         EventType = "run.started"
-	EventRunResumed         EventType = "run.resumed"
-	EventRunDone            EventType = "run.done"
-	EventRunError           EventType = "run.error"
-	EventRunCancelled       EventType = "run.cancelled"
+	EventRunStarted   EventType = "run.started"
+	EventRunResumed   EventType = "run.resumed"
+	EventRunDone      EventType = "run.done"
+	EventRunError     EventType = "run.error"
+	EventRunCancelled EventType = "run.cancelled"
+	// EventRunReverted marks an append-only rewind: the run's newest
+	// checkpoint is the state at the marker's checkpointSeq, and the log
+	// retains every event of the abandoned branch.
+	EventRunReverted        EventType = "run.reverted"
 	EventRequestSteer       EventType = "request.steer"
 	EventStepStarted        EventType = "step.started"
 	EventStepDone           EventType = "step.done"

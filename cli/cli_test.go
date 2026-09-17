@@ -149,6 +149,30 @@ func TestCLIReportsUsefulArgumentErrors(t *testing.T) {
 			wantCode:   2,
 			wantStderr: "runs does not accept positional arguments",
 		},
+		{
+			name:       "fork missing parent run id",
+			args:       []string{"fork"},
+			wantCode:   2,
+			wantStderr: "fork requires parent run id",
+		},
+		{
+			name:       "revert missing run id",
+			args:       []string{"revert"},
+			wantCode:   2,
+			wantStderr: "revert requires run id",
+		},
+		{
+			name:       "revert requires a sequence",
+			args:       []string{"revert", "run_1"},
+			wantCode:   2,
+			wantStderr: "revert requires --to with a positive sequence",
+		},
+		{
+			name:       "resume rejects a negative revert target",
+			args:       []string{"resume", "--revert-to", "-1", "run_1"},
+			wantCode:   2,
+			wantStderr: "--revert-to must be non-negative",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1767,5 +1791,68 @@ func TestLayeredConfigDoesNotLeakSecretsInErrors(t *testing.T) {
 	}
 	if strings.Contains(stderr.String(), "sk-leaky") {
 		t.Fatalf("error output leaked the key: %q", stderr.String())
+	}
+}
+
+// TestRevertCommandRewindsAStoredRun exercises the CLI revert path
+// against a real JSONL checkpoint store: the command appends a
+// run.reverted marker and makes the rewound state the newest
+// checkpoint, so a later resume continues from it.
+func TestRevertCommandRewindsAStoredRun(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	checkpoints := checkpointjsonl.New(dir)
+	events := eventlogjsonl.New(dir)
+	runID := "run_revert_cli"
+	base := harness.RunState{
+		Version:   harness.RunStateVersion,
+		RunID:     runID,
+		Input:     "task",
+		Phase:     harness.RunPhaseModel,
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+		Messages:  []harness.MessageState{{Role: "user", Content: "first"}},
+	}
+	for _, cp := range []checkpoint.Checkpoint{
+		{Version: checkpoint.CheckpointVersion, RunID: runID, Seq: 2, State: base, SavedAt: time.Now().UTC()},
+		{Version: checkpoint.CheckpointVersion, RunID: runID, Seq: 4, State: base, SavedAt: time.Now().UTC()},
+	} {
+		if err := checkpoints.Save(ctx, cp); err != nil {
+			t.Fatalf("Save returned error: %v", err)
+		}
+	}
+	for index := 1; index <= 4; index++ {
+		event := zenforge.NewEvent(zenforge.EventModelDelta, runID, map[string]any{"index": index}).WithSeq(int64(index))
+		if err := events.Append(ctx, event); err != nil {
+			t.Fatalf("Append returned error: %v", err)
+		}
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Main(ctx, []string{"revert", "--to", "2", "--checkpoint-dir", dir, runID}, IO{Stdout: &stdout, Stderr: &stderr})
+	if code != 0 {
+		t.Fatalf("code = %d, stdout = %q stderr = %q", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "reverted run "+runID+" to seq 2") {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+
+	latest, err := checkpoints.Load(ctx, runID)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if latest.Seq != 5 {
+		t.Fatalf("checkpoint seq = %d, want 5", latest.Seq)
+	}
+	if seq, ok := zenforge.RevertedSeq(latest.State); !ok || seq != 2 {
+		t.Fatalf("reverted seq = %d %v", seq, ok)
+	}
+	logged, err := events.Read(ctx, runID, 0, 0)
+	if err != nil || len(logged) != 5 {
+		t.Fatalf("events = %d err=%v", len(logged), err)
+	}
+	if logged[4].Type != zenforge.EventRunReverted {
+		t.Fatalf("marker = %#v", logged[4])
 	}
 }

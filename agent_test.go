@@ -273,6 +273,44 @@ func TestAgentStreamEmitsTraceEvents(t *testing.T) {
 	}
 }
 
+// runEventStore is an in-package event store that filters by run id, so
+// fork/revert tests can assert on per-run logs.
+type runEventStore struct {
+	events []Event
+}
+
+func (s *runEventStore) Append(ctx context.Context, event Event) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.events = append(s.events, event)
+	return nil
+}
+
+func (s *runEventStore) Read(_ context.Context, runID string, afterSeq int64, limit int) ([]Event, error) {
+	var out []Event
+	for _, event := range s.events {
+		if event.RunID() != runID || event.Seq <= afterSeq {
+			continue
+		}
+		out = append(out, event)
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
+
+func (s *runEventStore) LatestSeq(_ context.Context, runID string) (int64, error) {
+	var latest int64
+	for _, event := range s.events {
+		if event.RunID() == runID && event.Seq > latest {
+			latest = event.Seq
+		}
+	}
+	return latest, nil
+}
+
 type testEventStore struct {
 	events []Event
 }
@@ -4388,4 +4426,144 @@ func (forgedApprovalTool) Call(ctx context.Context, input json.RawMessage, call 
 		Risk:       approval.RiskMedium,
 		Options:    approval.DefaultOptions(),
 	}), approval.ErrRequired
+}
+
+func TestAgentForkBranchesFromParentCheckpoint(t *testing.T) {
+	ctx := context.Background()
+	checkpoints := checkpointmemory.New()
+	events := &runEventStore{}
+	parentID := "run_parent"
+	state := newTaskRunState(parentID, "parent task", nil, nil)
+	state.Phase = harness.RunPhaseModel
+	state.Messages = []harness.MessageState{{Role: "user", Content: "parent task"}}
+	state.Meta = map[string]any{"planning.preset": "plan_execute", "planning.input": "parent task"}
+	if err := checkpoints.Save(ctx, checkpoint.Checkpoint{
+		Version: checkpoint.CheckpointVersion, RunID: parentID, Seq: 4, State: state, SavedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("Save returned error: %v", err)
+	}
+	if err := events.Append(ctx, NewEvent(EventRunStarted, parentID, map[string]any{"input": "parent task"}).WithSeq(1)); err != nil {
+		t.Fatalf("Append returned error: %v", err)
+	}
+
+	fake := &scriptedModel{turns: []scriptedTurn{{events: []model.Event{{Delta: "forked"}}}}}
+	agent := New(Config{Model: fake, Checkpoints: checkpoints, Events: events})
+	childID, stream, err := agent.Fork(ctx, parentID, 4)
+	if err != nil {
+		t.Fatalf("Fork returned error: %v", err)
+	}
+	for range stream {
+	}
+	if childID == "" || childID == parentID {
+		t.Fatalf("child run id = %q", childID)
+	}
+
+	child, err := checkpoints.Load(ctx, childID)
+	if err != nil {
+		t.Fatalf("child Load returned error: %v", err)
+	}
+	if child.State.ParentRunID != parentID {
+		t.Fatalf("child parent = %q", child.State.ParentRunID)
+	}
+	parent, seq, ok := ForkedFrom(child.State)
+	if !ok || parent != parentID || seq != 4 {
+		t.Fatalf("fork lineage = %q %d %v", parent, seq, ok)
+	}
+
+	// The child log starts with its own run.started, carrying the lineage.
+	childEvents, err := events.Read(ctx, childID, 0, 0)
+	if err != nil {
+		t.Fatalf("Read returned error: %v", err)
+	}
+	if len(childEvents) == 0 || childEvents[0].Type != EventRunStarted {
+		t.Fatalf("child events = %#v", childEvents)
+	}
+	if childEvents[0].Value("forkedFrom") != parentID {
+		t.Fatalf("child run.started = %#v", childEvents[0].Map())
+	}
+	// The parent log is untouched.
+	parentEvents, err := events.Read(ctx, parentID, 0, 0)
+	if err != nil || len(parentEvents) != 1 {
+		t.Fatalf("parent events = %#v err=%v", parentEvents, err)
+	}
+}
+
+func TestAgentRevertRewindsAndResumeContinuesFromIt(t *testing.T) {
+	ctx := context.Background()
+	checkpoints := checkpointmemory.New()
+	events := &runEventStore{}
+	runID := "run_revert"
+	base := newTaskRunState(runID, "task", nil, nil)
+
+	// Two checkpoints: the later one is the abandoned branch.
+	early := base
+	early.Messages = []harness.MessageState{{Role: "user", Content: "first"}}
+	early.Phase = harness.RunPhaseModel
+	if err := checkpoints.Save(ctx, checkpoint.Checkpoint{
+		Version: checkpoint.CheckpointVersion, RunID: runID, Seq: 2, State: early, SavedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("Save returned error: %v", err)
+	}
+	late := base
+	late.Messages = []harness.MessageState{{Role: "user", Content: "first"}, {Role: "assistant", Content: "wrong branch"}}
+	late.Phase = harness.RunPhaseModel
+	if err := checkpoints.Save(ctx, checkpoint.Checkpoint{
+		Version: checkpoint.CheckpointVersion, RunID: runID, Seq: 6, State: late, SavedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("Save returned error: %v", err)
+	}
+	for index := 1; index <= 6; index++ {
+		if err := events.Append(ctx, NewEvent(EventModelDelta, runID, map[string]any{"index": index}).WithSeq(int64(index))); err != nil {
+			t.Fatalf("Append returned error: %v", err)
+		}
+	}
+
+	fake := &scriptedModel{turns: []scriptedTurn{{events: []model.Event{{Delta: "recovered"}}}}}
+	agent := New(Config{Model: fake, Checkpoints: checkpoints, Events: events})
+	marker, err := agent.Revert(ctx, runID, 2)
+	if err != nil {
+		t.Fatalf("Revert returned error: %v", err)
+	}
+	if marker.Type != EventRunReverted || marker.Seq != 7 {
+		t.Fatalf("marker = %#v", marker)
+	}
+
+	state, err := checkpoints.Load(ctx, runID)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if len(state.State.Messages) != 1 || state.State.Messages[0].Content != "first" {
+		t.Fatalf("reverted messages = %#v", state.State.Messages)
+	}
+	if seq, ok := RevertedSeq(state.State); !ok || seq != 2 {
+		t.Fatalf("reverted marker seq = %d %v", seq, ok)
+	}
+	if state.Seq != 7 {
+		t.Fatalf("reverted checkpoint seq = %d", state.Seq)
+	}
+
+	// Every event survives; the log is append-only.
+	all, err := events.Read(ctx, runID, 0, 0)
+	if err != nil || len(all) != 7 {
+		t.Fatalf("events = %d err=%v", len(all), err)
+	}
+	// Resuming continues from the rewound state.
+	stream, err := agent.Resume(ctx, runID)
+	if err != nil {
+		t.Fatalf("Resume returned error: %v", err)
+	}
+	for range stream {
+	}
+	if len(fake.requests) != 1 {
+		t.Fatalf("resume requests = %d", len(fake.requests))
+	}
+	contents := make([]string, 0, len(fake.requests[0].Messages))
+	for _, message := range fake.requests[0].Messages {
+		contents = append(contents, message.Content)
+	}
+	for _, content := range contents {
+		if content == "wrong branch" {
+			t.Fatalf("resume replayed the abandoned branch: %v", contents)
+		}
+	}
 }

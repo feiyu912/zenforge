@@ -12,11 +12,13 @@ import (
 type Store struct {
 	mu          sync.RWMutex
 	checkpoints map[string]checkpoint.Checkpoint
+	history     map[string][]checkpoint.Checkpoint
 }
 
 func New() *Store {
 	return &Store{
 		checkpoints: make(map[string]checkpoint.Checkpoint),
+		history:     make(map[string][]checkpoint.Checkpoint),
 	}
 }
 
@@ -37,7 +39,40 @@ func (s *Store) Save(ctx context.Context, cp checkpoint.Checkpoint) error {
 		return err
 	}
 	s.checkpoints[cp.RunID] = cloned
+	s.history[cp.RunID] = append(s.history[cp.RunID], cloned)
 	return nil
+}
+
+// LoadAt implements checkpoint.HistoricalStore.
+func (s *Store) LoadAt(ctx context.Context, runID string, seq int64) (*checkpoint.Checkpoint, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if runID == "" {
+		return nil, checkpoint.ErrNotFound
+	}
+	s.mu.RLock()
+	entries := s.history[runID]
+	s.mu.RUnlock()
+	if len(entries) == 0 {
+		return nil, checkpoint.ErrNotFound
+	}
+	if seq <= 0 {
+		seq = entries[len(entries)-1].Seq
+	}
+	for index := len(entries) - 1; index >= 0; index-- {
+		if entries[index].Seq <= seq {
+			cloned, err := clone(entries[index])
+			if err != nil {
+				return nil, err
+			}
+			if err := checkpoint.ValidateForLoad(cloned); err != nil {
+				return nil, err
+			}
+			return &cloned, nil
+		}
+	}
+	return nil, fmt.Errorf("%w: no checkpoint at or below seq %d for runId %q", checkpoint.ErrNotFound, seq, runID)
 }
 
 func (s *Store) Load(ctx context.Context, runID string) (*checkpoint.Checkpoint, error) {
@@ -78,6 +113,7 @@ func (s *Store) Delete(ctx context.Context, runID string) error {
 		return checkpoint.ErrNotFound
 	}
 	delete(s.checkpoints, runID)
+	delete(s.history, runID)
 	return nil
 }
 
