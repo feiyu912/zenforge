@@ -306,3 +306,183 @@ func containsString(values []string, want string) bool {
 	}
 	return false
 }
+
+// ValidateObjectValue reports whether a child's parsed structured answer
+// satisfies the schema its agent() call asked for.
+//
+// ValidateObjectSchema has already held the schema to the subset, so this only
+// compares the value against it, and it reports every violation at once for the
+// same reason: a child that answered almost correctly should be diagnosable in
+// one line, not one field per run. The answer is compared as JSON data, and a
+// number is a number however it was written (`1` and `1.0` are equal), so a
+// model's formatting does not decide conformance.
+func ValidateObjectValue(schema json.RawMessage, value json.RawMessage) error {
+	if len(schema) == 0 {
+		return nil
+	}
+	var schemaNode any
+	decoder := json.NewDecoder(strings.NewReader(string(schema)))
+	decoder.UseNumber()
+	if err := decoder.Decode(&schemaNode); err != nil {
+		return newError(CodeUnsupportedSchema, "schema is not valid JSON: %v", err)
+	}
+	record, ok := schemaNode.(map[string]any)
+	if !ok {
+		return newError(CodeUnsupportedSchema, "schema must be an object")
+	}
+	var parsed any
+	decoder = json.NewDecoder(strings.NewReader(string(value)))
+	decoder.UseNumber()
+	if err := decoder.Decode(&parsed); err != nil {
+		return newError(CodeAgentResult, "structured output is not valid JSON: %v", err)
+	}
+	violations := make([]string, 0)
+	checkSchemaValue(record, parsed, "value", &violations)
+	if len(violations) == 0 {
+		return nil
+	}
+	return newError(CodeAgentResult, "structured output does not match the schema — %s", strings.Join(violations, "; "))
+}
+
+// checkSchemaValue compares one value against one subset schema node.
+func checkSchemaValue(record map[string]any, value any, path string, violations *[]string) {
+	if branches, hasOneOf := record["oneOf"].([]any); hasOneOf {
+		matched := 0
+		for _, branch := range branches {
+			branchRecord, ok := branch.(map[string]any)
+			if !ok {
+				continue
+			}
+			branchViolations := make([]string, 0, 1)
+			checkSchemaValue(branchRecord, value, path, &branchViolations)
+			if len(branchViolations) == 0 {
+				matched++
+			}
+		}
+		if matched != 1 {
+			*violations = append(*violations, fmt.Sprintf("%s must match exactly one oneOf branch (%d matched)", path, matched))
+		}
+		return
+	}
+	schemaType, _ := record["type"].(string)
+	if schemaType != "" && !valueMatchesType(schemaType, value) {
+		*violations = append(*violations, fmt.Sprintf("%s must be %s", path, schemaType))
+		return
+	}
+	if schemaType == "" {
+		// The subset requires a type (or oneOf) on every node, so this cannot
+		// come from agent(): a direct caller's typeless node is read by shape,
+		// which keeps enum, const, properties and items meaningful instead of
+		// silently unenforced.
+		switch value.(type) {
+		case map[string]any:
+			schemaType = "object"
+		case []any:
+			schemaType = "array"
+		}
+	}
+	switch schemaType {
+	case "object":
+		object, _ := value.(map[string]any)
+		declared, _ := record["properties"].(map[string]any)
+		names := make([]string, 0, len(declared))
+		for name := range declared {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		required := requiredNames(record)
+		for _, name := range names {
+			child, present := object[name]
+			if !present {
+				// ValidateObjectSchema refuses a required name that is not
+				// declared, so a declared name is the only place a missing
+				// value can be reported from.
+				if containsString(required, name) {
+					*violations = append(*violations, fmt.Sprintf("%s.%s is required", path, name))
+				}
+				continue
+			}
+			childSchema, ok := declared[name].(map[string]any)
+			if !ok {
+				continue
+			}
+			checkSchemaValue(childSchema, child, path+"."+name, violations)
+		}
+		if additional, present := record["additionalProperties"]; present {
+			allowed, isBool := additional.(bool)
+			if isBool && !allowed {
+				extras := make([]string, 0, len(object))
+				for name := range object {
+					if _, declaredHere := declared[name]; !declaredHere {
+						extras = append(extras, name)
+					}
+				}
+				sort.Strings(extras)
+				for _, name := range extras {
+					*violations = append(*violations, fmt.Sprintf("%s.%s is not allowed (additionalProperties is false)", path, name))
+				}
+			}
+		}
+	case "array":
+		items, ok := record["items"].(map[string]any)
+		if !ok {
+			return
+		}
+		array, _ := value.([]any)
+		for index, item := range array {
+			checkSchemaValue(items, item, fmt.Sprintf("%s[%d]", path, index), violations)
+		}
+	default:
+		if enum, present := record["enum"]; present && !enumContains(enum, value) {
+			*violations = append(*violations, fmt.Sprintf("%s is not one of the allowed enum values", path))
+		}
+		if constant, present := record["const"]; present && !jsonEqual(constant, value) {
+			*violations = append(*violations, fmt.Sprintf("%s is not the required const value", path))
+		}
+	}
+}
+
+// valueMatchesType reports whether a JSON value has a subset schema type. An
+// integer is a number without a fractional part, which is how the reference
+// reads it.
+func valueMatchesType(schemaType string, value any) bool {
+	switch schemaType {
+	case "object":
+		_, ok := value.(map[string]any)
+		return ok
+	case "array":
+		_, ok := value.([]any)
+		return ok
+	case "string":
+		_, ok := value.(string)
+		return ok
+	case "boolean":
+		_, ok := value.(bool)
+		return ok
+	case "null":
+		return value == nil
+	case "number":
+		_, ok := jsonNumber(value)
+		return ok
+	case "integer":
+		number, ok := jsonNumber(value)
+		return ok && number == math.Trunc(number)
+	}
+	return false
+}
+
+// requiredNames reads a schema node's required list, which the subset check has
+// already confirmed is an array of declared names.
+func requiredNames(record map[string]any) []string {
+	entries, ok := record["required"].([]any)
+	if !ok {
+		return nil
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if name, isString := entry.(string); isString {
+			names = append(names, name)
+		}
+	}
+	return names
+}

@@ -173,6 +173,8 @@ rg -n '"[^"[:space:]]*agent-platform[^"[:space:]]*"' --glob "*.go" .
 | a workflow child named in `agent()` runs on the resolved adapter, and a sibling keeps the host's | `TestWorkflowToolRunsANamedChildOnAResolvedModel` |
 | an unresolvable model is a reported start failure and a host without a resolver still refuses | `TestWorkflowToolReportsAnUnresolvableModel`, `TestWorkflowToolRefusesAModelOverrideWithoutAResolver` |
 | the CLI resolver keeps the host's credentials for its own provider and reads a second provider's environment | `TestCLIModelResolverKeepsTheHostConfigurationForItsOwnProvider`, `TestCLIModelResolverReadsAnotherProvidersEnvironment`, `TestCLIModelResolverFallsBackToTheHostModel` |
+| a structured answer is validated against the whole schema subset, every violation at once | `TestValidateObjectValueAcceptsConformingAnswers`, `TestValidateObjectValueReportsEveryViolation`, `TestValidateObjectValueReadsATypelessNodeByShape`, `TestValidateObjectValueWithoutASchemaAcceptsAnything` |
+| a non-conforming or non-object structured answer is a null item whose reason reaches the workflow log | `TestAgentNullsAStructuredAnswerThatViolatesTheSchema`, `TestAgentNullsANonObjectAnswerForAnObjectSchema` |
 | a job is reported terminal only after its output has been drained | `jobs.TestRunWaitsForOutputWrittenAfterTheMainProcessExits`, `jobs.TestCollectSignalsDrainedOnlyAfterBothStreamsEnd` |
 | a job whose pipes are held open by a background grandchild still becomes terminal | `jobs.TestJobWhoseOutputIsHeldByAGrandchildStillBecomesTerminal` |
 | memory entries augment normalized tasks | `adapters/memory.TestAugmentTaskAddsMemoryBlockAndMetadata` |

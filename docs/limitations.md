@@ -82,10 +82,15 @@ what is experimental, and what remains adapter territory.
   plan, so a resumed run replays the whole script instead of replaying
   children; children are reused only through their deterministic
   `<toolCallId>_agent_<n>` ids and existing child checkpoints.
-- `agent(prompt, {schema})` asks the child for one JSON object and treats a
-  non-JSON answer as a failed item (`null`). The object is not re-validated
-  against the schema's keywords: ZenForge has no JSON Schema data validator,
-  so deep conformance is the model's obligation.
+- `agent(prompt, {schema})` asks the child for one JSON object, and an answer
+  that is not JSON, not an object, or does not satisfy the schema is a failed
+  item (`null`) with every violation written to the workflow's log (ADR 0065).
+  Conformance beyond the enforced schema subset — `pattern`, numeric bounds,
+  `format`, and anything else the subset refuses — is still the model's
+  obligation, because a schema using those keywords is refused at the call.
+- A conforming answer is the object; a violating one is not partly usable. A
+  script that wants to inspect partial data has to omit the schema and parse
+  the text itself.
 - `phase()` and `log()` have no dedicated wire event; they ride
   `subtask.event` with workflow-tagged types.
 - A workflow is one JavaScript realm per run. Scripts cannot share state

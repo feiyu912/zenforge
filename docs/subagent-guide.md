@@ -84,10 +84,10 @@ Wherever sub-agents are configured, the agent also advertises `workflow`: one
 JavaScript script that fans work out across child runs. The script body runs
 inside an async function, so top-level `await` is legal and `return <value>`
 is the tool's result. It sees `agent(prompt, opts?)` (the child's final text,
-or the object behind `opts.schema`, or `null` when the child did not
-complete), `parallel(thunks)`, `pipeline(items, ...stages)` (each item walks
-the stages on its own, no barrier between stages), `phase(title)`,
-`log(message)`, and `args`.
+or the object behind `opts.schema`, or `null` when the child did not complete
+or did not answer the schema it was given), `parallel(thunks)`,
+`pipeline(items, ...stages)` (each item walks the stages on its own, no
+barrier between stages), `phase(title)`, `log(message)`, and `args`.
 
 ```json
 {
@@ -102,9 +102,15 @@ id, step, and tool-call id, honours the host's nesting depth, and emits the
 same `subtask.*` events as the task tool. `Config.WorkflowAgent` names the
 sub-agent those calls run as (empty uses the first registered one), and
 `Config.WorkflowLimits` bounds concurrency, total agents, items per call,
-and the cancellation/sync windows. A `provider` or `model` option is refused
-with a fatal `AGENT_START` because this host cannot resolve a per-child model
-yet. Workflow children are the script's, not the parent's plan, so they are
+and the cancellation/sync windows. A `provider` or `model` option is resolved through
+`Config.ModelResolver` (ADR 0064): the host's own provider keeps the host's
+configured credentials, any other provider is read from its own environment
+variables, and a name that cannot be resolved is a fatal `AGENT_START` rather
+than a silent run on the host's model. A `schema` child's answer is parsed and
+then checked against that schema (ADR 0065): a non-conforming answer nulls the
+item like any other child failure, and every violation is written to the
+workflow's log in one line, so a bad answer is diagnosable rather than
+indistinguishable from an empty one. Workflow children are the script's, not the parent's plan, so they are
 not recorded as run-state subtasks; a resumed run replays the script and
 reuses children through their deterministic ids (see ADR 0059).
 

@@ -741,3 +741,65 @@ type runnerFunc func(ctx context.Context, req ChildRequest) (Child, error)
 func (f runnerFunc) StartChild(ctx context.Context, req ChildRequest) (Child, error) {
 	return f(ctx, req)
 }
+
+func TestAgentNullsAStructuredAnswerThatViolatesTheSchema(t *testing.T) {
+	var (
+		mu   sync.Mutex
+		logs []string
+	)
+	observer := observerFuncs{
+		phase: func(string) {},
+		log: func(message string) {
+			mu.Lock()
+			defer mu.Unlock()
+			logs = append(logs, message)
+		},
+		start: func(AgentInfo) {},
+		end:   func(AgentInfo, string) {},
+	}
+	runner := StartFunc(func(ctx context.Context, req ChildRequest) (ChildResult, error) {
+		return ChildResult{
+			Structured: json.RawMessage(`{"verdict": 7, "extra": true}`),
+			StopReason: StopReasonCompleted,
+		}, nil
+	})
+	result, err := runRequest(t, runner, Limits{}, Request{
+		Meta:     Meta{Name: "violating", Description: "one child, one bad answer"},
+		Observer: observer,
+		Script: `
+			const value = await agent("judge", {
+				schema: { type: "object", properties: { verdict: { type: "string" } }, required: ["verdict"], additionalProperties: false },
+			});
+			return { isNull: value === null };
+		`,
+	})
+	mustComplete(t, result, err)
+	if resultValue(t, result).(map[string]any)["isNull"] != true {
+		t.Fatalf("value = %#v", resultValue(t, result))
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(logs) != 1 {
+		t.Fatalf("logs = %#v", logs)
+	}
+	// The null carries no explanation, so the reason has to reach the
+	// workflow's own log channel — every violation, not the first one.
+	for _, want := range []string{"agent()", "value.verdict must be string", "value.extra is not allowed"} {
+		if !strings.Contains(logs[0], want) {
+			t.Fatalf("log = %q, want to contain %q", logs[0], want)
+		}
+	}
+}
+
+func TestAgentNullsANonObjectAnswerForAnObjectSchema(t *testing.T) {
+	runner := StartFunc(func(ctx context.Context, req ChildRequest) (ChildResult, error) {
+		return ChildResult{Structured: json.RawMessage(`[1, 2]`), StopReason: StopReasonCompleted}, nil
+	})
+	result := mustCompleteScript(t, runner, `
+		const value = await agent("judge", { schema: { type: "object", properties: {}, additionalProperties: false } });
+		return { isNull: value === null };
+	`)
+	if resultValue(t, result).(map[string]any)["isNull"] != true {
+		t.Fatalf("value = %#v", resultValue(t, result))
+	}
+}

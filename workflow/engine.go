@@ -303,8 +303,33 @@ func (x *execution) resolveCompletedChild(task *childTask, result ChildResult) {
 		x.resolveTask(task, goja.Null())
 		return
 	}
+	if err := ValidateObjectValue(task.request.Schema, result.Structured); err != nil {
+		// An answer that parses but does not satisfy the schema it was asked
+		// for is the same family of failure: the child did not do what it was
+		// told, so the item is null. The reason goes to the workflow's own log
+		// channel, because a null carries no explanation and a script author
+		// otherwise has no way to tell a violation from an empty answer.
+		message := "structured output does not match the requested schema"
+		var valueErr *Error
+		if errors.As(err, &valueErr) {
+			message = valueErr.Message
+		}
+		x.reportDiagnostic("agent() " + message)
+		x.observeAgentEnd(task, OutcomeFailed)
+		x.resolveTask(task, goja.Null())
+		return
+	}
 	x.observeAgentEnd(task, OutcomeCompleted)
 	x.resolveTask(task, value)
+}
+
+// reportDiagnostic publishes an engine notice on the workflow's log channel,
+// which is where a per-item failure with no other place in the contract stays
+// visible.
+func (x *execution) reportDiagnostic(message string) {
+	if observer := x.request.Observer; observer != nil {
+		observer.WorkflowLog(message)
+	}
 }
 
 // startWaiting launches queued agent() calls while slots are free. The
