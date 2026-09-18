@@ -71,6 +71,23 @@ what is experimental, and what remains adapter territory.
   do not resume an in-flight provider stream inside a child run.
 - Nested sub-agents are blocked by default and remain outside the MVP surface.
 
+## Workflows
+
+- `workflow/` runs the reference's orchestration scripts in-process (see ADR
+  0057), but the capability is not yet reachable from the CLI: there is no
+  `workflow` tool, no `agent.go` routing, and no durable progress for a script
+  beyond the `Observer` seam. The engine's child agents are a `Runner` the
+  caller supplies.
+- A workflow is one JavaScript realm per run. Scripts cannot share state
+  across runs, and the engine persists nothing itself.
+- Scripts are bounded by `SyncTimeout`, `MaxConcurrentAgents`,
+  `MaxTotalAgents`, `MaxItemsPerCall`, and `CancelGrace`; the caps are the
+  reference's defaults and are per-engine configuration, not per-script
+  arguments, so a script cannot raise its own limits.
+- A child agent's provider or model override is passed through to the runner;
+  the engine does not validate that the host has it, so an unsupported target
+  fails as a normal failed item.
+
 ## Deferred Systems
 
 - Full platform memory extraction is not included. Retrieved memory can be

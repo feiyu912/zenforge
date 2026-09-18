@@ -70,3 +70,4 @@ later ADRs supersede earlier ones, never edit.
 | [0054](0054-configured-mcp-servers-and-approval.md) | Configured MCP servers, gated by what the server declares |
 | [0055](0055-mcp-stdio-dispatch-by-id.md) | The stdio client dispatches by id, so a deadline is real |
 | [0056](0056-run-starting-mcp-tool-and-served-run-approval.md) | A run-starting MCP tool is gated three times, and a served run never prompts |
+| [0057](0057-workflow-engine-javascript-sandbox.md) | The workflow engine is a JavaScript sandbox inside the Go process |

@@ -502,6 +502,13 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - An interrupted checkpoint save no longer masks its own failure: the JSONL
   store completes a durably-pending save under a context that cannot be
   cancelled, and the loop re-derives its checkpoint counter after a failed save.
+- `workflow/` runs the reference's orchestration scripts in-process (ADR
+  0057): a JavaScript body with top-level `await`, `agent()`/`parallel()`/
+  `pipeline()`/`phase()`/`log()` hooks, an `args` input, a bounded
+  concurrency/total-agent/item cap, cooperative cancellation with a grace
+  timer, and an enforced JSON-Schema subset for structured child results.
+  Child agents sit behind a `Runner` seam; the CLI tool that wires them to
+  sub-agent runs is the next batch.
 - Plan/execute internal stages no longer leak terminal run lifecycle events or continue after stage failure.
 - Planner spec, guide, and MVP validation document the single top-level run lifecycle.
 - Plan/execute orchestration failures persist terminal checkpoints and resume without retrying completed work.
