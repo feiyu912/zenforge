@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/feiyu912/zenforge/commands"
+	"github.com/feiyu912/zenforge/configlayer"
 	"github.com/feiyu912/zenforge/schedule"
 	"github.com/feiyu912/zenforge/tool"
 )
@@ -99,17 +101,27 @@ func commandShell(opts options, command commands.Command) func(string) (string, 
 	}
 }
 
-// buildCatalog loads the commands directory, defaulting to the workspace's
-// .zenforge/commands when the flag is not set.
+// buildCatalog loads the two command layers: the workspace's own directory and
+// the per-user directory that follows the user config location. The workspace
+// layer keeps its old default (<workspace>/.zenforge/commands) and wins on a
+// name collision, because a checked-in command is the project's more specific
+// intent; the user directory is optional and may not exist.
 func buildCatalog(opts options) (*commands.Catalog, error) {
-	dir := strings.TrimSpace(opts.commandsDir)
-	if dir == "" {
-		if strings.TrimSpace(opts.workspace) == "" {
-			return nil, nil
-		}
-		dir = opts.workspace + "/" + commands.DefaultDir
+	workspaceDir := strings.TrimSpace(opts.commandsDir)
+	if workspaceDir == "" && strings.TrimSpace(opts.workspace) != "" {
+		workspaceDir = opts.workspace + "/" + commands.DefaultDir
 	}
-	return commands.Load(dir)
+	userDir := strings.TrimSpace(opts.userCommandsDir)
+	if userDir == "" {
+		configDir, err := configlayer.UserConfigDir()
+		if err != nil {
+			return nil, err
+		}
+		if configDir != "" {
+			userDir = filepath.Join(configDir, "commands")
+		}
+	}
+	return commands.LoadLayers(workspaceDir, userDir)
 }
 
 // runSchedule repeats a task on a schedule until the context ends. Each

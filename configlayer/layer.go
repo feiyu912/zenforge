@@ -308,19 +308,31 @@ func WithoutProfiles(document map[string]any) map[string]any {
 	return document
 }
 
-// UserConfigPath returns the per-user configuration path.
-func UserConfigPath() (string, error) {
+// UserConfigDir returns the per-user configuration directory. User-level
+// files that belong beside the configuration (the per-user command catalog,
+// for one) derive their path from here, so they follow the same
+// ZENFORGE_CONFIG_DIR / XDG_CONFIG_HOME convention instead of inventing one.
+func UserConfigDir() (string, error) {
 	if dir := strings.TrimSpace(os.Getenv("ZENFORGE_CONFIG_DIR")); dir != "" {
-		return filepath.Join(dir, "zenforge.json"), nil
+		return dir, nil
 	}
 	if dir := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); dir != "" {
-		return filepath.Join(dir, "zenforge", "zenforge.json"), nil
+		return filepath.Join(dir, "zenforge"), nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", nil
 	}
-	return filepath.Join(home, ".config", "zenforge", "zenforge.json"), nil
+	return filepath.Join(home, ".config", "zenforge"), nil
+}
+
+// UserConfigPath returns the per-user configuration path.
+func UserConfigPath() (string, error) {
+	dir, err := UserConfigDir()
+	if err != nil || dir == "" {
+		return "", err
+	}
+	return filepath.Join(dir, "zenforge.json"), nil
 }
 
 // SystemConfigPath returns the host-wide configuration path.

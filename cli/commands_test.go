@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"os"
@@ -24,6 +25,14 @@ func writeCommand(t *testing.T, root, name, content string) {
 	}
 }
 
+// missingUserCommandsDir is a per-user command directory that does not exist,
+// so a test catalog is exactly the layers the test sets up instead of whatever
+// the developer happens to keep in their own user config directory.
+func missingUserCommandsDir(t *testing.T) string {
+	t.Helper()
+	return filepath.Join(t.TempDir(), "absent")
+}
+
 func TestResolveCommandExpandsAnInvocation(t *testing.T) {
 	workspace := t.TempDir()
 	if err := os.WriteFile(filepath.Join(workspace, "README.md"), []byte("# project\n"), 0o644); err != nil {
@@ -32,6 +41,7 @@ func TestResolveCommandExpandsAnInvocation(t *testing.T) {
 	writeCommand(t, workspace, commands.DefaultDir+"/review.md", "---\ndescription: Review\n---\nReview @README.md for $1 (args: $ARGUMENTS)\n")
 	opts := defaultOptions()
 	opts.workspace = workspace
+	opts.userCommandsDir = missingUserCommandsDir(t)
 	catalog, err := buildCatalog(opts)
 	if err != nil {
 		t.Fatalf("buildCatalog returned error: %v", err)
@@ -78,6 +88,7 @@ func TestBuildCatalogDefaultsToTheWorkspace(t *testing.T) {
 	writeCommand(t, workspace, commands.DefaultDir+"/x.md", "body\n")
 	opts := defaultOptions()
 	opts.workspace = workspace
+	opts.userCommandsDir = missingUserCommandsDir(t)
 	catalog, err := buildCatalog(opts)
 	if err != nil || catalog.Len() != 1 {
 		t.Fatalf("buildCatalog = %#v, %v", catalog, err)
@@ -100,6 +111,7 @@ func TestInlineShellUsesTheConfiguredPolicy(t *testing.T) {
 	writeCommand(t, workspace, commands.DefaultDir+"/status.md", "---\nrun-bash: true\n---\nstatus:\n!`printf hello`\n")
 	opts := defaultOptions()
 	opts.workspace = workspace
+	opts.userCommandsDir = missingUserCommandsDir(t)
 	opts.shellWorkingDir = workspace
 	opts.shellAllow = multiFlag{"printf"}
 	catalog, err := buildCatalog(opts)
@@ -168,5 +180,186 @@ func TestScheduleFlagIsBound(t *testing.T) {
 	}
 	if opts.commandsDir != "/tmp/c" || !opts.listCommands || opts.scheduleSpec != "every 5m" {
 		t.Fatalf("options = %#v", opts)
+	}
+}
+
+func TestUserLevelCommandIsAvailableInAWorkspaceWithoutCommands(t *testing.T) {
+	workspace := t.TempDir()
+	userDir := t.TempDir()
+	writeCommand(t, userDir, "greet.md", "---\ndescription: Say hello\n---\nhello $1\n")
+	opts := defaultOptions()
+	opts.workspace = workspace
+	opts.userCommandsDir = userDir
+	catalog, err := buildCatalog(opts)
+	if err != nil {
+		t.Fatalf("buildCatalog returned error: %v", err)
+	}
+	command, ok := catalog.Get("greet")
+	if !ok || command.Layer != commands.LayerUser {
+		t.Fatalf("greet = %#v, %v", command, ok)
+	}
+	resolved, err := resolveCommand(catalog, "/greet world", opts)
+	if err != nil {
+		t.Fatalf("resolveCommand returned error: %v", err)
+	}
+	if resolved != "hello world" {
+		t.Fatalf("resolved = %q", resolved)
+	}
+}
+
+func TestWorkspaceCommandShadowsTheUserCommandOfTheSameName(t *testing.T) {
+	workspace := t.TempDir()
+	writeCommand(t, workspace, commands.DefaultDir+"/review.md", "---\ndescription: Project review\n---\nworkspace body\n")
+	userDir := t.TempDir()
+	writeCommand(t, userDir, "review.md", "---\ndescription: Personal review\n---\nuser body\n")
+	opts := defaultOptions()
+	opts.workspace = workspace
+	opts.userCommandsDir = userDir
+	catalog, err := buildCatalog(opts)
+	if err != nil {
+		t.Fatalf("buildCatalog returned error: %v", err)
+	}
+	// Resolution takes the workspace definition: the project's own intent.
+	command, ok := catalog.Get("review")
+	if !ok || command.Layer != commands.LayerWorkspace || !strings.Contains(command.Body, "workspace body") {
+		t.Fatalf("review = %#v, %v", command, ok)
+	}
+	shadowed := catalog.Shadowed()
+	if len(shadowed) != 1 || shadowed[0].Layer != commands.LayerUser || !strings.Contains(shadowed[0].Body, "user body") {
+		t.Fatalf("shadowed = %#v", shadowed)
+	}
+	// The user definition is still listed, marked, so an edit that does
+	// nothing has a visible reason rather than looking ignored.
+	listing := catalog.List()
+	if strings.Count(listing, "/review") != 2 {
+		t.Fatalf("listing = %q", listing)
+	}
+	if !strings.Contains(listing, "Personal review [user] (workspace overrides user)") {
+		t.Fatalf("listing = %q", listing)
+	}
+}
+
+func TestCommandListingShowsTheSourceLayer(t *testing.T) {
+	workspace := t.TempDir()
+	writeCommand(t, workspace, commands.DefaultDir+"/ws.md", "---\ndescription: From the workspace\n---\nws\n")
+	userDir := t.TempDir()
+	writeCommand(t, userDir, "usr.md", "---\ndescription: From the user\n---\nusr\n")
+	opts := defaultOptions()
+	opts.workspace = workspace
+	opts.userCommandsDir = userDir
+	catalog, err := buildCatalog(opts)
+	if err != nil {
+		t.Fatalf("buildCatalog returned error: %v", err)
+	}
+	listing := catalog.List()
+	if !strings.Contains(listing, "/usr - From the user [user]") {
+		t.Fatalf("listing = %q", listing)
+	}
+	if !strings.Contains(listing, "/ws - From the workspace [workspace]") {
+		t.Fatalf("listing = %q", listing)
+	}
+}
+
+func TestMalformedUserCommandNamesTheUserDirectory(t *testing.T) {
+	workspace := t.TempDir()
+	userDir := t.TempDir()
+	writeCommand(t, userDir, "bad.md", "---\nallowed_tools: shell\n---\nbody\n")
+	opts := defaultOptions()
+	opts.workspace = workspace
+	opts.userCommandsDir = userDir
+	_, err := buildCatalog(opts)
+	if err == nil {
+		t.Fatal("a malformed user command was accepted")
+	}
+	if !strings.Contains(err.Error(), "user commands directory") || !strings.Contains(err.Error(), userDir) {
+		t.Fatalf("error does not name the user directory: %v", err)
+	}
+	// A workspace typo is still reported as a workspace problem.
+	writeCommand(t, workspace, commands.DefaultDir+"/bad.md", "---\nallowed_tools: shell\n---\nbody\n")
+	if _, err := buildCatalog(opts); err == nil {
+		t.Fatal("a malformed workspace command was accepted")
+	} else if !strings.Contains(err.Error(), "workspace commands directory") {
+		t.Fatalf("error does not name the workspace layer: %v", err)
+	}
+}
+
+func TestMissingUserCommandsDirectoryIsNotAnError(t *testing.T) {
+	workspace := t.TempDir()
+	writeCommand(t, workspace, commands.DefaultDir+"/ws.md", "body\n")
+	opts := defaultOptions()
+	opts.workspace = workspace
+	opts.userCommandsDir = missingUserCommandsDir(t)
+	catalog, err := buildCatalog(opts)
+	if err != nil {
+		t.Fatalf("buildCatalog returned error: %v", err)
+	}
+	if catalog.Len() != 1 {
+		t.Fatalf("catalog = %#v", catalog.Names())
+	}
+	if _, ok := catalog.Get("ws"); !ok {
+		t.Fatalf("catalog = %#v", catalog.Names())
+	}
+}
+
+func TestUserCommandsFlagOverridesTheDefaultUserDirectory(t *testing.T) {
+	opts := defaultOptions()
+	fs := flag.NewFlagSet("commands-test", flag.ContinueOnError)
+	bindOptions(fs, &opts)
+	userDir := t.TempDir()
+	if err := fs.Parse([]string{"--user-commands", userDir}); err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if opts.userCommandsDir != userDir {
+		t.Fatalf("userCommandsDir = %q", opts.userCommandsDir)
+	}
+	writeCommand(t, userDir, "flag.md", "body\n")
+	opts.workspace = t.TempDir()
+	catalog, err := buildCatalog(opts)
+	if err != nil {
+		t.Fatalf("buildCatalog returned error: %v", err)
+	}
+	if _, ok := catalog.Get("flag"); !ok {
+		t.Fatalf("catalog = %#v", catalog.Names())
+	}
+}
+
+func TestDefaultUserCommandsDirectoryFollowsTheConfigDirectory(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("ZENFORGE_CONFIG_DIR", configDir)
+	writeCommand(t, configDir, "commands/home.md", "body\n")
+	opts := defaultOptions()
+	opts.workspace = t.TempDir()
+	catalog, err := buildCatalog(opts)
+	if err != nil {
+		t.Fatalf("buildCatalog returned error: %v", err)
+	}
+	if _, ok := catalog.Get("home"); !ok {
+		t.Fatalf("catalog = %#v", catalog.Names())
+	}
+}
+
+func TestUserCommandsDirectoryComesFromTheConfigFile(t *testing.T) {
+	userDir := t.TempDir()
+	configPath := filepath.Join(t.TempDir(), "zenforge.json")
+	encoded, err := json.Marshal(map[string]any{"commands": map[string]string{"userDir": userDir}})
+	if err != nil {
+		t.Fatalf("Marshal returned error: %v", err)
+	}
+	writeConfigFile(t, configPath, string(encoded))
+	opts, err := optionsFromArgs([]string{"--ignore-user-config", "--config", configPath, "--workspace", t.TempDir()})
+	if err != nil {
+		t.Fatalf("optionsFromArgs returned error: %v", err)
+	}
+	if opts.userCommandsDir != userDir {
+		t.Fatalf("userCommandsDir = %q", opts.userCommandsDir)
+	}
+	writeCommand(t, userDir, "conf.md", "body\n")
+	opts.workspace = t.TempDir()
+	catalog, err := buildCatalog(opts)
+	if err != nil {
+		t.Fatalf("buildCatalog returned error: %v", err)
+	}
+	if _, ok := catalog.Get("conf"); !ok {
+		t.Fatalf("catalog = %#v", catalog.Names())
 	}
 }

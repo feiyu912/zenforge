@@ -224,6 +224,7 @@ func TestMCPServerPromptsAreAbsentWithoutACommandCatalog(t *testing.T) {
 	// A fresh workspace has no .zenforge/commands, so there is nothing to
 	// advertise: an empty prompt set must not become a capability.
 	opts.workspace = t.TempDir()
+	opts.userCommandsDir = missingUserCommandsDir(t)
 	prompts, err := mcpServerPrompts(opts)
 	if err != nil {
 		t.Fatalf("mcpServerPrompts returned error: %v", err)
@@ -245,6 +246,7 @@ func TestMCPServerPromptArgumentsComeFromTheCommand(t *testing.T) {
 	writeCommand(t, dir, "escaped.md", "Print $$ARGUMENTS and $$5 literally\n")
 	opts := defaultOptions()
 	opts.commandsDir = dir
+	opts.userCommandsDir = missingUserCommandsDir(t)
 	prompts, err := mcpServerPrompts(opts)
 	if err != nil {
 		t.Fatalf("mcpServerPrompts returned error: %v", err)
@@ -280,6 +282,7 @@ func TestMCPServerPromptRenderingNeverRunsInlineShell(t *testing.T) {
 	writeCommand(t, dir, "status.md", "---\nrun-bash: true\n---\nstatus:\n!`printf ran`\n")
 	opts := defaultOptions()
 	opts.commandsDir = dir
+	opts.userCommandsDir = missingUserCommandsDir(t)
 	prompts, err := mcpServerPrompts(opts)
 	if err != nil {
 		t.Fatalf("mcpServerPrompts returned error: %v", err)

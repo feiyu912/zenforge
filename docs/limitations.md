@@ -116,6 +116,18 @@ what is experimental, and what remains adapter territory.
   the only place a second provider's key can live. A name that cannot be
   resolved is a fatal `AGENT_START`, never a silent run on the host's model.
 
+## Commands
+
+- Commands come from two layers: the workspace's `.zenforge/commands` and the
+  user's config directory (`commands.userDir`, default `~/.config/zenforge/commands`
+  or the equivalent under `XDG_CONFIG_HOME`/`ZENFORGE_CONFIG_DIR`). A workspace
+  command wins over a user command of the same name; the shadowed one is kept and
+  listed as `(workspace overrides user)` rather than removed, so precedence stays
+  visible.
+- `commands.userDir` is deliberately not written into the default config file
+  (`zenforge init`): the default is a resolved path, and freezing this machine's
+  home directory into a project's config would be worse than omitting it.
+
 ## MCP Resources And Prompts
 
 - `resources/subscribe`, `resources/templates/list`, `listChanged` and progress

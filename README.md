@@ -130,6 +130,9 @@ go run ./cmd/zenforge events --config zenforge.json run_123
 go run ./cmd/zenforge runs --config zenforge.json
 go run ./cmd/zenforge grants list --config zenforge.json
 go run ./cmd/zenforge grants revoke mcp__files__delete --config zenforge.json
+go run ./cmd/zenforge --user-commands ~/.config/zenforge/commands run /review
+# commands come from <workspace>/.zenforge/commands and the user directory;
+# a workspace command of the same name wins and the shadowed one is listed
 go run ./cmd/zenforge schedule add --config zenforge.json --spec "every 1h" --task "Review the open changes"
 go run ./cmd/zenforge schedule list --config zenforge.json
 go run ./cmd/zenforge schedule run-due --config zenforge.json   # from cron/launchd

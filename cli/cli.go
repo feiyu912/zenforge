@@ -695,8 +695,11 @@ type options struct {
 	memoryDistill bool
 	reviewMode    string
 	commandsDir   string
-	scheduleSpec  string
-	listCommands  bool
+	// userCommandsDir is the per-user catalog every workspace sees. Empty
+	// derives it from the user config directory.
+	userCommandsDir string
+	scheduleSpec    string
+	listCommands    bool
 
 	sandboxBackend      string
 	sandboxRoots        multiFlag
@@ -838,6 +841,7 @@ func bindOptions(fs *flag.FlagSet, opts *options) {
 	fs.BoolVar(&opts.memoryDistill, "memory-distill", opts.memoryDistill, "distil each finished run into new memories with one model call")
 	fs.StringVar(&opts.reviewMode, "review", opts.reviewMode, "independent review of each finished run: off, report, or enforce")
 	fs.StringVar(&opts.commandsDir, "commands", opts.commandsDir, "directory of command definitions (default <workspace>/"+commands.DefaultDir+")")
+	fs.StringVar(&opts.userCommandsDir, "user-commands", opts.userCommandsDir, "directory of per-user command definitions (default <user config dir>/zenforge/commands)")
 	fs.BoolVar(&opts.listCommands, "list-commands", opts.listCommands, "list the available commands and exit")
 	fs.StringVar(&opts.scheduleSpec, "schedule", opts.scheduleSpec, "repeat the task on a schedule, e.g. 'every 1h' or '0 3 * * *'")
 	fs.IntVar(&opts.goalMaxRounds, "goal-max-rounds", opts.goalMaxRounds, "default round budget for goals created in this session")

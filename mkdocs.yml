@@ -209,6 +209,7 @@ nav:
       - 0069 A schedule outlives the process that added it: adr/0069-a-schedule-outlives-the-process.md
       - 0070 A signed webhook starts a run: adr/0070-a-signed-webhook-starts-a-run.md
       - 0071 Resources and prompts not only tools: adr/0071-resources-and-prompts-not-only-tools.md
+      - 0072 A command can belong to a person: adr/0072-a-command-can-belong-to-a-person.md
 
 extra:
   social:

@@ -199,6 +199,10 @@ rg -n '"[^"[:space:]]*agent-platform[^"[:space:]]*"' --glob "*.go" .
 | capabilities are advertised only when something is behind them | `TestServerAdvertisesCapabilitiesOnlyWhenServed` |
 | prompts list and render with arguments, and a bad prompt or argument is -32602 | `TestServerListsPromptsWithArguments`, `TestServerGetsAPromptWithArguments`, `TestServerReportsPromptErrorsAsInvalidParams` |
 | the CLI server serves `zenforge://runs` and `zenforge://runs/{id}`, and renders workspace commands as prompts with inline shell disabled | `TestMCPServerResourcesListTheRunsIndex`, `TestMCPServerResourcesServeRecordedRuns`, `TestMCPServerPromptsRoundTripACommand`, `TestMCPServerPromptsAreAbsentWithoutACommandCatalog`, `TestMCPServerPromptArgumentsComeFromTheCommand`, `TestMCPServerPromptRenderingNeverRunsInlineShell` |
+| a user-level command is available in a workspace with no commands of its own | `TestUserLevelCommandIsAvailableInAWorkspaceWithoutCommands` |
+| a workspace command shadows the user command of the same name, visibly | `TestWorkspaceCommandShadowsTheUserCommandOfTheSameName`, `TestLoadLayersLetsTheWorkspaceShadowAUserCommand` |
+| the listing shows each command's layer, and a malformed user command names the user directory | `TestCommandListingShowsTheSourceLayer`, `TestMalformedUserCommandNamesTheUserDirectory`, `TestLoadLayersNamesTheLayerInErrors` |
+| a missing user directory is not an error, `--user-commands` overrides it, and the config file can set it | `TestMissingUserCommandsDirectoryIsNotAnError`, `TestUserCommandsFlagOverridesTheDefaultUserDirectory`, `TestDefaultUserCommandsDirectoryFollowsTheConfigDirectory`, `TestUserCommandsDirectoryComesFromTheConfigFile` |
 | a job is reported terminal only after its output has been drained | `jobs.TestRunWaitsForOutputWrittenAfterTheMainProcessExits`, `jobs.TestCollectSignalsDrainedOnlyAfterBothStreamsEnd` |
 | a job whose pipes are held open by a background grandchild still becomes terminal | `jobs.TestJobWhoseOutputIsHeldByAGrandchildStillBecomesTerminal` |
 | memory entries augment normalized tasks | `adapters/memory.TestAugmentTaskAddsMemoryBlockAndMetadata` |

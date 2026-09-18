@@ -233,3 +233,73 @@ func TestSplitArgumentsHandlesQuotes(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadLayersLetsTheWorkspaceShadowAUserCommand(t *testing.T) {
+	workspace := t.TempDir()
+	write(t, workspace, "review.md", "workspace review\n")
+	write(t, workspace, "git/commit.md", "commit\n")
+	user := t.TempDir()
+	write(t, user, "review.md", "user review\n")
+	write(t, user, "git/status.md", "status\n")
+	catalog, err := LoadLayers(workspace, user)
+	if err != nil {
+		t.Fatalf("LoadLayers returned error: %v", err)
+	}
+	if catalog.Len() != 3 {
+		t.Fatalf("catalog = %#v", catalog.Names())
+	}
+	review, ok := catalog.Get("review")
+	if !ok || review.Layer != LayerWorkspace || !strings.Contains(review.Body, "workspace review") {
+		t.Fatalf("review = %#v", review)
+	}
+	// Namespacing is the same in both layers and survives the merge.
+	commit, ok := catalog.Get("git:commit")
+	if !ok || commit.Layer != LayerWorkspace {
+		t.Fatalf("commit = %#v", commit)
+	}
+	status, ok := catalog.Get("git/status")
+	if !ok || status.Layer != LayerUser {
+		t.Fatalf("status = %#v", status)
+	}
+	// The replaced user definition is retained so the listing can mark it.
+	shadowed := catalog.Shadowed()
+	if len(shadowed) != 1 || shadowed[0].Name != "review" || shadowed[0].Layer != LayerUser || !shadowed[0].Shadowed {
+		t.Fatalf("shadowed = %#v", shadowed)
+	}
+	listing := catalog.List()
+	if !strings.Contains(listing, "/review [workspace]") || !strings.Contains(listing, "/review [user] (workspace overrides user)") {
+		t.Fatalf("listing = %q", listing)
+	}
+}
+
+func TestLoadLayersTreatsMissingDirectoriesAsEmpty(t *testing.T) {
+	workspace := t.TempDir()
+	write(t, workspace, "only.md", "body\n")
+	catalog, err := LoadLayers(workspace, filepath.Join(t.TempDir(), "absent"))
+	if err != nil || catalog.Len() != 1 {
+		t.Fatalf("LoadLayers = %#v, %v", catalog, err)
+	}
+	if _, ok := catalog.Get("only"); !ok {
+		t.Fatalf("catalog = %#v", catalog.Names())
+	}
+	if catalog, err = LoadLayers(filepath.Join(t.TempDir(), "absent"), ""); err != nil || catalog.Len() != 0 {
+		t.Fatalf("LoadLayers = %#v, %v", catalog, err)
+	}
+}
+
+func TestLoadLayersNamesTheLayerInErrors(t *testing.T) {
+	user := t.TempDir()
+	write(t, user, "bad.md", "---\nallowed_tools: shell\n---\nbody\n")
+	if _, err := LoadLayers(t.TempDir(), user); err == nil {
+		t.Fatal("a malformed user command was accepted")
+	} else if !strings.Contains(err.Error(), "user commands directory") || !strings.Contains(err.Error(), user) {
+		t.Fatalf("error does not name the user directory: %v", err)
+	}
+	workspace := t.TempDir()
+	write(t, workspace, "bad.md", "---\nallowed_tools: shell\n---\nbody\n")
+	if _, err := LoadLayers(workspace, user); err == nil {
+		t.Fatal("a malformed workspace command was accepted")
+	} else if !strings.Contains(err.Error(), "workspace commands directory") {
+		t.Fatalf("error does not name the workspace layer: %v", err)
+	}
+}
