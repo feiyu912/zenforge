@@ -357,3 +357,138 @@ func TestServedRunHoldsTheServerSlot(t *testing.T) {
 		t.Fatalf("the first run failed: %v", err)
 	}
 }
+
+// runToolNotification is the wire form of a notifications/progress frame, as
+// the client would decode it.
+type runToolNotification struct {
+	Method string `json:"method"`
+	Params struct {
+		ProgressToken any     `json:"progressToken"`
+		Progress      float64 `json:"progress"`
+		Message       string  `json:"message"`
+	} `json:"params"`
+}
+
+// runToolServer builds the protocol layer around one served run tool, so a
+// test exercises the path a client's tools/call actually takes: token parsing
+// in the adapter, the reporter on the handler's context, and the served run's
+// own event loop.
+func runToolServer(t *testing.T, opts *options) *mcp.Server {
+	t.Helper()
+	runTool, err := newMCPRunTool(context.Background(), opts, servedRunStreams(), time.Minute, newServedRunRegistry(context.Background()))
+	if err != nil {
+		t.Fatalf("newMCPRunTool returned error: %v", err)
+	}
+	server, err := mcp.NewServer(mcp.ServerConfig{
+		Name:    "zenforge",
+		Version: "test",
+		Tools:   []mcp.ServerTool{runTool},
+	})
+	if err != nil {
+		t.Fatalf("NewServer returned error: %v", err)
+	}
+	return server
+}
+
+// callRunTool sends one tools/call for the run tool and returns the decoded
+// result plus every progress frame the handler emitted.
+func callRunTool(t *testing.T, server *mcp.Server, params string) (mcp.CallResult, [][]byte) {
+	t.Helper()
+	var frames [][]byte
+	ctx := mcp.WithNotificationSink(context.Background(), func(frame []byte) error {
+		frames = append(frames, append([]byte(nil), frame...))
+		return nil
+	})
+	response, respond := server.Handle(ctx, []byte(
+		`{"jsonrpc":"2.0","id":7,"method":"tools/call","params":`+params+`}`,
+	))
+	if !respond {
+		t.Fatal("the run call was not answered")
+	}
+	var decoded struct {
+		Result mcp.CallResult `json:"result"`
+		Error  *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(response, &decoded); err != nil {
+		t.Fatalf("the response is not JSON (%v): %s", err, response)
+	}
+	if decoded.Error != nil {
+		t.Fatalf("the run call was rejected: %s", response)
+	}
+	return decoded.Result, frames
+}
+
+// TestMCPRunToolReportsProgressFromRunEvents pins the client's view of a
+// streamed served run: one notifications/progress per run event, counted in
+// order, with the event type as the message, all before the single result the
+// tool returns.
+func TestMCPRunToolReportsProgressFromRunEvents(t *testing.T) {
+	model := newOpenAISSEStub(t, textChunk("the answer from the served run"))
+	opts := servedRunOptions(t, model.url)
+	defer drainClosers(&opts, servedRunStreams())
+	server := runToolServer(t, &opts)
+
+	result, frames := callRunTool(t, server,
+		`{"name":"`+mcpRunToolName+`","arguments":{"prompt":"say hello"},"_meta":{"progressToken":"watch-1"}}`)
+	if result.IsError {
+		t.Fatalf("the run reported an error: %#v", result.Content)
+	}
+	if len(result.Content) == 0 || !strings.Contains(result.Content[0].Text, "the answer from the served run") {
+		t.Fatalf("the result changed: %#v", result.Content)
+	}
+	if len(frames) < 2 {
+		t.Fatalf("progress notifications = %d, want one per run event: %q", len(frames), frames)
+	}
+	messages := make([]string, 0, len(frames))
+	for index, frame := range frames {
+		var notification runToolNotification
+		if err := json.Unmarshal(frame, &notification); err != nil {
+			t.Fatalf("notification %d is not JSON (%v): %s", index, err, frame)
+		}
+		if notification.Method != "notifications/progress" {
+			t.Fatalf("notification %d method = %q", index, notification.Method)
+		}
+		if notification.Params.ProgressToken != "watch-1" {
+			t.Fatalf("notification %d token = %#v", index, notification.Params.ProgressToken)
+		}
+		if notification.Params.Progress != float64(index+1) {
+			t.Fatalf("notification %d progress = %v, want the running event count %d", index, notification.Params.Progress, index+1)
+		}
+		if notification.Params.Message == "" {
+			t.Fatalf("notification %d carried no event type: %s", index, frame)
+		}
+		messages = append(messages, notification.Params.Message)
+	}
+	// The order is the run's own: the first event starts it, the last ends it.
+	if messages[0] != "run.started" || messages[len(messages)-1] != "run.done" {
+		t.Fatalf("progress messages = %#v", messages)
+	}
+}
+
+// TestMCPRunToolSendsNoProgressWithoutAToken pins the other half: a caller
+// that did not attach a token gets no notifications at all, and the run
+// behaves exactly as it did before progress existed.
+func TestMCPRunToolSendsNoProgressWithoutAToken(t *testing.T) {
+	model := newOpenAISSEStub(t, textChunk("the answer from the served run"))
+	opts := servedRunOptions(t, model.url)
+	defer drainClosers(&opts, servedRunStreams())
+	server := runToolServer(t, &opts)
+
+	result, frames := callRunTool(t, server,
+		`{"name":"`+mcpRunToolName+`","arguments":{"prompt":"say hello"}}`)
+	if result.IsError {
+		t.Fatalf("the run reported an error: %#v", result.Content)
+	}
+	if len(result.Content) == 0 || !strings.Contains(result.Content[0].Text, "the answer from the served run") {
+		t.Fatalf("the result changed: %#v", result.Content)
+	}
+	if len(frames) != 0 {
+		t.Fatalf("a call without a token received %q", frames)
+	}
+	if result.StructuredContent["status"] != "completed" {
+		t.Fatalf("status = %#v", result.StructuredContent["status"])
+	}
+}

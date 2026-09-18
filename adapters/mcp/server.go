@@ -71,6 +71,16 @@ type ServerConfig struct {
 	// server cannot keep.
 	Resources []ServerResource
 	Prompts   []ServerPrompt
+	// DynamicLists says the tool, resource and prompt sets may change while
+	// this server is serving, so initialize should advertise listChanged:
+	// true for each surface. It is an explicit opt-in because the default is
+	// a promise the server can keep: a fixed set advertised as listChanged:
+	// false tells the client it never has to re-list, and a server that then
+	// sent a list-changed notification would be sending one the client was
+	// told not to expect. With this set, the server must call the matching
+	// Notify method after it changes a list, because a client that was told
+	// the list can change may cache it and wait to be told.
+	DynamicLists bool
 }
 
 // Server implements the server half of the MCP protocol. It is transport
@@ -92,6 +102,17 @@ type Server struct {
 	resourceByURI map[string]ServerResource
 	prompts       []ServerPrompt
 	promptByName  map[string]ServerPrompt
+	dynamicLists  bool
+
+	// stream is the writer Serve is currently answering on, set for the
+	// duration of one Serve call. writeMu serializes frames from every source
+	// that may write concurrently -- the serving goroutine and a Notify call
+	// made by whatever changed a list -- so two frames can never interleave
+	// on the wire. streamMu only guards the pointer, and is never held while
+	// a write happens.
+	stream   io.Writer
+	streamMu sync.Mutex
+	writeMu  sync.Mutex
 
 	mu       sync.Mutex
 	shutdown bool
@@ -122,6 +143,7 @@ func NewServer(config ServerConfig) (*Server, error) {
 		resourceByURI: make(map[string]ServerResource, len(config.Resources)),
 		prompts:       make([]ServerPrompt, 0, len(config.Prompts)),
 		promptByName:  make(map[string]ServerPrompt, len(config.Prompts)),
+		dynamicLists:  config.DynamicLists,
 	}
 	for _, serverTool := range config.Tools {
 		toolName := strings.TrimSpace(serverTool.Name)
@@ -215,6 +237,11 @@ func (s *Server) Prompts() []ServerPrompt {
 // if any. A notification (a request without an id) produces no response: the
 // protocol has no way to answer one, and inventing an id-less response would
 // desynchronize the peer.
+//
+// A caller that owns the transport can install a sink with
+// [WithNotificationSink] to receive the progress notifications a handler emits
+// while it runs; those arrive before Handle returns and therefore before the
+// response is written.
 func (s *Server) Handle(ctx context.Context, message []byte) ([]byte, bool) {
 	var envelope serverRequest
 	if err := decodeMessage(message, &envelope); err != nil {
@@ -248,7 +275,19 @@ func (s *Server) Handle(ctx context.Context, message []byte) ([]byte, bool) {
 // Serve reads messages until the input ends, writing each response. It
 // returns nil on a clean end of stream: a client that closes the pipe is done
 // with the server, not an error worth reporting.
+//
+// Serve owns the outbound stream for its duration. That is what lets a handler
+// answer with progress notifications on the same pipe, and what makes the
+// Notify* list-changed methods usable: they write to the stream Serve attached,
+// so they fail rather than silently vanish when no client is connected.
 func (s *Server) Serve(ctx context.Context, reader io.Reader, writer io.Writer) error {
+	s.attach(writer)
+	defer s.detach()
+	// Progress and list-changed frames share the response stream, so the
+	// handlers Serve drives reach it through the same sink. Installing it on
+	// the context (rather than on the Server) keeps Handle's in-process
+	// callers in control of their own transport.
+	ctx = WithNotificationSink(ctx, s.send)
 	buffered := bufio.NewReader(reader)
 	for {
 		if err := ctx.Err(); err != nil {
@@ -268,10 +307,40 @@ func (s *Server) Serve(ctx context.Context, reader io.Reader, writer io.Writer) 
 		if !respond {
 			continue
 		}
-		if err := writeFrame(writer, json.RawMessage(response)); err != nil {
+		if err := s.send(response); err != nil {
 			return err
 		}
 	}
+}
+
+// attach records the writer Serve answers on. It is separate from send so the
+// pointer can be read without holding writeMu, which is held across writes.
+func (s *Server) attach(writer io.Writer) {
+	s.streamMu.Lock()
+	s.stream = writer
+	s.streamMu.Unlock()
+}
+
+func (s *Server) detach() {
+	s.streamMu.Lock()
+	s.stream = nil
+	s.streamMu.Unlock()
+}
+
+// send writes exactly one frame to the attached stream. Every outbound frame
+// goes through it -- responses, progress, list changes -- because a Notify
+// call can arrive from a different goroutine than the one Serve is answering
+// on, and writeMu is what keeps two frames from sharing a line.
+func (s *Server) send(frame []byte) error {
+	s.streamMu.Lock()
+	writer := s.stream
+	s.streamMu.Unlock()
+	if writer == nil {
+		return errors.New("mcp server is not serving a stream")
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return writeFrame(writer, json.RawMessage(frame))
 }
 
 func (s *Server) handleNotification(method string) {
@@ -293,15 +362,15 @@ func (s *Server) dispatch(ctx context.Context, method string, params json.RawMes
 	case "tools/list":
 		return s.listTools()
 	case "tools/call":
-		return s.callTool(ctx, params)
+		return s.callTool(withProgress(ctx, params), params)
 	case "resources/list":
 		return s.listResources()
 	case "resources/read":
-		return s.readResource(ctx, params)
+		return s.readResource(withProgress(ctx, params), params)
 	case "prompts/list":
 		return s.listPrompts()
 	case "prompts/get":
-		return s.getPrompt(ctx, params)
+		return s.getPrompt(withProgress(ctx, params), params)
 	default:
 		return nil, &rpcError{Code: codeMethodNotFound, Message: fmt.Sprintf("unknown method %q", method)}
 	}
@@ -327,17 +396,19 @@ func (s *Server) initialize(params json.RawMessage) (json.RawMessage, *rpcError)
 	// resources or prompts that do not exist would make a conforming client
 	// call a method that answers with an empty list at best, and the whole
 	// point of the capability block is that the client can trust it.
-	// listChanged and subscribe are false because both sets are fixed at
-	// startup and this server sends no update notifications: promising them
-	// would promise a notification that never arrives.
+	// subscribe is false because there is no per-resource subscription, and
+	// listChanged mirrors ServerConfig.DynamicLists: false by default,
+	// because a fixed set that claimed otherwise would promise notifications
+	// this server would never send, and true only when the server was told it
+	// may change its lists and has the Notify methods to say so.
 	capabilities := map[string]any{
-		"tools": map[string]any{"listChanged": false},
+		"tools": map[string]any{"listChanged": s.dynamicLists},
 	}
 	if len(s.resources) > 0 {
-		capabilities["resources"] = map[string]any{"subscribe": false, "listChanged": false}
+		capabilities["resources"] = map[string]any{"subscribe": false, "listChanged": s.dynamicLists}
 	}
 	if len(s.prompts) > 0 {
-		capabilities["prompts"] = map[string]any{"listChanged": false}
+		capabilities["prompts"] = map[string]any{"listChanged": s.dynamicLists}
 	}
 	result := map[string]any{
 		"protocolVersion": version,

@@ -116,6 +116,19 @@ what is experimental, and what remains adapter territory.
   the only place a second provider's key can live. A name that cannot be
   resolved is a fatal `AGENT_START`, never a silent run on the host's model.
 
+## MCP Notifications
+
+- Progress notifications reach a client only when its request carried a
+  `_meta.progressToken`; the token is echoed exactly as sent, and a handler that
+  reports a non-finite value produces no frame rather than an invented number.
+- `listChanged` is opt-in: the CLI server advertises `false` because its tool,
+  resource, and prompt sets are fixed by the flags it was started with, and a
+  `Notify*` call on a server without the capability errors instead of sending a
+  notification the client was told not to expect. A `Notify*` call also needs a
+  served stream; a caller driving the server's `Handle` directly cannot use it.
+- Elicitation, sampling, `resources/subscribe`, `resources/templates/list`, and
+  server-initiated requests are not implemented.
+
 ## Commands
 
 - Commands come from two layers: the workspace's `.zenforge/commands` and the

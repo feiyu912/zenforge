@@ -86,3 +86,4 @@ later ADRs supersede earlier ones, never edit.
 | [0070](0070-a-signed-webhook-starts-a-run.md) | A signed webhook starts a run |
 | [0071](0071-resources-and-prompts-not-only-tools.md) | Resources and prompts, not only tools |
 | [0072](0072-a-command-can-belong-to-a-person.md) | A command can belong to a person |
+| [0073](0073-progress-is-a-notification.md) | Progress is a notification, not a second protocol |

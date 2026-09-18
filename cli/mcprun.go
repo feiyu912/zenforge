@@ -177,7 +177,22 @@ func runServedTask(ctx context.Context, agent *zenforge.Agent, refusals *runAppr
 	refusals.reset()
 	// A detached run names itself before it starts, so the caller can be told
 	// which run it is holding; a blocking one lets the agent choose.
-	result, runErr := agent.Run(ctx, zenforge.Task{RunID: runID, Input: prompt})
+	task := zenforge.Task{RunID: runID, Input: prompt}
+	// A client that attached a progress token gets one notification per run
+	// event, counted as the events arrive, with the event type as the message.
+	// The reporter is a no-op when the caller asked for nothing -- and for a
+	// detached run the context is the server's, not the request's, so its
+	// no-op is also what keeps a finished call from writing progress for a
+	// token nobody is waiting on any more. This hangs off Agent.Run's own
+	// event loop: there is one pass over the stream, and it is the one that
+	// produces the result, so progress can never change what the run returns.
+	report := mcp.ProgressFrom(ctx)
+	count := 0
+	task.OnEvent = func(event zenforge.Event) {
+		count++
+		report(float64(count), string(event.Type))
+	}
+	result, runErr := agent.Run(ctx, task)
 	if result == nil {
 		result = &zenforge.Result{}
 	}

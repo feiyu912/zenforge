@@ -165,6 +165,12 @@ func (a *Agent) Run(ctx context.Context, task Task) (*Result, error) {
 	var result Result
 	var approvalPending bool
 	for event := range events {
+		// The observer runs here, in the loop that already consumes the
+		// stream: a caller that wants live progress does not have to open a
+		// second subscription and race this one for the same events.
+		if task.OnEvent != nil {
+			task.OnEvent(event)
+		}
 		if result.RunID == "" {
 			result.RunID = event.RunID()
 		}

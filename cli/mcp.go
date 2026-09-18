@@ -97,6 +97,11 @@ func mcpServerCommand(ctx context.Context, args []string, ioStreams IO) error {
 		Tools:        tools,
 		Resources:    mcpServerResources(opts.checkpointType, opts.checkpointDir),
 		Prompts:      prompts,
+		// This server's tool, resource and prompt sets are fixed by its flags
+		// at startup: nothing here adds or removes a tool while it serves, so
+		// listChanged stays false and a client is right to cache the lists.
+		// The protocol layer's Notify* methods are deliberately left unused.
+		DynamicLists: false,
 	})
 	if err != nil {
 		return err
