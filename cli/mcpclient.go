@@ -30,6 +30,26 @@ type mcpServerSpec struct {
 	Args     []string
 	Env      []string
 	Deferred bool
+	// StartupTimeout and ToolCallTimeout are this server's overrides for the
+	// two bounds above. Zero means the default applies.
+	StartupTimeout  time.Duration
+	ToolCallTimeout time.Duration
+}
+
+// startupTimeout is the bound to use for this server's handshake.
+func (s mcpServerSpec) startupTimeout() time.Duration {
+	if s.StartupTimeout > 0 {
+		return s.StartupTimeout
+	}
+	return mcpStartupTimeout
+}
+
+// toolCallTimeout is the budget to declare for this server's tools.
+func (s mcpServerSpec) toolCallTimeout() time.Duration {
+	if s.ToolCallTimeout > 0 {
+		return s.ToolCallTimeout
+	}
+	return mcpToolCallTimeout
 }
 
 // buildMCPTools starts every configured MCP server and adapts its tools.
@@ -60,7 +80,7 @@ func buildMCPTools(ctx context.Context, opts *options, ioStreams IO) ([]tool.Too
 		// deferred drain owns this process.
 		opts.addCloser("mcp server "+spec.Name, client.Close)
 
-		startupCtx, cancel := context.WithTimeout(ctx, mcpStartupTimeout)
+		startupCtx, cancel := context.WithTimeout(ctx, spec.startupTimeout())
 		if err := client.Initialize(startupCtx, mcp.InitializeParams{ClientInfo: mcpClientInfo()}); err != nil {
 			cancel()
 			return nil, fmt.Errorf("initialize mcp server %s: %w", spec.Name, err)
@@ -68,7 +88,7 @@ func buildMCPTools(ctx context.Context, opts *options, ioStreams IO) ([]tool.Too
 		serverTools, err := mcp.ToolsWithOptions(startupCtx, client, mcp.ServerOptions{
 			Server:          spec.Name,
 			Deferred:        spec.Deferred,
-			ToolCallTimeout: mcpToolCallTimeout,
+			ToolCallTimeout: spec.toolCallTimeout(),
 		})
 		cancel()
 		if err != nil {

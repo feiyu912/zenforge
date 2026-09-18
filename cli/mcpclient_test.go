@@ -23,6 +23,7 @@ const (
 	cliMCPHelperInitEnv  = "ZENFORGE_CLI_MCP_INIT_FILE"
 	cliMCPHelperExitEnv  = "ZENFORGE_CLI_MCP_EXIT_FILE"
 	cliMCPHelperLogEnv   = "ZENFORGE_CLI_MCP_CALL_LOG"
+	cliMCPHelperDelayEnv = "ZENFORGE_CLI_MCP_DELAY"
 	cliMCPHelperCommand  = "-test.run=TestCLIMCPHelperProcess"
 	cliMCPHelperArgument = "serve"
 )
@@ -75,6 +76,22 @@ func TestMCPServerSpecsValidateTheSection(t *testing.T) {
 			name:    "an unusable environment name is rejected",
 			config:  mcpServersConfig{"helper": {Command: "helper", Env: map[string]redact.String{"A=B": redact.New("x")}}},
 			wantErr: "invalid variable name",
+		},
+		{
+			name:    "an unparseable startup timeout is rejected",
+			config:  mcpServersConfig{"helper": {Command: "helper", StartupTimeout: "soon"}},
+			wantErr: "parse mcpServers.helper.startupTimeout",
+		},
+		{
+			name:    "a non-positive tool call timeout is rejected",
+			config:  mcpServersConfig{"helper": {Command: "helper", ToolCallTimeout: "-1s"}},
+			wantErr: "mcpServers.helper.toolCallTimeout must be positive",
+		},
+		{
+			name: "per-server time bounds are parsed",
+			config: mcpServersConfig{"helper": {
+				Command: "helper", StartupTimeout: "45s", ToolCallTimeout: "5m",
+			}},
 		},
 	}
 	for _, testCase := range cases {
@@ -527,6 +544,16 @@ func runCLIMCPHelper() {
 			// initialize also sends notifications/initialized.
 			continue
 		}
+		if delay := strings.TrimSpace(os.Getenv(cliMCPHelperDelayEnv)); delay != "" {
+			// A delayed server is how the per-server handshake bound is
+			// exercised: the delay applies to the handshake methods a startup
+			// timeout bounds, not to calls.
+			if request.Method == "initialize" || request.Method == "tools/list" {
+				if wait, err := time.ParseDuration(delay); err == nil {
+					time.Sleep(wait)
+				}
+			}
+		}
 		if request.Method == "tools/call" {
 			var params struct {
 				Name string `json:"name"`
@@ -603,4 +630,105 @@ func appendHelperCall(path, name string) {
 	}
 	defer file.Close()
 	_, _ = file.WriteString(name + "\n")
+}
+
+func TestMCPServerSpecsParseTimeBounds(t *testing.T) {
+	specs, err := mcpServerSpecs(mcpServersConfig{
+		"slow":     {Command: "slow", StartupTimeout: "45s", ToolCallTimeout: "5m"},
+		"defaults": {Command: "defaults"},
+	})
+	if err != nil {
+		t.Fatalf("mcpServerSpecs returned error: %v", err)
+	}
+	if len(specs) != 2 || specs[0].Name != "defaults" || specs[1].Name != "slow" {
+		t.Fatalf("specs are not sorted by name: %#v", specs)
+	}
+	if specs[0].StartupTimeout != 0 || specs[0].ToolCallTimeout != 0 {
+		t.Fatalf("an entry without bounds kept defaults in the spec: %#v", specs[0])
+	}
+	if specs[1].StartupTimeout != 45*time.Second || specs[1].ToolCallTimeout != 5*time.Minute {
+		t.Fatalf("parsed bounds = %s/%s", specs[1].StartupTimeout, specs[1].ToolCallTimeout)
+	}
+	// The effective bounds are the defaults when nothing was configured, and
+	// the override when something was: this is what buildMCPTools uses.
+	if got := specs[0].startupTimeout(); got != 30*time.Second {
+		t.Fatalf("default startup timeout = %s", got)
+	}
+	if got := specs[0].toolCallTimeout(); got != 60*time.Second {
+		t.Fatalf("default tool call timeout = %s", got)
+	}
+	if got := specs[1].startupTimeout(); got != 45*time.Second {
+		t.Fatalf("overridden startup timeout = %s", got)
+	}
+	if got := specs[1].toolCallTimeout(); got != 5*time.Minute {
+		t.Fatalf("overridden tool call timeout = %s", got)
+	}
+}
+
+func TestBuildMCPToolsBoundsTheHandshakePerServer(t *testing.T) {
+	helper := newCLIMCPHelper(t)
+	// The helper answers the handshake half a second late, which is longer
+	// than the bound this spec declares.
+	slow := helper.spec("helper")
+	slow.Env = append(slow.Env, cliMCPHelperDelayEnv+"=500ms")
+	slow.StartupTimeout = 50 * time.Millisecond
+
+	opts := defaultOptions()
+	opts.mcpServers = []mcpServerSpec{slow}
+	started := time.Now()
+	_, err := buildMCPTools(context.Background(), &opts, IO{Stderr: io.Discard})
+	elapsed := time.Since(started)
+	drainClosers(&opts, IO{Stderr: io.Discard})
+	if err == nil {
+		t.Fatal("buildMCPTools accepted a server that outlived its startup timeout")
+	}
+	if !strings.Contains(err.Error(), "initialize mcp server helper") {
+		t.Fatalf("error = %v", err)
+	}
+	if elapsed >= 400*time.Millisecond {
+		t.Fatalf("the handshake waited %s for a 50ms bound", elapsed)
+	}
+
+	// The same slow server is accepted once its own bound covers the delay,
+	// so the override widens the bound instead of replacing it with a fixed
+	// value: a server that is merely slow is not a server that is broken.
+	patient := helper.spec("helper")
+	patient.Env = append(patient.Env, cliMCPHelperDelayEnv+"=500ms")
+	patient.StartupTimeout = 10 * time.Second
+	patientOpts := defaultOptions()
+	patientOpts.mcpServers = []mcpServerSpec{patient}
+	adapted, err := buildMCPTools(context.Background(), &patientOpts, IO{Stderr: io.Discard})
+	defer drainClosers(&patientOpts, IO{Stderr: io.Discard})
+	if err != nil {
+		t.Fatalf("buildMCPTools returned error for a covered delay: %v", err)
+	}
+	if len(adapted) == 0 {
+		t.Fatal("a covered slow server exposed no tools")
+	}
+}
+
+func TestBuildMCPToolsDeclaresThePerServerToolCallTimeout(t *testing.T) {
+	helper := newCLIMCPHelper(t)
+	spec := helper.spec("helper")
+	spec.ToolCallTimeout = 3 * time.Second
+	opts := defaultOptions()
+	opts.mcpServers = []mcpServerSpec{spec}
+
+	adapted, err := buildMCPTools(context.Background(), &opts, IO{Stderr: io.Discard})
+	if err != nil {
+		t.Fatalf("buildMCPTools returned error: %v", err)
+	}
+	defer drainClosers(&opts, IO{Stderr: io.Discard})
+	if len(adapted) == 0 {
+		t.Fatal("the helper exposed no tools")
+	}
+	for _, adaptedTool := range adapted {
+		declarer, ok := adaptedTool.(tool.TimeoutDeclarer)
+		if !ok {
+			t.Fatalf("%s declares no timeout", adaptedTool.Name())
+		}
+		if got := declarer.TimeoutBudget(); got != 3*time.Second {
+			t.Fatalf("%s timeout = %s, want 3s", adaptedTool.Name(), got)
+		}
+	}
 }

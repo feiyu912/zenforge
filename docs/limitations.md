@@ -119,6 +119,20 @@ what is experimental, and what remains adapter territory.
   cap) plus the newest bytes, so a reader that never polls still loses the
   middle; it is told how much (`elidedBytes`).
 
+## MCP Servers
+
+- A server's `startupTimeout` covers `initialize` and `tools/list` together and
+  defaults to 30 seconds; `toolCallTimeout` defaults to 60 seconds per call.
+  Both are per server, are read when the configuration loads (changing one
+  needs a restart), and are not clamped by any maximum.
+- An unparseable or non-positive bound is a configuration error that names the
+  key, so a bound the client would otherwise ignore cannot be mistaken for a
+  protection that is in place.
+- A server that misses its startup bound fails the command rather than being
+  skipped, matching the rest of `mcpServers`: the file is the operator's own,
+  and a run that silently lacks the tool set it asked for is worse than a loud
+  failure.
+
 ## Deferred Systems
 
 - Full platform memory extraction is not included. Retrieved memory can be

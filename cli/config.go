@@ -47,6 +47,15 @@ type mcpServerConfig struct {
 	// until a tool_search activates them, which is what a large remote
 	// catalog wants.
 	Deferred bool `json:"deferred,omitempty"`
+	// StartupTimeout bounds this server's initialize + tools/list handshake.
+	// Empty uses the default; a server that needs longer than the default to
+	// wake up (a cold container, a JVM) says so here instead of slowing every
+	// other server down.
+	StartupTimeout string `json:"startupTimeout,omitempty"`
+	// ToolCallTimeout is this server's declared budget for one tool call.
+	// Empty uses the default; a remote tool that legitimately runs for
+	// minutes (a build, a crawl) declares it here.
+	ToolCallTimeout string `json:"toolCallTimeout,omitempty"`
 }
 
 type modelConfig struct {
@@ -492,15 +501,44 @@ func mcpServerSpecs(config mcpServersConfig) ([]mcpServerSpec, error) {
 			}
 			env = append(env, key+"="+server.Env[key].Reveal())
 		}
+		startupTimeout, err := mcpTimeout("startupTimeout", name, server.StartupTimeout)
+		if err != nil {
+			return nil, err
+		}
+		toolCallTimeout, err := mcpTimeout("toolCallTimeout", name, server.ToolCallTimeout)
+		if err != nil {
+			return nil, err
+		}
 		specs = append(specs, mcpServerSpec{
-			Name:     name,
-			Command:  command,
-			Args:     append([]string(nil), server.Args...),
-			Env:      env,
-			Deferred: server.Deferred,
+			Name:            name,
+			Command:         command,
+			Args:            append([]string(nil), server.Args...),
+			Env:             env,
+			Deferred:        server.Deferred,
+			StartupTimeout:  startupTimeout,
+			ToolCallTimeout: toolCallTimeout,
 		})
 	}
 	return specs, nil
+}
+
+// mcpTimeout parses one per-server time bound. An empty value keeps the
+// default (the caller's spec field stays zero), and a value that cannot be a
+// duration or is not positive is a configuration error: a bound the operator
+// wrote but the client silently ignored would be worse than no bound at all.
+func mcpTimeout(key, server, value string) (time.Duration, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, nil
+	}
+	timeout, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, fmt.Errorf("parse mcpServers.%s.%s: %w", server, key, err)
+	}
+	if timeout <= 0 {
+		return 0, fmt.Errorf("mcpServers.%s.%s must be positive", server, key)
+	}
+	return timeout, nil
 }
 
 // applyWebConfig maps the web section onto CLI options.

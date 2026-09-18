@@ -725,7 +725,11 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
   server did not declare read-only goes through the approval broker with the
   reference's rule (destructive asks, read-only runs, absent hints ask), and
   the request carries a per-tool rule key plus an argument fingerprint so a
-  broad grant cannot be replayed for a different payload. Server processes get
+  broad grant cannot be replayed for a different payload. Both time bounds are
+  per server (`startupTimeout`, covering `initialize` and `tools/list`, and
+  `toolCallTimeout` per call), so a cold container or a long-running remote
+  tool says so in its own entry instead of moving the default for every
+  server. Server processes get
   the ambient environment minus credential-shaped names, are owned by the
   command that started them, and are drained on every exit path — including a
   repeated schedule, which drains per firing. The stdio client now dispatches

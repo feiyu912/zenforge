@@ -71,7 +71,9 @@ The `mcpServers` config section starts stdio servers for a run:
       "command": "mcp-server-files",
       "args": ["--root", "."],
       "env": { "FILES_TOKEN": "..." },
-      "deferred": true
+      "deferred": true,
+      "startupTimeout": "2m",
+      "toolCallTimeout": "10m"
     }
   }
 }
@@ -80,14 +82,19 @@ The `mcpServers` config section starts stdio servers for a run:
 Servers start (and handshake) while the agent is built, in a deterministic
 name order, and their tools join the catalog before the `tool_search` decision
 so a `deferred` server is what makes lazy loading necessary. A server that
-cannot start, or whose `initialize`/`tools/list` does not answer within 30
-seconds, fails the command: this file is the operator's own configuration, and
-running silently without a tool set it asked for is the failure mode this
-repository refuses. The ambient environment is scrubbed of credential-shaped
-names (`KEY`, `PASSWORD`, `SECRET`, `TOKEN`) before it reaches a server, so
-`env` is the explicit way to forward one. One remote call is bounded by a
-declared 60-second budget, which the timeout policy arms without the model
-ever seeing it.
+cannot start, or whose `initialize`/`tools/list` does not answer within its
+startup bound, fails the command: this file is the operator's own
+configuration, and running silently without a tool set it asked for is the
+failure mode this repository refuses. The ambient environment is scrubbed of
+credential-shaped names (`KEY`, `PASSWORD`, `SECRET`, `TOKEN`) before it
+reaches a server, so `env` is the explicit way to forward one. One remote call
+is bounded by a declared budget, which the timeout policy arms without the
+model ever seeing it. Both bounds are per server: `startupTimeout` defaults to
+30 seconds and covers `initialize` and `tools/list` together, and
+`toolCallTimeout` defaults to 60 seconds per call, so a cold container or a
+tool that legitimately runs for minutes says so in its own entry instead of
+moving the default for every server (ADR 0061). An unusable value is a
+configuration error naming the key, not a bound that is quietly ignored.
 
 A call to a tool the server did not declare read-only goes through the
 approval channel, carrying its server and remote name: `readOnlyHint: true`
