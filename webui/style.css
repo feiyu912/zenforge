@@ -1,3 +1,12 @@
+/* The hidden attribute is how the console shows and hides panels, and it is
+   only a UA `display: none`: any class rule that sets `display` (the settings
+   overlay and the approvals panel both do) outranks it, which left the panel
+   permanently on screen and blocked the page behind it. This keeps the
+   attribute authoritative wherever it is used. */
+[hidden] {
+  display: none !important;
+}
+
 /* Console styling for `zenforge serve`. Plain CSS, dark agent-console look,
    no external fonts: the server may be the only reachable host. */
 

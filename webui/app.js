@@ -541,13 +541,15 @@ async function saveSettings() {
   const button = $("settings-save");
   button.disabled = true;
   showSettingsError("");
-  const payload = {
-    baseUrl: $("settings-base-url").value.trim(),
-    model: $("settings-model").value.trim(),
-    provider: $("settings-provider").value,
-    apiKey: $("settings-api-key").value,
-  };
   try {
+    // Read the fields inside the try: a missing element used to throw before
+    // the request was made, which left the button disabled with no message.
+    const payload = {
+      baseUrl: $("settings-base-url").value.trim(),
+      model: $("settings-model").value.trim(),
+      provider: $("settings-provider").value,
+      apiKey: $("settings-api-key").value,
+    };
     const settings = await api("/api/settings", {
       method: "POST",
       headers: { "Content-Type": "application/json" },

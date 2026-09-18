@@ -3,6 +3,7 @@ package webui
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -79,5 +80,28 @@ func TestConsoleOwnsOnlyItsOwnPaths(t *testing.T) {
 	Handler().ServeHTTP(post, httptest.NewRequest(http.MethodPost, "/", strings.NewReader("x")))
 	if post.Code != http.StatusMethodNotAllowed {
 		t.Errorf("POST / = %d, want 405", post.Code)
+	}
+}
+
+// The console hides panels with the hidden attribute, and two of them set
+// display through a class. Without an explicit rule the attribute loses to
+// those classes, so the settings panel stayed on screen covering the page.
+// This pins the stylesheet to keeping hidden authoritative.
+func TestStylesheetKeepsTheHiddenAttributeAuthoritative(t *testing.T) {
+	style, err := os.ReadFile("style.css")
+	if err != nil {
+		t.Fatalf("read style.css: %v", err)
+	}
+	if !strings.Contains(string(style), "[hidden]") {
+		t.Error("style.css does not keep the hidden attribute authoritative, so a panel that sets display through a class cannot be closed")
+	}
+	shell, err := os.ReadFile("index.html")
+	if err != nil {
+		t.Fatalf("read index.html: %v", err)
+	}
+	for _, id := range []string{"settings-overlay", "approvals"} {
+		if !strings.Contains(string(shell), `id="`+id+`"`) || !strings.Contains(string(shell), "hidden") {
+			t.Errorf("index.html no longer hides %s", id)
+		}
 	}
 }
