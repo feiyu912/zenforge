@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -173,16 +174,20 @@ func TestServedRunRunsApprovalGatedToolsWhenTheOperatorAllowedThem(t *testing.T)
 
 func TestServedRunReportsATimeoutWithTheRunID(t *testing.T) {
 	release := make(chan struct{})
-	defer close(release)
 	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Hold the model call open until the run's deadline cancels it, so
-		// the server closes without waiting on an abandoned request.
+		// Hold the model call open until the run's deadline cancels it.
 		select {
 		case <-r.Context().Done():
 		case <-release:
 		}
 	}))
 	defer model.Close()
+	// Registered after Close, so it runs before it: a cancellation is not
+	// guaranteed to surface as the request context being done (a request
+	// whose response headers never arrived may leave the handler waiting),
+	// and Close waits for handlers. Releasing the hold first keeps the
+	// cleanup from depending on which one happened.
+	defer close(release)
 
 	opts := servedRunOptions(t, model.URL)
 	runTool, err := newMCPRunTool(context.Background(), &opts, servedRunStreams(), 50*time.Millisecond)
@@ -275,21 +280,30 @@ func TestMCPServerRunToolAppearsOnlyWithTheOperatorGrant(t *testing.T) {
 // newHoldableOpenAISSEStub serves one SSE response only after the test closes
 // release, and reports when a request has arrived. It exists for tests that
 // need a run to be observably in flight.
-func newHoldableOpenAISSEStub(t *testing.T, response string) (url string, started chan struct{}, release chan struct{}) {
+func newHoldableOpenAISSEStub(t *testing.T, response string) (url string, started chan struct{}, release func()) {
 	t.Helper()
 	started = make(chan struct{}, 1)
-	release = make(chan struct{})
+	hold := make(chan struct{})
+	var once sync.Once
+	release = func() { once.Do(func() { close(hold) }) }
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.ReadAll(r.Body)
 		select {
 		case started <- struct{}{}:
 		default:
 		}
-		<-release
+		select {
+		case <-hold:
+		case <-r.Context().Done():
+			return
+		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = fmt.Fprint(w, response)
 	}))
 	t.Cleanup(server.Close)
+	// Registered after Close, so a test that fails before it releases the
+	// hold still lets the handler return and Close finish.
+	t.Cleanup(release)
 	return server.URL, started, release
 }
 
@@ -328,7 +342,7 @@ func TestServedRunHoldsTheServerSlot(t *testing.T) {
 		t.Fatalf("the busy server did not say why the call was refused: %v", busyErr)
 	}
 
-	close(release)
+	release()
 	if err := <-first; err != nil {
 		t.Fatalf("the first run failed: %v", err)
 	}
