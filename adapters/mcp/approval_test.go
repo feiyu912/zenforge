@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -78,6 +79,59 @@ func TestToolWithoutAHintAsksBeforeCallingTheServer(t *testing.T) {
 	}
 	if err := req.Validate(); err != nil {
 		t.Fatalf("request does not validate: %v", err)
+	}
+}
+
+func TestAGatedCallOffersTheStandingRuleOption(t *testing.T) {
+	client := &fakeClient{
+		definitions: []ToolDefinition{{Name: "delete", Description: "Delete a record."}},
+		result:      CallResult{Content: []Content{{Type: "text", Text: "deleted"}}},
+	}
+	tools, err := ToolsWithOptions(context.Background(), client, ServerOptions{Server: "records"})
+	if err != nil {
+		t.Fatalf("ToolsWithOptions returned error: %v", err)
+	}
+	result, err := tools[0].Call(context.Background(), json.RawMessage(`{"id":"7"}`), toolContext())
+	if !errors.Is(err, approval.ErrRequired) {
+		t.Fatalf("Call error = %v, want approval.ErrRequired", err)
+	}
+	req, ok := approval.RequestFromResult(result)
+	if !ok {
+		t.Fatal("the gated call carried no approval request")
+	}
+	var standing *approval.Option
+	for i, option := range req.Options {
+		if option.Scope == approval.ScopeRule {
+			standing = &req.Options[i]
+		}
+	}
+	if standing == nil {
+		t.Fatalf("the request offered no standing option: %#v", req.Options)
+	}
+	if !approval.IsApprovedAction(standing.Action) || strings.TrimSpace(standing.Label) == "" {
+		t.Fatalf("standing option = %#v", *standing)
+	}
+	// The rule option has to resolve against the request's own rule key, or a
+	// broker could not scope the decision it returns.
+	key, err := approval.ScopeKey(req, approval.ScopeRule)
+	if err != nil {
+		t.Fatalf("ScopeKey returned error: %v", err)
+	}
+	if key != "mcp:records:delete" {
+		t.Fatalf("rule key = %q", key)
+	}
+	// A read-only tool never gets the request at all, so it cannot be given a
+	// standing grant by accident.
+	readOnly := true
+	trusted, err := ToolsWithOptions(context.Background(), &fakeClient{
+		definitions: []ToolDefinition{{Name: "list", Annotations: ToolAnnotations{ReadOnlyHint: &readOnly}}},
+		result:      CallResult{Content: []Content{{Type: "text", Text: "ok"}}},
+	}, ServerOptions{Server: "records"})
+	if err != nil {
+		t.Fatalf("ToolsWithOptions returned error: %v", err)
+	}
+	if _, err := trusted[0].Call(context.Background(), json.RawMessage(`{}`), toolContext()); err != nil {
+		t.Fatalf("a read-only tool asked for approval: %v", err)
 	}
 }
 

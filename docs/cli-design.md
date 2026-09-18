@@ -99,11 +99,37 @@ configuration error naming the key, not a bound that is quietly ignored.
 A call to a tool the server did not declare read-only goes through the
 approval channel, carrying its server and remote name: `readOnlyHint: true`
 runs unattended, a `destructiveHint: true` always asks, and a tool with no
-useful hints asks as well — absent is not "safe". "Always" decisions are
-scoped to the tool (`mcp:<server>:<tool>`) while a run-scoped decision is
-scoped to the exact arguments, so a broad grant cannot be replayed for a
-different payload. Every server process is owned by the command that started
-it and is closed on the way out, including when the build fails halfway.
+useful hints asks as well — absent is not "safe". A gated call offers once
+and "Always allow this tool": the standing answer is scoped to the tool
+(`mcp:<server>:<tool>`) and covers any arguments, while a run-scoped decision
+is scoped to the exact arguments, so the two cannot be confused for one
+another. Every server process is owned by the command that started it and is
+closed on the way out, including when the build fails halfway.
+
+By default a standing decision lives only in the run that made it. Naming a
+file makes it outlive the process:
+
+```json
+{
+  "approval": {
+    "mode": "prompt",
+    "grantsFile": "~/.local/state/zenforge/approval-grants.db",
+    "grantTtl": "720h",
+    "tenant": "cli",
+    "subject": "me"
+  }
+}
+```
+
+`grantsFile` is the whole opt-in (a sqlite store the command opens and drains
+like any other resource); `grantTtl` bounds how long a grant stays valid;
+`tenant` and `subject` are the namespace the grants belong to, defaulting to
+`cli` and the operating-system user name so one operator's grant never answers
+for another's. A TTL, tenant, or subject without a grants file is a
+configuration error: a key the client silently ignored would be a protection
+that is not in place. A once- or run-scoped decision still never outlives its
+run, and until the `grants` command lands, deleting the file resets the store
+(ADR 0062).
 
 ## Images and reasoning
 

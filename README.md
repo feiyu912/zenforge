@@ -191,8 +191,11 @@ root. Provider error output redacts the configured API key.
   resumed waiter can consume a decision submitted by another process.
 - Run and rule approval scopes are checkpointed grants matched by exact
   fingerprint or rule key. Optional `approval.GrantStore` persistence reuses
-  only `ScopeRule` across runs, isolated by tenant/subject and exact rule key
-  plus fingerprint, with TTL and revocation support.
+  only `ScopeRule` across runs — a standing grant is the rule, so it covers
+  that tool with any arguments and stores no fingerprint, while a
+  fingerprint-pinned grant from an earlier store is still honoured. Grants are
+  isolated by tenant/subject, with TTL and revocation support, and the CLI
+  opts in by naming an `approval.grantsFile` (ADR 0062).
 - Durable event log and checkpoint stores: memory, JSONL, SQLite.
 - Canonical `server/harnesshttp.NewRuntime` assembly for detached HTTP
   start/resume/status/list/attach/cancel, durable SSE reconnect with

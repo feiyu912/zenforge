@@ -161,6 +161,10 @@ rg -n '"[^"[:space:]]*agent-platform[^"[:space:]]*"' --glob "*.go" .
 | per-server MCP time bounds are parsed, validated, and defaulted | `TestMCPServerSpecsParseTimeBounds` |
 | a server that misses its own startup bound fails fast, and one covered by a wider bound is accepted | `TestBuildMCPToolsBoundsTheHandshakePerServer` |
 | a per-server tool-call bound reaches each adapted tool's declared budget | `TestBuildMCPToolsDeclaresThePerServerToolCallTimeout` |
+| a rule grant covers the tool across runs even when the arguments differ, and stores no fingerprint | `TestAgentPersistentRuleGrantCoversDifferentArguments` |
+| a gated remote call offers a rule-scoped standing option that resolves against its own rule key | `TestAGatedCallOffersTheStandingRuleOption` |
+| the approval section parses and validates the persistence keys | `TestApprovalConfigParsesPersistenceKeys`, `TestApprovalConfigRejectsUnusablePersistence` |
+| a configured grants file is opt-in, namespaced, owned by the command, and survives the process | `TestApprovalGrantConfigIsOptInAndSurvivesTheProcess`, `TestApprovalGrantConfigHonoursAnExplicitNamespace`, `TestBuildAgentOpensTheConfiguredGrantsFile` |
 | a job is reported terminal only after its output has been drained | `jobs.TestRunWaitsForOutputWrittenAfterTheMainProcessExits`, `jobs.TestCollectSignalsDrainedOnlyAfterBothStreamsEnd` |
 | a job whose pipes are held open by a background grandchild still becomes terminal | `jobs.TestJobWhoseOutputIsHeldByAGrandchildStillBecomesTerminal` |
 | memory entries augment normalized tasks | `adapters/memory.TestAugmentTaskAddsMemoryBlockAndMetadata` |

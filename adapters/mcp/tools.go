@@ -369,7 +369,7 @@ func (t *Tool) approvalRequest(call tool.Context, fingerprint, ruleKey string) a
 		Title:       "Approve MCP tool " + t.Name(),
 		Description: description,
 		Risk:        risk,
-		Options:     approval.DefaultOptions(),
+		Options:     approvalOptions(),
 		Payload: map[string]any{
 			"server":      t.server,
 			"tool":        t.RemoteName(),
@@ -381,6 +381,21 @@ func (t *Tool) approvalRequest(call tool.Context, fingerprint, ruleKey string) a
 		},
 		CreatedAt: time.Now().UTC(),
 	}
+}
+
+// approvalOptions are what a broker may answer a gated remote call with:
+// once, or standing. The standing option is the rule scope the request's rule
+// key already names, so "always allow" means this server's tool with any
+// arguments — which is what a rule decision means inside a run, and what the
+// agent persists across runs when the operator configured a grant store.
+// Read-only tools never reach this path at all.
+func approvalOptions() []approval.Option {
+	return append(approval.DefaultOptions(), approval.Option{
+		Action:      approval.DecisionApprove,
+		Label:       "Always allow this tool",
+		Description: "Approve every future call to this tool, whatever its arguments.",
+		Scope:       approval.ScopeRule,
+	})
 }
 
 // approvalIdentity derives the two keys an approval decision is scoped by.

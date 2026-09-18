@@ -178,6 +178,19 @@ type webConfig struct {
 
 type approvalConfig struct {
 	Mode string `json:"mode,omitempty"`
+	// GrantsFile is where durable "always allow" grants are kept. Empty keeps
+	// a grant inside the run that made it; naming a file lets a standing
+	// decision outlive the process, which is what the reference does.
+	GrantsFile string `json:"grantsFile,omitempty"`
+	// GrantTTL bounds how long a persisted grant stays valid. Empty means it
+	// does not expire.
+	GrantTTL string `json:"grantTtl,omitempty"`
+	// Tenant and Subject are the namespace a persisted grant belongs to, so a
+	// grant recorded for one identity is never replayed for another. They may
+	// only be set with a grants file; defaults are "cli" and the
+	// operating-system user name.
+	Tenant  string `json:"tenant,omitempty"`
+	Subject string `json:"subject,omitempty"`
 }
 
 type checkpointConfig struct {
@@ -437,6 +450,33 @@ func applyConfig(opts *options, config configFile) error {
 			return fmt.Errorf("unknown approval.mode: %s", config.Approval.Mode)
 		}
 		opts.approve = config.Approval.Mode
+	}
+	if grantsFile := strings.TrimSpace(config.Approval.GrantsFile); grantsFile != "" {
+		opts.approvalGrantsFile = grantsFile
+	}
+	if config.Approval.GrantTTL != "" {
+		ttl, err := time.ParseDuration(config.Approval.GrantTTL)
+		if err != nil {
+			return fmt.Errorf("parse approval.grantTtl: %w", err)
+		}
+		if ttl <= 0 {
+			return fmt.Errorf("approval.grantTtl must be positive")
+		}
+		opts.approvalGrantTTL = ttl
+	}
+	opts.approvalTenant = strings.TrimSpace(config.Approval.Tenant)
+	opts.approvalSubject = strings.TrimSpace(config.Approval.Subject)
+	if opts.approvalGrantsFile == "" {
+		// Persistence is the only reason these keys exist; a value without a
+		// file would be a standing grant the operator configured and the
+		// client silently did not keep, which is the failure mode this
+		// repository refuses.
+		if opts.approvalGrantTTL > 0 {
+			return fmt.Errorf("approval.grantTtl requires approval.grantsFile")
+		}
+		if opts.approvalTenant != "" || opts.approvalSubject != "" {
+			return fmt.Errorf("approval.tenant and approval.subject require approval.grantsFile")
+		}
 	}
 	if config.Checkpoint.Type != "" {
 		switch config.Checkpoint.Type {

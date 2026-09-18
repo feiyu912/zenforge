@@ -2372,6 +2372,59 @@ func TestAgentReusesPersistentRuleGrantAcrossRuns(t *testing.T) {
 	}
 }
 
+func TestAgentPersistentRuleGrantCoversDifferentArguments(t *testing.T) {
+	// A rule grant is the tool, not the argument string the operator saw: the
+	// second run calls the same tool with different arguments and still needs
+	// no second decision. This is what the tool-side metadata and the in-run
+	// grant already meant by rule scope; the store now means it too.
+	store := approval.NewMemoryGrantStore()
+	fakeModel := &scriptedModel{turns: []scriptedTurn{
+		{events: []model.Event{{Message: &model.Message{ToolCalls: []model.ToolCallSpec{{
+			ID: "call_1", Name: "scoped_approval",
+			Arguments: json.RawMessage(`{"fingerprint":"fp-one","ruleKey":"rule"}`),
+		}}}}}},
+		{events: []model.Event{{Delta: "first done"}}},
+		{events: []model.Event{{Message: &model.Message{ToolCalls: []model.ToolCallSpec{{
+			ID: "call_2", Name: "scoped_approval",
+			Arguments: json.RawMessage(`{"fingerprint":"fp-two","ruleKey":"rule"}`),
+		}}}}}},
+		{events: []model.Event{{Delta: "second done"}}},
+	}}
+	brokerCalls := 0
+	agent := New(Config{
+		Model: fakeModel, Tools: []Tool{scopedApprovalTool{}},
+		ApprovalGrants:    store,
+		ApprovalNamespace: approval.Namespace{Tenant: "tenant", Subject: "subject"},
+		Approval: approval.BrokerFunc(func(_ context.Context, req approval.Request) (approval.Decision, error) {
+			brokerCalls++
+			return approval.Decision{RequestID: req.ID, Action: approval.DecisionApprove, Scope: approval.ScopeRule}, nil
+		}),
+		Checkpoints: checkpointmemory.New(),
+	})
+	for _, runID := range []string{"wide_run_1", "wide_run_2"} {
+		events, err := agent.Stream(context.Background(), Task{RunID: runID, Input: "work"})
+		if err != nil {
+			t.Fatalf("Stream(%s) returned error: %v", runID, err)
+		}
+		for event := range events {
+			if event.Type == EventRunError {
+				t.Fatalf("Stream(%s) failed: %#v", runID, event.Payload)
+			}
+		}
+	}
+	if brokerCalls != 1 {
+		t.Fatalf("broker calls = %d, want 1: a rule grant must cover the tool, not one argument string", brokerCalls)
+	}
+	grant, err := store.Get(context.Background(),
+		approval.Namespace{Tenant: "tenant", Subject: "subject"}, "rule", "")
+	if err != nil {
+		t.Fatalf("the rule grant was not stored under its rule key: %v", err)
+	}
+	if grant.Fingerprint != "" || grant.EffectiveScope() != approval.ScopeRule {
+		t.Fatalf("stored grant = %#v", grant)
+	}
+}
+
 func TestAgentPersistentRuleGrantIsTenantIsolated(t *testing.T) {
 	store := approval.NewMemoryGrantStore()
 	fakeModel := &scriptedModel{turns: []scriptedTurn{

@@ -27,15 +27,33 @@ func (n Namespace) Validate() error {
 	return nil
 }
 
-// Grant authorizes exactly one rule and operation fingerprint.
+// Grant authorizes a rule's calls. RuleKey names the tool (or operation) the
+// operator approved. A grant that pins a fingerprint authorizes exactly the
+// call that fingerprint covers; a grant that pins none authorizes every call
+// to the rule, whatever its arguments — that is what an in-run rule grant
+// means, and what "always allow this tool" must mean once it outlives the run.
 type Grant struct {
 	Namespace   Namespace      `json:"namespace"`
+	Scope       DecisionScope  `json:"scope,omitempty"`
 	RuleKey     string         `json:"ruleKey"`
-	Fingerprint string         `json:"fingerprint"`
+	Fingerprint string         `json:"fingerprint,omitempty"`
 	Action      DecisionAction `json:"action"`
 	RequestID   string         `json:"requestId,omitempty"`
 	GrantedAt   time.Time      `json:"grantedAt"`
 	ExpiresAt   *time.Time     `json:"expiresAt,omitempty"`
+}
+
+// EffectiveScope is the scope a grant's shape authorizes. A grant that names
+// no scope is the original payload-pinned form, so an existing store keeps
+// its meaning.
+func (g Grant) EffectiveScope() DecisionScope {
+	if g.Scope != "" {
+		return g.Scope
+	}
+	if strings.TrimSpace(g.Fingerprint) == "" {
+		return ScopeRule
+	}
+	return ScopeRun
 }
 
 func (g Grant) Validate() error {
@@ -45,8 +63,19 @@ func (g Grant) Validate() error {
 	if strings.TrimSpace(g.RuleKey) == "" {
 		return fmt.Errorf("approval grant ruleKey is required")
 	}
-	if strings.TrimSpace(g.Fingerprint) == "" {
-		return fmt.Errorf("approval grant fingerprint is required")
+	switch g.EffectiveScope() {
+	case ScopeRule:
+		// The absence of a fingerprint is the rule form; pinning one here
+		// would narrow what the scope promises without saying so.
+		if strings.TrimSpace(g.Fingerprint) != "" {
+			return fmt.Errorf("approval grant rule scope must not pin a fingerprint")
+		}
+	case ScopeRun:
+		if strings.TrimSpace(g.Fingerprint) == "" {
+			return fmt.Errorf("approval grant fingerprint is required")
+		}
+	default:
+		return fmt.Errorf("unsupported approval grant scope %q", g.Scope)
 	}
 	if !IsApprovedAction(g.Action) {
 		return fmt.Errorf("approval grant action must approve")
@@ -65,7 +94,8 @@ func (g Grant) Expired(now time.Time) bool {
 }
 
 // GrantStore persists reusable rule grants. Lookup is an exact match across
-// tenant, subject, rule key, and fingerprint.
+// tenant, subject, rule key, and fingerprint, so a rule grant (no fingerprint)
+// and a payload-pinned grant for the same rule are distinct entries.
 type GrantStore interface {
 	Get(ctx context.Context, namespace Namespace, ruleKey, fingerprint string) (Grant, error)
 	Put(ctx context.Context, grant Grant) error
@@ -155,8 +185,11 @@ func makeGrantKey(namespace Namespace, ruleKey, fingerprint string) (grantKey, e
 	if err := namespace.Validate(); err != nil {
 		return grantKey{}, err
 	}
-	if strings.TrimSpace(ruleKey) == "" || strings.TrimSpace(fingerprint) == "" {
-		return grantKey{}, fmt.Errorf("approval grant ruleKey and fingerprint are required")
+	// The fingerprint is part of the key rather than a required field: a rule
+	// grant is looked up by its rule key with no fingerprint, and the empty
+	// string is what selects that entry.
+	if strings.TrimSpace(ruleKey) == "" {
+		return grantKey{}, fmt.Errorf("approval grant ruleKey is required")
 	}
 	return grantKey{namespace.Tenant, namespace.Subject, ruleKey, fingerprint}, nil
 }

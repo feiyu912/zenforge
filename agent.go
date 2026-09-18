@@ -2549,30 +2549,40 @@ func (a *Agent) reusedPersistentApproval(ctx context.Context, state harness.RunS
 	if !ruleOK || !fingerprintOK {
 		return approval.Decision{}, false, nil
 	}
-	grant, err := a.config.ApprovalGrants.Get(ctx, namespace, ruleKey, fingerprint)
-	if errors.Is(err, approval.ErrGrantNotFound) {
-		return approval.Decision{}, false, nil
+	// A rule grant authorizes the tool itself, so it is looked up without the
+	// fingerprint and covers whatever arguments this call carries. The
+	// fingerprint-pinned form is still honoured after it, so a store written
+	// by an earlier version keeps working.
+	for _, pinned := range []string{"", fingerprint} {
+		grant, err := a.config.ApprovalGrants.Get(ctx, namespace, ruleKey, pinned)
+		if errors.Is(err, approval.ErrGrantNotFound) {
+			continue
+		}
+		if err != nil {
+			return approval.Decision{}, false, fmt.Errorf("load persistent approval grant: %w", err)
+		}
+		if err := grant.Validate(); err != nil {
+			return approval.Decision{}, false, fmt.Errorf("invalid persistent approval grant: %w", err)
+		}
+		if grant.Namespace != namespace || grant.RuleKey != ruleKey || grant.Fingerprint != pinned ||
+			grant.Expired(time.Now().UTC()) || !approval.IsApprovedAction(grant.Action) {
+			continue
+		}
+		return approval.Decision{
+			RequestID: req.ID,
+			Action:    grant.Action,
+			Scope:     grant.EffectiveScope(),
+			Reason:    approval.ReasonReused,
+			DecidedAt: time.Now().UTC(),
+		}, true, nil
 	}
-	if err != nil {
-		return approval.Decision{}, false, fmt.Errorf("load persistent approval grant: %w", err)
-	}
-	if err := grant.Validate(); err != nil {
-		return approval.Decision{}, false, fmt.Errorf("invalid persistent approval grant: %w", err)
-	}
-	if grant.Namespace != namespace || grant.RuleKey != ruleKey || grant.Fingerprint != fingerprint ||
-		grant.Expired(time.Now().UTC()) || !approval.IsApprovedAction(grant.Action) {
-		return approval.Decision{}, false, nil
-	}
-	return approval.Decision{
-		RequestID: req.ID,
-		Action:    grant.Action,
-		Scope:     approval.ScopeRule,
-		Reason:    approval.ReasonReused,
-		DecidedAt: time.Now().UTC(),
-	}, true, nil
+	return approval.Decision{}, false, nil
 }
 
 func (a *Agent) persistApprovalGrant(ctx context.Context, state harness.RunState, req approval.Request, decision approval.Decision) error {
+	// Only a rule decision outlives the run that made it: "this call" is not a
+	// standing permission, so a once-scoped or run-scoped approval is left in
+	// the run state where the run will forget it.
 	if !grantStoreConfigured(a.config.ApprovalGrants) ||
 		decision.Scope != approval.ScopeRule || !approval.IsApprovedAction(decision.Action) ||
 		decision.Reason == approval.ReasonReused {
@@ -2583,17 +2593,19 @@ func (a *Agent) persistApprovalGrant(ctx context.Context, state harness.RunState
 		return err
 	}
 	ruleKey, ruleOK := approvalString(req.Payload, "ruleKey")
-	fingerprint, fingerprintOK := approvalString(req.Payload, "fingerprint")
-	if !ruleOK || !fingerprintOK {
-		return fmt.Errorf("persistent approval rule scope requires exact ruleKey and fingerprint")
+	if !ruleOK {
+		return fmt.Errorf("persistent approval rule scope requires a ruleKey")
 	}
 	grant := approval.Grant{
-		Namespace:   namespace,
-		RuleKey:     ruleKey,
-		Fingerprint: fingerprint,
-		Action:      decision.Action,
-		RequestID:   decision.RequestID,
-		GrantedAt:   decision.DecidedAt,
+		Namespace: namespace,
+		// No fingerprint: the grant is the rule, not the argument string the
+		// operator happened to see, which is what the same decision means
+		// inside the run.
+		Scope:     approval.ScopeRule,
+		RuleKey:   ruleKey,
+		Action:    decision.Action,
+		RequestID: decision.RequestID,
+		GrantedAt: decision.DecidedAt,
 	}
 	if a.config.ApprovalGrantTTL > 0 {
 		expires := grant.GrantedAt.Add(a.config.ApprovalGrantTTL)

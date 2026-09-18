@@ -733,6 +733,14 @@ type options struct {
 	// command that owns the decision (the MCP server, for a served run)
 	// installs a non-interactive broker without pretending to be a mode.
 	approvalOverride approval.Broker
+
+	// approvalGrantsFile is where durable "always allow" grants are kept, and
+	// approvalTenant/approvalSubject are the namespace they belong to. All
+	// three are empty unless the approval section asked for persistence.
+	approvalGrantsFile string
+	approvalGrantTTL   time.Duration
+	approvalTenant     string
+	approvalSubject    string
 }
 
 // resource is something a command opened that has to be released when the
@@ -1141,6 +1149,10 @@ func buildAgent(ctx context.Context, opts *options, ioStreams IO) (*zenforge.Age
 	if err != nil {
 		return nil, err
 	}
+	grantStore, grantNamespace, err := approvalGrantConfig(opts)
+	if err != nil {
+		return nil, err
+	}
 	return zenforge.New(zenforge.Config{
 		Model:              modelAdapter,
 		Hooks:              hookEngine,
@@ -1156,6 +1168,9 @@ func buildAgent(ctx context.Context, opts *options, ioStreams IO) (*zenforge.Age
 		Tools:              tools,
 		ToolRuntime:        toolRuntime,
 		Approval:           approvalBroker,
+		ApprovalGrants:     grantStore,
+		ApprovalNamespace:  grantNamespace,
+		ApprovalGrantTTL:   opts.approvalGrantTTL,
 		Events:             events,
 		Checkpoints:        checkpoints,
 		Compaction:         compactionConfig,

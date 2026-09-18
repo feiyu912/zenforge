@@ -75,3 +75,4 @@ later ADRs supersede earlier ones, never edit.
 | [0059](0059-workflow-tool-wiring.md) | A workflow script drives sub-agent runs through the orchestrator |
 | [0060](0060-terminal-jobs-and-head-tail-buffers.md) | A terminal job is a session, and a bounded buffer keeps both ends |
 | [0061](0061-mcp-per-server-time-bounds.md) | MCP server time bounds belong to the server entry |
+| [0062](0062-standing-approval-is-a-rule.md) | A standing approval is a rule, not an argument string |

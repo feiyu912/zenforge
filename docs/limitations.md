@@ -119,6 +119,23 @@ what is experimental, and what remains adapter territory.
   cap) plus the newest bytes, so a reader that never polls still loses the
   middle; it is told how much (`elidedBytes`).
 
+## Persistent Approvals
+
+- A standing "always allow this tool" decision is persisted only when
+  `approval.grantsFile` names a file; it then covers that tool with any
+  arguments, across runs, in the namespace it was granted for
+  (`approval.tenant`/`approval.subject`, defaulting to `cli` and the
+  operating-system user name). A once- or run-scoped decision never leaves the
+  run it was made in (ADR 0062).
+- The grants file is authority that outlives the process: it must be readable
+  only by its operator, and its namespace is what keeps one operator's grant
+  from answering for another's.
+- There is no way to list or revoke a persisted grant from the CLI yet. The
+  store's `Revoke` exists and the `grants` command is the next batch (ADR
+  0063); until then, deleting the grants file resets the store.
+- A grant TTL, tenant, or subject without a grants file is a configuration
+  error rather than a silently ignored key.
+
 ## MCP Servers
 
 - A server's `startupTimeout` covers `initialize` and `tools/list` together and
