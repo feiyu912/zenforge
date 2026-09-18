@@ -44,10 +44,15 @@ at; the server's own responses still echo what the client sent.
 
 `Request` requires the caller's context to carry a deadline; without one it
 returns an error rather than risking a hang. On cancellation it removes its own
-pending entry. When `Serve` returns, the stream is detached first (so a late
-write fails fast instead of blocking on a dead pipe), every waiter is woken with
-`ErrStreamClosed`, and `Serve` waits for in-flight handlers before returning. A
-pending request leaves no goroutine behind, and a shutdown cannot hang.
+pending entry. When `Serve` returns it fails every pending request with
+`ErrStreamClosed` first (so a handler blocked in `Request` cannot wait for an
+answer that will never come), then waits for in-flight handlers — which is what
+lets each of them emit its one complete line — and only then detaches the
+stream. A pending request leaves no goroutine behind, and a shutdown cannot
+hang. The original order (detach, then wait) silently dropped the response of
+any handler still running when the reader reached EOF, because a detached
+stream makes the write fail; the half-closed-client case is pinned by a test
+now.
 
 ### Elicitation needs the client to have asked for it
 
@@ -66,9 +71,12 @@ advertised server capability map is unchanged.
   reverse channel that `sampling` would also need now exists.
 - Responses are no longer guaranteed to arrive in request order when two calls
   are handled concurrently, because concurrent handlers are the point of the
-  change. MCP pairs a response with its request by id; the existing round-trip
-  test was relaxed to compare ids as a set, and this is a wire-visible note for
-  any consumer that assumed ordering.
+  change. MCP pairs a response with its request by id; the round-trip tests in
+  both packages now assert by id, and this is a wire-visible note for any
+  consumer that assumed ordering. The first push of this change was red because
+  the CLI's protocol test still read positionally while the package's own test
+  had been relaxed: a wire change has to be propagated to every reader of the
+  wire.
 - The CLI's approval path is unchanged in this batch: a served run still
   refuses an approval-gated tool rather than eliciting, because wiring
   elicitation into approvals is a separate decision about what a run does when

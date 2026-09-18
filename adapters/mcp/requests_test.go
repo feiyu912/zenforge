@@ -126,6 +126,47 @@ func expectNoFrame(t *testing.T, stream *serverStream) {
 	}
 }
 
+// readWithin reads one frame, failing the test rather than blocking forever
+// when no frame arrives. It is what lets a test assert "this response must
+// still be delivered" without hanging if a regression drops it.
+func readWithin(t *testing.T, stream *serverStream, timeout time.Duration) map[string]any {
+	t.Helper()
+	lines := make(chan string, 1)
+	go func() {
+		line, err := stream.reader.ReadString('\n')
+		if err != nil {
+			lines <- ""
+			return
+		}
+		lines <- line
+	}()
+	select {
+	case line := <-lines:
+		if line == "" {
+			t.Fatal("the stream ended before the response arrived")
+		}
+		return decodeFrame(t, []byte(line))
+	case <-time.After(timeout):
+		t.Fatal("no response arrived within the deadline")
+		return nil
+	}
+}
+
+// waitUntil polls a condition with a deadline, so a test can synchronize on
+// shutdown state without a fixed sleep. It fails rather than hanging when the
+// state never arrives.
+func waitUntil(t *testing.T, timeout time.Duration, condition func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("the expected state did not arrive within the deadline")
+}
+
 // requestServer builds a server whose "ask" tool sends one server request and
 // reports the answer in its result. The handler captures the Server through a
 // closure because a handler is handed a context, not the server it belongs to;
@@ -325,6 +366,17 @@ func TestServerRequestFailsWhenServeEnds(t *testing.T) {
 	}
 
 	stream.closeInput()
+	// The refused handler is still answered: shutdown lets it finish its write
+	// before the stream is released, so the client sees one complete failure
+	// frame rather than silence. On the old order the stream was gone by now
+	// and this read would time out.
+	response := readWithin(t, stream, 5*time.Second)
+	if response["id"] != float64(1) {
+		t.Fatalf("the shutdown response carries id %v, want the client's 1", response["id"])
+	}
+	if result, ok := response["result"].(map[string]any); !ok || result["isError"] != true {
+		t.Fatalf("the refused call was not answered as a tool failure: %v", response)
+	}
 	if err := stream.wait(); err != nil {
 		t.Fatalf("Serve returned error: %v", err)
 	}
@@ -426,6 +478,12 @@ func TestServerServeShutdownLeavesNothingRunning(t *testing.T) {
 	stream.read()
 
 	stream.closeInput()
+	// The handler's failure response is delivered before shutdown finishes:
+	// Serve waits for that write, so the client is not cut off with its answer
+	// half-sent.
+	if response := readWithin(t, stream, 5*time.Second); response["id"] != float64(1) {
+		t.Fatalf("the shutdown response carries id %v, want the client's 1", response["id"])
+	}
 	if err := stream.wait(); err != nil {
 		t.Fatalf("Serve returned error: %v", err)
 	}
@@ -439,5 +497,83 @@ func TestServerServeShutdownLeavesNothingRunning(t *testing.T) {
 	}
 	if got := server.pendingRequestCount(); got != 0 {
 		t.Fatalf("shutdown left %d pending entries", got)
+	}
+}
+
+// TestServerDeliversResponsesWhenTheReaderEndsFirst pins the shutdown
+// guarantee the reader/handler split has to carry: a client may send its last
+// requests and close its input before the server has answered them, and every
+// request must still get exactly one complete response. The old order released
+// the stream the instant the reader saw EOF, so a handler that had not written
+// yet found no stream and its response was silently dropped.
+//
+// The test is deterministic about the ordering. Every handler blocks until the
+// test releases it, and the release only happens after the server has stopped
+// serving -- which, on the old code, is necessarily after the stream was
+// released. A dropped response therefore cannot hide behind timing.
+func TestServerDeliversResponsesWhenTheReaderEndsFirst(t *testing.T) {
+	const requests = 3
+	started := make(chan struct{}, requests)
+	release := make(chan struct{})
+	var server *Server
+	server, err := NewServer(ServerConfig{
+		Name:    "zenforge",
+		Version: "test",
+		Tools: []ServerTool{{
+			Name: "slow",
+			Handler: func(ctx context.Context, arguments json.RawMessage) (CallResult, error) {
+				started <- struct{}{}
+				<-release
+				return CallResult{Content: []Content{{Type: "text", Text: "done"}}}, nil
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("NewServer returned error: %v", err)
+	}
+	stream := startServerStream(t, server)
+	for id := 1; id <= requests; id++ {
+		stream.send(fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"tools/call","params":{"name":"slow"}}`, id))
+	}
+	for index := 0; index < requests; index++ {
+		select {
+		case <-started:
+		case <-time.After(5 * time.Second):
+			t.Fatal("a handler did not start")
+		}
+	}
+
+	// The input ends while every handler is still running and no response has
+	// been written; the server has not yet released the stream.
+	stream.closeInput()
+	waitUntil(t, 5*time.Second, func() bool { return !server.isServing() })
+
+	close(release)
+	seen := map[float64]bool{}
+	for index := 0; index < requests; index++ {
+		frame := readWithin(t, stream, 5*time.Second)
+		id, ok := frame["id"].(float64)
+		if !ok {
+			t.Fatalf("response %d carries no numeric id: %v", index, frame)
+		}
+		if seen[id] {
+			t.Fatalf("response %d repeated id %v", index, id)
+		}
+		seen[id] = true
+		result, ok := frame["result"].(map[string]any)
+		if !ok {
+			t.Fatalf("response %d has no result object: %v", index, frame)
+		}
+		if content, ok := result["content"].([]any); !ok || len(content) != 1 {
+			t.Fatalf("response %d is not the complete tool result: %v", index, frame)
+		}
+	}
+	for id := 1; id <= requests; id++ {
+		if !seen[float64(id)] {
+			t.Fatalf("request %d was never answered: %v", id, seen)
+		}
+	}
+	if err := stream.wait(); err != nil {
+		t.Fatalf("Serve returned error: %v", err)
 	}
 }

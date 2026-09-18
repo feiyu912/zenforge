@@ -128,6 +128,11 @@ what is experimental, and what remains adapter territory.
 - Responses to two concurrently handled calls may arrive in either order; MCP
   pairs a response with its request by id, and a consumer that assumed ordering
   must not.
+- On shutdown, in-flight handlers are waited for (so a client that closes its
+  input but keeps reading still receives the responses it asked for) before the
+  stream is detached. A client that stops reading altogether makes a write
+  block, and that backpressure delays shutdown, exactly as a blocked stdout did
+  before.
 
 ## MCP Notifications
 

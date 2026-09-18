@@ -349,16 +349,26 @@ func (s *Server) Serve(ctx context.Context, reader io.Reader, writer io.Writer) 
 
 	var handlers sync.WaitGroup
 	serveErr := s.readLoop(ctx, reader, &handlers)
-	// The stream is released before the waiters are woken. A handler blocked
-	// in Request must not wake up and write its answer to a pipe the client
-	// has already stopped reading: with the stream gone, that write fails at
-	// once instead of blocking shutdown.
-	s.detach()
+	// The order here is the guarantee: fail the waiters, wait for every
+	// handler, then release the stream.
+	//
+	//   - Failing the pending requests first is what unblocks a handler
+	//     blocked in Request, so handlers.Wait cannot wait on an answer the
+	//     client will never send. Without it, shutdown would have to lean on
+	//     the caller's deadline, and Serve could stay up long after the client
+	//     left.
+	//   - Waiting for the handlers before detaching is what keeps a response
+	//     from being lost. A client may send its last request and close its
+	//     input -- a half-close -- while the handler is still running; if the
+	//     stream were released the instant the reader saw EOF, that handler
+	//     would find no stream and its response would be silently dropped.
+	//   - Detaching after the wait is what keeps "when Serve returns, nothing
+	//     is writing to the stream" true and leaves no goroutine behind: a
+	//     write is only ever attempted while the stream is attached, and every
+	//     writer is accounted for by the wait.
 	s.failPending(ErrStreamClosed)
-	// Serve does not return while a handler is still running, which is what
-	// keeps "when Serve returns, nothing is writing to the stream" true and
-	// leaves no goroutine behind.
 	handlers.Wait()
+	s.detach()
 	if serveErr == nil {
 		serveErr = s.takeWriteError()
 	}

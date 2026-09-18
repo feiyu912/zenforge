@@ -87,10 +87,38 @@ func TestMCPServerCommandSpeaksTheProtocol(t *testing.T) {
 	if err := writer.Flush(); err != nil {
 		t.Fatalf("flush failed: %v", err)
 	}
+	// Three requests were sent, so three responses come back. Serve answers
+	// each request on its own goroutine so a handler can wait for a
+	// server-initiated answer, which means the responses may arrive in any
+	// order. MCP pairs a response with its request by id, so they are
+	// collected by id rather than read positionally: assuming the initialize
+	// response came first is what made this test flake under concurrent
+	// dispatch.
+	responses := map[float64]string{}
+	for index := 0; index < 3; index++ {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			t.Fatalf("read %d failed: %v", index, err)
+		}
+		var envelope struct {
+			ID json.RawMessage `json:"id"`
+		}
+		if err := json.Unmarshal([]byte(line), &envelope); err != nil {
+			t.Fatalf("response %d is not JSON (%v): %s", index, err, line)
+		}
+		var id float64
+		if err := json.Unmarshal(envelope.ID, &id); err != nil {
+			t.Fatalf("response %d carries no numeric id (%v): %s", index, err, line)
+		}
+		if _, exists := responses[id]; exists {
+			t.Fatalf("response %d repeated id %v: %s", index, id, line)
+		}
+		responses[id] = line
+	}
 	// initialize: the server identifies itself.
-	line, err := reader.ReadString('\n')
-	if err != nil {
-		t.Fatalf("read failed: %v", err)
+	line, ok := responses[1]
+	if !ok {
+		t.Fatalf("no response to initialize: %v", responses)
 	}
 	var initialized struct {
 		Result struct {
@@ -109,9 +137,9 @@ func TestMCPServerCommandSpeaksTheProtocol(t *testing.T) {
 	// tools/list: the read-only tools are advertised as read-only, and the
 	// status tool comes first because a caller that cannot wait for a run
 	// needs to ask about it without starting one.
-	line, err = reader.ReadString('\n')
-	if err != nil {
-		t.Fatalf("read failed: %v", err)
+	line, ok = responses[2]
+	if !ok {
+		t.Fatalf("no response to tools/list: %v", responses)
 	}
 	var listed struct {
 		Result struct {
@@ -129,9 +157,9 @@ func TestMCPServerCommandSpeaksTheProtocol(t *testing.T) {
 		t.Fatalf("a read-only tool is not advertised read-only: %#v", listed.Result.Tools)
 	}
 	// tools/call: an empty store answers with an empty list, not an error.
-	line, err = reader.ReadString('\n')
-	if err != nil {
-		t.Fatalf("read failed: %v", err)
+	line, ok = responses[3]
+	if !ok {
+		t.Fatalf("no response to tools/call: %v", responses)
 	}
 	var called struct {
 		Result struct {
