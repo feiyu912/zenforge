@@ -76,3 +76,4 @@ later ADRs supersede earlier ones, never edit.
 | [0060](0060-terminal-jobs-and-head-tail-buffers.md) | A terminal job is a session, and a bounded buffer keeps both ends |
 | [0061](0061-mcp-per-server-time-bounds.md) | MCP server time bounds belong to the server entry |
 | [0062](0062-standing-approval-is-a-rule.md) | A standing approval is a rule, not an argument string |
+| [0063](0063-grants-list-and-revoke.md) | A standing grant an operator can see and take back |

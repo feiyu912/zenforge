@@ -67,6 +67,7 @@ WHERE tenant = ? AND subject = ? AND rule_key = ? AND fingerprint = ?`,
 	grant.Namespace = namespace
 	grant.RuleKey = ruleKey
 	grant.Fingerprint = fingerprint
+	grant.Scope = grant.EffectiveScope()
 	grant.GrantedAt, err = time.Parse(time.RFC3339Nano, grantedAt)
 	if err != nil {
 		return approval.Grant{}, err
@@ -145,6 +146,61 @@ WHERE tenant = ? AND subject = ? AND rule_key = ? AND fingerprint = ?`,
 		return approval.ErrGrantNotFound
 	}
 	return nil
+}
+
+// List returns the namespace's live grants, ordered by rule key and then by
+// fingerprint, which is the order an operator reads them in: a rule's standing
+// grant before the payload-pinned entries for the same rule.
+func (s *Store) List(ctx context.Context, namespace approval.Namespace) ([]approval.Grant, error) {
+	if err := s.ready(); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := namespace.Validate(); err != nil {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx, `
+SELECT rule_key, fingerprint, action, request_id, granted_at, expires_at
+FROM approval_grants
+WHERE tenant = ? AND subject = ?
+ORDER BY rule_key, fingerprint`,
+		namespace.Tenant, namespace.Subject)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	now := time.Now().UTC()
+	grants := make([]approval.Grant, 0, 8)
+	for rows.Next() {
+		var grant approval.Grant
+		var grantedAt string
+		var expiresAt sql.NullString
+		if err := rows.Scan(&grant.RuleKey, &grant.Fingerprint, &grant.Action, &grant.RequestID, &grantedAt, &expiresAt); err != nil {
+			return nil, err
+		}
+		grant.Namespace = namespace
+		grant.Scope = grant.EffectiveScope()
+		grant.GrantedAt, err = time.Parse(time.RFC3339Nano, grantedAt)
+		if err != nil {
+			return nil, err
+		}
+		if expiresAt.Valid {
+			expires, parseErr := time.Parse(time.RFC3339Nano, expiresAt.String)
+			if parseErr != nil {
+				return nil, parseErr
+			}
+			grant.ExpiresAt = &expires
+		}
+		if grant.Expired(now) {
+			continue
+		}
+		grants = append(grants, grant)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return grants, nil
 }
 
 func (s *Store) init(ctx context.Context) error {

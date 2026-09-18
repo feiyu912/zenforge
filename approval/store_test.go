@@ -53,3 +53,50 @@ func TestMemoryGrantStoreHonorsCancellation(t *testing.T) {
 		t.Fatalf("Get error = %v", err)
 	}
 }
+
+func TestMemoryGrantStoreListsTheNamespacesLiveGrants(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemoryGrantStore()
+	now := time.Now().UTC()
+	store.now = func() time.Time { return now }
+	namespace := Namespace{Tenant: "tenant-a", Subject: "user-1"}
+	expired := now.Add(-time.Minute)
+	live := []Grant{
+		{Namespace: namespace, RuleKey: "rule-b", Action: DecisionApprove, GrantedAt: now},
+		{Namespace: namespace, RuleKey: "rule-a", Fingerprint: "fp-1", Action: DecisionApprove, GrantedAt: now},
+		{Namespace: namespace, RuleKey: "rule-a", Action: DecisionApprove, GrantedAt: now},
+		{Namespace: Namespace{Tenant: "tenant-b", Subject: "user-1"}, RuleKey: "rule-c", Action: DecisionApprove, GrantedAt: now},
+		{Namespace: namespace, RuleKey: "rule-d", Action: DecisionApprove, GrantedAt: now.Add(-2 * time.Hour), ExpiresAt: &expired},
+	}
+	for _, grant := range live {
+		if err := store.Put(ctx, grant); err != nil {
+			t.Fatalf("Put returned error: %v", err)
+		}
+	}
+	listed, err := store.List(ctx, namespace)
+	if err != nil {
+		t.Fatalf("List returned error: %v", err)
+	}
+	if len(listed) != 3 {
+		t.Fatalf("listed = %#v", listed)
+	}
+	// Sorted by rule key, standing grant before the pinned entry for the same
+	// rule, other tenants and expired grants absent.
+	if listed[0].RuleKey != "rule-a" || listed[0].EffectiveScope() != ScopeRule ||
+		listed[1].RuleKey != "rule-a" || listed[1].Fingerprint != "fp-1" || listed[1].EffectiveScope() != ScopeRun ||
+		listed[2].RuleKey != "rule-b" {
+		t.Fatalf("listed = %#v", listed)
+	}
+	// The listing is a copy: a caller mutating it must not reach the store.
+	listed[0].Action = DecisionReject
+	stored, err := store.Get(ctx, namespace, "rule-a", "")
+	if err != nil {
+		t.Fatalf("Get returned error: %v", err)
+	}
+	if stored.Action != DecisionApprove || stored.Scope != ScopeRule {
+		t.Fatalf("the store was mutated through the listing: %#v", stored)
+	}
+	if _, err := store.List(ctx, Namespace{Tenant: "tenant-a"}); err == nil {
+		t.Fatal("List accepted an incomplete namespace")
+	}
+}

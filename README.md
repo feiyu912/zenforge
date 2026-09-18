@@ -128,6 +128,8 @@ go run ./cmd/zenforge run --checkpoint-type sqlite --checkpoint-dir .zenforge/ru
 go run ./cmd/zenforge resume --config zenforge.json run_123
 go run ./cmd/zenforge events --config zenforge.json run_123
 go run ./cmd/zenforge runs --config zenforge.json
+go run ./cmd/zenforge grants list --config zenforge.json
+go run ./cmd/zenforge grants revoke mcp__files__delete --config zenforge.json
 ```
 
 `run` executes a task in the configured workspace. `exec [prompt]` is the

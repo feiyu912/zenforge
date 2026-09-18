@@ -100,3 +100,64 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		t.Fatalf("Get error = %v", err)
 	}
 }
+
+func TestStoreListsTheNamespacesLiveGrants(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, filepath.Join(t.TempDir(), "grants.db"))
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer store.Close()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	expired := now.Add(-time.Minute)
+	namespace := approval.Namespace{Tenant: "tenant", Subject: "subject"}
+	live := []approval.Grant{
+		{Namespace: namespace, Scope: approval.ScopeRule, RuleKey: "rule-b", Action: approval.DecisionApprove, GrantedAt: now},
+		{Namespace: namespace, Scope: approval.ScopeRun, RuleKey: "rule-a", Fingerprint: "fp-1", Action: approval.DecisionApprove, GrantedAt: now},
+		{Namespace: namespace, Scope: approval.ScopeRule, RuleKey: "rule-a", Action: approval.DecisionApprove, GrantedAt: now},
+		{Namespace: approval.Namespace{Tenant: "other", Subject: "subject"}, RuleKey: "rule-c", Action: approval.DecisionApprove, GrantedAt: now},
+		{Namespace: namespace, RuleKey: "rule-d", Action: approval.DecisionApprove, GrantedAt: now.Add(-2 * time.Hour), ExpiresAt: &expired},
+	}
+	for _, grant := range live {
+		if err := store.Put(ctx, grant); err != nil {
+			t.Fatalf("Put returned error: %v", err)
+		}
+	}
+	listed, err := store.List(ctx, namespace)
+	if err != nil {
+		t.Fatalf("List returned error: %v", err)
+	}
+	if len(listed) != 3 {
+		t.Fatalf("listed = %#v", listed)
+	}
+	if listed[0].RuleKey != "rule-a" || listed[0].EffectiveScope() != approval.ScopeRule || listed[0].Fingerprint != "" ||
+		listed[1].RuleKey != "rule-a" || listed[1].EffectiveScope() != approval.ScopeRun || listed[1].Fingerprint != "fp-1" ||
+		listed[2].RuleKey != "rule-b" {
+		t.Fatalf("listed = %#v", listed)
+	}
+	// A standing grant and a pinned grant for the same rule are one revoke
+	// apart, which is what the command relies on.
+	if err := store.Revoke(ctx, namespace, "rule-a", ""); err != nil {
+		t.Fatalf("Revoke returned error: %v", err)
+	}
+	listed, err = store.List(ctx, namespace)
+	if err != nil {
+		t.Fatalf("List returned error: %v", err)
+	}
+	if len(listed) != 2 || listed[0].Fingerprint != "fp-1" {
+		t.Fatalf("after revoking the standing grant: %#v", listed)
+	}
+	// Every grant in the namespace can be taken back by walking the listing.
+	for _, grant := range listed {
+		if err := store.Revoke(ctx, namespace, grant.RuleKey, grant.Fingerprint); err != nil {
+			t.Fatalf("Revoke(%s) returned error: %v", grant.RuleKey, err)
+		}
+	}
+	listed, err = store.List(ctx, namespace)
+	if err != nil {
+		t.Fatalf("List returned error: %v", err)
+	}
+	if len(listed) != 0 {
+		t.Fatalf("listed after revoking everything = %#v", listed)
+	}
+}

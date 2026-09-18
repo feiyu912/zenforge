@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -102,6 +103,15 @@ type GrantStore interface {
 	Revoke(ctx context.Context, namespace Namespace, ruleKey, fingerprint string) error
 }
 
+// GrantLister is the optional half of a store: enumerating the grants a
+// namespace holds. A run only ever resolves and writes, so it is separate from
+// GrantStore rather than required of every implementation; an operator's
+// listing surface is what needs it, and a store that cannot answer is told so
+// instead of appearing empty.
+type GrantLister interface {
+	List(ctx context.Context, namespace Namespace) ([]Grant, error)
+}
+
 type MemoryGrantStore struct {
 	mu     sync.RWMutex
 	grants map[grantKey]Grant
@@ -133,6 +143,7 @@ func (s *MemoryGrantStore) Get(ctx context.Context, namespace Namespace, ruleKey
 	if !ok {
 		return Grant{}, ErrGrantNotFound
 	}
+	grant.Scope = grant.EffectiveScope()
 	if grant.Expired(s.now().UTC()) {
 		s.mu.Lock()
 		if current, exists := s.grants[key]; exists && current.Expired(s.now().UTC()) {
@@ -192,6 +203,44 @@ func makeGrantKey(namespace Namespace, ruleKey, fingerprint string) (grantKey, e
 		return grantKey{}, fmt.Errorf("approval grant ruleKey is required")
 	}
 	return grantKey{namespace.Tenant, namespace.Subject, ruleKey, fingerprint}, nil
+}
+
+// List returns the namespace's live grants, ordered by rule key and then by
+// fingerprint so an operator sees a rule's standing grant before the
+// payload-pinned entries for the same rule.
+func (s *MemoryGrantStore) List(ctx context.Context, namespace Namespace) ([]Grant, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := namespace.Validate(); err != nil {
+		return nil, err
+	}
+	if s == nil {
+		return nil, nil
+	}
+	now := s.now().UTC()
+	s.mu.RLock()
+	out := make([]Grant, 0, len(s.grants))
+	for key, grant := range s.grants {
+		if key.tenant != namespace.Tenant || key.subject != namespace.Subject || grant.Expired(now) {
+			continue
+		}
+		stored := cloneGrant(grant)
+		stored.Scope = stored.EffectiveScope()
+		out = append(out, stored)
+	}
+	s.mu.RUnlock()
+	sortGrants(out)
+	return out, nil
+}
+
+func sortGrants(grants []Grant) {
+	sort.Slice(grants, func(i, j int) bool {
+		if grants[i].RuleKey != grants[j].RuleKey {
+			return grants[i].RuleKey < grants[j].RuleKey
+		}
+		return grants[i].Fingerprint < grants[j].Fingerprint
+	})
 }
 
 func cloneGrant(grant Grant) Grant {

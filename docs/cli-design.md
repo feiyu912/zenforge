@@ -156,6 +156,7 @@ zenforge code
 zenforge resume
 zenforge events
 zenforge runs
+zenforge grants
 zenforge init
 zenforge version
 ```
@@ -490,6 +491,37 @@ Behavior:
 - lists local durable runs;
 - sorts newest checkpoint first;
 - skips directories without a valid latest checkpoint.
+
+## `zenforge grants`
+
+```bash
+zenforge grants list
+zenforge grants list --json
+zenforge grants revoke mcp__files__delete
+zenforge grants revoke mcp__files__write --fingerprint 6f1c2a…
+zenforge grants revoke --all
+```
+
+The operator's view of the durable grant store (ADR 0062): what standing
+approvals a namespace holds, and how to take one back. `list` prints the rule
+key, scope, action, granted time, and expiry, labelling a payload-pinned entry
+with its fingerprint so a rule's two entries cannot be confused; `--json`
+prints the grants themselves. A bare rule key revokes the *standing* grant —
+the broad one — and `--fingerprint` selects a pinned entry instead. `--all`
+walks the namespace and takes everything back. The file comes from
+`approval.grantsFile`, or from `--grants-file` when an operator keeps several,
+and the namespace from `--tenant`/`--subject`, the configuration, then the
+same defaults the agent uses. Without a configured file the command fails
+rather than inventing a store: it does not guess where grants live.
+
+Behavior:
+
+- lists only the namespace's live grants, expired ones excluded;
+- orders them by rule key, standing grant before pinned entries;
+- reports a rule key with no grant as an error naming the scope and the
+  namespace, so a typo is not mistaken for a revocation;
+- revokes from the next approval check onwards: a call that already reused a
+  grant keeps its decision.
 
 ## `zenforge init`
 

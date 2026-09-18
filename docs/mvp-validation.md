@@ -165,6 +165,10 @@ rg -n '"[^"[:space:]]*agent-platform[^"[:space:]]*"' --glob "*.go" .
 | a gated remote call offers a rule-scoped standing option that resolves against its own rule key | `TestAGatedCallOffersTheStandingRuleOption` |
 | the approval section parses and validates the persistence keys | `TestApprovalConfigParsesPersistenceKeys`, `TestApprovalConfigRejectsUnusablePersistence` |
 | a configured grants file is opt-in, namespaced, owned by the command, and survives the process | `TestApprovalGrantConfigIsOptInAndSurvivesTheProcess`, `TestApprovalGrantConfigHonoursAnExplicitNamespace`, `TestBuildAgentOpensTheConfiguredGrantsFile` |
+| both grant stores list a namespace's live grants in rule-key order with the scope normalized | `TestMemoryGrantStoreListsTheNamespacesLiveGrants`, `TestStoreListsTheNamespacesLiveGrants` |
+| `grants list` shows the standing grant and a labelled pinned entry without leaking another subject's | `TestGrantsCommandListsTheStandingGrant`, `TestGrantsCommandListsJSON` |
+| `grants revoke` takes back the standing grant, a pinned grant on its own, or everything | `TestGrantsCommandRevokesAStandingGrant`, `TestGrantsCommandRevokesAPinnedGrantWithoutTheStandingOne`, `TestGrantsCommandRevokesEveryGrant` |
+| `grants` reports a missing grant, requires a configured file, accepts the file as a flag, and rejects bad usage | `TestGrantsCommandReportsAMissingGrant`, `TestGrantsCommandNeedsAConfiguredFile`, `TestGrantsCommandTakesTheFileAsAFlag`, `TestGrantsCommandUsage` |
 | a job is reported terminal only after its output has been drained | `jobs.TestRunWaitsForOutputWrittenAfterTheMainProcessExits`, `jobs.TestCollectSignalsDrainedOnlyAfterBothStreamsEnd` |
 | a job whose pipes are held open by a background grandchild still becomes terminal | `jobs.TestJobWhoseOutputIsHeldByAGrandchildStillBecomesTerminal` |
 | memory entries augment normalized tasks | `adapters/memory.TestAugmentTaskAddsMemoryBlockAndMetadata` |

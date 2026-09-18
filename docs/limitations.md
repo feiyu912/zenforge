@@ -130,9 +130,13 @@ what is experimental, and what remains adapter territory.
 - The grants file is authority that outlives the process: it must be readable
   only by its operator, and its namespace is what keeps one operator's grant
   from answering for another's.
-- There is no way to list or revoke a persisted grant from the CLI yet. The
-  store's `Revoke` exists and the `grants` command is the next batch (ADR
-  0063); until then, deleting the grants file resets the store.
+- `zenforge grants list` shows what a namespace holds and `zenforge grants
+  revoke` takes one — or, with `--all`, everything — back. A bare rule key
+  revokes the standing grant; `--fingerprint` selects a payload-pinned entry
+  (ADR 0063).
+- Revocation is consulted at decision time, so a call that already reused a
+  grant stays approved and the next call sees the revocation. The listing
+  shows the store, not the grants a running agent holds in run state.
 - A grant TTL, tenant, or subject without a grants file is a configuration
   error rather than a silently ignored key.
 
