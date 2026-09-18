@@ -56,6 +56,14 @@ type EventStore interface {
 	LatestSeq(ctx context.Context, runID string) (int64, error)
 }
 
+// ModelResolver resolves a provider and model name into an adapter. One
+// resolution is one call: an implementation may build a new adapter each time
+// or return a shared one, and an unresolvable pair is an error the caller
+// reports rather than a silent fallback.
+type ModelResolver interface {
+	Resolve(provider, model string) (model.Model, error)
+}
+
 // Config describes the default high-level ZenForge agent.
 type Config struct {
 	Model        model.Model
@@ -83,15 +91,21 @@ type Config struct {
 	ToolRuntime           []tool.Middleware
 	ToolArgumentRedaction []string
 	Approval              approval.Broker
-	ApprovalGrants        approval.GrantStore
-	ApprovalNamespace     approval.Namespace
-	ApprovalGrantTTL      time.Duration
-	Todos                 planner.Manager
-	SubAgentSpecs         []subagent.SubAgentSpec
-	SubAgentRegistry      subagent.Registry
-	SubAgentOrchestrator  subagent.Orchestrator
-	SubAgentRunner        subagent.Runner
-	SubAgentOptions       subagent.Options
+	// ModelResolver builds a model adapter for a provider and model name,
+	// which is how a host that can reach more than one model lets a caller
+	// name one (a workflow script's agent() option, for instance). A host
+	// without one refuses a named model instead of silently running on its
+	// own, because the script asked for something the host cannot do.
+	ModelResolver        ModelResolver
+	ApprovalGrants       approval.GrantStore
+	ApprovalNamespace    approval.Namespace
+	ApprovalGrantTTL     time.Duration
+	Todos                planner.Manager
+	SubAgentSpecs        []subagent.SubAgentSpec
+	SubAgentRegistry     subagent.Registry
+	SubAgentOrchestrator subagent.Orchestrator
+	SubAgentRunner       subagent.Runner
+	SubAgentOptions      subagent.Options
 	// WorkflowAgent names the sub-agent a workflow script's agent() calls run
 	// as. Empty uses the first registered sub-agent, which is the only
 	// sensible default when the host registered exactly one.

@@ -2719,7 +2719,10 @@ func mergeSubAgentRequestOptions(host, request subagent.Options) subagent.Option
 }
 
 func (a *Agent) runChildSubAgent(ctx context.Context, spec subagent.SubAgentSpec, task subagent.TaskSpec, req subagent.Request) (subagent.TaskResult, error) {
-	childModel := spec.Model
+	childModel := task.Model
+	if childModel == nil {
+		childModel = spec.Model
+	}
 	if childModel == nil {
 		childModel = a.config.Model
 	}

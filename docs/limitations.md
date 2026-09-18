@@ -94,10 +94,12 @@ what is experimental, and what remains adapter territory.
   `MaxTotalAgents`, `MaxItemsPerCall`, and `CancelGrace`; the caps are the
   reference's defaults and are per-engine configuration, not per-script
   arguments, so a script cannot raise its own limits.
-- A child agent's provider or model override travels to the runner; the
-  harness runner refuses it with a fatal `AGENT_START` because this host has
-  no per-child model resolver yet, so a script that asks for one fails loudly
-  instead of silently running on the host's model.
+- A child agent's provider or model override is resolved by the host
+  (`Config.ModelResolver`; ADR 0064). The host's own provider keeps the host's
+  configured credentials, while any other provider is read from its own
+  environment variables — this configuration has one model section, so that is
+  the only place a second provider's key can live. A name that cannot be
+  resolved is a fatal `AGENT_START`, never a silent run on the host's model.
 
 ## Long-Running Commands
 

@@ -193,7 +193,7 @@ func TestWorkflowToolReportsAFatalFailureToTheModel(t *testing.T) {
 	}
 }
 
-func TestWorkflowToolRefusesUnsupportedModelOverrides(t *testing.T) {
+func TestWorkflowToolRefusesAModelOverrideWithoutAResolver(t *testing.T) {
 	fakeModel := workflowScriptModel(t, `{
 		"meta": {"name": "override", "description": "Ask for another model"},
 		"script": "return await agent(\"one\", {model: \"gpt-5\"});"
@@ -215,7 +215,7 @@ func TestWorkflowToolRefusesUnsupportedModelOverrides(t *testing.T) {
 	}
 	second := fakeModel.requests[1]
 	toolMessage := second.Messages[len(second.Messages)-1]
-	if !contains(toolMessage.Content, "not supported by this host") && !contains(toolMessage.Content, "provider/model overrides") {
+	if !contains(toolMessage.Content, "cannot resolve a model by name") {
 		t.Fatalf("unexpected refusal text: %q", toolMessage.Content)
 	}
 }

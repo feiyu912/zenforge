@@ -33,6 +33,11 @@ type TaskSpec struct {
 	Input     string         `json:"input"`
 	Files     []string       `json:"files,omitempty"`
 	Metadata  map[string]any `json:"metadata,omitempty"`
+	// Model is the adapter this task runs on. It is not serialized: a model is
+	// a live client, and a task that arrives as JSON must not be able to name
+	// one. A caller that wants a different model resolves it first and sets it
+	// here; an AgentName's own spec.Model remains the fallback.
+	Model model.Model `json:"-"`
 }
 
 type Options struct {

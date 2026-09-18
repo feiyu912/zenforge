@@ -150,7 +150,7 @@ rg -n '"[^"[:space:]]*agent-platform[^"[:space:]]*"' --glob "*.go" .
 | the `workflow` tool runs a script end to end: two `agent()` calls become two sub-agent runs with the parent's identity, the return value reaches the model, and `phase()`/`log()` progress rides the subtask events | `TestAgentRunsWorkflowTool` |
 | a workflow call is decoded and validated before anything runs, and a direct `Call` fails loudly | `TestDecodeAcceptsAWorkflowCall`, `TestDecodeRefusesMalformedCalls`, `TestToolDescribesItselfAndRefusesDirectCalls` |
 | a workflow run that trips a host limit reports the engine's failure text to the model and starts only the children that fit | `TestWorkflowToolReportsAFatalFailureToTheModel` |
-| a workflow `provider`/`model` override is refused instead of silently ignored, and the host resolves the worker sub-agent deterministically | `TestWorkflowToolRefusesUnsupportedModelOverrides`, `TestWorkflowToolNeedsAConfiguredSubAgent` |
+| a workflow `provider`/`model` override is refused when the host has no resolver, and the host resolves the worker sub-agent deterministically | `TestWorkflowToolRefusesAModelOverrideWithoutAResolver`, `TestWorkflowToolNeedsAConfiguredSubAgent` |
 | a schema child's JSON answer is parsed (fences and prose tolerated) and the tool renders both outcome paths | `TestWorkflowStructuredOutput`, `TestWorkflowToolOutcomeRendersBothPaths` |
 | a terminal job sees a terminal, merges its streams, injects a `TERM`, and reports its exit | `TestPTYJobSeesATerminalAndMergesStreams`, `TestPTYJobGetsATerminalEnvironment`, `TestPTYSessionAcceptsInputAndReportsItsExit` |
 | killing a terminal session signals its process group, so a `SIGHUP`-ignoring child does not survive or hold the terminal | `TestKillingAPTYSessionStopsItsProcessGroup` |
@@ -169,6 +169,10 @@ rg -n '"[^"[:space:]]*agent-platform[^"[:space:]]*"' --glob "*.go" .
 | `grants list` shows the standing grant and a labelled pinned entry without leaking another subject's | `TestGrantsCommandListsTheStandingGrant`, `TestGrantsCommandListsJSON` |
 | `grants revoke` takes back the standing grant, a pinned grant on its own, or everything | `TestGrantsCommandRevokesAStandingGrant`, `TestGrantsCommandRevokesAPinnedGrantWithoutTheStandingOne`, `TestGrantsCommandRevokesEveryGrant` |
 | `grants` reports a missing grant, requires a configured file, accepts the file as a flag, and rejects bad usage | `TestGrantsCommandReportsAMissingGrant`, `TestGrantsCommandNeedsAConfiguredFile`, `TestGrantsCommandTakesTheFileAsAFlag`, `TestGrantsCommandUsage` |
+| a task's own model outranks its agent spec's and the host's | `TestRunChildSubAgentPrefersTheTaskModel` |
+| a workflow child named in `agent()` runs on the resolved adapter, and a sibling keeps the host's | `TestWorkflowToolRunsANamedChildOnAResolvedModel` |
+| an unresolvable model is a reported start failure and a host without a resolver still refuses | `TestWorkflowToolReportsAnUnresolvableModel`, `TestWorkflowToolRefusesAModelOverrideWithoutAResolver` |
+| the CLI resolver keeps the host's credentials for its own provider and reads a second provider's environment | `TestCLIModelResolverKeepsTheHostConfigurationForItsOwnProvider`, `TestCLIModelResolverReadsAnotherProvidersEnvironment`, `TestCLIModelResolverFallsBackToTheHostModel` |
 | a job is reported terminal only after its output has been drained | `jobs.TestRunWaitsForOutputWrittenAfterTheMainProcessExits`, `jobs.TestCollectSignalsDrainedOnlyAfterBothStreamsEnd` |
 | a job whose pipes are held open by a background grandchild still becomes terminal | `jobs.TestJobWhoseOutputIsHeldByAGrandchildStillBecomesTerminal` |
 | memory entries augment normalized tasks | `adapters/memory.TestAugmentTaskAddsMemoryBlockAndMetadata` |

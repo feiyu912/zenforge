@@ -1170,6 +1170,9 @@ func buildAgent(ctx context.Context, opts *options, ioStreams IO) (*zenforge.Age
 		Tools:              tools,
 		ToolRuntime:        toolRuntime,
 		Approval:           approvalBroker,
+		// A workflow script's agent() can name another model; this is the
+		// resolver that turns the name into an adapter.
+		ModelResolver:      cliModelResolver{opts: *opts},
 		ApprovalGrants:     grantStore,
 		ApprovalNamespace:  grantNamespace,
 		ApprovalGrantTTL:   opts.approvalGrantTTL,
@@ -1305,6 +1308,38 @@ func buildModel(opts options) (model.Model, error) {
 		APIKey:    opts.apiKey,
 		APIKeyEnv: opts.apiKeyEnv,
 	})
+}
+
+// cliModelResolver turns a provider and model name into an adapter for a
+// caller that names one — a workflow script's agent() option.
+//
+// The host's own provider keeps the host's configuration, because an explicit
+// key or base URL in the config file is how it authenticates. Any other
+// provider is read from its own environment variables, which is the only place
+// this host can hold a second provider's credentials; without them the
+// resolution fails and the caller says so rather than running the child on the
+// host's model.
+type cliModelResolver struct {
+	opts options
+}
+
+func (r cliModelResolver) Resolve(providerName, modelName string) (model.Model, error) {
+	protocol := strings.TrimSpace(providerName)
+	config := provider.Config{Protocol: protocol, Model: strings.TrimSpace(modelName)}
+	if protocol == "" || strings.EqualFold(protocol, r.opts.provider) {
+		config.Protocol = r.opts.provider
+		config.BaseURL = r.opts.baseURL
+		config.APIKey = r.opts.apiKey
+		config.APIKeyEnv = r.opts.apiKeyEnv
+	}
+	if config.Model == "" {
+		config.Model = r.opts.model
+	}
+	resolved, err := provider.FromEnv(config)
+	if err != nil {
+		return nil, fmt.Errorf("resolve %s model %q: %w", config.Protocol, config.Model, err)
+	}
+	return resolved, nil
 }
 
 type runSummary struct {

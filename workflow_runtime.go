@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 
 	"github.com/feiyu912/zenforge/harness"
+	"github.com/feiyu912/zenforge/model"
 	"github.com/feiyu912/zenforge/subagent"
 	"github.com/feiyu912/zenforge/tool"
 	workflowtool "github.com/feiyu912/zenforge/tools/workflow"
@@ -88,6 +89,10 @@ type workflowRunner struct {
 	workflowName string
 	context      map[string]any
 	progress     subagent.Observer
+	// resolveModel turns an agent() option into an adapter. It is nil on a
+	// host that cannot reach a second model, and the runner then refuses a
+	// named model instead of quietly running the child on the host's own.
+	resolveModel func(provider, model string) (model.Model, error)
 	seq          atomic.Int64
 }
 
@@ -106,9 +111,14 @@ func (a *Agent) workflowRunner(ctx context.Context, emit eventEmitter, state *ha
 	if value, ok := intFromMeta(state.Meta["subagent.depth"]); ok {
 		depth = value
 	}
+	var resolveModel func(provider, model string) (model.Model, error)
+	if a.config.ModelResolver != nil {
+		resolveModel = a.config.ModelResolver.Resolve
+	}
 	return &workflowRunner{
 		orchestrator: orchestrator,
 		agentName:    agentName,
+		resolveModel: resolveModel,
 		options:      mergeSubAgentRequestOptions(a.subAgentOptions(), subagent.Options{MaxTasks: 1}),
 		parentRunID:  state.RunID,
 		parentStep:   state.Step,
@@ -151,11 +161,23 @@ func (r *workflowRunner) StartChild(ctx context.Context, request workflowengine.
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	var childModel model.Model
 	if request.Provider != "" || request.Model != "" {
-		return nil, fmt.Errorf(
-			"agent() provider/model overrides are not supported by this host (provider %q, model %q); remove the option or run the child through the task tool",
-			request.Provider, request.Model,
-		)
+		if r.resolveModel == nil {
+			return nil, fmt.Errorf(
+				"agent() asked for provider %q, model %q and this host cannot resolve a model by name; remove the option or run the child through the task tool",
+				request.Provider, request.Model,
+			)
+		}
+		resolved, err := r.resolveModel(request.Provider, request.Model)
+		if err != nil {
+			return nil, fmt.Errorf("resolve agent() model (provider %q, model %q): %w", request.Provider, request.Model, err)
+		}
+		if resolved == nil {
+			return nil, fmt.Errorf(
+				"the model resolver returned no model for provider %q, model %q", request.Provider, request.Model)
+		}
+		childModel = resolved
 	}
 	seq := r.seq.Add(1)
 	metadata := map[string]any{
@@ -172,6 +194,9 @@ func (r *workflowRunner) StartChild(ctx context.Context, request workflowengine.
 		Name:      request.Label,
 		Input:     workflowChildInput(request),
 		Metadata:  metadata,
+		// The resolved adapter rides on the task, so a workflow child runs on
+		// the model the script named and every other child is unaffected.
+		Model: childModel,
 	}
 	childRequest := subagent.Request{
 		RunID:        r.parentRunID,
