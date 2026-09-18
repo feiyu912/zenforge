@@ -57,26 +57,38 @@ const (
 	EventToolsActivated EventType = "tools.activated"
 	// EventPlanApproved marks the end of plan mode: the plan was approved
 	// and the run switched to executing durably.
-	EventPlanApproved       EventType = "plan.approved"
-	EventApprovalRequested  EventType = "approval.requested"
-	EventApprovalResolved   EventType = "approval.resolved"
-	EventApprovalExpired    EventType = "approval.expired"
-	EventSubtaskStarted     EventType = "subtask.started"
-	EventSubtaskEvent       EventType = "subtask.event"
-	EventSubtaskDone        EventType = "subtask.done"
-	EventSubtaskError       EventType = "subtask.error"
-	EventTaskStarted        EventType = "task.started"
-	EventTaskDone           EventType = "task.done"
-	EventTaskError          EventType = "task.error"
-	EventTaskCancelled      EventType = "task.cancelled"
-	EventCheckpointCreated  EventType = "checkpoint.created"
-	EventCompactionStarted  EventType = "compaction.started"
-	EventCompactionPruned   EventType = "compaction.pruned"
-	EventCompactionSummary  EventType = "compaction.summary"
-	EventCompactionDone     EventType = "compaction.done"
-	EventCompactionError    EventType = "compaction.error"
-	EventModelRetry         EventType = "model.retry"
-	EventInstructionsLoaded EventType = "instructions.loaded"
+	EventPlanApproved      EventType = "plan.approved"
+	EventApprovalRequested EventType = "approval.requested"
+	EventApprovalResolved  EventType = "approval.resolved"
+	EventApprovalExpired   EventType = "approval.expired"
+	// EventWorkflowPhase, EventWorkflowLog, EventWorkflowAgentStarted and
+	// EventWorkflowAgentDone are the workflow engine's own progress: a phase()
+	// or log() call and the script's bookkeeping view of its children. They
+	// are first-class types rather than subtask events with a workflow tag, so
+	// a reader can subscribe to a script's narration without also receiving
+	// every child's stream. A child *run*'s lifecycle and its own streamed
+	// events stay subtask events, because that is what they are and they
+	// carry the child's run id.
+	EventWorkflowPhase        EventType = "workflow.phase"
+	EventWorkflowLog          EventType = "workflow.log"
+	EventWorkflowAgentStarted EventType = "workflow.agent.started"
+	EventWorkflowAgentDone    EventType = "workflow.agent.done"
+	EventSubtaskStarted       EventType = "subtask.started"
+	EventSubtaskEvent         EventType = "subtask.event"
+	EventSubtaskDone          EventType = "subtask.done"
+	EventSubtaskError         EventType = "subtask.error"
+	EventTaskStarted          EventType = "task.started"
+	EventTaskDone             EventType = "task.done"
+	EventTaskError            EventType = "task.error"
+	EventTaskCancelled        EventType = "task.cancelled"
+	EventCheckpointCreated    EventType = "checkpoint.created"
+	EventCompactionStarted    EventType = "compaction.started"
+	EventCompactionPruned     EventType = "compaction.pruned"
+	EventCompactionSummary    EventType = "compaction.summary"
+	EventCompactionDone       EventType = "compaction.done"
+	EventCompactionError      EventType = "compaction.error"
+	EventModelRetry           EventType = "model.retry"
+	EventInstructionsLoaded   EventType = "instructions.loaded"
 )
 
 type Event struct {

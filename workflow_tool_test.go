@@ -72,10 +72,14 @@ func TestAgentRunsWorkflowTool(t *testing.T) {
 	}
 	var types []EventType
 	var workflowEvents []Event
+	var childEvents []Event
 	for event := range events {
 		types = append(types, event.Type)
-		if event.Type == EventSubtaskEvent {
+		switch event.Type {
+		case EventWorkflowPhase, EventWorkflowLog, EventWorkflowAgentStarted, EventWorkflowAgentDone:
 			workflowEvents = append(workflowEvents, event)
+		case EventSubtaskEvent:
+			childEvents = append(childEvents, event)
 		}
 	}
 	if !hasTool(fakeModel.requests[0].Tools, "workflow") {
@@ -85,6 +89,10 @@ func TestAgentRunsWorkflowTool(t *testing.T) {
 	assertContainsEvent(t, types, EventSubtaskEvent)
 	assertContainsEvent(t, types, EventSubtaskDone)
 	assertContainsEvent(t, types, EventToolResult)
+	assertContainsEvent(t, types, EventWorkflowPhase)
+	assertContainsEvent(t, types, EventWorkflowLog)
+	assertContainsEvent(t, types, EventWorkflowAgentStarted)
+	assertContainsEvent(t, types, EventWorkflowAgentDone)
 
 	// The script's return value reaches the model as the reference's text
 	// shape, and the parent's own turn still runs afterwards.
@@ -138,17 +146,60 @@ func TestAgentRunsWorkflowTool(t *testing.T) {
 		t.Fatalf("text child was asked for JSON: %q", childRequests[0].Tasks[0].Input)
 	}
 
-	// phase() and log() ride the subtask-event carrier, and the child's own
-	// streamed events are forwarded live.
-	var kinds []string
+	// The engine's own progress is first-class workflow events with the
+	// workflow's identity, while a child's streamed events stay subtask events
+	// carrying the child's own event type: the two views are separable.
 	for _, event := range workflowEvents {
-		kinds = append(kinds, stringValue(event.Payload["type"]))
-	}
-	for _, want := range []string{"workflow.phase", "workflow.log", "workflow.agent.start", "workflow.agent.end", "child.note"} {
-		if !contains(strings.Join(kinds, ","), want) {
-			t.Fatalf("missing %s among workflow events: %v", want, kinds)
+		if event.Payload["workflow"] != "review" || event.Payload["parentRunId"] != "run_workflow" ||
+			event.Payload["toolCallId"] != "call_workflow" {
+			t.Fatalf("%s lost the workflow identity: %#v", event.Type, event.Payload)
 		}
 	}
+	if phase := firstEventOfType(workflowEvents, EventWorkflowPhase); phase == nil || phase.Payload["phase"] != "research" {
+		t.Fatalf("phase event = %#v", phase)
+	}
+	if logEvent := firstEventOfType(workflowEvents, EventWorkflowLog); logEvent == nil || logEvent.Payload["message"] != "starting" {
+		t.Fatalf("log event = %#v", logEvent)
+	}
+	var starts, dones int
+	for _, event := range workflowEvents {
+		switch event.Type {
+		case EventWorkflowAgentStarted:
+			starts++
+			if event.Payload["seq"] == nil {
+				t.Fatalf("agent.started lost its sequence: %#v", event.Payload)
+			}
+		case EventWorkflowAgentDone:
+			dones++
+			if stringValue(event.Payload["outcome"]) != "completed" {
+				t.Fatalf("agent.done outcome = %#v", event.Payload)
+			}
+		}
+	}
+	// Both children are reported by the script's own bookkeeping, not only by
+	// the subtask events their runs emit.
+	if starts != 2 || dones != 2 {
+		t.Fatalf("agent events = %d started, %d done", starts, dones)
+	}
+	var childKinds []string
+	for _, event := range childEvents {
+		childKinds = append(childKinds, stringValue(event.Payload["type"]))
+	}
+	if !contains(strings.Join(childKinds, ","), "child.note") {
+		t.Fatalf("the child's own event was not forwarded: %v", childKinds)
+	}
+	if contains(strings.Join(childKinds, ","), "workflow.") {
+		t.Fatalf("a workflow progress event still rides the subtask carrier: %v", childKinds)
+	}
+}
+
+func firstEventOfType(events []Event, eventType EventType) *Event {
+	for index := range events {
+		if events[index].Type == eventType {
+			return &events[index]
+		}
+	}
+	return nil
 }
 
 func TestWorkflowToolReportsAFatalFailureToTheModel(t *testing.T) {

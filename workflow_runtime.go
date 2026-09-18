@@ -37,7 +37,7 @@ func (a *Agent) invokeWorkflowTool(ctx context.Context, emit eventEmitter, check
 	engineRequest.Observer = workflowProgressObserver{
 		emit:        emit,
 		parentRunID: state.RunID,
-		subtaskID:   call.ID,
+		toolCallID:  call.ID,
 		workflow:    request.Meta.Name,
 	}
 	result, runErr := engine.Run(ctx, engineRequest)
@@ -296,27 +296,29 @@ func workflowStructuredOutput(output string) (json.RawMessage, bool) {
 	return json.RawMessage(encoded), true
 }
 
-// workflowProgressObserver maps the engine's progress onto the event stream.
-// Child lifecycle travels as the subtask events the sub-agent runtime already
-// defines; phase() and log() have no dedicated event type, so they ride the
-// same carrier with a workflow-specific type, keeping one shape for a reader.
+// workflowProgressObserver maps the engine's own progress onto dedicated
+// workflow events: a phase(), a log(), and the script's bookkeeping view of its
+// children. A child *run*'s lifecycle and its streamed events stay on the
+// subtask events the sub-agent runtime defines (they carry the child's run id),
+// so the two views are separable: subscribing to a script's narration no
+// longer means receiving every child's stream.
 type workflowProgressObserver struct {
 	emit        eventEmitter
 	parentRunID string
-	subtaskID   string
+	toolCallID  string
 	workflow    string
 }
 
 func (o workflowProgressObserver) WorkflowPhase(title string) {
-	o.report("workflow.phase", map[string]any{"phase": title})
+	o.report(EventWorkflowPhase, map[string]any{"phase": title})
 }
 
 func (o workflowProgressObserver) WorkflowLog(message string) {
-	o.report("workflow.log", map[string]any{"message": message})
+	o.report(EventWorkflowLog, map[string]any{"message": message})
 }
 
 func (o workflowProgressObserver) WorkflowAgentStart(info workflowengine.AgentInfo) {
-	o.report("workflow.agent.start", map[string]any{
+	o.report(EventWorkflowAgentStarted, map[string]any{
 		"seq":   info.Seq,
 		"label": info.Label,
 		"phase": info.Phase,
@@ -324,7 +326,7 @@ func (o workflowProgressObserver) WorkflowAgentStart(info workflowengine.AgentIn
 }
 
 func (o workflowProgressObserver) WorkflowAgentEnd(info workflowengine.AgentInfo, outcome string) {
-	o.report("workflow.agent.end", map[string]any{
+	o.report(EventWorkflowAgentDone, map[string]any{
 		"seq":     info.Seq,
 		"label":   info.Label,
 		"phase":   info.Phase,
@@ -332,17 +334,22 @@ func (o workflowProgressObserver) WorkflowAgentEnd(info workflowengine.AgentInfo
 	})
 }
 
-func (o workflowProgressObserver) report(kind string, payload map[string]any) {
+// report emits one workflow event carrying the identity every such event
+// shares plus the kind's own fields. The fields are flat because the event type
+// already says what the event is; there is no second level to unwrap.
+func (o workflowProgressObserver) report(eventType EventType, fields map[string]any) {
 	if o.emit == nil {
 		return
 	}
-	_ = o.emit(EventSubtaskEvent, map[string]any{
+	payload := map[string]any{
 		"parentRunId": o.parentRunID,
-		"subtaskId":   o.subtaskID,
+		"toolCallId":  o.toolCallID,
 		"workflow":    o.workflow,
-		"type":        kind,
-		"payload":     payload,
-	})
+	}
+	for key, value := range fields {
+		payload[key] = value
+	}
+	_ = o.emit(eventType, payload)
 }
 
 // workflowChildObserver streams one workflow child's lifecycle and events

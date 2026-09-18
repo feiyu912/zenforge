@@ -91,8 +91,18 @@ what is experimental, and what remains adapter territory.
 - A conforming answer is the object; a violating one is not partly usable. A
   script that wants to inspect partial data has to omit the schema and parse
   the text itself.
-- `phase()` and `log()` have no dedicated wire event; they ride
-  `subtask.event` with workflow-tagged types.
+- The engine's own progress is four first-class events (ADR 0066):
+  `workflow.phase`, `workflow.log`, `workflow.agent.started`, and
+  `workflow.agent.done`, each carrying `workflow`, `parentRunId` and
+  `toolCallId` with the kind's fields flat (`phase`; `message`;
+  `seq`/`label`/`phase`; `seq`/`label`/`phase`/`outcome`). A child run's
+  lifecycle and streamed events stay on `subtask.*`, which is a change for a
+  reader that used to filter `subtask.event` for a `type` of `workflow.*`.
+- `workflow.agent.started`/`.done` and `subtask.started`/`.done` both describe
+  a child, because they are two views: the script's bookkeeping (sequence,
+  label, phase, outcome, including a child that never started) and the child
+  run itself (child run id, status, error, its own stream). Neither replaces
+  the other.
 - A workflow is one JavaScript realm per run. Scripts cannot share state
   across runs, and the engine persists nothing itself.
 - Scripts are bounded by `SyncTimeout`, `MaxConcurrentAgents`,

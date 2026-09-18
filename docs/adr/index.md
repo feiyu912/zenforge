@@ -79,3 +79,4 @@ later ADRs supersede earlier ones, never edit.
 | [0063](0063-grants-list-and-revoke.md) | A standing grant an operator can see and take back |
 | [0064](0064-a-child-can-name-its-model.md) | A child can run on a model it names |
 | [0065](0065-a-structured-answer-is-checked.md) | A structured answer is checked, not trusted |
+| [0066](0066-workflow-progress-is-its-own-event.md) | Workflow progress is its own event family |

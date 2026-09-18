@@ -203,6 +203,7 @@ nav:
       - 0063 Grants list and revoke: adr/0063-grants-list-and-revoke.md
       - 0064 A child can name its model: adr/0064-a-child-can-name-its-model.md
       - 0065 A structured answer is checked: adr/0065-a-structured-answer-is-checked.md
+      - 0066 Workflow progress is its own event family: adr/0066-workflow-progress-is-its-own-event.md
 
 extra:
   social:

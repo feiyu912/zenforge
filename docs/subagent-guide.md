@@ -154,6 +154,13 @@ Sub-agent work emits:
 - `subtask.done`;
 - `subtask.error`.
 
+A workflow's own progress is separate (ADR 0066): `workflow.phase` for a
+`phase()` call, `workflow.log` for a `log()` call, and
+`workflow.agent.started`/`workflow.agent.done` for the script's bookkeeping
+view of each `agent()` call, all carrying `workflow`, `parentRunId` and
+`toolCallId` plus the kind's fields. A workflow child is still a sub-agent
+run, so its lifecycle and streamed events remain `subtask.*` events.
+
 ## Safety
 
 Sub-agents should receive scoped tools. Do not automatically give every child
