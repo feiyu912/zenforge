@@ -91,6 +91,7 @@ func newMCPRunTool(ctx context.Context, opts *options, ioStreams IO, timeout tim
 			if err != nil {
 				return mcp.CallResult{}, err
 			}
+			runID := zenforge.NewRunID()
 			if !detach {
 				select {
 				case runSlot <- struct{}{}:
@@ -103,7 +104,15 @@ func newMCPRunTool(ctx context.Context, opts *options, ioStreams IO, timeout tim
 				// the operator's run timeout still bounds every served run.
 				runCtx, cancel := context.WithTimeout(ctx, timeout)
 				defer cancel()
-				return mcpRunCallResult(runServedTask(runCtx, agent, refusals, "", timeout, prompt), refusals), nil
+				// A blocking run is registered too: it is still a run this
+				// server owns, so it can be reported on while it runs and
+				// stopped from another connection.
+				if err := registry.start(runID, false, cancel); err != nil {
+					return mcp.CallResult{}, err
+				}
+				state := runServedTask(runCtx, agent, refusals, runID, false, timeout, prompt)
+				registry.finish(state)
+				return mcpRunCallResult(state, refusals), nil
 			}
 			// A detached run outlives the call that asked for it, so it must
 			// not be bound to that call's context: the server's own context,
@@ -114,9 +123,8 @@ func newMCPRunTool(ctx context.Context, opts *options, ioStreams IO, timeout tim
 			default:
 				return mcp.CallResult{}, errors.New("another served run is in progress; ask for zenforge_run_status on it or retry when it finishes")
 			}
-			runID := zenforge.NewRunID()
 			detachedCtx, cancel := context.WithTimeout(registry.context(), timeout)
-			if err := registry.start(runID, cancel); err != nil {
+			if err := registry.start(runID, true, cancel); err != nil {
 				<-runSlot
 				cancel()
 				return mcp.CallResult{}, err
@@ -124,7 +132,7 @@ func newMCPRunTool(ctx context.Context, opts *options, ioStreams IO, timeout tim
 			go func() {
 				defer func() { <-runSlot }()
 				defer cancel()
-				registry.finish(runServedTask(detachedCtx, agent, refusals, runID, timeout, prompt))
+				registry.finish(runServedTask(detachedCtx, agent, refusals, runID, true, timeout, prompt))
 			}()
 			return mcp.CallResult{
 				Content: []mcp.Content{{Type: "text", Text: fmt.Sprintf(
@@ -165,7 +173,7 @@ func decodeMCPRunArguments(arguments json.RawMessage) (string, bool, error) {
 // answer already reflects the refusal. A run that errored, timed out, or was
 // cancelled is an `isError` result, and it still carries the run id so the
 // caller can inspect what happened in the durable log.
-func runServedTask(ctx context.Context, agent *zenforge.Agent, refusals *runApprovalRecorder, runID string, timeout time.Duration, prompt string) servedRunState {
+func runServedTask(ctx context.Context, agent *zenforge.Agent, refusals *runApprovalRecorder, runID string, detached bool, timeout time.Duration, prompt string) servedRunState {
 	refusals.reset()
 	// A detached run names itself before it starts, so the caller can be told
 	// which run it is holding; a blocking one lets the agent choose.
@@ -178,17 +186,23 @@ func runServedTask(ctx context.Context, agent *zenforge.Agent, refusals *runAppr
 		Status:   servedRunCompleted,
 		Output:   result.Output,
 		Refused:  refusals.refused(),
-		Detached: runID != "",
+		Detached: detached,
 	}
 	if runErr != nil {
+		// How a cancellation surfaces depends on where it landed: a model call
+		// reports the context error, while a checkpoint save that was already
+		// in flight can return a store error that does not chain to
+		// context.Canceled. The run's own context is therefore the authority
+		// on why it stopped — if the bound was hit, the outcome is the bound,
+		// whatever error the internals produced on the way out.
 		switch {
 		case errors.Is(runErr, approval.ErrRequired):
 			state.Status = "awaiting-approval"
 			state.Message = "the served run stopped while an approval request was open, which this server cannot answer"
-		case errors.Is(runErr, context.DeadlineExceeded):
+		case errors.Is(runErr, context.DeadlineExceeded), errors.Is(ctx.Err(), context.DeadlineExceeded):
 			state.Status = "timeout"
 			state.Message = fmt.Sprintf("the served run was cancelled after %s", timeout)
-		case errors.Is(runErr, context.Canceled):
+		case errors.Is(runErr, context.Canceled), ctx.Err() != nil:
 			state.Status = "cancelled"
 			state.Message = "the served run was cancelled"
 		default:

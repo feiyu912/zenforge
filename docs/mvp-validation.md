@@ -180,6 +180,9 @@ rg -n '"[^"[:space:]]*agent-platform[^"[:space:]]*"' --glob "*.go" .
 | the status tool reports a durable run this server did not start, and `unknown` for an id in neither place | `TestServedRunStatusReportsDurableRunsAndUnknownIDs` |
 | the served-run registry is bounded and cancels what it still runs on shutdown | `TestServedRunRegistryBoundsItsMemoryAndNeverDropsALiveRun`, `TestServedRunRegistryShutdownCancelsAndWaits` |
 | the status tool is read-only and the run tool offers `detach` without claiming read-only | `TestServedRunStatusToolIsReadOnlyAndTheRunToolOffersDetach` |
+| a detached run can be cancelled, and the status tool then reports the terminal cancellation | `TestServedRunCancelStopsADetachedRun` |
+| cancelling a finished run reports its status as a fact, not a failure | `TestServedRunCancelReportsAnAlreadyFinishedRun` |
+| cancel reports another process's run as uncancellable and an unknown id as `unknown` | `TestServedRunCancelReportsWhatItCannotStop` |
 | a job is reported terminal only after its output has been drained | `jobs.TestRunWaitsForOutputWrittenAfterTheMainProcessExits`, `jobs.TestCollectSignalsDrainedOnlyAfterBothStreamsEnd` |
 | a job whose pipes are held open by a background grandchild still becomes terminal | `jobs.TestJobWhoseOutputIsHeldByAGrandchildStillBecomesTerminal` |
 | memory entries augment normalized tasks | `adapters/memory.TestAugmentTaskAddsMemoryBlockAndMetadata` |

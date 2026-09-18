@@ -15,9 +15,11 @@ import (
 // the blocking run tool's vocabulary so one status word means one thing.
 const (
 	servedRunRunning    = "running"
+	servedRunCancelling = "cancelling"
 	servedRunCompleted  = "completed"
 	servedRunUnknown    = "unknown"
 	servedRunStatusName = "zenforge_run_status"
+	servedRunCancelName = "zenforge_run_cancel"
 )
 
 // maxServedRunRecords bounds the registry's memory. Only terminal records are
@@ -72,7 +74,7 @@ func (r *servedRunRegistry) context() context.Context {
 	return r.baseCtx
 }
 
-func (r *servedRunRegistry) start(runID string, cancel context.CancelFunc) error {
+func (r *servedRunRegistry) start(runID string, detached bool, cancel context.CancelFunc) error {
 	if r == nil {
 		if cancel != nil {
 			cancel()
@@ -91,7 +93,7 @@ func (r *servedRunRegistry) start(runID string, cancel context.CancelFunc) error
 		RunID:     runID,
 		Status:    servedRunRunning,
 		StartedAt: time.Now().UTC(),
-		Detached:  true,
+		Detached:  detached,
 	}
 	r.order = append(r.order, runID)
 	if cancel != nil {
@@ -133,6 +135,59 @@ func (r *servedRunRegistry) get(runID string) (servedRunState, bool) {
 	defer r.mu.Unlock()
 	state, ok := r.runs[runID]
 	return state, ok
+}
+
+// cancelOutcome is what a cancellation request found and did.
+type cancelOutcome struct {
+	State     servedRunState
+	Found     bool
+	Requested bool
+}
+
+// requestCancel stops a run this server is still running. It reports what it
+// saw as well as what it did, so the caller can be told "stopped" from
+// "already finished" from "not this server's run".
+func (r *servedRunRegistry) requestCancel(runID string) cancelOutcome {
+	if r == nil {
+		return cancelOutcome{}
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	state, found := r.runs[runID]
+	if !found {
+		return cancelOutcome{}
+	}
+	cancel, stoppable := r.cancellers[runID]
+	if state.Status != servedRunRunning || !stoppable {
+		return cancelOutcome{State: state, Found: true}
+	}
+	// The cancellation is asynchronous: the run has to unwind its own work,
+	// so the request is made and the caller is told it was accepted.
+	cancel()
+	return cancelOutcome{State: state, Found: true, Requested: true}
+}
+
+// waitTerminal waits a bounded time for a run to reach a terminal state, which
+// turns "cancelling" into the status the caller actually wants whenever the
+// run unwinds quickly.
+func (r *servedRunRegistry) waitTerminal(ctx context.Context, runID string, timeout time.Duration) servedRunState {
+	deadline := time.Now().Add(timeout)
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		state, ok := r.get(runID)
+		if ok && state.Status != servedRunRunning {
+			return state
+		}
+		if time.Now().After(deadline) {
+			return state
+		}
+		select {
+		case <-ctx.Done():
+			return state
+		case <-ticker.C:
+		}
+	}
 }
 
 // evictLocked drops the oldest terminal records once the registry is over its
@@ -311,5 +366,114 @@ func servedRunStateResult(state servedRunState) mcp.CallResult {
 	return mcp.CallResult{
 		Content:           []mcp.Content{{Type: "text", Text: text}},
 		StructuredContent: structured,
+	}
+}
+
+// newMCPRunCancelTool stops a run this server is still running. It exists
+// because detaching returns before the work is done: a caller that changes its
+// mind, or that knows the task is wrong, must not have to wait out the
+// operator's run timeout.
+//
+// It takes the same operator grant as starting a run: a server that cannot
+// start runs has none to stop, and the flag is the capability list.
+func newMCPRunCancelTool(storeType, path string, registry *servedRunRegistry) mcp.ServerTool {
+	return mcp.ServerTool{
+		Name:        servedRunCancelName,
+		Description: "Stop a run this server is still running, by the id zenforge_run returned. Cancellation is asynchronous and takes effect at the run's next cancellation point. Only a run this server started and that is still running can be stopped: a finished run is reported as finished, and a run of another process cannot be cancelled here. Not read-only.",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"runId": map[string]any{
+					"type":        "string",
+					"description": "The run to stop, as zenforge_run or zenforge_run_status returned it.",
+				},
+			},
+			"required": []string{"runId"},
+		},
+		// Stopping work is not a read: a conforming client asks its own
+		// operator, exactly as it does before starting one.
+		ReadOnly: false,
+		Handler: func(ctx context.Context, arguments json.RawMessage) (mcp.CallResult, error) {
+			var input struct {
+				RunID string `json:"runId"`
+			}
+			if len(arguments) > 0 {
+				if err := json.Unmarshal(arguments, &input); err != nil {
+					return mcp.CallResult{}, fmt.Errorf("invalid arguments: %w", err)
+				}
+			}
+			runID := strings.TrimSpace(input.RunID)
+			if runID == "" {
+				return mcp.CallResult{}, fmt.Errorf("runId is required")
+			}
+			outcome := registry.requestCancel(runID)
+			switch {
+			case outcome.Requested:
+				// Give the run a moment to unwind, so a caller usually gets
+				// the terminal status instead of "cancelling"; if it does not,
+				// the request was still accepted and the status tool can be
+				// asked again.
+				state := registry.waitTerminal(ctx, runID, 2*time.Second)
+				if state.Status == "" || state.Status == servedRunRunning {
+					state.Status = servedRunCancelling
+				}
+				return mcp.CallResult{
+					Content: []mcp.Content{{Type: "text", Text: fmt.Sprintf(
+						"run %s was asked to stop; its status is %q", runID, state.Status)}},
+					StructuredContent: map[string]any{
+						"runId":     runID,
+						"status":    state.Status,
+						"cancelled": true,
+					},
+				}, nil
+			case outcome.Found:
+				// The run is no longer running. That is not a failure of the
+				// caller's intent — the work is stopped — so it is reported as
+				// a fact with its status rather than as an error.
+				return mcp.CallResult{
+					Content: []mcp.Content{{Type: "text", Text: fmt.Sprintf(
+						"run %s is not running; its status is %q", runID, outcome.State.Status)}},
+					StructuredContent: map[string]any{
+						"runId":           runID,
+						"status":          outcome.State.Status,
+						"cancelled":       false,
+						"alreadyFinished": true,
+					},
+				}, nil
+			}
+			// Not this server's run. A durable record means the run existed,
+			// but its owner is elsewhere — this server cannot stop it — and
+			// saying which of those two cases it is matters to the caller.
+			summaries, closeStore, err := listRuns(ctx, storeType, path)
+			if err != nil {
+				return mcp.CallResult{}, err
+			}
+			defer func() { _ = closeStore() }()
+			for _, summary := range summaries {
+				if summary.RunID != runID {
+					continue
+				}
+				return mcp.CallResult{
+					Content: []mcp.Content{{Type: "text", Text: fmt.Sprintf(
+						"run %s is not running on this server (its last recorded status is %q), so it cannot be cancelled here",
+						runID, summary.Status)}},
+					StructuredContent: map[string]any{
+						"runId":     runID,
+						"status":    summary.Status,
+						"cancelled": false,
+						"recorded":  true,
+					},
+				}, nil
+			}
+			return mcp.CallResult{
+				Content: []mcp.Content{{Type: "text", Text: fmt.Sprintf(
+					"no run %s in this server's registry or in its recorded runs, so there is nothing to cancel", runID)}},
+				StructuredContent: map[string]any{
+					"runId":     runID,
+					"status":    servedRunUnknown,
+					"cancelled": false,
+				},
+			}, nil
+		},
 	}
 }

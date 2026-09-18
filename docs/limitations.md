@@ -129,8 +129,15 @@ what is experimental, and what remains adapter territory.
   `unknown` for an id in neither. `unknown` is a result, not an error.
 - A server cancels its live runs on the way out and waits a bounded time for
   them, so it does not exit while a detached run is still writing to its
-  workspace. A detached run is still bounded by `--run-timeout`, and a caller
-  cannot cancel one early: there is no cancel tool yet.
+  workspace. A detached run is still bounded by `--run-timeout`, and the
+  caller that started it can stop it early with `zenforge_run_cancel` (same
+  `--allow-run` grant). Cancellation is cooperative: it lands at the run's next
+  cancellation point, so a tool call already in flight finishes or fails on its
+  own terms before the run ends. A run stopped by its bound is reported as
+  `cancelled`/`timeout` by what its own context says, not by the shape of the
+  error the interruption happened to produce (a checkpoint load that is
+  cancelled mid-flight returns a store error that does not chain to
+  `context.Canceled`).
 
 ## Long-Running Commands
 

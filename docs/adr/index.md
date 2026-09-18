@@ -81,3 +81,4 @@ later ADRs supersede earlier ones, never edit.
 | [0065](0065-a-structured-answer-is-checked.md) | A structured answer is checked, not trusted |
 | [0066](0066-workflow-progress-is-its-own-event.md) | Workflow progress is its own event family |
 | [0067](0067-a-served-run-can-outlive-its-call.md) | A served run can outlive the call that asked for it |
+| [0068](0068-a-run-a-caller-can-stop.md) | A run a caller can stop |

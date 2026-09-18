@@ -70,8 +70,8 @@ func mcpServerCommand(ctx context.Context, args []string, ioStreams IO) error {
 		if err != nil {
 			return err
 		}
-		tools = append(tools, runTool)
-		instructions = "ZenForge is a coding agent harness. These tools inspect its recorded runs, and zenforge_run starts one in the workspace this server was configured with; zenforge_run can also detach a run, whose state zenforge_run_status then reports."
+		tools = append(tools, runTool, newMCPRunCancelTool(opts.checkpointType, opts.checkpointDir, registry))
+		instructions = "ZenForge is a coding agent harness. These tools inspect its recorded runs, and zenforge_run starts one in the workspace this server was configured with; zenforge_run can also detach a run, whose state zenforge_run_status then reports and zenforge_run_cancel stops."
 		if opts.approve != "always" {
 			// Say it once, before serving: a served run that needs a human
 			// cannot ask one, and the operator should hear that from the

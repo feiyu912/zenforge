@@ -721,7 +721,8 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
   configured workspace and returns its answer, id, and status; with
   `detach: true` it instead returns the id as soon as the run has started, so
   a task longer than one call can hold keeps running on the server (bounded by
-  `--run-timeout`) and is polled through `zenforge_run_status`. The tool is
+  `--run-timeout`), is polled through `zenforge_run_status`, and can be stopped
+  early with `zenforge_run_cancel`. The tool is
   advertised without a read-only hint so the calling client asks its own
   operator, it does not exist without the grant from this host's operator, and
   inside the served run `--approve always` is what allows approval-gated tools

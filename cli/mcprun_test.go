@@ -238,7 +238,8 @@ func TestMCPServerRunToolAppearsOnlyWithTheOperatorGrant(t *testing.T) {
 		t.Fatalf("newMCPRunTool returned error: %v", err)
 	}
 	defer drainClosers(&opts, servedRunStreams())
-	server, err := mcp.NewServer(mcp.ServerConfig{Name: "zenforge", Version: "test", Tools: append(tools, runTool)})
+	cancelTool := newMCPRunCancelTool(opts.checkpointType, opts.checkpointDir, newServedRunRegistry(context.Background()))
+	server, err := mcp.NewServer(mcp.ServerConfig{Name: "zenforge", Version: "test", Tools: append(tools, runTool, cancelTool)})
 	if err != nil {
 		t.Fatalf("NewServer returned error: %v", err)
 	}
@@ -268,12 +269,21 @@ func TestMCPServerRunToolAppearsOnlyWithTheOperatorGrant(t *testing.T) {
 	if err := json.Unmarshal(listResponse, &listed); err != nil {
 		t.Fatalf("the tools/list response is not JSON (%v): %s", err, listResponse)
 	}
-	if len(listed.Result.Tools) != len(tools)+1 {
+	// The grant is the capability list: it adds starting a run *and* stopping
+	// one, both without a read-only hint so the calling client asks its own
+	// operator.
+	if len(listed.Result.Tools) != len(tools)+2 {
 		t.Fatalf("tools = %#v", listed.Result.Tools)
 	}
-	last := listed.Result.Tools[len(listed.Result.Tools)-1]
-	if last.Name != mcpRunToolName || last.ReadOnly() {
-		t.Fatalf("run tool definition = %#v", last)
+	granted := map[string]bool{}
+	for _, tool := range listed.Result.Tools[len(listed.Result.Tools)-2:] {
+		granted[tool.Name] = tool.ReadOnly()
+	}
+	if readOnly, ok := granted[mcpRunToolName]; !ok || readOnly {
+		t.Fatalf("run tool definition = %#v", listed.Result.Tools)
+	}
+	if readOnly, ok := granted[servedRunCancelName]; !ok || readOnly {
+		t.Fatalf("cancel tool definition = %#v", listed.Result.Tools)
 	}
 }
 
