@@ -1,0 +1,226 @@
+package dshapi
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/url"
+	"reflect"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/feiyu912/zenforge/eventlog"
+	"github.com/feiyu912/zenforge/server/harnesshttp"
+)
+
+// Config is the trust seam for the handler. It is configuration rather than a
+// hard-coded address check so the process that owns the listener decides the
+// policy: zenforge serve can pass its own --allow-remote decision here once it
+// mounts this handler, and a test can flip it without touching the package.
+type Config struct {
+	// AllowRemote admits requests whose RemoteAddr is not a loopback address.
+	// The zero value refuses them, which is the safe default for a console
+	// that sends no credentials of its own.
+	AllowRemote bool
+}
+
+// Handler answers the console's unary RPCs over the run manager and the
+// durable event store. It is a plain http.Handler with no knowledge of where
+// /api is mounted, so serve can wire it later and tests can drive it with
+// httptest.
+type Handler struct {
+	manager *harnesshttp.RunManager
+	events  eventlog.Store
+	cfg     Config
+
+	mu      sync.Mutex
+	pending map[string]pendingSession
+}
+
+// pendingSession is a session id allocated by session/create that has not
+// started a run yet. It is process-local: a pending session has no durable
+// footprint, which is honest because the run manager has nothing to remember
+// it by until the first prompt.
+type pendingSession struct {
+	id        string
+	createdAt time.Time
+}
+
+// maxPendingSessions bounds the pending table. Create keeps working by
+// refusing past the bound rather than evicting a session the console already
+// showed, which would make a later prompt fail as "not found".
+const maxPendingSessions = 4096
+
+// New builds the handler from the run manager and durable store the caller
+// already owns. Both are required: the session methods cannot be answered
+// truthfully without them.
+func New(manager *harnesshttp.RunManager, events eventlog.Store, cfg Config) (*Handler, error) {
+	if manager == nil {
+		return nil, fmt.Errorf("run manager is required")
+	}
+	if events == nil || nilInterface(events) {
+		return nil, fmt.Errorf("event store is required")
+	}
+	return &Handler{
+		manager: manager,
+		events:  events,
+		cfg:     cfg,
+		pending: make(map[string]pendingSession),
+	}, nil
+}
+
+// ServeHTTP dispatches one POST /api/<namespace>/<method> request. Requests
+// are fenced before anything else, then the envelope is validated, then the
+// method runs. Only a request that passes every check reaches a method, so
+// every method-level failure can be reported as a result envelope.
+func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if !h.fence(w, r) {
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeProtocolError(w, http.StatusMethodNotAllowed, nil, codeBadRequest, "console RPC endpoints require POST")
+		return
+	}
+	endpoint, ok := endpointFromPath(r.URL.Path)
+	if !ok {
+		writeNotFound(w)
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxRequestBodyBytes+1))
+	if err != nil {
+		writeProtocolError(w, http.StatusBadRequest, nil, codeBadRequest, "request body could not be read")
+		return
+	}
+	if len(body) > maxRequestBodyBytes {
+		writeProtocolError(w, http.StatusBadRequest, nil, codeBadRequest, "request body exceeds the size limit")
+		return
+	}
+	request, problem := parseEnvelope(body)
+	if problem != "" {
+		writeProtocolError(w, http.StatusBadRequest, request.rawRPCID, codeBadRequest, problem)
+		return
+	}
+	// The body and the URL must name the same endpoint. Trusting either alone
+	// would let a request logged against one method mutate another.
+	if request.method != endpoint {
+		writeProtocolError(w, http.StatusBadRequest, request.rawRPCID, codeBadRequest,
+			fmt.Sprintf("method %q does not match endpoint %q", request.method, endpoint))
+		return
+	}
+	method, ok := h.method(endpoint)
+	if !ok {
+		writeNotFound(w)
+		return
+	}
+	value, failure := method(r.Context(), request.args)
+	if failure != nil {
+		writeResult(w, request.rawRPCID, rpcResult{Error: &rpcError{
+			Code: failure.code, Message: failure.message, Details: failure.details,
+		}})
+		return
+	}
+	writeResult(w, request.rawRPCID, rpcResult{OK: true, Value: value})
+}
+
+// methodFunc is one endpoint implementation. A nil *methodError is success; a
+// non-nil one is a method-level failure carried in a result envelope.
+type methodFunc func(context.Context, map[string]json.RawMessage) (any, *methodError)
+
+// method resolves an endpoint to its implementation. An unknown namespace or
+// method returns false, which the caller answers with 404 — the console's
+// expected shape for a capability a partial host does not provide.
+func (h *Handler) method(endpoint string) (methodFunc, bool) {
+	namespace, name, found := strings.Cut(endpoint, "/")
+	if !found {
+		return nil, false
+	}
+	switch namespace {
+	case "session":
+		switch name {
+		case "list":
+			return h.sessionList, true
+		case "create":
+			return h.sessionCreate, true
+		case "prompt":
+			return h.sessionPrompt, true
+		case "cancel":
+			return h.sessionCancel, true
+		case "rename":
+			return h.sessionRename, true
+		case "page":
+			return h.sessionPage, true
+		}
+	}
+	return nil, false
+}
+
+// fence applies the Host/Origin/RemoteAddr trust checks the console expects
+// from a host. It runs before the method and before body parsing: a request
+// that fails trust gets no information about which endpoints exist.
+func (h *Handler) fence(w http.ResponseWriter, r *http.Request) bool {
+	if strings.EqualFold(strings.TrimSpace(r.Header.Get("Sec-Fetch-Site")), "cross-site") {
+		writeForbidden(w, "cross-site requests are refused")
+		return false
+	}
+	if origin := strings.TrimSpace(r.Header.Get("Origin")); origin != "" && !originMatchesHost(origin, r.Host) {
+		writeForbidden(w, fmt.Sprintf("Origin %q does not match Host %q", origin, r.Host))
+		return false
+	}
+	if !h.cfg.AllowRemote && !remoteIsLoopback(r.RemoteAddr) {
+		writeForbidden(w, "non-loopback remote addresses are refused unless remote access is configured")
+		return false
+	}
+	return true
+}
+
+// originMatchesHost compares the authority of an Origin header against the
+// request Host. A serialized "null" origin parses to an empty host and is a
+// mismatch, which is the correct answer: it identifies no same-origin page.
+func originMatchesHost(origin, host string) bool {
+	parsed, err := url.Parse(origin)
+	if err != nil || parsed.Host == "" {
+		return false
+	}
+	return strings.EqualFold(parsed.Host, host)
+}
+
+// remoteIsLoopback reports whether a RemoteAddr names this machine. It accepts
+// the host:port form net/http produces as well as a bare host, so a test or a
+// proxy that omits the port still gets a real answer.
+func remoteIsLoopback(remoteAddr string) bool {
+	host := strings.TrimSpace(remoteAddr)
+	if host == "" {
+		return false
+	}
+	if parsedHost, _, err := net.SplitHostPort(host); err == nil {
+		host = parsedHost
+	}
+	host = strings.Trim(host, "[]")
+	if host == "" {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// nilInterface catches a typed-nil event store, which would pass a plain nil
+// check and panic on first use.
+func nilInterface(value any) bool {
+	if value == nil {
+		return true
+	}
+	reflected := reflect.ValueOf(value)
+	switch reflected.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return reflected.IsNil()
+	default:
+		return false
+	}
+}

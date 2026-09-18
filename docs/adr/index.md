@@ -94,3 +94,4 @@ later ADRs supersede earlier ones, never edit.
 | [0078](0078-a-console-on-localhost.md) | A console on localhost |
 | [0079](0079-a-console-under-our-own-name.md) | A console under our own name |
 | [0080](0080-the-module-graph-is-validated.md) | The module graph is validated |
+| [0081](0081-the-console-answers-in-envelopes.md) | The console answers in envelopes |

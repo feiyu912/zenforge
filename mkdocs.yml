@@ -221,6 +221,7 @@ nav:
       - 0078 A console on localhost: adr/0078-a-console-on-localhost.md
       - 0079 A console under our own name: adr/0079-a-console-under-our-own-name.md
       - 0080 The module graph is validated: adr/0080-the-module-graph-is-validated.md
+      - 0081 The console answers in envelopes: adr/0081-the-console-answers-in-envelopes.md
 
 extra:
   social:

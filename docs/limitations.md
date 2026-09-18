@@ -128,6 +128,18 @@ what is experimental, and what remains adapter territory.
   rebuildable through the manually triggered console workflow), because the
   upstream build cannot be renamed at runtime (ADR 0079).
 
+## Browser Console
+
+- The console cannot hold a **multi-turn conversation** yet: a session maps to a
+  run, and a run is one execution, so a second message after the first run
+  finished is answered `unimplemented`. Multi-turn needs either a
+  session-to-current-run map or an agent that appends a turn to a finished run.
+- Panels whose namespaces this host does not serve (model catalog, forks,
+  workspace files, subagents) show a feature-level error rather than data; that
+  is the intended degradation, not a bug.
+- `session/create` refuses `cwd`/`workspaceId`/`agentPreset` for the same
+  reason: per-run working directories and presets do not exist in this harness.
+
 ## MCP Sampling
 
 - A sampled run reasons in text. `sampling/createMessage` has no tool field, so
