@@ -510,8 +510,15 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
   `pipeline()`/`phase()`/`log()` hooks, an `args` input, a bounded
   concurrency/total-agent/item cap, cooperative cancellation with a grace
   timer, and an enforced JSON-Schema subset for structured child results.
-  Child agents sit behind a `Runner` seam; the CLI tool that wires them to
-  sub-agent runs is the next batch.
+- The `workflow` tool wires those scripts to real sub-agent runs (ADR 0059):
+  it is advertised wherever sub-agents are configured, each `agent()` call is
+  a one-task sub-agent run through the existing orchestrator (same identity,
+  nesting depth, options merge, and live `subtask.*` events), `phase()`/`log()`
+  progress rides the subtask event carrier, `Config.WorkflowAgent` picks the
+  worker and `Config.WorkflowLimits` bounds the run, a completed run returns
+  the reference's text shape plus structured
+  `{workflow, agentsStarted, stopReason, value}`, and a `provider`/`model`
+  override is refused with a fatal `AGENT_START` rather than silently ignored.
 - Plan/execute internal stages no longer leak terminal run lifecycle events or continue after stage failure.
 - Planner spec, guide, and MVP validation document the single top-level run lifecycle.
 - Plan/execute orchestration failures persist terminal checkpoints and resume without retrying completed work.

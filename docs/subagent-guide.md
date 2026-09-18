@@ -78,6 +78,36 @@ Request `maxTasks` can only tighten the host-owned `SubAgentOptions.MaxTasks`;
 it cannot raise the configured limit. ZenForge validates that limit before
 creating or checkpointing child state.
 
+## Workflow Tool
+
+Wherever sub-agents are configured, the agent also advertises `workflow`: one
+JavaScript script that fans work out across child runs. The script body runs
+inside an async function, so top-level `await` is legal and `return <value>`
+is the tool's result. It sees `agent(prompt, opts?)` (the child's final text,
+or the object behind `opts.schema`, or `null` when the child did not
+complete), `parallel(thunks)`, `pipeline(items, ...stages)` (each item walks
+the stages on its own, no barrier between stages), `phase(title)`,
+`log(message)`, and `args`.
+
+```json
+{
+  "meta": {"name": "review", "description": "Review the diff in two passes"},
+  "script": "phase(\"scan\"); const first = await agent(\"list the changed files\"); return await agent(\"review: \" + first);",
+  "args": {"paths": ["a.go"]}
+}
+```
+
+Each `agent()` call is an ordinary sub-agent run: it carries the parent run
+id, step, and tool-call id, honours the host's nesting depth, and emits the
+same `subtask.*` events as the task tool. `Config.WorkflowAgent` names the
+sub-agent those calls run as (empty uses the first registered one), and
+`Config.WorkflowLimits` bounds concurrency, total agents, items per call,
+and the cancellation/sync windows. A `provider` or `model` option is refused
+with a fatal `AGENT_START` because this host cannot resolve a per-child model
+yet. Workflow children are the script's, not the parent's plan, so they are
+not recorded as run-state subtasks; a resumed run replays the script and
+reuses children through their deterministic ids (see ADR 0059).
+
 ## Defaults
 
 - max tasks: 8;

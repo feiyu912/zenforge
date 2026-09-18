@@ -147,6 +147,11 @@ rg -n '"[^"[:space:]]*agent-platform[^"[:space:]]*"' --glob "*.go" .
 | a workflow that does not yield, throws, or returns non-JSON is reported instead of hanging | `workflow.TestScriptThatDoesNotYieldIsInterrupted`, `workflow.TestScriptProblemsAreReported`, `workflow.TestCancelledContextDoesNotStartTheScript` |
 | a cancelled workflow rejects waiting calls and settles even when the script parks on its own promise | `workflow.TestCancellationReportsCancelled`, `workflow.TestCancellationGraceSettlesAScriptParkedOnItsOwnPromise`, `workflow.TestChildContextIsCancelledWhenTheRunEnds` |
 | workflow progress reaches an observer, and arg/label/phase defaults are deterministic | `workflow.TestObserverSeesPhasesLogsAndAgents`, `workflow.TestAgentOptionsOverrideThePhaseAndLabelDefaults`, `workflow.TestRunExposesArgsAndKeepsThemOutOfTheCaller` |
+| the `workflow` tool runs a script end to end: two `agent()` calls become two sub-agent runs with the parent's identity, the return value reaches the model, and `phase()`/`log()` progress rides the subtask events | `TestAgentRunsWorkflowTool` |
+| a workflow call is decoded and validated before anything runs, and a direct `Call` fails loudly | `TestDecodeAcceptsAWorkflowCall`, `TestDecodeRefusesMalformedCalls`, `TestToolDescribesItselfAndRefusesDirectCalls` |
+| a workflow run that trips a host limit reports the engine's failure text to the model and starts only the children that fit | `TestWorkflowToolReportsAFatalFailureToTheModel` |
+| a workflow `provider`/`model` override is refused instead of silently ignored, and the host resolves the worker sub-agent deterministically | `TestWorkflowToolRefusesUnsupportedModelOverrides`, `TestWorkflowToolNeedsAConfiguredSubAgent` |
+| a schema child's JSON answer is parsed (fences and prose tolerated) and the tool renders both outcome paths | `TestWorkflowStructuredOutput`, `TestWorkflowToolOutcomeRendersBothPaths` |
 | a job is reported terminal only after its output has been drained | `jobs.TestRunWaitsForOutputWrittenAfterTheMainProcessExits`, `jobs.TestCollectSignalsDrainedOnlyAfterBothStreamsEnd` |
 | a job whose pipes are held open by a background grandchild still becomes terminal | `jobs.TestJobWhoseOutputIsHeldByAGrandchildStillBecomesTerminal` |
 | memory entries augment normalized tasks | `adapters/memory.TestAugmentTaskAddsMemoryBlockAndMetadata` |

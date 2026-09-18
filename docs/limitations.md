@@ -73,20 +73,31 @@ what is experimental, and what remains adapter territory.
 
 ## Workflows
 
-- `workflow/` runs the reference's orchestration scripts in-process (see ADR
-  0057), but the capability is not yet reachable from the CLI: there is no
-  `workflow` tool, no `agent.go` routing, and no durable progress for a script
-  beyond the `Observer` seam. The engine's child agents are a `Runner` the
-  caller supplies.
+- `workflow/` runs the reference's orchestration scripts in-process (ADR
+  0057) and the `workflow` tool wires them to sub-agent runs wherever
+  sub-agents are configured (ADR 0059). ZenForge's CLI does not configure
+  sub-agents, so the tool is not advertised by `zenforge run` today; a host
+  that does (the SDK, the ZenMind adapter) gets it next to the task tools.
+- Workflow children are not registered in the parent's run-state subtask
+  plan, so a resumed run replays the whole script instead of replaying
+  children; children are reused only through their deterministic
+  `<toolCallId>_agent_<n>` ids and existing child checkpoints.
+- `agent(prompt, {schema})` asks the child for one JSON object and treats a
+  non-JSON answer as a failed item (`null`). The object is not re-validated
+  against the schema's keywords: ZenForge has no JSON Schema data validator,
+  so deep conformance is the model's obligation.
+- `phase()` and `log()` have no dedicated wire event; they ride
+  `subtask.event` with workflow-tagged types.
 - A workflow is one JavaScript realm per run. Scripts cannot share state
   across runs, and the engine persists nothing itself.
 - Scripts are bounded by `SyncTimeout`, `MaxConcurrentAgents`,
   `MaxTotalAgents`, `MaxItemsPerCall`, and `CancelGrace`; the caps are the
   reference's defaults and are per-engine configuration, not per-script
   arguments, so a script cannot raise its own limits.
-- A child agent's provider or model override is passed through to the runner;
-  the engine does not validate that the host has it, so an unsupported target
-  fails as a normal failed item.
+- A child agent's provider or model override travels to the runner; the
+  harness runner refuses it with a fatal `AGENT_START` because this host has
+  no per-child model resolver yet, so a script that asks for one fails loudly
+  instead of silently running on the host's model.
 
 ## Deferred Systems
 

@@ -20,6 +20,7 @@ import (
 	"github.com/feiyu912/zenforge/tool"
 	workspacetools "github.com/feiyu912/zenforge/tools/workspace"
 	"github.com/feiyu912/zenforge/trace"
+	"github.com/feiyu912/zenforge/workflow"
 	"github.com/feiyu912/zenforge/workspace"
 )
 
@@ -91,7 +92,14 @@ type Config struct {
 	SubAgentOrchestrator  subagent.Orchestrator
 	SubAgentRunner        subagent.Runner
 	SubAgentOptions       subagent.Options
-	Workspace             workspace.Workspace
+	// WorkflowAgent names the sub-agent a workflow script's agent() calls run
+	// as. Empty uses the first registered sub-agent, which is the only
+	// sensible default when the host registered exactly one.
+	WorkflowAgent string
+	// WorkflowLimits bounds workflow runs. A zero field takes the engine's
+	// default; see workflow.DefaultLimits.
+	WorkflowLimits workflow.Limits
+	Workspace      workspace.Workspace
 	// TurnDiffs receives per-mutation content captures from the
 	// workspace Write/Edit tools; the agent drains it at each turn
 	// boundary and emits turn.diff events with unified diffs (codex

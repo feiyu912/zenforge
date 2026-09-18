@@ -36,6 +36,7 @@ import (
 	tasktool "github.com/feiyu912/zenforge/tools/task"
 	todotools "github.com/feiyu912/zenforge/tools/todo"
 	"github.com/feiyu912/zenforge/tools/toolsearch"
+	workflowtool "github.com/feiyu912/zenforge/tools/workflow"
 	"github.com/feiyu912/zenforge/trace"
 )
 
@@ -2182,6 +2183,9 @@ func (a *Agent) invokeToolOrRuntime(ctx context.Context, emit eventEmitter, chec
 	if tasktool.IsTaskTool(call.Name) {
 		return a.invokeSubAgentTool(ctx, emit, checkpointState, state, call)
 	}
+	if workflowtool.IsWorkflowTool(call.Name) {
+		return a.invokeWorkflowTool(ctx, emit, checkpointState, state, call)
+	}
 	return a.invokeTool(ctx, *state, call)
 }
 
@@ -3704,7 +3708,14 @@ func (a *Agent) configuredTools() ([]tool.Tool, error) {
 		if err != nil {
 			return nil, err
 		}
-		for _, current := range taskTools {
+		// Workflow scripts drive the same sub-agent runtime, so the tool is
+		// advertised exactly where that runtime is configured.
+		workflowTool, err := workflowtool.New()
+		if err != nil {
+			return nil, err
+		}
+		subAgentTools := append(append([]tool.Tool(nil), taskTools...), workflowTool)
+		for _, current := range subAgentTools {
 			name := strings.ToLower(current.Name())
 			if _, ok := existing[name]; ok {
 				continue

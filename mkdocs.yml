@@ -196,6 +196,7 @@ nav:
       - 0056 Run-starting MCP tool and served-run approval: adr/0056-run-starting-mcp-tool-and-served-run-approval.md
       - 0057 Workflow engine JavaScript sandbox: adr/0057-workflow-engine-javascript-sandbox.md
       - 0058 Job terminal after output drain: adr/0058-job-terminal-after-output-drain.md
+      - 0059 Workflow tool wiring: adr/0059-workflow-tool-wiring.md
 
 extra:
   social:
