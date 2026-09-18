@@ -502,6 +502,9 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - An interrupted checkpoint save no longer masks its own failure: the JSONL
   store completes a durably-pending save under a context that cannot be
   cancelled, and the loop re-derives its checkpoint counter after a failed save.
+- A background job is announced as terminal only after its output has been
+  drained, so a foreground `Run` returns the output a command produced instead
+  of racing the pipe copies (ADR 0058).
 - `workflow/` runs the reference's orchestration scripts in-process (ADR
   0057): a JavaScript body with top-level `await`, `agent()`/`parallel()`/
   `pipeline()`/`phase()`/`log()` hooks, an `args` input, a bounded

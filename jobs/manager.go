@@ -17,6 +17,7 @@ const (
 	DefaultTimeout      = 10 * time.Minute
 	DefaultMaxJobs      = 16
 	DefaultReadMaxBytes = 64 << 10
+	DefaultDrainGrace   = 2 * time.Second
 )
 
 // Config configures a Manager.
@@ -33,6 +34,11 @@ type Config struct {
 	MaxJobs int
 	// Env is the base environment; empty inherits the manager process.
 	Env []string
+	// DrainGrace bounds how long a job that has already exited waits for its
+	// output pipes to reach EOF. A background grandchild inheriting the pipes
+	// can hold them open past the main process, and such a job must still
+	// become terminal with what was captured.
+	DrainGrace time.Duration
 }
 
 // Manager runs and tracks jobs.
@@ -40,6 +46,7 @@ type Manager struct {
 	shell          string
 	defaultCWD     string
 	defaultTimeout time.Duration
+	drainGrace     time.Duration
 	maxJobs        int
 	env            []string
 
@@ -75,10 +82,15 @@ func New(config Config) *Manager {
 	if maxJobs <= 0 {
 		maxJobs = DefaultMaxJobs
 	}
+	drainGrace := config.DrainGrace
+	if drainGrace <= 0 {
+		drainGrace = DefaultDrainGrace
+	}
 	return &Manager{
 		shell:          shell,
 		defaultCWD:     config.DefaultCWD,
 		defaultTimeout: timeout,
+		drainGrace:     drainGrace,
 		maxJobs:        maxJobs,
 		env:            append([]string(nil), config.Env...),
 		jobs:           map[string]*record{},
@@ -133,21 +145,36 @@ func (m *Manager) Start(ctx context.Context, spec Spec) (Job, error) {
 	command := exec.CommandContext(jobCtx, m.shell, "-c", spec.Command)
 	command.Dir = m.workingDir(spec)
 	command.Env = m.environment(spec)
-	stdout, err := command.StdoutPipe()
+	// The pipes are created here rather than through StdoutPipe: StdoutPipe's
+	// read end is closed by Wait, which races the copies still draining the
+	// bytes a fast command left in the pipe. These read ends belong to the
+	// manager, and the write ends are dropped from the parent as soon as the
+	// child has them, so EOF means the child is gone.
+	stdout, stdoutWrite, err := os.Pipe()
 	if err != nil {
 		m.fail(id, fmt.Errorf("capture stdout: %w", err))
 		return m.snapshot(id)
 	}
-	stderr, err := command.StderrPipe()
+	stderr, stderrWrite, err := os.Pipe()
 	if err != nil {
+		_ = stdout.Close()
+		_ = stdoutWrite.Close()
 		m.fail(id, fmt.Errorf("capture stderr: %w", err))
 		return m.snapshot(id)
+	}
+	command.Stdout = stdoutWrite
+	command.Stderr = stderrWrite
+	closePipes := func() {
+		for _, pipe := range []*os.File{stdout, stdoutWrite, stderr, stderrWrite} {
+			_ = pipe.Close()
+		}
 	}
 	// stdin is always a pipe: a job started without input may still be fed
 	// later, and a closed pipe is how a reader-driven program is told that
 	// no more input is coming.
 	stdin, err := command.StdinPipe()
 	if err != nil {
+		closePipes()
 		m.fail(id, fmt.Errorf("capture stdin: %w", err))
 		return m.snapshot(id)
 	}
@@ -156,14 +183,20 @@ func (m *Manager) Start(ctx context.Context, spec Spec) (Job, error) {
 	m.mu.Unlock()
 	if spec.Stdin != "" {
 		if _, err := io.WriteString(stdin, spec.Stdin); err != nil {
+			closePipes()
 			m.fail(id, fmt.Errorf("write stdin: %w", err))
 			return m.snapshot(id)
 		}
 	}
 	if err := command.Start(); err != nil {
+		closePipes()
 		m.fail(id, fmt.Errorf("start command: %w", err))
 		return m.snapshot(id)
 	}
+	// The child holds its own copies of the write ends now; the parent's must
+	// go so the copies below see EOF when the child is gone.
+	_ = stdoutWrite.Close()
+	_ = stderrWrite.Close()
 	m.mu.Lock()
 	rec.job.PID = command.Process.Pid
 	if timeout > 0 {
@@ -173,8 +206,9 @@ func (m *Manager) Start(ctx context.Context, spec Spec) (Job, error) {
 	}
 	m.mu.Unlock()
 
-	go m.collect(rec, stdout, stderr)
-	go m.wait(rec, command)
+	drained := make(chan struct{})
+	go m.collect(rec, stdout, stderr, drained)
+	go m.wait(rec, command, drained, stdout, stderr)
 	return m.snapshot(id)
 }
 
@@ -384,23 +418,31 @@ func (m *Manager) environment(spec Spec) []string {
 	return os.Environ()
 }
 
-// collect drains both pipes into their buffers until they close.
-func (m *Manager) collect(rec *record, stdout, stderr io.Reader) {
+// collect drains both pipes into their buffers and reports when it is done.
+// The reaper waits for that report, because a command's output is still in
+// the pipe when its process exits.
+func (m *Manager) collect(rec *record, stdout, stderr io.ReadCloser, drained chan<- struct{}) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
+		defer func() { _ = stdout.Close() }()
 		_, _ = io.Copy(rec.stdout, stdout)
 	}()
 	go func() {
 		defer wg.Done()
+		defer func() { _ = stderr.Close() }()
 		_, _ = io.Copy(rec.stderr, stderr)
 	}()
 	wg.Wait()
+	close(drained)
 }
 
-// wait reaps the process and records the outcome.
-func (m *Manager) wait(rec *record, command *exec.Cmd) {
+// wait reaps the process and records the outcome. A job is only announced as
+// terminal once its output has been drained: readers take the terminal state
+// as permission to read the result, so closing it first would hand them an
+// empty stdout for a command that already wrote one.
+func (m *Manager) wait(rec *record, command *exec.Cmd, drained <-chan struct{}, readers ...io.Closer) {
 	err := command.Wait()
 	m.mu.Lock()
 	if rec.timer != nil {
@@ -430,6 +472,17 @@ func (m *Manager) wait(rec *record, command *exec.Cmd) {
 	cancel := rec.cancel
 	m.mu.Unlock()
 	cancel()
+	select {
+	case <-drained:
+	case <-time.After(m.drainGrace):
+		// A background grandchild can hold the pipes past the main process,
+		// so EOF may never arrive. The job still has to become terminal with
+		// what was captured; closing the read ends unblocks the copies.
+		for _, reader := range readers {
+			_ = reader.Close()
+		}
+		<-drained
+	}
 	close(rec.done)
 }
 

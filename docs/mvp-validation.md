@@ -147,6 +147,8 @@ rg -n '"[^"[:space:]]*agent-platform[^"[:space:]]*"' --glob "*.go" .
 | a workflow that does not yield, throws, or returns non-JSON is reported instead of hanging | `workflow.TestScriptThatDoesNotYieldIsInterrupted`, `workflow.TestScriptProblemsAreReported`, `workflow.TestCancelledContextDoesNotStartTheScript` |
 | a cancelled workflow rejects waiting calls and settles even when the script parks on its own promise | `workflow.TestCancellationReportsCancelled`, `workflow.TestCancellationGraceSettlesAScriptParkedOnItsOwnPromise`, `workflow.TestChildContextIsCancelledWhenTheRunEnds` |
 | workflow progress reaches an observer, and arg/label/phase defaults are deterministic | `workflow.TestObserverSeesPhasesLogsAndAgents`, `workflow.TestAgentOptionsOverrideThePhaseAndLabelDefaults`, `workflow.TestRunExposesArgsAndKeepsThemOutOfTheCaller` |
+| a job is reported terminal only after its output has been drained | `jobs.TestRunWaitsForOutputWrittenAfterTheMainProcessExits`, `jobs.TestCollectSignalsDrainedOnlyAfterBothStreamsEnd` |
+| a job whose pipes are held open by a background grandchild still becomes terminal | `jobs.TestJobWhoseOutputIsHeldByAGrandchildStillBecomesTerminal` |
 | memory entries augment normalized tasks | `adapters/memory.TestAugmentTaskAddsMemoryBlockAndMetadata` |
 | memory scope metadata filters cross-tenant entries | `adapters/memory.TestScopedStoreFiltersEntriesByQueryMetadata`, `adapters/memory.TestAugmentTaskUsesScopedStoreMetadata` |
 | sub-agent task tool delegates work | `TestAgentRunsSubAgentTaskTool`, `subagent.TestOrchestratorRunsTasksInStableOrder`, `tools/task.TestTaskToolSchemaAndAlias` |

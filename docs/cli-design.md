@@ -260,8 +260,12 @@ long test run stops blocking the turn: `exec_command` with
 `background=true` returns a job id, `job_output` reads each stream from the
 offsets it returns (and reports when the bounded buffer dropped output
 instead of hiding it), `write_stdin` feeds interactive programs, and
-`job_kill` stops a job. The manager is closed when the command's context
-ends, so interrupting the CLI does not leave a background process behind.
+`job_kill` stops a job. A job is reported as finished only after its output
+has been drained into those buffers (ADR 0058), so the terminal state and a
+readable result arrive together; a command that hands its pipes to a
+background process is bounded by the manager's drain grace instead of waiting
+forever. The manager is closed when the command's context ends, so
+interrupting the CLI does not leave a background process behind.
 
 ## Goals and Ralph
 

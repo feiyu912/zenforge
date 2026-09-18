@@ -3,6 +3,7 @@ package jobs
 import (
 	"context"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -84,6 +85,73 @@ func TestRunCapturesOutputAndExitCode(t *testing.T) {
 	}
 	if !strings.Contains(job.Summary(), "exited (3)") {
 		t.Fatalf("summary = %s", job.Summary())
+	}
+}
+
+func TestRunWaitsForOutputWrittenAfterTheMainProcessExits(t *testing.T) {
+	// A command can hand its stdout to a background subshell and exit before
+	// that subshell has written. The bytes are still coming, and a job
+	// announced as terminal at the main process's exit would hand the caller
+	// an empty stdout for output that arrives a moment later.
+	manager := New(Config{DefaultTimeout: 10 * time.Second, DrainGrace: 10 * time.Second})
+	defer manager.Close()
+	start := time.Now()
+	_, result, err := manager.Run(context.Background(), Spec{Command: "(sleep 0.2; echo late) & exit 0"})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if got := strings.TrimSpace(string(result.Stdout.Data)); got != "late" {
+		t.Fatalf("stdout = %q, want the output the subshell wrote after the process exited", got)
+	}
+	if elapsed := time.Since(start); elapsed > 8*time.Second {
+		t.Fatalf("the job took %s", elapsed)
+	}
+}
+
+func TestCollectSignalsDrainedOnlyAfterBothStreamsEnd(t *testing.T) {
+	// The mechanism the reaper depends on: a drain is complete only when both
+	// copies have ended, not when the first pipe reaches EOF.
+	manager := New(Config{})
+	stdoutRead, stdoutWrite := io.Pipe()
+	stderrRead, stderrWrite := io.Pipe()
+	drained := make(chan struct{})
+	go manager.collect(&record{stdout: NewBuffer(1024), stderr: NewBuffer(1024)}, stdoutRead, stderrRead, drained)
+	if _, err := io.WriteString(stdoutWrite, "out"); err != nil {
+		t.Fatalf("WriteString returned error: %v", err)
+	}
+	_ = stdoutWrite.Close()
+	select {
+	case <-drained:
+		t.Fatal("the drain was reported complete while stderr was still open")
+	case <-time.After(50 * time.Millisecond):
+	}
+	if _, err := io.WriteString(stderrWrite, "err"); err != nil {
+		t.Fatalf("WriteString returned error: %v", err)
+	}
+	_ = stderrWrite.Close()
+	select {
+	case <-drained:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the drain was never reported complete")
+	}
+}
+
+func TestJobWhoseOutputIsHeldByAGrandchildStillBecomesTerminal(t *testing.T) {
+	// A background grandchild inherits the pipe and can hold it open past the
+	// main process exit, so EOF may never arrive. The job must still reach a
+	// terminal state with what was captured instead of hanging.
+	manager := New(Config{DefaultTimeout: 10 * time.Second, DrainGrace: 500 * time.Millisecond})
+	defer manager.Close()
+	start := time.Now()
+	_, result, err := manager.Run(context.Background(), Spec{Command: "sleep 30 & echo started"})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !strings.Contains(string(result.Stdout.Data), "started") {
+		t.Fatalf("stdout = %q", result.Stdout.Data)
+	}
+	if elapsed := time.Since(start); elapsed > 10*time.Second {
+		t.Fatalf("the job hung for %s", elapsed)
 	}
 }
 
