@@ -76,6 +76,7 @@ plugins:
 
 exclude_docs: |
   # Internal planning artifacts — must not be served publicly.
+  dsh-console-protocol-recon.md
   s0-*.md
   s1-*.md
   s2-*.md
@@ -217,6 +218,7 @@ nav:
       - 0076 A resource can be watched: adr/0076-a-resource-can-be-watched.md
       - 0077 The client can lend its model: adr/0077-the-client-can-lend-its-model.md
       - 0078 A console on localhost: adr/0078-a-console-on-localhost.md
+      - 0079 A console under our own name: adr/0079-a-console-under-our-own-name.md
 
 extra:
   social:
