@@ -174,11 +174,14 @@ type Server struct {
 	writeErr   error
 
 	// clientMu guards the capabilities the client advertised in initialize.
-	// They are the client's, not this server's: elicitation is checked against
-	// them, and nothing here is ever added to the server's own capability
-	// block.
+	// They are the client's, not this server's: elicitation and sampling are
+	// checked against them, and nothing here is ever added to the server's own
+	// capability block. A server claiming either there would be claiming a
+	// method it does not serve -- both are requests the client answers, not
+	// the server.
 	clientMu          sync.Mutex
 	clientElicitation bool
+	clientSampling    bool
 }
 
 // NewServer validates the configuration and builds the server. A nil input
@@ -652,8 +655,8 @@ func (s *Server) initialize(params json.RawMessage) (json.RawMessage, *rpcError)
 		ProtocolVersion string `json:"protocolVersion"`
 		// Capabilities is the *client's* block. It is read here (and only
 		// here) because initialize is where a client states what it can be
-		// asked for: elicitation lives in it, and a Request that needs the
-		// capability has to know whether the client claimed it.
+		// asked for: elicitation and sampling live in it, and a Request that
+		// needs either capability has to know whether the client claimed it.
 		Capabilities map[string]any `json:"capabilities"`
 	}
 	if len(params) > 0 {
@@ -666,6 +669,7 @@ func (s *Server) initialize(params json.RawMessage) (json.RawMessage, *rpcError)
 	// later one that drops a capability must not leave the older claim behind.
 	s.clientMu.Lock()
 	s.clientElicitation = clientAdvertises(request.Capabilities, "elicitation")
+	s.clientSampling = clientAdvertises(request.Capabilities, "sampling")
 	s.clientMu.Unlock()
 	version := ServerProtocolVersion
 	for _, supported := range serverProtocolVersions {

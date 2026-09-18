@@ -214,6 +214,7 @@ nav:
       - 0074 A server can ask its client: adr/0074-a-server-can-ask-its-client.md
       - 0075 An approval can be a question: adr/0075-an-approval-can-be-a-question.md
       - 0076 A resource can be watched: adr/0076-a-resource-can-be-watched.md
+      - 0077 The client can lend its model: adr/0077-the-client-can-lend-its-model.md
 
 extra:
   social:

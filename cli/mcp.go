@@ -34,6 +34,7 @@ func mcpServerCommand(ctx context.Context, args []string, ioStreams IO) error {
 	bindOptions(fs, &opts)
 	allowRun := fs.Bool("allow-run", false, "expose a tool that starts a ZenForge run in this server's workspace")
 	runTimeout := fs.Duration("run-timeout", defaultMCPRunTimeout, "bound on one served run")
+	sampling := fs.Bool("sampling", false, "answer served runs through the connected MCP client's model (MCP sampling) instead of a provider configured here")
 	if err := fs.Parse(args); err != nil {
 		return invalidUsage(err)
 	}
@@ -46,6 +47,13 @@ func mcpServerCommand(ctx context.Context, args []string, ioStreams IO) error {
 	if *runTimeout <= 0 {
 		return invalidUsage(errors.New("--run-timeout must be positive"))
 	}
+	// Sampling only means anything for a run this server starts, so a server
+	// that was given --sampling but not the grant is refused instead of
+	// starting up with a flag that silently does nothing.
+	if *sampling && !*allowRun {
+		return invalidUsage(errors.New("--sampling requires --allow-run: sampling answers served runs through the connected MCP client's model"))
+	}
+	opts.sampling = *sampling
 	// A server can be asked to serve runs, and a served run opens the same
 	// resources any other run does, so the drain is registered before the
 	// first agent is built.

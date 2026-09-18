@@ -741,6 +741,19 @@ type options struct {
 	// installs a non-interactive broker without pretending to be a mode.
 	approvalOverride approval.Broker
 
+	// sampling is the MCP server's opt-in to answer served runs through the
+	// connected client's own model (MCP sampling) instead of a provider
+	// configured here. It is read only by newMCPRunTool; no other command
+	// binds the flag, because sampling is a property of a served run, not of
+	// a run the operator drives at a keyboard.
+	sampling bool
+	// modelOverride replaces the adapter buildModel would construct from the
+	// operator's flags. It exists so an operator's explicit choice (sampling)
+	// can supply the model without a local API key being required, and so
+	// nothing silently falls back to a local provider when that choice cannot
+	// be honored.
+	modelOverride model.Model
+
 	// approvalGrantsFile is where durable "always allow" grants are kept, and
 	// approvalTenant/approvalSubject are the namespace they belong to. All
 	// three are empty unless the approval section asked for persistence.
@@ -1028,9 +1041,17 @@ func buildAgent(ctx context.Context, opts *options, ioStreams IO) (*zenforge.Age
 		return nil, err
 	}
 	opts.addCloser("checkpoint store", closeCheckpoints)
-	modelAdapter, err := buildModel(*opts)
-	if err != nil {
-		return nil, err
+	// An explicit override is an operator's choice of model, not a
+	// convenience: when one is set the local provider is never constructed,
+	// so no API key is required and a failure to honor the override surfaces
+	// as the override's own error instead of a silent fall back to a
+	// different model.
+	modelAdapter := opts.modelOverride
+	if modelAdapter == nil {
+		modelAdapter, err = buildModel(*opts)
+		if err != nil {
+			return nil, err
+		}
 	}
 	// Context management follows the reference harnesses: retry with
 	// exponential backoff and an idle watchdog for transport failures, and

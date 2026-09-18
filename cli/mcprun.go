@@ -12,6 +12,7 @@ import (
 
 	"github.com/feiyu912/zenforge"
 	"github.com/feiyu912/zenforge/adapters/mcp"
+	"github.com/feiyu912/zenforge/adapters/mcpsampling"
 	"github.com/feiyu912/zenforge/approval"
 )
 
@@ -23,6 +24,14 @@ const defaultMCPRunTimeout = 15 * time.Minute
 // mcpRunToolName is the model-visible name of the run-starting tool.
 const mcpRunToolName = "zenforge_run"
 
+// errServedSamplingUnsupported is what a served run fails with when the
+// operator enabled --sampling but the connected client never advertised the
+// capability. It is returned as a tool failure rather than resolved by
+// falling back to a local model: a run answered by a model the operator did
+// not choose would be a silent substitution, and a run refused with no reason
+// would look like a server bug. The sentence names both ways out.
+var errServedSamplingUnsupported = errors.New("this server was started with --sampling, but the connected MCP client did not advertise the sampling capability, so it cannot run this task; connect a client that supports sampling, or restart the server without --sampling")
+
 // newMCPRunTool builds the tool that starts a run for a remote caller.
 //
 // The agent is built here, before the protocol is served, for the same reason
@@ -33,6 +42,16 @@ const mcpRunToolName = "zenforge_run"
 // only the task.
 func newMCPRunTool(ctx context.Context, opts *options, ioStreams IO, timeout time.Duration, registry *servedRunRegistry) (mcp.ServerTool, error) {
 	served := *opts
+	// --sampling swaps the run's model for the connected client's. The
+	// adapter is built here but bound per run: the protocol layer does not
+	// exist until a tools/call arrives, and the reference to it can only be
+	// read off that request's context (a detached run deliberately outlives
+	// the request, so the binding has to outlive it too).
+	var samplingModel *mcpsampling.Model
+	if served.sampling {
+		samplingModel = mcpsampling.New(nil)
+		served.modelOverride = samplingModel
+	}
 	refusals := &runApprovalRecorder{}
 	if served.approve != "always" {
 		// A served run has no operator at a keyboard, and the interactive
@@ -105,6 +124,18 @@ func newMCPRunTool(ctx context.Context, opts *options, ioStreams IO, timeout tim
 			// handler called without a server (the tests that invoke it
 			// directly) gets nil, which is the fallback refusal.
 			server := mcp.ServerFrom(ctx)
+			if samplingModel != nil {
+				// The capability is only knowable here, after the client's
+				// initialize, and it is checked before anything is started:
+				// no registry entry, no run slot, no model call. A client
+				// that cannot sample is told exactly that, because falling
+				// back to the local model would answer the caller with a
+				// model the operator did not choose.
+				if server == nil || !server.ClientSupportsSampling() {
+					return mcp.CallResult{}, errServedSamplingUnsupported
+				}
+				samplingModel.BindServer(server)
+			}
 			runID := zenforge.NewRunID()
 			if !detach {
 				select {

@@ -586,6 +586,23 @@ func (s *servedRunServe) initialize(t *testing.T, advertiseElicitation bool) {
 	}
 }
 
+// initializeSampling is initialize for a client that may be asked to run the
+// model call. Elicitation is claimed alongside it so a sampling session is
+// still free to approve a tool: the two capabilities are independent, and a
+// test should not have to choose between them.
+func (s *servedRunServe) initializeSampling(t *testing.T, advertiseSampling bool) {
+	t.Helper()
+	capabilities := ""
+	if advertiseSampling {
+		capabilities = `,"capabilities":{"sampling":{},"elicitation":{}}`
+	}
+	response := exchange(t, s.writer, s.reader,
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"`+capabilities+`}}`)
+	if _, ok := response["result"]; !ok {
+		t.Fatalf("initialize failed: %v", response)
+	}
+}
+
 // callRun starts one served run whose model will issue an approval-gated shell
 // call.
 func (s *servedRunServe) callRun(t *testing.T) {
@@ -1001,5 +1018,174 @@ func TestMCPRunFallsBackWhenTheElicitationTimesOut(t *testing.T) {
 	}
 	if names := recorder.refused(); len(names) != 1 || names[0] != "shell" {
 		t.Fatalf("refused = %#v", names)
+	}
+}
+
+// startServedRunServeWithSampling builds a served run tool with the operator's
+// --sampling opt-in and serves it over pipes. No model endpoint is configured:
+// the point of the flag is that the run's model call is delegated to the
+// connected client, so an attempted fall back to a local provider would fail
+// with a connection error rather than quietly succeed.
+func startServedRunServeWithSampling(t *testing.T) *servedRunServe {
+	t.Helper()
+	opts := servedRunOptions(t, "http://127.0.0.1:1")
+	opts.sampling = true
+	streams := servedRunStreams()
+	runTool, err := newMCPRunTool(context.Background(), &opts, streams, time.Minute, newServedRunRegistry(context.Background()))
+	if err != nil {
+		t.Fatalf("newMCPRunTool returned error: %v", err)
+	}
+	t.Cleanup(func() { drainClosers(&opts, streams) })
+	server, err := mcp.NewServer(mcp.ServerConfig{
+		Name:    "zenforge",
+		Version: "test",
+		Tools:   []mcp.ServerTool{runTool},
+	})
+	if err != nil {
+		t.Fatalf("NewServer returned error: %v", err)
+	}
+	return startServedServer(t, server)
+}
+
+// runTurnSampling returns the sampling request a served run's model call put
+// on the wire, so a test can assert what the client was actually asked.
+func (s *servedRunServe) runTurnSampling(t *testing.T) (string, map[string]any) {
+	t.Helper()
+	request := readFrameWithin(t, s.reader, 10*time.Second)
+	if request["method"] != "sampling/createMessage" {
+		t.Fatalf("the frame was not a sampling request: %v", request)
+	}
+	id, _ := request["id"].(string)
+	if id == "" {
+		t.Fatalf("the sampling request has no string id: %v", request)
+	}
+	params, _ := request["params"].(map[string]any)
+	return id, params
+}
+
+// TestServedRunUsesTheClientsModelWhenSamplingIsEnabled pins the opt-in end to
+// end: with --sampling and a capable client, the run's model call is a
+// sampling/createMessage carrying the run's turn, and the client's answer is
+// the run's result. The configured endpoint is unreachable, so a run that fell
+// back to a local model could not have completed.
+func TestServedRunUsesTheClientsModelWhenSamplingIsEnabled(t *testing.T) {
+	session := startServedRunServeWithSampling(t)
+	session.initializeSampling(t, true)
+	session.callRun(t)
+
+	id, params := session.runTurnSampling(t)
+	messages, _ := params["messages"].([]any)
+	if len(messages) == 0 {
+		t.Fatalf("the sampling request carried no messages: %#v", params)
+	}
+	found := false
+	for _, raw := range messages {
+		message, _ := raw.(map[string]any)
+		content, _ := message["content"].(map[string]any)
+		if strings.Contains(fmt.Sprint(content["text"]), "run the shell tool") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("the sampling request did not carry the run's turn: %#v", messages)
+	}
+	// The system prompt travels outside the message list, which is the
+	// protocol's shape for it.
+	if prompt, _ := params["systemPrompt"].(string); prompt == "" {
+		t.Fatalf("the sampling request dropped the system prompt: %#v", params)
+	}
+
+	session.answer(t, id, `{"role":"assistant","content":{"type":"text","text":"the client model answered"},"model":"client-model"}`)
+	result := session.result(t)
+	if result.IsError {
+		t.Fatalf("the sampled run reported an error: %#v", result.Content)
+	}
+	if len(result.Content) == 0 || !strings.Contains(result.Content[0].Text, "the client model answered") {
+		t.Fatalf("text = %#v", result.Content)
+	}
+	if result.StructuredContent["status"] != "completed" {
+		t.Fatalf("status = %#v", result.StructuredContent["status"])
+	}
+}
+
+// TestServedRunFailsWhenTheClientCannotSample pins the refusal the operator
+// asked for: --sampling with a client that never advertised the capability is
+// a failed run carrying both ways out, not a silent fall back to a local model
+// and not a refusal with no reason.
+func TestServedRunFailsWhenTheClientCannotSample(t *testing.T) {
+	session := startServedRunServeWithSampling(t)
+	session.initializeSampling(t, false)
+	session.callRun(t)
+
+	// The handler refuses before starting the run, so the next frame is the
+	// run call's own response, not a sampling request.
+	result := session.result(t)
+	if !result.IsError {
+		t.Fatalf("a run without a sampling-capable client was reported as a success: %#v", result.StructuredContent)
+	}
+	if len(result.Content) == 0 {
+		t.Fatal("the refusal carried no explanation")
+	}
+	text := result.Content[0].Text
+	if !strings.Contains(text, "--sampling") || !strings.Contains(text, "sampling capability") {
+		t.Fatalf("the refusal does not name the flag and the missing capability: %q", text)
+	}
+}
+
+// TestServedRunWithoutSamplingKeepsTheLocalModel pins the other half of the
+// opt-in: a client that could sample is still not asked unless the operator
+// passed --sampling, and the run is answered by the configured provider
+// exactly as before the flag existed.
+func TestServedRunWithoutSamplingKeepsTheLocalModel(t *testing.T) {
+	model := newOpenAISSEStub(t, textChunk("the local model answered"))
+	opts := servedRunOptions(t, model.url)
+	streams := servedRunStreams()
+	runTool, err := newMCPRunTool(context.Background(), &opts, streams, time.Minute, newServedRunRegistry(context.Background()))
+	if err != nil {
+		t.Fatalf("newMCPRunTool returned error: %v", err)
+	}
+	t.Cleanup(func() { drainClosers(&opts, streams) })
+	server, err := mcp.NewServer(mcp.ServerConfig{
+		Name:    "zenforge",
+		Version: "test",
+		Tools:   []mcp.ServerTool{runTool},
+	})
+	if err != nil {
+		t.Fatalf("NewServer returned error: %v", err)
+	}
+	session := startServedServer(t, server)
+	session.initializeSampling(t, true)
+	session.callRun(t)
+
+	// Any sampling frame would arrive before the run's response and would
+	// fail this read's id check, so the local answer is also the proof that no
+	// sampling request was sent.
+	result := session.result(t)
+	if result.IsError {
+		t.Fatalf("the local run reported an error: %#v", result.Content)
+	}
+	if len(result.Content) == 0 || !strings.Contains(result.Content[0].Text, "the local model answered") {
+		t.Fatalf("text = %#v", result.Content)
+	}
+	if !strings.Contains(model.body(), "run the shell tool") {
+		t.Fatalf("the local model never saw the run's turn: %s", model.body())
+	}
+}
+
+// TestMCPServerSamplingRequiresTheRunGrant pins the flag combination at the
+// command boundary: --sampling without --allow-run would start a server on
+// which it could never take effect, so it is refused with the reason instead
+// of being accepted and ignored.
+func TestMCPServerSamplingRequiresTheRunGrant(t *testing.T) {
+	err := mcpServerCommand(context.Background(), []string{"--sampling", "--checkpoint-dir", t.TempDir()}, IO{
+		Stdin:  strings.NewReader(""),
+		Stdout: io.Discard,
+		Stderr: io.Discard,
+	})
+	if err == nil {
+		t.Fatal("--sampling without --allow-run was accepted")
+	}
+	if !strings.Contains(err.Error(), "--sampling requires --allow-run") {
+		t.Fatalf("error = %v", err)
 	}
 }

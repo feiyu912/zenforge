@@ -116,6 +116,19 @@ what is experimental, and what remains adapter territory.
   the only place a second provider's key can live. A name that cannot be
   resolved is a fatal `AGENT_START`, never a silent run on the host's model.
 
+## MCP Sampling
+
+- A sampled run reasons in text. `sampling/createMessage` has no tool field, so
+  the client's model cannot call the harness's tools; the definitions are
+  dropped, a request that requires a tool call is refused loudly, and the
+  client's answer arrives as one delta plus done because the protocol is not
+  streaming. Use sampling for text-only work and the server's own model when a
+  run needs tools.
+- `--sampling` is the operator's choice, and only on `mcp-server` beside
+  `--allow-run`: a client that cannot sample fails the run with an actionable
+  error instead of silently using a different model, because a run's answer has
+  to be traceable to the model that produced it.
+
 ## MCP Resource Subscriptions
 
 - Subscriptions are per connection and opt-in (`ServerConfig.ResourceSubscriptions`);
