@@ -219,6 +219,7 @@ nav:
       - 0077 The client can lend its model: adr/0077-the-client-can-lend-its-model.md
       - 0078 A console on localhost: adr/0078-a-console-on-localhost.md
       - 0079 A console under our own name: adr/0079-a-console-under-our-own-name.md
+      - 0080 The module graph is validated: adr/0080-the-module-graph-is-validated.md
 
 extra:
   social:
