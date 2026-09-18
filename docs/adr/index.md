@@ -95,3 +95,4 @@ later ADRs supersede earlier ones, never edit.
 | [0079](0079-a-console-under-our-own-name.md) | A console under our own name |
 | [0080](0080-the-module-graph-is-validated.md) | The module graph is validated |
 | [0081](0081-the-console-answers-in-envelopes.md) | The console answers in envelopes |
+| [0082](0082-the-host-names-what-it-cannot-answer.md) | The host names the model and records what it cannot answer |

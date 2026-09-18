@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -26,6 +27,15 @@ type Config struct {
 	// The zero value refuses them, which is the safe default for a console
 	// that sends no credentials of its own.
 	AllowRemote bool
+	// Logger, when non-nil, receives one line per request for an endpoint this
+	// host does not serve, naming the namespace and method only. That is the
+	// host-side replacement for reading a browser's network panel, so the next
+	// person can implement the namespaces the console actually calls.
+	//
+	// The zero value is silent: a nil Logger never falls back to
+	// slog.Default, so an unconfigured handler and every existing test print
+	// nothing.
+	Logger *slog.Logger
 }
 
 // Handler answers the console's unary RPCs over the run manager and the
@@ -39,6 +49,12 @@ type Handler struct {
 
 	mu      sync.Mutex
 	pending map[string]pendingSession
+
+	// modelCatalog is the injected description of the host's configured model,
+	// installed by SetModelCatalog after New. The RWMutex lets a settings
+	// change swap it while requests are in flight.
+	modelCatalogMu sync.RWMutex
+	modelCatalog   ModelCatalogSource
 }
 
 // pendingSession is a session id allocated by session/create that has not
@@ -113,6 +129,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	method, ok := h.method(endpoint)
 	if !ok {
+		// Diagnose the gap before answering: the console's per-feature
+		// degradation is a bare 404, so without this line the only record of
+		// what it asked for is a browser's network panel.
+		h.logUnservedEndpoint(endpoint)
 		writeNotFound(w)
 		return
 	}
@@ -153,6 +173,8 @@ func (h *Handler) method(endpoint string) (methodFunc, bool) {
 			return h.sessionRename, true
 		case "page":
 			return h.sessionPage, true
+		case "modelCatalog":
+			return h.sessionModelCatalog, true
 		}
 	}
 	return nil, false
