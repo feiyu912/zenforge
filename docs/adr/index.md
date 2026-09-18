@@ -87,3 +87,4 @@ later ADRs supersede earlier ones, never edit.
 | [0071](0071-resources-and-prompts-not-only-tools.md) | Resources and prompts, not only tools |
 | [0072](0072-a-command-can-belong-to-a-person.md) | A command can belong to a person |
 | [0073](0073-progress-is-a-notification.md) | Progress is a notification, not a second protocol |
+| [0074](0074-a-server-can-ask-its-client.md) | A server can ask its client |

@@ -211,6 +211,7 @@ nav:
       - 0071 Resources and prompts not only tools: adr/0071-resources-and-prompts-not-only-tools.md
       - 0072 A command can belong to a person: adr/0072-a-command-can-belong-to-a-person.md
       - 0073 Progress is a notification not a second protocol: adr/0073-progress-is-a-notification.md
+      - 0074 A server can ask its client: adr/0074-a-server-can-ask-its-client.md
 
 extra:
   social:

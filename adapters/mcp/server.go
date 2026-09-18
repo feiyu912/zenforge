@@ -88,10 +88,14 @@ type ServerConfig struct {
 // single message for a caller that owns the transport (an in-process bridge,
 // or a test).
 //
-// It handles requests sequentially. MCP over stdio is a single ordered
-// stream, and the tools this server is meant to expose (a run, a job) are
-// long and stateful, so concurrency here would buy nothing and would make
-// interleaved output harder to attribute.
+// Serve reads frames on one goroutine and answers each request on its own, so
+// a handler that calls Request can wait for the client's response without
+// stopping the reader. That split is the whole point: a server-initiated
+// request is answered on the same single stream it was sent on, and a reader
+// that was busy inside a handler could never see the answer it was waiting
+// for. Requests that run at the same time are attributed by the id each
+// response carries, and writes are serialized, so a frame is still one
+// well-formed line.
 type Server struct {
 	name          string
 	version       string
@@ -106,16 +110,45 @@ type Server struct {
 
 	// stream is the writer Serve is currently answering on, set for the
 	// duration of one Serve call. writeMu serializes frames from every source
-	// that may write concurrently -- the serving goroutine and a Notify call
-	// made by whatever changed a list -- so two frames can never interleave
-	// on the wire. streamMu only guards the pointer, and is never held while
-	// a write happens.
+	// that may write concurrently -- the goroutine answering a request, a
+	// Notify call made by whatever changed a list, and a Request sent by a
+	// handler -- so two frames can never interleave on the wire. writeMu is
+	// taken before streamMu, and streamMu only guards the pointer; neither is
+	// held by a caller that is not writing.
 	stream   io.Writer
 	streamMu sync.Mutex
 	writeMu  sync.Mutex
 
-	mu       sync.Mutex
-	shutdown bool
+	// serving is true while Serve owns an outbound stream. It is guarded by
+	// requestMu together with pendingRequests, so a Request either registers
+	// while the stream is up or is refused at once: it can never register into
+	// a registry that Serve has already stopped draining.
+	serving bool
+	// nextRequestID numbers this server's own requests. Server ids live in a
+	// namespace of their own ("srv-<n>", see serverRequestIDPrefix), so an id
+	// this server mints can never be confused with an id a client minted for
+	// its own requests: client ids are echoed back raw and are never touched.
+	nextRequestID uint64
+	// pendingRequests maps a server request id, as raw JSON so it is compared
+	// byte for byte with what the client echoes back, to the waiter its Request
+	// call is reading.
+	pendingRequests map[string]chan pendingResponse
+	// requestMu guards serving, nextRequestID and pendingRequests. It is never
+	// held while a frame is written.
+	requestMu sync.Mutex
+
+	// writeErr records the first transport write that failed, so Serve can
+	// still report a broken stream now that responses are written by the
+	// goroutine answering a request rather than by Serve itself.
+	writeErrMu sync.Mutex
+	writeErr   error
+
+	// clientMu guards the capabilities the client advertised in initialize.
+	// They are the client's, not this server's: elicitation is checked against
+	// them, and nothing here is ever added to the server's own capability
+	// block.
+	clientMu          sync.Mutex
+	clientElicitation bool
 }
 
 // NewServer validates the configuration and builds the server. A nil input
@@ -144,6 +177,8 @@ func NewServer(config ServerConfig) (*Server, error) {
 		prompts:       make([]ServerPrompt, 0, len(config.Prompts)),
 		promptByName:  make(map[string]ServerPrompt, len(config.Prompts)),
 		dynamicLists:  config.DynamicLists,
+
+		pendingRequests: map[string]chan pendingResponse{},
 	}
 	for _, serverTool := range config.Tools {
 		toolName := strings.TrimSpace(serverTool.Name)
@@ -238,6 +273,11 @@ func (s *Server) Prompts() []ServerPrompt {
 // protocol has no way to answer one, and inventing an id-less response would
 // desynchronize the peer.
 //
+// A response to a server-initiated request is not a request: it is delivered
+// to the Request waiting for that id, and nothing is answered even when nobody
+// is waiting. Treating it as a request would answer a late response with a
+// method-not-found error and desynchronize a peer that is merely slow.
+//
 // A caller that owns the transport can install a sink with
 // [WithNotificationSink] to receive the progress notifications a handler emits
 // while it runs; those arrive before Handle returns and therefore before the
@@ -250,6 +290,14 @@ func (s *Server) Handle(ctx context.Context, message []byte) ([]byte, bool) {
 			Error:   &rpcError{Code: codeParseError, Message: "parse error: " + err.Error()},
 		}), true
 	}
+	return s.handleEnvelope(ctx, envelope)
+}
+
+// handleEnvelope answers one decoded frame. It is split out of Handle so
+// Serve's reader can decode a frame once and then either route a response to
+// its waiter or hand the request to its own goroutine, without decoding the
+// same bytes twice.
+func (s *Server) handleEnvelope(ctx context.Context, envelope serverRequest) ([]byte, bool) {
 	if envelope.JSONRPC != "" && envelope.JSONRPC != "2.0" {
 		return mustMarshal(serverResponse{
 			JSONRPC: "2.0",
@@ -260,6 +308,10 @@ func (s *Server) Handle(ctx context.Context, message []byte) ([]byte, bool) {
 	if envelope.ID == nil {
 		// A notification: act on it, answer nothing.
 		s.handleNotification(envelope.Method)
+		return nil, false
+	}
+	if isResponseEnvelope(envelope) {
+		s.routeResponse(envelope)
 		return nil, false
 	}
 	response := serverResponse{JSONRPC: "2.0", ID: envelope.ID}
@@ -276,18 +328,48 @@ func (s *Server) Handle(ctx context.Context, message []byte) ([]byte, bool) {
 // returns nil on a clean end of stream: a client that closes the pipe is done
 // with the server, not an error worth reporting.
 //
+// The reader never runs a handler itself. It reads a frame, routes a response
+// to the Request waiting for its id, and hands every other frame to a
+// goroutine of its own. That is what lets a handler call Request and wait: the
+// client's answer is read while the handler is still blocked, instead of
+// queueing behind it. Responses are written under writeMu, so concurrent
+// handlers still put one well-formed line each on the wire.
+//
 // Serve owns the outbound stream for its duration. That is what lets a handler
 // answer with progress notifications on the same pipe, and what makes the
 // Notify* list-changed methods usable: they write to the stream Serve attached,
 // so they fail rather than silently vanish when no client is connected.
 func (s *Server) Serve(ctx context.Context, reader io.Reader, writer io.Writer) error {
 	s.attach(writer)
-	defer s.detach()
 	// Progress and list-changed frames share the response stream, so the
 	// handlers Serve drives reach it through the same sink. Installing it on
 	// the context (rather than on the Server) keeps Handle's in-process
 	// callers in control of their own transport.
 	ctx = WithNotificationSink(ctx, s.send)
+
+	var handlers sync.WaitGroup
+	serveErr := s.readLoop(ctx, reader, &handlers)
+	// The stream is released before the waiters are woken. A handler blocked
+	// in Request must not wake up and write its answer to a pipe the client
+	// has already stopped reading: with the stream gone, that write fails at
+	// once instead of blocking shutdown.
+	s.detach()
+	s.failPending(ErrStreamClosed)
+	// Serve does not return while a handler is still running, which is what
+	// keeps "when Serve returns, nothing is writing to the stream" true and
+	// leaves no goroutine behind.
+	handlers.Wait()
+	if serveErr == nil {
+		serveErr = s.takeWriteError()
+	}
+	return serveErr
+}
+
+// readLoop reads frames until the input ends, routing answers to their waiters
+// and handing requests to their own goroutines. It is the only reader of the
+// transport, which is what makes a blocked handler harmless: the next frame is
+// read whoever is waiting for what.
+func (s *Server) readLoop(ctx context.Context, reader io.Reader, handlers *sync.WaitGroup) error {
 	buffered := bufio.NewReader(reader)
 	for {
 		if err := ctx.Err(); err != nil {
@@ -303,43 +385,135 @@ func (s *Server) Serve(ctx context.Context, reader io.Reader, writer io.Writer) 
 		if len(raw) == 0 {
 			continue
 		}
-		response, respond := s.Handle(ctx, raw)
-		if !respond {
+		var envelope serverRequest
+		if err := decodeMessage(raw, &envelope); err != nil {
+			// A malformed line is not a response; it goes to a handler
+			// goroutine so its parse-error answer does not stall the reader.
+			handlers.Add(1)
+			go func(raw json.RawMessage) {
+				defer handlers.Done()
+				s.respondRaw(ctx, raw)
+			}(raw)
 			continue
 		}
-		if err := s.send(response); err != nil {
-			return err
+		if isResponseEnvelope(envelope) {
+			// A response nobody is waiting for -- an unknown id, or an answer
+			// that arrived after its deadline -- is dropped here. Answering it
+			// would be a protocol error aimed at a client that did nothing
+			// wrong, and dispatching it as a request would answer a response
+			// with a method-not-found error.
+			s.routeResponse(envelope)
+			continue
 		}
+		handlers.Add(1)
+		go func(envelope serverRequest) {
+			defer handlers.Done()
+			s.respondEnvelope(ctx, envelope)
+		}(envelope)
 	}
 }
 
-// attach records the writer Serve answers on. It is separate from send so the
-// pointer can be read without holding writeMu, which is held across writes.
+// respondEnvelope answers one decoded request on its own goroutine. The
+// recover is a backstop for a panic that escaped dispatch's per-surface
+// recovery: turning it into an internal-error response keeps the failing call
+// failing and the stream alive, which is the guarantee the in-process Handle
+// path already had.
+func (s *Server) respondEnvelope(ctx context.Context, envelope serverRequest) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			s.writeResponse(mustMarshal(serverResponse{
+				JSONRPC: "2.0",
+				ID:      envelope.ID,
+				Error:   &rpcError{Code: codeInternalError, Message: fmt.Sprintf("mcp server panicked while answering %q: %v", envelope.Method, recovered)},
+			}))
+		}
+	}()
+	response, respond := s.handleEnvelope(ctx, envelope)
+	if !respond {
+		return
+	}
+	s.writeResponse(response)
+}
+
+// respondRaw answers a frame that did not decode, so the peer gets the parse
+// error rather than silence. It mirrors respondEnvelope's recover because a
+// malformed frame is exactly the input most likely to trip an encoder.
+func (s *Server) respondRaw(ctx context.Context, raw json.RawMessage) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			s.writeResponse(mustMarshal(serverResponse{
+				JSONRPC: "2.0",
+				Error:   &rpcError{Code: codeInternalError, Message: fmt.Sprintf("mcp server panicked on a malformed message: %v", recovered)},
+			}))
+		}
+	}()
+	response, respond := s.Handle(ctx, raw)
+	if !respond {
+		return
+	}
+	s.writeResponse(response)
+}
+
+// writeResponse puts one response on the stream. A send failure during
+// shutdown is expected -- the stream is gone and so is the client -- and is
+// dropped; any other failure is recorded so Serve still reports a broken
+// transport.
+func (s *Server) writeResponse(frame []byte) {
+	if err := s.send(frame); err != nil && !errors.Is(err, ErrNotServing) {
+		s.recordWriteError(err)
+	}
+}
+
+// attach records the writer Serve answers on. The stream pointer is set before
+// serving is turned on, so a Request that sees a live server also sees a
+// writer; a Request that races attach is either refused or finds the writer
+// already there.
 func (s *Server) attach(writer io.Writer) {
+	s.writeMu.Lock()
 	s.streamMu.Lock()
 	s.stream = writer
 	s.streamMu.Unlock()
+	s.writeMu.Unlock()
+
+	s.requestMu.Lock()
+	s.serving = true
+	if s.pendingRequests == nil {
+		s.pendingRequests = map[string]chan pendingResponse{}
+	}
+	s.requestMu.Unlock()
+
+	s.writeErrMu.Lock()
+	s.writeErr = nil
+	s.writeErrMu.Unlock()
 }
 
+// detach releases the outbound stream. It takes writeMu so it cannot run in
+// the middle of a frame: a goroutine that already decided to write either
+// finishes first or finds the stream gone, never writes half a line to a
+// stream nobody owns.
 func (s *Server) detach() {
+	s.writeMu.Lock()
 	s.streamMu.Lock()
 	s.stream = nil
 	s.streamMu.Unlock()
+	s.writeMu.Unlock()
 }
 
 // send writes exactly one frame to the attached stream. Every outbound frame
-// goes through it -- responses, progress, list changes -- because a Notify
-// call can arrive from a different goroutine than the one Serve is answering
-// on, and writeMu is what keeps two frames from sharing a line.
+// goes through it -- responses, progress, list changes, server requests --
+// because any of them can arrive from a different goroutine than the others,
+// and writeMu is what keeps two frames from sharing a line. writeMu is taken
+// before the stream pointer is read, so a detach can never race a write into
+// using a stream that was already released.
 func (s *Server) send(frame []byte) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	s.streamMu.Lock()
 	writer := s.stream
 	s.streamMu.Unlock()
 	if writer == nil {
-		return errors.New("mcp server is not serving a stream")
+		return ErrNotServing
 	}
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
 	return writeFrame(writer, json.RawMessage(frame))
 }
 
@@ -379,12 +553,23 @@ func (s *Server) dispatch(ctx context.Context, method string, params json.RawMes
 func (s *Server) initialize(params json.RawMessage) (json.RawMessage, *rpcError) {
 	var request struct {
 		ProtocolVersion string `json:"protocolVersion"`
+		// Capabilities is the *client's* block. It is read here (and only
+		// here) because initialize is where a client states what it can be
+		// asked for: elicitation lives in it, and a Request that needs the
+		// capability has to know whether the client claimed it.
+		Capabilities map[string]any `json:"capabilities"`
 	}
 	if len(params) > 0 {
 		if err := decodeMessage(params, &request); err != nil {
 			return nil, &rpcError{Code: codeInvalidParams, Message: "invalid initialize params: " + err.Error()}
 		}
 	}
+	// A re-initialize replaces what was remembered, including with absence:
+	// the latest handshake is the client's word on what it supports, and a
+	// later one that drops a capability must not leave the older claim behind.
+	s.clientMu.Lock()
+	s.clientElicitation = clientAdvertises(request.Capabilities, "elicitation")
+	s.clientMu.Unlock()
 	version := ServerProtocolVersion
 	for _, supported := range serverProtocolVersions {
 		if strings.TrimSpace(request.ProtocolVersion) == supported {
@@ -482,14 +667,18 @@ func (s *Server) invoke(ctx context.Context, serverTool ServerTool, arguments js
 	return serverTool.Handler(ctx, arguments)
 }
 
-// serverRequest is the wire form of a request. ID is kept raw so a string id
-// is echoed back as a string: the spec allows either, and a client that sent a
-// string and got a number back would not match the response to its request.
+// serverRequest is the wire form of an inbound frame. ID is kept raw so a
+// string id is echoed back as a string: the spec allows either, and a client
+// that sent a string and got a number back would not match the response to its
+// request. Result and Error are present only on a response to a
+// server-initiated request, and routeResponse is the only reader of them.
 type serverRequest struct {
 	JSONRPC string          `json:"jsonrpc"`
 	ID      json.RawMessage `json:"id,omitempty"`
 	Method  string          `json:"method"`
 	Params  json.RawMessage `json:"params,omitempty"`
+	Result  json.RawMessage `json:"result,omitempty"`
+	Error   *rpcError       `json:"error,omitempty"`
 }
 
 type serverResponse struct {

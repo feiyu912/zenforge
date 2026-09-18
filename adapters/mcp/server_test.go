@@ -294,14 +294,30 @@ func TestServerServeRoundTrip(t *testing.T) {
 	if err := writer.Flush(); err != nil {
 		t.Fatalf("flush failed: %v", err)
 	}
-	// Three requests, three responses: the notification is not answered.
-	for index, id := range []string{`"id":1`, `"id":2`, `"id":3`} {
+	// Three requests, three responses: the notification is not answered, and
+	// every response carries the id of a request that was sent, exactly once.
+	// The order is deliberately not asserted any more: the reader hands each
+	// request to its own goroutine so a handler can wait for a server-initiated
+	// answer, and two requests that do not wait may now finish in either order.
+	seen := map[float64]bool{}
+	for index := 0; index < 3; index++ {
 		line, err := reader.ReadString('\n')
 		if err != nil {
 			t.Fatalf("read %d failed: %v", index, err)
 		}
-		if !strings.Contains(line, id) {
-			t.Fatalf("response %d is for the wrong request: %s", index, line)
+		decoded := decodeFrame(t, []byte(line))
+		id, ok := decoded["id"].(float64)
+		if !ok {
+			t.Fatalf("response %d carries no numeric id: %s", index, line)
+		}
+		if seen[id] {
+			t.Fatalf("response %d repeated id %v: %s", index, id, line)
+		}
+		seen[id] = true
+	}
+	for _, id := range []float64{1, 2, 3} {
+		if !seen[id] {
+			t.Fatalf("no response for request %v (got %v)", id, seen)
 		}
 	}
 	// Closing the client end ends the loop cleanly rather than as an error.

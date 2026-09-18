@@ -207,6 +207,10 @@ rg -n '"[^"[:space:]]*agent-platform[^"[:space:]]*"' --glob "*.go" .
 | a non-finite progress value is dropped rather than written | `TestServerDropsNonFiniteProgress` |
 | `listChanged` is advertised and sent only with `DynamicLists`, and refused without it | `TestServerWithDynamicListsAdvertisesAndSendsListChanges`, `TestServerWithoutDynamicListsRefusesListChanges` |
 | the run tool reports a run's events as progress, and sends none without a token | `TestMCPRunToolReportsProgressFromRunEvents`, `TestMCPRunToolSendsNoProgressWithoutAToken` |
+| a server request round-trips while the call continues, and the server keeps answering while it is pending | `TestServerRequestRoundTripsWhileTheCallContinues`, `TestServerKeepsAnsweringWhileARequestIsPending` |
+| an unknown or late response is ignored, a request times out with no pending state left, and a request never outlives its stream | `TestServerIgnoresAResponseWithAnUnknownID`, `TestServerRequestTimesOutAndLeavesNoPendingState`, `TestServerRequestFailsWhenServeEnds`, `TestServerRequestRefusedWithNoStream`, `TestServerRequestNeedsACallerDeadline` |
+| elicitation accepts, declines, and cancels, and is refused when the client did not advertise it | `TestElicitationAcceptsDeclinesAndCancels`, `TestElicitationRefusedWhenTheClientDidNotAdvertiseIt`, `TestElicitationRefusedWithNoStream` |
+| concurrent handlers cannot kill the stream and a shutdown leaves nothing running | `TestServerConcurrentPanicDoesNotKillTheStream`, `TestServerServeShutdownLeavesNothingRunning` |
 | a job is reported terminal only after its output has been drained | `jobs.TestRunWaitsForOutputWrittenAfterTheMainProcessExits`, `jobs.TestCollectSignalsDrainedOnlyAfterBothStreamsEnd` |
 | a job whose pipes are held open by a background grandchild still becomes terminal | `jobs.TestJobWhoseOutputIsHeldByAGrandchildStillBecomesTerminal` |
 | memory entries augment normalized tasks | `adapters/memory.TestAugmentTaskAddsMemoryBlockAndMetadata` |

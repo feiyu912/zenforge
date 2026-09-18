@@ -116,6 +116,19 @@ what is experimental, and what remains adapter territory.
   the only place a second provider's key can live. A name that cannot be
   resolved is a fatal `AGENT_START`, never a silent run on the host's model.
 
+## MCP Server Requests
+
+- A server request needs a caller deadline and a client that answers. An
+  unknown or late response is dropped, and a `Serve` return wakes every waiter
+  with `ErrStreamClosed`; a request cannot outlive its stream.
+- Elicitation is refused unless the client advertised the capability, so a
+  caller must be able to fall back. The CLI's served runs still refuse an
+  approval-gated tool rather than eliciting: wiring approvals to elicitation is
+  a separate decision, and until then the refusal is the honest answer.
+- Responses to two concurrently handled calls may arrive in either order; MCP
+  pairs a response with its request by id, and a consumer that assumed ordering
+  must not.
+
 ## MCP Notifications
 
 - Progress notifications reach a client only when its request carried a
