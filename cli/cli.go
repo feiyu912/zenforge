@@ -119,6 +119,8 @@ func Main(ctx context.Context, args []string, ioStreams IO) int {
 		err = runs(ctx, args[1:], ioStreams)
 	case "grants":
 		err = grantsCommand(ctx, args[1:], ioStreams)
+	case "schedule":
+		err = scheduleCommand(ctx, args[1:], ioStreams)
 	case "mcp-server":
 		err = mcpServerCommand(ctx, args[1:], ioStreams)
 	case "init":
@@ -1638,7 +1640,7 @@ func stringValue(value any) string {
 }
 
 func printUsage(out io.Writer) {
-	_, _ = fmt.Fprintln(out, "usage: zenforge <run|exec|code|resume|fork|revert|goal|ralph|events|runs|grants|mcp-server|init|version> [options]")
+	_, _ = fmt.Fprintln(out, "usage: zenforge <run|exec|code|resume|fork|revert|goal|ralph|events|runs|grants|schedule|mcp-server|init|version> [options]")
 }
 
 type multiFlag []string

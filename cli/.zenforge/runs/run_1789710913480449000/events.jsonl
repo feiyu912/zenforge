@@ -1,0 +1,10 @@
+{"seq":1,"type":"run.started","input":"say hello","mode":"plan_execute","preset":"plan_execute","runId":"run_1789710913480449000","timestamp":1789710913481}
+{"seq":2,"type":"session.title","runId":"run_1789710913480449000","source":"fallback","title":"say hello","timestamp":1789710913486}
+{"seq":3,"type":"session.title","runId":"run_1789710913480449000","source":"fallback","title":"say hello Create a concise todo plan for","timestamp":1789710913491}
+{"seq":4,"type":"step.started","runId":"run_1789710913480449000","step":1,"timestamp":1789710913495}
+{"seq":5,"type":"checkpoint.created","checkpointSeq":1,"phase":"model","runId":"run_1789710913480449000","version":"zenforge.checkpoint.v1","timestamp":1789710913524}
+{"seq":6,"type":"checkpoint.created","checkpointSeq":2,"phase":"model","runId":"run_1789710913480449000","version":"zenforge.checkpoint.v1","timestamp":1789710913553}
+{"seq":7,"type":"model.started","attemptId":"attempt_1789710913529193000","chunkSeq":0,"offset":0,"runId":"run_1789710913480449000","step":1,"timestamp":1789710913557}
+{"seq":8,"type":"checkpoint.created","checkpointSeq":3,"phase":"failed","runId":"run_1789710913480449000","version":"zenforge.checkpoint.v1","timestamp":1789710915140}
+{"seq":9,"type":"checkpoint.created","checkpointSeq":4,"phase":"failed","runId":"run_1789710913480449000","version":"zenforge.checkpoint.v1","timestamp":1789710915169}
+{"seq":10,"type":"run.error","error":"openai chat completion failed: 401 Unauthorized (endpoint https://api.openai.com/v1/chat/completions; authentication failed; verify the API key belongs to this BaseURL and that the selected provider protocol matches the endpoint): {\n    \"error\": {\n        \"message\": \"Incorrect API key provided: [REDACTED]. You can find your API key at https://platform.openai.com/account/api-keys.\",\n        \"type\": \"invalid_request_error\",\n        \"param\": null,\n        \"code\": \"invalid_api_key\"\n    }\n}","runId":"run_1789710913480449000","timestamp":1789710915174}

@@ -130,6 +130,9 @@ go run ./cmd/zenforge events --config zenforge.json run_123
 go run ./cmd/zenforge runs --config zenforge.json
 go run ./cmd/zenforge grants list --config zenforge.json
 go run ./cmd/zenforge grants revoke mcp__files__delete --config zenforge.json
+go run ./cmd/zenforge schedule add --config zenforge.json --spec "every 1h" --task "Review the open changes"
+go run ./cmd/zenforge schedule list --config zenforge.json
+go run ./cmd/zenforge schedule run-due --config zenforge.json   # from cron/launchd
 ```
 
 `run` executes a task in the configured workspace. `exec [prompt]` is the

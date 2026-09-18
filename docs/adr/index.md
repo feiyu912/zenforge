@@ -82,3 +82,4 @@ later ADRs supersede earlier ones, never edit.
 | [0066](0066-workflow-progress-is-its-own-event.md) | Workflow progress is its own event family |
 | [0067](0067-a-served-run-can-outlive-its-call.md) | A served run can outlive the call that asked for it |
 | [0068](0068-a-run-a-caller-can-stop.md) | A run a caller can stop |
+| [0069](0069-a-schedule-outlives-the-process.md) | A schedule outlives the process that added it |

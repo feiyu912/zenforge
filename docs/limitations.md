@@ -116,6 +116,23 @@ what is experimental, and what remains adapter territory.
   the only place a second provider's key can live. A name that cannot be
   resolved is a fatal `AGENT_START`, never a silent run on the host's model.
 
+## Schedules
+
+- A durable schedule is a file (`<checkpoint dir>/schedules.json`) plus
+  whatever runs it. ZenForge does not keep a timer running: `schedule run-due`
+  is meant to be invoked by cron, launchd, or a systemd timer, so nothing here
+  holds a process open and a restart is just the next invocation.
+- Windows that passed while nothing ran are counted as missed, not replayed.
+  A schedule that was down for a weekend fires once, and `schedule list` shows
+  how many windows were skipped; a scheduler that fired once per missed window
+  would turn downtime into a burst of runs.
+- Only `run-due` decides what is due, and it decides at the moment it starts:
+  two overlapping timer invocations can both see the same schedule as due, so
+  a timer should not run this concurrently with itself. The file is written by
+  rename, so a reader never sees a half-written set.
+- There is no signed-webhook trigger yet, and a schedule always runs as the
+  operator who added it, in the workspace recorded with it.
+
 ## Served Runs
 
 - A detached MCP run lives in the server process: its state is in an

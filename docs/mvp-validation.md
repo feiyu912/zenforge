@@ -183,6 +183,13 @@ rg -n '"[^"[:space:]]*agent-platform[^"[:space:]]*"' --glob "*.go" .
 | a detached run can be cancelled, and the status tool then reports the terminal cancellation | `TestServedRunCancelStopsADetachedRun` |
 | cancelling a finished run reports its status as a fact, not a failure | `TestServedRunCancelReportsAnAlreadyFinishedRun` |
 | cancel reports another process's run as uncancellable and an unknown id as `unknown` | `TestServedRunCancelReportsWhatItCannotStop` |
+| a durable schedule survives being reopened, and removal persists | `TestStoreKeepsSchedulesAcrossReopen` |
+| a firing advances the schedule past now and counts the windows it skipped instead of replaying them | `TestDueAndRecordRunAdvancePastNowWithoutReplaying` |
+| a schedule whose spec can never match again is removed rather than left looking active | `TestRecordRunRemovesAScheduleThatCanNeverMatchAgain` |
+| `schedule add|list|remove` round-trips through the file, and bad usage exits 2 | `TestScheduleCommandAddsListsAndRemoves`, `TestScheduleCommandRejectsBadUsage` |
+| `schedule run-due` runs an overdue schedule, records the run, reports the missed windows, and a dry run consumes nothing | `TestScheduleRunDueRunsAnOverdueScheduleAndReportsWhatItSkipped` |
+| `schedule run-due --json` is machine-readable and empty when nothing is due | `TestScheduleRunDueJSONIsMachineReadableAndEmptyWhenNothingIsDue` |
+| a failed firing is recorded, still advances the schedule, and makes run-due exit non-zero | `TestScheduleRunDueFailsLoudly` |
 | a job is reported terminal only after its output has been drained | `jobs.TestRunWaitsForOutputWrittenAfterTheMainProcessExits`, `jobs.TestCollectSignalsDrainedOnlyAfterBothStreamsEnd` |
 | a job whose pipes are held open by a background grandchild still becomes terminal | `jobs.TestJobWhoseOutputIsHeldByAGrandchildStillBecomesTerminal` |
 | memory entries augment normalized tasks | `adapters/memory.TestAugmentTaskAddsMemoryBlockAndMetadata` |
