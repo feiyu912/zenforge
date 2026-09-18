@@ -1021,3 +1021,65 @@ func closeManager(t *testing.T, manager *RunManager) {
 		t.Errorf("Close = %v", err)
 	}
 }
+
+// gatedReleaseRegistry parks the first Release the manager publishes, which is
+// the moment the manager already reports a terminal run but the registry has
+// not heard about it yet.
+type gatedReleaseRegistry struct {
+	*MemoryRunRegistry
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (r *gatedReleaseRegistry) Release(ctx context.Context, lease RunLease, info RunInfo) error {
+	first := false
+	r.once.Do(func() {
+		first = true
+		close(r.entered)
+	})
+	if first {
+		select {
+		case <-r.release:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return r.MemoryRunRegistry.Release(ctx, lease, info)
+}
+
+func TestForgetPublishesTheTerminalRecordBeforeDeletingIt(t *testing.T) {
+	registry := &gatedReleaseRegistry{
+		MemoryRunRegistry: NewMemoryRunRegistry(),
+		entered:           make(chan struct{}),
+		release:           make(chan struct{}),
+	}
+	manager, agent, _ := newTestRunManager(t, RunManagerOptions{
+		Registry: registry, OwnerID: "owner", TerminalRetention: -1,
+	})
+	// The parked publish has to be released before the manager waits for its
+	// drainers, on the failing path too, or the test deadlocks instead of
+	// reporting the bug it reproduces.
+	defer func() {
+		close(registry.release)
+		closeManager(t, manager)
+	}()
+	if _, err := manager.Start(context.Background(), zenforge.Task{RunID: "forget_race", Input: "hi"}); err != nil {
+		t.Fatal(err)
+	}
+	agent.finish("forget_race", zenforge.EventRunDone)
+	waitStatus(t, manager, "forget_race", RunCompleted)
+	select {
+	case <-registry.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the manager never published the terminal run")
+	}
+	// The manager says completed, the registry still says running: forgetting
+	// the run must publish the terminal record rather than fail as active.
+	if err := manager.Forget("forget_race"); err != nil {
+		t.Fatalf("Forget during the publish window: %v", err)
+	}
+	if _, err := registry.Get(context.Background(), "forget_race"); !errors.Is(err, ErrRunNotFound) {
+		t.Fatalf("registry get after forget = %v", err)
+	}
+}

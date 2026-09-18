@@ -91,6 +91,20 @@ supposed to prevent. The batch fixes both ends:
 
 Both changes have tests that fail without them.
 
+### A supporting fix, because a polled run could not be forgotten
+
+The HTTP run manager marks its own record terminal and only then publishes the
+terminal record to the run registry. A client that polled the terminal status
+and immediately forgot the run could land between the two: the manager said
+`completed`, the registry still said `running`, and the forget was refused
+with "run is still active". CI caught it as an intermittent
+`TestRunManagerForgetDeletesTerminalRegistryRecord` under load. `Forget` now
+publishes the manager's terminal record before deleting it — a no-op once the
+release already happened, where the lease is gone — so a delete the manager
+knows is terminal is not refused by a registry that has not caught up yet.
+`TestForgetPublishesTheTerminalRecordBeforeDeletingIt` parks the manager's own
+publish and fails against the old ordering with exactly that refusal.
+
 ## Consequences
 
 Benefits:

@@ -629,24 +629,39 @@ func (m *RunManager) Cancel(runID string) error {
 // not deleted. Registries that implement RunRegistryDeleter remove their
 // terminal status record as part of the same explicit cleanup request.
 func (m *RunManager) Forget(runID string) error {
+	runID = strings.TrimSpace(runID)
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	run, ok := m.runs[strings.TrimSpace(runID)]
+	run, ok := m.runs[runID]
 	if !ok {
+		m.mu.Unlock()
 		return ErrRunNotFound
 	}
 	if !terminal(run.info.Status) {
+		m.mu.Unlock()
 		return ErrRunActive
 	}
+	m.mu.Unlock()
+	// The registry learns a run is terminal from Release, which the manager
+	// publishes just after it marks its own record terminal. A client that
+	// polled the terminal status can therefore reach this delete first, and
+	// the registry would refuse it as active. Publishing the manager's
+	// terminal record before deleting closes that window — and is a no-op
+	// once the release already happened, where the lease is gone — instead of
+	// refusing a delete the manager knows is terminal.
+	m.releaseRegistry(run)
 	if registry, ok := m.opts.Registry.(RunRegistryDeleter); ok && !nilRunRegistry(m.opts.Registry) {
-		if err := registry.Delete(context.Background(), run.info.RunID); err != nil {
-			return fmt.Errorf("delete run registry record %q: %w", run.info.RunID, err)
+		if err := registry.Delete(context.Background(), runID); err != nil {
+			return fmt.Errorf("delete run registry record %q: %w", runID, err)
 		}
 	}
-	if run.timer != nil {
-		run.timer.Stop()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if current, ok := m.runs[runID]; ok && current == run {
+		if run.timer != nil {
+			run.timer.Stop()
+		}
+		delete(m.runs, runID)
 	}
-	delete(m.runs, run.info.RunID)
 	return nil
 }
 

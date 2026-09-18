@@ -157,6 +157,7 @@ rg -n '"[^"[:space:]]*agent-platform[^"[:space:]]*"' --glob "*.go" .
 | a terminal spec is validated, and a bounded buffer keeps the head and the newest bytes with a measured hole | `TestPTYSpecIsValidated`, `TestBufferKeepsTheHeadAndTheNewestBytes`, `TestOutputReportsDroppedBytes` |
 | the job tools carry `pty` through the schema, refuse a terminal size without it, and report elided bytes | `TestExecCommandRunsAnInteractivePTYSession`, `TestExecCommandRefusesTerminalSizeWithoutAPTY`, `TestJobOutputReportsElidedBytes` |
 | a job's status is published only once its output is drained, so a poller never reads an empty buffer at a terminal status | `TestStatusIsPublishedOnlyAfterTheOutputIsDrained` |
+| forgetting a terminal run publishes the terminal record before deleting it, so a polled run is never refused as still active | `TestForgetPublishesTheTerminalRecordBeforeDeletingIt` |
 | a job is reported terminal only after its output has been drained | `jobs.TestRunWaitsForOutputWrittenAfterTheMainProcessExits`, `jobs.TestCollectSignalsDrainedOnlyAfterBothStreamsEnd` |
 | a job whose pipes are held open by a background grandchild still becomes terminal | `jobs.TestJobWhoseOutputIsHeldByAGrandchildStillBecomesTerminal` |
 | memory entries augment normalized tasks | `adapters/memory.TestAugmentTaskAddsMemoryBlockAndMetadata` |
