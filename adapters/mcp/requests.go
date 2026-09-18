@@ -198,6 +198,12 @@ func (s *Server) failPending(err error) {
 	s.serving = false
 	pending := s.pendingRequests
 	s.pendingRequests = map[string]chan pendingResponse{}
+	// The connection is over, so its subscriptions end with it: a later
+	// NotifyResourceUpdated must not try to reach a client that has stopped
+	// reading, and the next Serve must start with none. Clearing this in the
+	// same critical section that clears serving is what makes "not serving"
+	// and "no subscriptions" observable as one fact.
+	s.subscriptions = map[string]struct{}{}
 	s.requestMu.Unlock()
 	for _, waiter := range pending {
 		select {

@@ -4,19 +4,24 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
+	"strings"
 )
 
 // Notification methods this server can send. Progress is tied to one request
 // and is emitted by the handler that is answering it; the list-changed trio is
 // server-initiated and only valid when initialize advertised listChanged for
-// that surface.
+// that surface; resource-updated is server-initiated and only valid for a URI
+// some client subscribed to, which is only possible when initialize advertised
+// resources.subscribe.
 const (
 	methodProgress             = "notifications/progress"
 	methodToolsListChanged     = "notifications/tools/list_changed"
 	methodResourcesListChanged = "notifications/resources/list_changed"
 	methodPromptsListChanged   = "notifications/prompts/list_changed"
+	methodResourceUpdated      = "notifications/resources/updated"
 )
 
 // NotificationSink receives one already-encoded notification frame, without a
@@ -222,5 +227,93 @@ func (s *Server) notifyListChanged(surface string, served bool, method string) e
 	if err != nil {
 		return err
 	}
+	return s.send(frame)
+}
+
+// NotifyResourceUpdated tells the connected client that the resource at uri
+// changed, so a client that subscribed to it can re-read it. The notification
+// carries the URI the caller gave, which is the concrete resource the client
+// should refresh.
+//
+// A subscription is a URI the client named, and that URI may be the template
+// registration itself (`zenforge://runs/{runId}`, meaning "every run") or a
+// concrete instance that a template serves (`zenforge://runs/run_1`, meaning
+// "this run"). The argument is matched against each subscription the same way
+// resources/read matches a request: an exact string, or a registered template
+// whose placeholder covers the concrete URI. That is what makes "the run that
+// just finished" reach the client watching that run and "a run changed" reach
+// the client watching the collection.
+//
+// The refusals are errors, matching the list-changed methods, so a server that
+// meant to notify learns at the call site instead of sending a frame the
+// client has no context for:
+//
+//   - without ServerConfig.ResourceSubscriptions the capability was never
+//     advertised, so no client can be subscribed and the call is a misuse;
+//   - a blank or unregistered URI would announce a resource the client was
+//     never offered, and a client that trusted it would re-read and get
+//     resource-not-found -- dropping it instead would hide the caller's bug,
+//     so it is refused;
+//   - with no stream there is nowhere to write, reported as ErrNotServing like
+//     every other Notify method. A delivery that races shutdown therefore
+//     returns exactly that error rather than blocking or writing into a
+//     detached stream: the subscription set and serving are one fact under
+//     requestMu, and the write itself goes through send's writeMu.
+//
+// An update with no subscribers is not a failure. A resource changing while
+// nobody is watching is the normal case, so it returns nil and writes nothing.
+func (s *Server) NotifyResourceUpdated(uri string) error {
+	if s == nil {
+		return errors.New("mcp server is nil, so notifications/resources/updated cannot be sent")
+	}
+	if !s.resourceSubscriptions {
+		return fmt.Errorf("mcp server %q advertises resources.subscribe false; set ServerConfig.ResourceSubscriptions to send notifications/resources/updated", s.name)
+	}
+	target := strings.TrimSpace(uri)
+	if target == "" {
+		return errors.New("notifications/resources/updated needs a uri")
+	}
+	if _, ok := s.matchResource(target); !ok {
+		return fmt.Errorf("mcp server %q has no resource matching %q, so notifications/resources/updated would announce a resource the client was never offered", s.name, target)
+	}
+	// The serving check and the subscription snapshot are taken together, so a
+	// call that races Serve's shutdown sees either a live connection and its
+	// subscribers or a closed one -- never a live flag with a set that
+	// failPending has already emptied and a nil answer that would look like
+	// "nobody was listening".
+	s.requestMu.Lock()
+	if !s.serving {
+		s.requestMu.Unlock()
+		return ErrNotServing
+	}
+	wanted := false
+	for subscribed := range s.subscriptions {
+		if subscribed == target || resourceMatches(subscribed, target) {
+			wanted = true
+			break
+		}
+	}
+	s.requestMu.Unlock()
+	if !wanted {
+		return nil
+	}
+	frame, err := json.Marshal(struct {
+		JSONRPC string `json:"jsonrpc"`
+		Method  string `json:"method"`
+		Params  struct {
+			URI string `json:"uri"`
+		} `json:"params"`
+	}{
+		JSONRPC: "2.0",
+		Method:  methodResourceUpdated,
+		Params: struct {
+			URI string `json:"uri"`
+		}{URI: target},
+	})
+	if err != nil {
+		return err
+	}
+	// send handles the shutdown race: it writes under writeMu, so it either
+	// lands before detach or finds the stream gone and reports ErrNotServing.
 	return s.send(frame)
 }

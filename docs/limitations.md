@@ -116,6 +116,20 @@ what is experimental, and what remains adapter territory.
   the only place a second provider's key can live. A name that cannot be
   resolved is a fatal `AGENT_START`, never a silent run on the host's model.
 
+## MCP Resource Subscriptions
+
+- Subscriptions are per connection and opt-in (`ServerConfig.ResourceSubscriptions`);
+  the CLI server does not advertise them, because its resources are read from
+  the checkpoint store on each request and it has no update source to notify
+  from. A client of that server sees `subscribe: false`.
+- `resources/templates/list` returns the whole set without pagination: the
+  registrations are fixed for the life of the process, so a `cursor` is
+  accepted and ignored rather than answered with a `nextCursor` that never
+  advances.
+- An update racing shutdown either completes its write or returns
+  `ErrNotServing`; the deliverable-or-error split follows the write lock's
+  order and is not forced further.
+
 ## MCP Approvals
 
 - An approval gate is a question only when the client advertised elicitation;

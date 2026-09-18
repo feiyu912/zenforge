@@ -81,6 +81,17 @@ type ServerConfig struct {
 	// Notify method after it changes a list, because a client that was told
 	// the list can change may cache it and wait to be told.
 	DynamicLists bool
+	// ResourceSubscriptions opts in to per-resource update notifications. It
+	// is what makes initialize advertise resources.subscribe: true, what lets
+	// resources/subscribe and resources/unsubscribe do anything, and what
+	// permits NotifyResourceUpdated. It is deliberately independent of
+	// DynamicLists, because the two promise different things: DynamicLists
+	// says a *list* can change, while this says the *contents* behind one
+	// resource can change and the client may ask to be told. A server whose
+	// resources are read-once snapshots should leave this false and keep the
+	// client from waiting for updates that will never come; a server that sets
+	// it must call NotifyResourceUpdated once the underlying resource changes.
+	ResourceSubscriptions bool
 }
 
 // Server implements the server half of the MCP protocol. It is transport
@@ -107,6 +118,11 @@ type Server struct {
 	prompts       []ServerPrompt
 	promptByName  map[string]ServerPrompt
 	dynamicLists  bool
+	// resourceSubscriptions mirrors ServerConfig.ResourceSubscriptions. It is
+	// read only by initialize (to advertise resources.subscribe) and by the
+	// subscription methods and NotifyResourceUpdated (to refuse before the
+	// capability promises anything).
+	resourceSubscriptions bool
 
 	// stream is the writer Serve is currently answering on, set for the
 	// duration of one Serve call. writeMu serializes frames from every source
@@ -119,11 +135,21 @@ type Server struct {
 	streamMu sync.Mutex
 	writeMu  sync.Mutex
 
-	// serving is true while Serve owns an outbound stream. It is guarded by
-	// requestMu together with pendingRequests, so a Request either registers
-	// while the stream is up or is refused at once: it can never register into
-	// a registry that Serve has already stopped draining.
+	// serving is true while Serve owns an outbound stream, and subscriptions
+	// is the set of concrete URIs the connected client asked to hear about.
+	// Both are guarded by requestMu together with pendingRequests, so a
+	// NotifyResourceUpdated either sees a live connection and its
+	// subscriptions as one fact, or sees the connection gone; there is no
+	// window in which the server is still "serving" but the subscriptions
+	// have already been dropped. A subscription belongs to the connection,
+	// not to the *Server: attach resets it and failPending clears it, which is
+	// what keeps a second Serve from inheriting the first one's subscribers.
 	serving bool
+	// subscriptions maps a URI the client subscribed to its (empty) value. The
+	// URI is stored as the client sent it, which may be a concrete instance of
+	// a registered template, so NotifyResourceUpdated can match it the same
+	// way resources/read matches a request.
+	subscriptions map[string]struct{}
 	// nextRequestID numbers this server's own requests. Server ids live in a
 	// namespace of their own ("srv-<n>", see serverRequestIDPrefix), so an id
 	// this server mints can never be confused with an id a client minted for
@@ -133,8 +159,12 @@ type Server struct {
 	// byte for byte with what the client echoes back, to the waiter its Request
 	// call is reading.
 	pendingRequests map[string]chan pendingResponse
-	// requestMu guards serving, nextRequestID and pendingRequests. It is never
-	// held while a frame is written.
+	// requestMu guards serving, subscriptions, nextRequestID and
+	// pendingRequests. It is never held while a frame is written. Sharing one
+	// lock is what makes a Request either register while the stream is up or
+	// be refused at once -- it can never register into a registry Serve has
+	// already stopped draining -- and it is what makes the subscription set in
+	// the same atomic fact as "serving".
 	requestMu sync.Mutex
 
 	// writeErr records the first transport write that failed, so Serve can
@@ -177,6 +207,9 @@ func NewServer(config ServerConfig) (*Server, error) {
 		prompts:       make([]ServerPrompt, 0, len(config.Prompts)),
 		promptByName:  make(map[string]ServerPrompt, len(config.Prompts)),
 		dynamicLists:  config.DynamicLists,
+
+		resourceSubscriptions: config.ResourceSubscriptions,
+		subscriptions:         map[string]struct{}{},
 
 		pendingRequests: map[string]chan pendingResponse{},
 	}
@@ -523,6 +556,13 @@ func (s *Server) attach(writer io.Writer) {
 	if s.pendingRequests == nil {
 		s.pendingRequests = map[string]chan pendingResponse{}
 	}
+	// A subscription belongs to the connection this Serve call is opening, not
+	// to the *Server. Resetting it here is what keeps a second Serve from
+	// inheriting the first one's subscribers, whose client is gone. The reset
+	// is under requestMu together with serving, so a concurrent
+	// NotifyResourceUpdated sees the two as one fact: either this connection
+	// is live with the fresh empty set, or it is not yet attached.
+	s.subscriptions = map[string]struct{}{}
 	s.requestMu.Unlock()
 
 	s.writeErrMu.Lock()
@@ -588,8 +628,16 @@ func (s *Server) dispatch(ctx context.Context, method string, params json.RawMes
 		return s.callTool(withServer(withProgress(ctx, params), s), params)
 	case "resources/list":
 		return s.listResources()
+	case "resources/templates/list":
+		// Pagination is deliberately not implemented; see
+		// listResourceTemplates for why the params are accepted and ignored.
+		return s.listResourceTemplates(params)
 	case "resources/read":
 		return s.readResource(withProgress(ctx, params), params)
+	case "resources/subscribe":
+		return s.subscribeResource(params)
+	case "resources/unsubscribe":
+		return s.unsubscribeResource(params)
 	case "prompts/list":
 		return s.listPrompts()
 	case "prompts/get":
@@ -630,16 +678,21 @@ func (s *Server) initialize(params json.RawMessage) (json.RawMessage, *rpcError)
 	// resources or prompts that do not exist would make a conforming client
 	// call a method that answers with an empty list at best, and the whole
 	// point of the capability block is that the client can trust it.
-	// subscribe is false because there is no per-resource subscription, and
-	// listChanged mirrors ServerConfig.DynamicLists: false by default,
-	// because a fixed set that claimed otherwise would promise notifications
-	// this server would never send, and true only when the server was told it
-	// may change its lists and has the Notify methods to say so.
+	// listChanged mirrors ServerConfig.DynamicLists: false by default, because
+	// a fixed set that claimed otherwise would promise notifications this
+	// server would never send, and true only when the server was told it may
+	// change its lists and has the Notify methods to say so. subscribe mirrors
+	// ServerConfig.ResourceSubscriptions and is independent of listChanged:
+	// one promise is about the resource list changing, the other about the
+	// contents behind a resource the client already knows, and a server can
+	// honestly make either without the other. subscribe is false unless the
+	// server opted in, because the capability block is the client's only way
+	// to know that resources/subscribe will be answered rather than refused.
 	capabilities := map[string]any{
 		"tools": map[string]any{"listChanged": s.dynamicLists},
 	}
 	if len(s.resources) > 0 {
-		capabilities["resources"] = map[string]any{"subscribe": false, "listChanged": s.dynamicLists}
+		capabilities["resources"] = map[string]any{"subscribe": s.resourceSubscriptions, "listChanged": s.dynamicLists}
 	}
 	if len(s.prompts) > 0 {
 		capabilities["prompts"] = map[string]any{"listChanged": s.dynamicLists}

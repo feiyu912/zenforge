@@ -89,3 +89,4 @@ later ADRs supersede earlier ones, never edit.
 | [0073](0073-progress-is-a-notification.md) | Progress is a notification, not a second protocol |
 | [0074](0074-a-server-can-ask-its-client.md) | A server can ask its client |
 | [0075](0075-an-approval-can-be-a-question.md) | An approval can be a question |
+| [0076](0076-a-resource-can-be-watched.md) | A resource can be watched |

@@ -216,6 +216,11 @@ rg -n '"[^"[:space:]]*agent-platform[^"[:space:]]*"' --glob "*.go" .
 | a client that cannot answer gets the byte-for-byte old refusal (no capability, stream ended, timeout) | `TestMCPRunRefusesWithoutElicitationUsingTheOldText`, `TestMCPRunFallsBackWhenTheElicitationStreamEnds`, `TestMCPRunFallsBackWhenTheClientCannotAnswer`, `TestMCPRunFallsBackWhenTheElicitationTimesOut` |
 | `--approve never` never elicits | `TestMCPRunNeverModeDoesNotElicit` |
 | the handshake's elicitation capability is recorded, and a handler can reach its server | `TestClientSupportsElicitationFollowsTheHandshake`, `TestServerFromReachesTheServerFromAHandlerContext` |
+| the template listing returns templates and excludes plain resources | `TestServerListsResourceTemplatesAndExcludesPlainResources` |
+| a subscriber is notified for its URI and for a concrete URI matching a watched template, and a non-subscriber is not | `TestServerNotifiesSubscribedResourceUpdates`, `TestServerNotifiesConcreteURIMatchingASubscribedTemplate` |
+| subscribe failures are distinct, unsubscribe is idempotent, and an unknown or blank URI is refused | `TestServerReportsSubscriptionFailuresDistinctly`, `TestServerUnsubscribeIsIdempotent`, `TestServerNotifyResourceUpdatedRejectsUnknownAndBlankURIs` |
+| `subscribe` is advertised only with the opt-in and does not disturb `listChanged`, and subscriptions do not survive `Serve` | `TestServerWithoutResourceSubscriptionsKeepsSubscribeFalse`, `TestServerWithResourceSubscriptionsAdvertisesSubscribeWithoutChangingListChanged`, `TestServerSubscriptionsDoNotSurviveServe` |
+| an update racing shutdown errors without corrupting the stream | `TestServerNotifyResourceUpdatedRacingShutdownReturnsErrorsWithoutCorruptingTheStream` |
 | a job is reported terminal only after its output has been drained | `jobs.TestRunWaitsForOutputWrittenAfterTheMainProcessExits`, `jobs.TestCollectSignalsDrainedOnlyAfterBothStreamsEnd` |
 | a job whose pipes are held open by a background grandchild still becomes terminal | `jobs.TestJobWhoseOutputIsHeldByAGrandchildStillBecomesTerminal` |
 | memory entries augment normalized tasks | `adapters/memory.TestAugmentTaskAddsMemoryBlockAndMetadata` |
