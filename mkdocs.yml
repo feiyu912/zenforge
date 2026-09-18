@@ -135,6 +135,7 @@ nav:
       - ZenMind: zenmind-adapter-guide.md
       - HTTP server: server-http-guide.md
       - SSE server: server-sse-guide.md
+      - Web console: web-console.md
   - Examples: examples.md
   - ADRs:
       - Overview: adr/index.md
@@ -215,6 +216,7 @@ nav:
       - 0075 An approval can be a question: adr/0075-an-approval-can-be-a-question.md
       - 0076 A resource can be watched: adr/0076-a-resource-can-be-watched.md
       - 0077 The client can lend its model: adr/0077-the-client-can-lend-its-model.md
+      - 0078 A console on localhost: adr/0078-a-console-on-localhost.md
 
 extra:
   social:

@@ -91,3 +91,4 @@ later ADRs supersede earlier ones, never edit.
 | [0075](0075-an-approval-can-be-a-question.md) | An approval can be a question |
 | [0076](0076-a-resource-can-be-watched.md) | A resource can be watched |
 | [0077](0077-the-client-can-lend-its-model.md) | The client can lend its model |
+| [0078](0078-a-console-on-localhost.md) | A console on localhost |

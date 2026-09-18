@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>zenforge console</title>
+<link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+<div id="layout">
+  <header id="topbar">
+    <span class="brand">zenforge</span>
+    <span id="server-info" class="muted" title="server workspace">…</span>
+    <span class="spacer"></span>
+    <span id="live" class="live live-unknown" title="event polling">offline</span>
+    <button id="settings-open" class="icon-button" type="button" title="model settings" aria-label="model settings">⚙</button>
+  </header>
+
+  <aside id="sidebar">
+    <div class="sidebar-head">
+      <span>runs</span>
+      <button id="refresh" class="link-button" type="button">refresh</button>
+    </div>
+    <ul id="run-list" class="run-list"></ul>
+    <p id="run-list-empty" class="muted empty">no runs yet — start one below</p>
+  </aside>
+
+  <main id="main">
+    <section id="run-header" class="run-header">
+      <div class="run-heading">
+        <span id="run-title" class="run-title">no run selected</span>
+        <span id="run-status" class="badge badge-idle">idle</span>
+      </div>
+      <div class="run-actions">
+        <button id="cancel" class="danger" type="button" disabled>cancel run</button>
+      </div>
+    </section>
+
+    <section id="transcript" class="transcript" aria-live="polite">
+      <p class="muted empty">select a run to follow its transcript, or start a new one.</p>
+    </section>
+
+    <section id="approvals" class="approvals" hidden>
+      <h2>waiting for approval</h2>
+      <div id="approval-list"></div>
+    </section>
+
+    <section class="composer">
+      <label class="field">
+        <span class="field-label">task</span>
+        <textarea id="task" rows="3" placeholder="describe the task to run…"></textarea>
+      </label>
+      <div class="composer-row">
+        <label class="field grow">
+          <span class="field-label">workspace</span>
+          <input id="workspace" type="text" readonly title="set by `zenforge serve --workspace`; restart the server to change it">
+        </label>
+        <button id="start" type="button" class="primary">run</button>
+      </div>
+      <p id="composer-hint" class="muted"></p>
+    </section>
+  </main>
+</div>
+
+<div id="settings-overlay" class="overlay" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+    <div class="modal-head">
+      <h2 id="settings-title">model settings</h2>
+      <button id="settings-close" class="icon-button" type="button" aria-label="close settings">✕</button>
+    </div>
+    <p class="muted">
+      Values apply to runs started after saving and live in this server process
+      only: they are never written to disk, never logged, and the API key is
+      never returned.
+    </p>
+    <label class="field">
+      <span class="field-label">base URL</span>
+      <input id="settings-base-url" type="text" placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1">
+    </label>
+    <label class="field">
+      <span class="field-label">model</span>
+      <input id="settings-model" type="text" placeholder="qwen-plus">
+    </label>
+    <label class="field">
+      <span class="field-label">provider</span>
+      <select id="settings-provider">
+        <option value="openai">openai</option>
+        <option value="anthropic">anthropic</option>
+      </select>
+    </label>
+    <label class="field">
+      <span class="field-label">API key</span>
+      <input id="settings-api-key" type="password" autocomplete="off" placeholder="not set">
+    </label>
+    <p id="settings-key-note" class="muted"></p>
+    <p id="settings-error" class="error" hidden></p>
+    <div class="modal-actions">
+      <button id="settings-save" type="button" class="primary">save</button>
+    </div>
+  </div>
+</div>
+
+<script src="/assets/app.js"></script>
+</body>
+</html>

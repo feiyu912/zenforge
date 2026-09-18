@@ -123,6 +123,8 @@ func Main(ctx context.Context, args []string, ioStreams IO) int {
 		err = scheduleCommand(ctx, args[1:], ioStreams)
 	case "mcp-server":
 		err = mcpServerCommand(ctx, args[1:], ioStreams)
+	case "serve":
+		err = serveCommand(ctx, args[1:], ioStreams)
 	case "init":
 		err = initConfig(args[1:], ioStreams)
 	case "version":
@@ -897,18 +899,26 @@ func optionsFromArgs(args []string) (options, error) {
 	return opts, nil
 }
 
-func buildAgent(ctx context.Context, opts *options, ioStreams IO) (*zenforge.Agent, error) {
+// buildAgentConfig assembles the agent configuration and returns the durable
+// event store it opened. Most commands only need the built agent and call
+// buildAgent; `serve` needs the configuration itself, because the HTTP runtime
+// must replace the event store with the fanout the run manager and every
+// attachment share, and doing that after construction would leave the agent
+// writing to a store no stream could follow. The store is returned alongside
+// so the caller reuses the one already opened instead of opening a second
+// handle on the same path.
+func buildAgentConfig(ctx context.Context, opts *options, ioStreams IO) (zenforge.Config, eventlog.Store, error) {
 	// The hook configuration is validated first: it decides what may run, so
 	// a typo in it must fail before anything else is constructed.
 	hookEngine, err := buildHookEngine(*opts)
 	if err != nil {
-		return nil, err
+		return zenforge.Config{}, nil, err
 	}
 	var executionMode zenforge.AgentMode
 	if strings.TrimSpace(opts.mode) != "" {
 		mode, err := parseAgentMode(opts.mode)
 		if err != nil {
-			return nil, err
+			return zenforge.Config{}, nil, err
 		}
 		executionMode = mode
 	}
@@ -923,7 +933,7 @@ func buildAgent(ctx context.Context, opts *options, ioStreams IO) (*zenforge.Age
 		AllowBinaryRead: true,
 	})
 	if err != nil {
-		return nil, err
+		return zenforge.Config{}, nil, err
 	}
 	// One private spill store under the workspace serves both the
 	// tool-result spill middleware and the search tools' over-cap lists,
@@ -944,7 +954,7 @@ func buildAgent(ctx context.Context, opts *options, ioStreams IO) (*zenforge.Age
 		TurnDiffs:              turnDiffs,
 	})
 	if err != nil {
-		return nil, err
+		return zenforge.Config{}, nil, err
 	}
 	patchTool, err := patchtools.New(patchtools.Config{
 		Workspace:              ws,
@@ -954,21 +964,21 @@ func buildAgent(ctx context.Context, opts *options, ioStreams IO) (*zenforge.Age
 		TurnDiffs:              turnDiffs,
 	})
 	if err != nil {
-		return nil, err
+		return zenforge.Config{}, nil, err
 	}
 	tools := append([]tool.Tool(nil), workspaceTools...)
 	tools = append(tools, patchTool)
 	if opts.webEnabled {
 		webTools, err := buildWebTools(*opts)
 		if err != nil {
-			return nil, err
+			return zenforge.Config{}, nil, err
 		}
 		tools = append(tools, webTools...)
 	}
 	if !opts.noShell {
 		shell, err := buildShellTool(*opts)
 		if err != nil {
-			return nil, err
+			return zenforge.Config{}, nil, err
 		}
 		tools = append(tools, shell)
 	}
@@ -977,7 +987,7 @@ func buildAgent(ctx context.Context, opts *options, ioStreams IO) (*zenforge.Age
 	// without answers (the tool reports the dismissal) or deny.
 	askTool, err := askuser.New(askuser.Config{})
 	if err != nil {
-		return nil, err
+		return zenforge.Config{}, nil, err
 	}
 	tools = append(tools, askTool)
 	// get_context_remaining reports the live token budget the agent
@@ -985,21 +995,21 @@ func buildAgent(ctx context.Context, opts *options, ioStreams IO) (*zenforge.Age
 	// window is configured.
 	contextTool, err := contextinfo.New()
 	if err != nil {
-		return nil, err
+		return zenforge.Config{}, nil, err
 	}
 	tools = append(tools, contextTool)
 	// view_image shows the model an image from the workspace; the image
 	// travels on the tool result and is replayed on later model calls.
 	viewImage, err := viewimage.New(viewimage.Config{Workspace: ws})
 	if err != nil {
-		return nil, err
+		return zenforge.Config{}, nil, err
 	}
 	tools = append(tools, viewImage)
 	// present declares final deliverables; the agent records validated
 	// files as deliverables.presented events.
 	presentTool, err := present.New(present.Config{Workspace: ws})
 	if err != nil {
-		return nil, err
+		return zenforge.Config{}, nil, err
 	}
 	tools = append(tools, presentTool)
 	// Configured MCP servers are started here, before the deferred-tool
@@ -1008,7 +1018,7 @@ func buildAgent(ctx context.Context, opts *options, ioStreams IO) (*zenforge.Age
 	// decision is made.
 	mcpTools, err := buildMCPTools(ctx, opts, ioStreams)
 	if err != nil {
-		return nil, err
+		return zenforge.Config{}, nil, err
 	}
 	tools = append(tools, mcpTools...)
 	// Deferred tools (for example MCP catalogs fetched through
@@ -1019,26 +1029,26 @@ func buildAgent(ctx context.Context, opts *options, ioStreams IO) (*zenforge.Age
 	if hasDeferredTools(tools) {
 		source, err := tool.NewRegistry(tools...)
 		if err != nil {
-			return nil, err
+			return zenforge.Config{}, nil, err
 		}
 		searchTool, err := toolsearch.New(toolsearch.Config{Source: source})
 		if err != nil {
-			return nil, err
+			return zenforge.Config{}, nil, err
 		}
 		tools = append(tools, searchTool)
 	}
 	approvalBroker, err := approvalBroker(*opts, ioStreams)
 	if err != nil {
-		return nil, err
+		return zenforge.Config{}, nil, err
 	}
 	events, closeEvents, err := openEventStore(ctx, opts.checkpointType, opts.checkpointDir)
 	if err != nil {
-		return nil, err
+		return zenforge.Config{}, nil, err
 	}
 	opts.addCloser("event store", closeEvents)
 	checkpoints, closeCheckpoints, err := openCheckpointStore(ctx, opts.checkpointType, opts.checkpointDir)
 	if err != nil {
-		return nil, err
+		return zenforge.Config{}, nil, err
 	}
 	opts.addCloser("checkpoint store", closeCheckpoints)
 	// An explicit override is an operator's choice of model, not a
@@ -1050,7 +1060,7 @@ func buildAgent(ctx context.Context, opts *options, ioStreams IO) (*zenforge.Age
 	if modelAdapter == nil {
 		modelAdapter, err = buildModel(*opts)
 		if err != nil {
-			return nil, err
+			return zenforge.Config{}, nil, err
 		}
 	}
 	// Context management follows the reference harnesses: retry with
@@ -1114,7 +1124,7 @@ func buildAgent(ctx context.Context, opts *options, ioStreams IO) (*zenforge.Age
 			MaxRounds: opts.goalMaxRounds,
 		})
 		if err != nil {
-			return nil, err
+			return zenforge.Config{}, nil, err
 		}
 		tools = append(tools, goalTools...)
 		for _, registered := range goalTools {
@@ -1142,7 +1152,7 @@ func buildAgent(ctx context.Context, opts *options, ioStreams IO) (*zenforge.Age
 		})
 		if err != nil {
 			manager.Close()
-			return nil, err
+			return zenforge.Config{}, nil, err
 		}
 		tools = append(tools, jobTools...)
 		for _, registered := range jobTools {
@@ -1161,7 +1171,7 @@ func buildAgent(ctx context.Context, opts *options, ioStreams IO) (*zenforge.Age
 	if opts.planMode {
 		planTool, err := plantools.New()
 		if err != nil {
-			return nil, err
+			return zenforge.Config{}, nil, err
 		}
 		tools = append(tools, planTool)
 		toolsByName[planTool.Name()] = planTool
@@ -1172,17 +1182,17 @@ func buildAgent(ctx context.Context, opts *options, ioStreams IO) (*zenforge.Age
 	}
 	memoryProvider, err := buildMemory(*opts, modelAdapter)
 	if err != nil {
-		return nil, err
+		return zenforge.Config{}, nil, err
 	}
 	guardian, err := buildGuardian(*opts, modelAdapter)
 	if err != nil {
-		return nil, err
+		return zenforge.Config{}, nil, err
 	}
 	grantStore, grantNamespace, err := approvalGrantConfig(opts)
 	if err != nil {
-		return nil, err
+		return zenforge.Config{}, nil, err
 	}
-	return zenforge.New(zenforge.Config{
+	return zenforge.Config{
 		Model:              modelAdapter,
 		Hooks:              hookEngine,
 		Memory:             memoryProvider,
@@ -1217,7 +1227,17 @@ func buildAgent(ctx context.Context, opts *options, ioStreams IO) (*zenforge.Age
 		Mode:               executionMode,
 		Planning:           planningMode(opts.planning),
 		PlanMode:           opts.planMode,
-	}), nil
+	}, events, nil
+}
+
+// buildAgent builds the configured agent from the configuration
+// buildAgentConfig assembles.
+func buildAgent(ctx context.Context, opts *options, ioStreams IO) (*zenforge.Agent, error) {
+	config, _, err := buildAgentConfig(ctx, opts, ioStreams)
+	if err != nil {
+		return nil, err
+	}
+	return zenforge.New(config), nil
 }
 
 func resolveExecutionFlags(fs *flag.FlagSet, opts *options) error {
@@ -1665,7 +1685,7 @@ func stringValue(value any) string {
 }
 
 func printUsage(out io.Writer) {
-	_, _ = fmt.Fprintln(out, "usage: zenforge <run|exec|code|resume|fork|revert|goal|ralph|events|runs|grants|schedule|mcp-server|init|version> [options]")
+	_, _ = fmt.Fprintln(out, "usage: zenforge <run|exec|code|resume|fork|revert|goal|ralph|events|runs|grants|schedule|mcp-server|serve|init|version> [options]")
 }
 
 type multiFlag []string
