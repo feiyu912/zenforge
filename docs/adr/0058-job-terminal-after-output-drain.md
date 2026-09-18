@@ -54,6 +54,16 @@ read ends, which unblocks both copies, and the job becomes terminal with what
 was captured. A job must not become unreachable because something it started
 is still holding a file descriptor.
 
+### Refinement: the status, not only the completion signal
+
+The first implementation waited for the drain before closing the job's `done`
+channel, which is what `Run` observes, but it recorded `Status`/`ExitCode` as
+soon as the process was reaped. A caller that polled `Get` therefore still saw
+a terminal status while the copies were running and could read an empty buffer
+for output the process had already written. The status fields are now
+published after the drain as well, so "terminal" means readable at every
+tier — `Get`, `Output`, and `done` — which is what this ADR claimed.
+
 ## Consequences
 
 Benefits:

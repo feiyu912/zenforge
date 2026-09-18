@@ -538,3 +538,38 @@ func TestPTYSpecIsValidated(t *testing.T) {
 		t.Fatalf("default terminal size = %dx%d", rows, cols)
 	}
 }
+
+func TestStatusIsPublishedOnlyAfterTheOutputIsDrained(t *testing.T) {
+	// The main process exits at once; its output follows from a background
+	// writer. A terminal status must not appear in between, because a caller
+	// that polls the job treats it as permission to read the result.
+	manager := New(Config{DefaultTimeout: 10 * time.Second, DrainGrace: 5 * time.Second})
+	defer manager.Close()
+	job, err := manager.Start(context.Background(), Spec{Command: "(sleep 0.3; echo late) & exit 0"})
+	if err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	time.Sleep(150 * time.Millisecond)
+	early, err := manager.Get(job.ID)
+	if err != nil {
+		t.Fatalf("Get returned error: %v", err)
+	}
+	if early.Status.Terminal() {
+		t.Fatalf("status became %s before the output was drained (total %d)", early.Status, early.StdoutTotal)
+	}
+	earlyOutput, err := manager.Output(job.ID, 0, 0, -1)
+	if err != nil {
+		t.Fatalf("Output returned error: %v", err)
+	}
+	if !earlyOutput.Job.Running() {
+		t.Fatalf("a job whose output is still arriving reported %s", earlyOutput.Job.Status)
+	}
+	final := waitFor(t, manager, job.ID)
+	result, err := manager.Output(job.ID, 0, 0, -1)
+	if err != nil {
+		t.Fatalf("Output returned error: %v", err)
+	}
+	if final.StdoutTotal == 0 || !strings.Contains(string(result.Stdout.Data), "late") {
+		t.Fatalf("drained output was not readable at the terminal status: %#v", final)
+	}
+}

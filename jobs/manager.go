@@ -515,15 +515,35 @@ func (m *Manager) collect(rec *record, stdout, stderr io.ReadCloser, drained cha
 // empty stdout for a command that already wrote one.
 func (m *Manager) wait(rec *record, command *exec.Cmd, drained <-chan struct{}, readers ...io.Closer) {
 	err := command.Wait()
+	ended := time.Now()
+	var exitCode *int
+	if code := command.ProcessState.ExitCode(); err == nil || command.ProcessState != nil {
+		exitCode = &code
+	}
 	m.mu.Lock()
 	if rec.timer != nil {
 		rec.timer.Stop()
 	}
-	ended := time.Now()
-	rec.job.EndedAt = &ended
-	if code := command.ProcessState.ExitCode(); err == nil || command.ProcessState != nil {
-		rec.job.ExitCode = &code
+	m.mu.Unlock()
+	// The status is published only after the drain. A caller that polls Get
+	// takes a terminal status as permission to read the result, so recording
+	// "exited" while the copies are still draining would hand it an empty
+	// buffer for output the process already wrote — the same race the pipes
+	// themselves were changed to avoid, one layer up.
+	select {
+	case <-drained:
+	case <-time.After(m.drainGrace):
+		// A background grandchild can hold the pipes past the main process,
+		// so EOF may never arrive. The job still has to become terminal with
+		// what was captured; closing the read ends unblocks the copies.
+		for _, reader := range readers {
+			_ = reader.Close()
+		}
+		<-drained
 	}
+	m.mu.Lock()
+	rec.job.EndedAt = &ended
+	rec.job.ExitCode = exitCode
 	switch {
 	case rec.job.Status == StatusKilled:
 		// Kill already recorded the status and reason.
@@ -543,17 +563,6 @@ func (m *Manager) wait(rec *record, command *exec.Cmd, drained <-chan struct{}, 
 	cancel := rec.cancel
 	m.mu.Unlock()
 	cancel()
-	select {
-	case <-drained:
-	case <-time.After(m.drainGrace):
-		// A background grandchild can hold the pipes past the main process,
-		// so EOF may never arrive. The job still has to become terminal with
-		// what was captured; closing the read ends unblocks the copies.
-		for _, reader := range readers {
-			_ = reader.Close()
-		}
-		<-drained
-	}
 	close(rec.done)
 }
 
