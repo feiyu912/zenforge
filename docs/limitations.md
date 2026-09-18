@@ -116,6 +116,19 @@ what is experimental, and what remains adapter territory.
   the only place a second provider's key can live. A name that cannot be
   resolved is a fatal `AGENT_START`, never a silent run on the host's model.
 
+## MCP Approvals
+
+- An approval gate is a question only when the client advertised elicitation;
+  otherwise the run refuses the tool call with the same text as before. A
+  refusal the client answered says the client declined, which is a different
+  sentence from the one that says this server cannot ask — a run has to be able
+  to tell those apart.
+- A non-boolean answer is a denial, never consent, and an approval is granted
+  for one call: a yes does not create a standing grant (use the `grants`
+  command for that).
+- A detached run can also elicit, bounded by the elicitation timeout rather than
+  by the request it outlived.
+
 ## MCP Server Requests
 
 - A server request needs a caller deadline and a client that answers. An

@@ -329,6 +329,41 @@ func TestServerServeRoundTrip(t *testing.T) {
 	}
 }
 
+// TestServerFromReachesTheServerFromAHandlerContext pins the plumbing a tool
+// handler uses to make a server-initiated request. The handler sees the server
+// answering it through its own context, and a context that never came from a
+// server -- or a nil one -- yields nil rather than a panic, which is what lets
+// a caller take a path that needs no server.
+func TestServerFromReachesTheServerFromAHandlerContext(t *testing.T) {
+	if ServerFrom(context.Background()) != nil {
+		t.Fatal("a plain context reported a server")
+	}
+	if ServerFrom(nil) != nil {
+		t.Fatal("a nil context reported a server")
+	}
+	var seen *Server
+	server, err := NewServer(ServerConfig{
+		Name:    "zenforge",
+		Version: "test",
+		Tools: []ServerTool{{
+			Name: "probe",
+			Handler: func(ctx context.Context, arguments json.RawMessage) (CallResult, error) {
+				seen = ServerFrom(ctx)
+				return CallResult{Content: []Content{{Type: "text", Text: "ok"}}}, nil
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("NewServer returned error: %v", err)
+	}
+	if _, respond := server.Handle(context.Background(), []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"probe"}}`)); !respond {
+		t.Fatal("the probe tool was not answered")
+	}
+	if seen != server {
+		t.Fatalf("the handler saw server %p, want %p", seen, server)
+	}
+}
+
 // TestReadFrameAcceptsHeaderFraming pins the reader's tolerance: a peer that
 // frames with Content-Length is not the spec's stdio form, but refusing it
 // would turn a harmless difference into a connection failure.

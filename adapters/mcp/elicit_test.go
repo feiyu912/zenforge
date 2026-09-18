@@ -122,6 +122,36 @@ func TestElicitationRefusedWithNoStream(t *testing.T) {
 	}
 }
 
+// TestClientSupportsElicitationFollowsTheHandshake pins the exported accessor a
+// caller uses to decide whether an elicitation is written at all. It reads the
+// latest handshake only: a client that never initialized or never claimed the
+// capability is false, a client that claimed it is true, and a later handshake
+// that drops it is false again rather than leaving the older claim behind.
+func TestClientSupportsElicitationFollowsTheHandshake(t *testing.T) {
+	server := testServer(t)
+	stream := startServerStream(t, server)
+	if server.ClientSupportsElicitation() {
+		t.Fatal("a server that never initialized claims the client supports elicitation")
+	}
+	stream.send(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}`)
+	resultOf(t, stream.read())
+	if server.ClientSupportsElicitation() {
+		t.Fatal("a client that did not advertise elicitation reads as supporting it")
+	}
+	stream.send(initializeWithElicitation)
+	resultOf(t, stream.read())
+	if !server.ClientSupportsElicitation() {
+		t.Fatal("a client that advertised elicitation reads as not supporting it")
+	}
+	// A null capability is not an advertisement either: the spec's values are
+	// objects, and presence means presence of an object.
+	stream.send(`{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{"elicitation":null}}}`)
+	resultOf(t, stream.read())
+	if server.ClientSupportsElicitation() {
+		t.Fatal("a null elicitation capability was read as an advertisement")
+	}
+}
+
 // TestElicitationRejectsAnUnknownAction pins that a client cannot smuggle an
 // action past the caller's switch: an answer that is none of the three spec
 // actions is an error, not an empty result a caller might treat as a decline.

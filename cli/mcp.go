@@ -74,13 +74,22 @@ func mcpServerCommand(ctx context.Context, args []string, ioStreams IO) error {
 		tools = append(tools, runTool, newMCPRunCancelTool(opts.checkpointType, opts.checkpointDir, registry))
 		instructions = "ZenForge is a coding agent harness. These tools inspect its recorded runs, and zenforge_run starts one in the workspace this server was configured with; zenforge_run can also detach a run, whose state zenforge_run_status then reports and zenforge_run_cancel stops."
 		if opts.approve != "always" {
-			// Say it once, before serving: a served run that needs a human
-			// cannot ask one, and the operator should hear that from the
-			// server rather than from a refusal inside a remote run.
-			_, _ = fmt.Fprintf(
-				ioStreams.Stderr,
-				"warning: served runs cannot prompt for approval, so tools that need one will be refused; pass --approve always to allow them\n",
-			)
+			// Say it once, before serving: a served run has no operator at a
+			// keyboard, so a prompt goes to the MCP client when that client
+			// advertised elicitation, and is refused otherwise. The operator
+			// should hear which of those applies from the server rather than
+			// from a refusal inside a remote run.
+			if opts.approve == "prompt" {
+				_, _ = fmt.Fprintf(
+					ioStreams.Stderr,
+					"warning: served runs have no operator at a keyboard, so a tool that needs approval is asked of the MCP client when it advertises elicitation and refused otherwise; pass --approve always to allow such tools without asking\n",
+				)
+			} else {
+				_, _ = fmt.Fprintf(
+					ioStreams.Stderr,
+					"warning: served runs will refuse tools that need approval because --approve never disables approval\n",
+				)
+			}
 		}
 	}
 	// Resources and prompts are read-only surfaces, so they need no operator

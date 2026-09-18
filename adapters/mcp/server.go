@@ -268,6 +268,39 @@ func (s *Server) Prompts() []ServerPrompt {
 	return out
 }
 
+// serverContextKey is the context key that carries the server handling a
+// request to the handler answering it. It is unexported, so this package is the
+// only writer: the reader and the handler always belong to the same server, and
+// a caller cannot substitute one server's identity for another's.
+type serverContextKey struct{}
+
+// withServer returns a context that carries the server handling the request. A
+// nil server leaves ctx unchanged, so the paths that have no server behind them
+// -- a handler invoked directly, as a test may do -- behave as if no server
+// existed rather than panicking on a nil dereference.
+func withServer(ctx context.Context, s *Server) context.Context {
+	if s == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, serverContextKey{}, s)
+}
+
+// ServerFrom returns the server whose handler is running under ctx, or nil
+// when ctx did not come from [Server.Handle] or [Server.Serve].
+//
+// It exists because a handler that wants to make a server-initiated request --
+// an elicitation is the one that matters here -- needs the server itself, and
+// [ServerHandler] receives only a context. The nil result is a documented
+// outcome rather than a failure to paper over: a handler with no server cannot
+// ask its client anything, so it has to take the path that does not need one.
+func ServerFrom(ctx context.Context) *Server {
+	if ctx == nil {
+		return nil
+	}
+	server, _ := ctx.Value(serverContextKey{}).(*Server)
+	return server
+}
+
 // Handle processes one raw JSON message and returns the response to write,
 // if any. A notification (a request without an id) produces no response: the
 // protocol has no way to answer one, and inventing an id-less response would
@@ -546,7 +579,13 @@ func (s *Server) dispatch(ctx context.Context, method string, params json.RawMes
 	case "tools/list":
 		return s.listTools()
 	case "tools/call":
-		return s.callTool(withProgress(ctx, params), params)
+		// The server is attached here, at the one point that knows both the
+		// request and the server answering it, so a tool handler can reach
+		// its client through [ServerFrom]. It is tools/call only: a
+		// server-initiated request belongs to a tool doing work on the
+		// client's behalf, and the read-only surfaces have no reason to hold
+		// the stream open waiting on a person.
+		return s.callTool(withServer(withProgress(ctx, params), s), params)
 	case "resources/list":
 		return s.listResources()
 	case "resources/read":

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/feiyu912/zenforge/adapters/mcp"
+	"github.com/feiyu912/zenforge/approval"
 )
 
 // servedRunOptions is the operator's side of a served run: a workspace, a
@@ -490,5 +492,514 @@ func TestMCPRunToolSendsNoProgressWithoutAToken(t *testing.T) {
 	}
 	if result.StructuredContent["status"] != "completed" {
 		t.Fatalf("status = %#v", result.StructuredContent["status"])
+	}
+}
+
+// servedRunServe is one mcp.Server serving a run tool over real pipes, with the
+// client side owned by the test. It is the served-run counterpart of
+// runToolServer: where that helper drives Handle in process, this one runs
+// Serve so a run can put its own request -- the approval elicitation -- on the
+// same stream, and the test can answer it or refuse to.
+type servedRunServe struct {
+	t           *testing.T
+	model       *openAISSEStub
+	reader      *bufio.Reader
+	writer      *bufio.Writer
+	clientWrite *io.PipeWriter
+	done        chan error
+}
+
+// startServedServer runs one server over pipes and returns the client side. The
+// server's input is closed on cleanup, so Serve returns even when a test fails
+// before it does; the wait turns a broken shutdown into a failure rather than a
+// hung test binary.
+func startServedServer(t *testing.T, server *mcp.Server) *servedRunServe {
+	t.Helper()
+	clientRead, serverWrite := io.Pipe()
+	serverRead, clientWrite := io.Pipe()
+	session := &servedRunServe{
+		t:           t,
+		reader:      bufio.NewReader(clientRead),
+		writer:      bufio.NewWriter(clientWrite),
+		clientWrite: clientWrite,
+		done:        make(chan error, 1),
+	}
+	go func() { session.done <- server.Serve(context.Background(), serverRead, serverWrite) }()
+	t.Cleanup(func() {
+		_ = clientWrite.Close()
+		_ = serverWrite.Close()
+		select {
+		case <-session.done:
+		case <-time.After(10 * time.Second):
+			t.Errorf("the served run server did not stop")
+		}
+	})
+	return session
+}
+
+// startServedRunServe builds the run tool the subcommand would install and
+// serves it over pipes, so the approval path under test is the one a remote
+// caller reaches. The model stub's responses drive the run.
+func startServedRunServe(t *testing.T, responses ...string) *servedRunServe {
+	t.Helper()
+	return startServedRunServeWithApproval(t, "prompt", responses...)
+}
+
+// startServedRunServeWithApproval is startServedRunServe with the operator's
+// approval mode chosen by the test, so `never` can be pinned as unchanged.
+func startServedRunServeWithApproval(t *testing.T, approve string, responses ...string) *servedRunServe {
+	t.Helper()
+	model := newOpenAISSEStub(t, responses...)
+	opts := servedRunOptions(t, model.url)
+	opts.approve = approve
+	streams := servedRunStreams()
+	runTool, err := newMCPRunTool(context.Background(), &opts, streams, time.Minute, newServedRunRegistry(context.Background()))
+	if err != nil {
+		t.Fatalf("newMCPRunTool returned error: %v", err)
+	}
+	t.Cleanup(func() { drainClosers(&opts, streams) })
+	server, err := mcp.NewServer(mcp.ServerConfig{
+		Name:    "zenforge",
+		Version: "test",
+		Tools:   []mcp.ServerTool{runTool},
+	})
+	if err != nil {
+		t.Fatalf("NewServer returned error: %v", err)
+	}
+	session := startServedServer(t, server)
+	session.model = model
+	return session
+}
+
+// initialize performs the handshake, claiming the elicitation capability only
+// when the test wants a client that can be asked.
+func (s *servedRunServe) initialize(t *testing.T, advertiseElicitation bool) {
+	t.Helper()
+	capabilities := ""
+	if advertiseElicitation {
+		capabilities = `,"capabilities":{"elicitation":{}}`
+	}
+	response := exchange(t, s.writer, s.reader,
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"`+capabilities+`}}`)
+	if _, ok := response["result"]; !ok {
+		t.Fatalf("initialize failed: %v", response)
+	}
+}
+
+// callRun starts one served run whose model will issue an approval-gated shell
+// call.
+func (s *servedRunServe) callRun(t *testing.T) {
+	t.Helper()
+	s.write(t, `{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"`+mcpRunToolName+`","arguments":{"prompt":"run the shell tool"}}}`)
+}
+
+// elicitation reads the run's approval question off the stream and returns its
+// id and params, so a test can inspect the message and answer it.
+func (s *servedRunServe) elicitation(t *testing.T) (string, map[string]any) {
+	t.Helper()
+	request := readFrameWithin(t, s.reader, 10*time.Second)
+	if request["method"] != "elicitation/create" {
+		t.Fatalf("the frame was not an elicitation: %v", request)
+	}
+	id, _ := request["id"].(string)
+	if id == "" {
+		t.Fatalf("the elicitation has no string id: %v", request)
+	}
+	params, _ := request["params"].(map[string]any)
+	return id, params
+}
+
+// answer writes the client's answer to one server-initiated request.
+func (s *servedRunServe) answer(t *testing.T, id, result string) {
+	t.Helper()
+	s.write(t, fmt.Sprintf(`{"jsonrpc":"2.0","id":%q,"result":%s}`, id, result))
+}
+
+// answerError writes a JSON-RPC error for one server-initiated request, which
+// is how a client that cannot serve the method refuses it.
+func (s *servedRunServe) answerError(t *testing.T, id string, code int, message string) {
+	t.Helper()
+	s.write(t, fmt.Sprintf(`{"jsonrpc":"2.0","id":%q,"error":{"code":%d,"message":%q}}`, id, code, message))
+}
+
+func (s *servedRunServe) write(t *testing.T, frame string) {
+	t.Helper()
+	if _, err := s.writer.WriteString(frame + "\n"); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+	if err := s.writer.Flush(); err != nil {
+		t.Fatalf("flush failed: %v", err)
+	}
+}
+
+// result reads the tools/call response and decodes its result.
+func (s *servedRunServe) result(t *testing.T) mcp.CallResult {
+	t.Helper()
+	response := readFrameWithin(t, s.reader, 10*time.Second)
+	if response["id"] != float64(7) {
+		t.Fatalf("the frame was not the run response: %v", response)
+	}
+	if errValue, ok := response["error"]; ok {
+		t.Fatalf("the run call was rejected: %v", errValue)
+	}
+	encoded, err := json.Marshal(response["result"])
+	if err != nil {
+		t.Fatalf("the result could not be re-encoded: %v", err)
+	}
+	var result mcp.CallResult
+	if err := json.Unmarshal(encoded, &result); err != nil {
+		t.Fatalf("the result did not decode: %v (%s)", err, encoded)
+	}
+	return result
+}
+
+// readFrameWithin reads one frame the server wrote, failing instead of blocking
+// forever when the server goes quiet.
+func readFrameWithin(t *testing.T, reader *bufio.Reader, timeout time.Duration) map[string]any {
+	t.Helper()
+	lines := make(chan string, 1)
+	go func() {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			lines <- ""
+			return
+		}
+		lines <- line
+	}()
+	select {
+	case line := <-lines:
+		if line == "" {
+			t.Fatal("the server closed its stream before answering")
+		}
+		var decoded map[string]any
+		if err := json.Unmarshal([]byte(line), &decoded); err != nil {
+			t.Fatalf("the frame is not JSON (%v): %s", err, line)
+		}
+		return decoded
+	case <-time.After(timeout):
+		t.Fatal("the server wrote no frame")
+		return nil
+	}
+}
+
+// refusedToolCalls decodes the refused names out of a projected result. The
+// value has crossed the wire, so it is []any rather than the []string the
+// in-process tests see.
+func refusedToolCalls(t *testing.T, result mcp.CallResult) []string {
+	t.Helper()
+	raw, ok := result.StructuredContent["refusedToolCalls"].([]any)
+	if !ok {
+		return nil
+	}
+	names := make([]string, 0, len(raw))
+	for _, entry := range raw {
+		name, _ := entry.(string)
+		names = append(names, name)
+	}
+	return names
+}
+
+// servedRunShellCall is the model turn every elicitation test starts from: one
+// shell call that needs approval. The command assembles its marker at run time
+// ("served-run-%s" plus "ran"), so finding "served-run-ran" in a later model
+// request means the shell really ran rather than that its arguments were merely
+// replayed.
+func servedRunShellCall() string {
+	return toolCallChunk("call_shell", "shell", `{"command":"printf 'served-run-%s' ran","description":"print a marker"}`)
+}
+
+// TestMCPRunElicitsApprovalFromTheClient pins the approval path's new first
+// step: when the client advertised elicitation, the run asks it -- naming the
+// tool and the harness's reason -- and the tool call really runs when the
+// client approves.
+func TestMCPRunElicitsApprovalFromTheClient(t *testing.T) {
+	session := startServedRunServe(t, servedRunShellCall(), textChunk("the served run finished"))
+	session.initialize(t, true)
+	session.callRun(t)
+
+	id, params := session.elicitation(t)
+	message, _ := params["message"].(string)
+	if !strings.Contains(message, "shell") {
+		t.Fatalf("the elicitation did not name the tool: %q", message)
+	}
+	if !strings.Contains(message, "print a marker") {
+		t.Fatalf("the elicitation dropped the harness reason: %q", message)
+	}
+	schema, _ := params["requestedSchema"].(map[string]any)
+	properties, _ := schema["properties"].(map[string]any)
+	approve, _ := properties["approve"].(map[string]any)
+	if approve["type"] != "boolean" {
+		t.Fatalf("the requested schema = %#v", params["requestedSchema"])
+	}
+	required, _ := schema["required"].([]any)
+	if len(required) != 1 || required[0] != "approve" {
+		t.Fatalf("the requested schema does not require approve: %#v", schema)
+	}
+
+	session.answer(t, id, `{"action":"accept","content":{"approve":true}}`)
+	result := session.result(t)
+	if result.IsError {
+		t.Fatalf("an approved run reported an error: %#v", result.Content)
+	}
+	if names := refusedToolCalls(t, result); len(names) != 0 {
+		t.Fatalf("an approved call was still reported refused: %#v", result.StructuredContent)
+	}
+	if len(result.Content) == 0 || !strings.Contains(result.Content[0].Text, "the served run finished") {
+		t.Fatalf("text = %#v", result.Content)
+	}
+	if !strings.Contains(session.model.body(), "served-run-ran") {
+		t.Fatalf("the approved tool never ran: %s", session.model.body())
+	}
+}
+
+// TestMCPRunDeniesWhenTheClientDeclines pins the client's own "no": the call is
+// denied, the run says the client declined rather than that the server could
+// not ask, and the tool never runs.
+func TestMCPRunDeniesWhenTheClientDeclines(t *testing.T) {
+	cases := []struct {
+		name   string
+		answer string
+		want   string
+	}{
+		{"decline", `{"action":"decline"}`, "the MCP client declined the approval request"},
+		{"cancel", `{"action":"cancel"}`, "the MCP client declined the approval request"},
+		{"approve-false", `{"action":"accept","content":{"approve":false}}`, "the MCP client's operator declined the approval request"},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			session := startServedRunServe(t, servedRunShellCall(), textChunk("the served run finished"))
+			session.initialize(t, true)
+			session.callRun(t)
+			id, _ := session.elicitation(t)
+			session.answer(t, id, testCase.answer)
+
+			result := session.result(t)
+			if result.IsError {
+				t.Fatalf("a denied tool call failed the whole run: %#v", result.Content)
+			}
+			names := refusedToolCalls(t, result)
+			if len(names) != 1 || names[0] != "shell" {
+				t.Fatalf("refusedToolCalls = %#v", result.StructuredContent["refusedToolCalls"])
+			}
+			if len(result.Content) == 0 || !strings.Contains(result.Content[0].Text, testCase.want) {
+				t.Fatalf("text = %#v, want %q", result.Content, testCase.want)
+			}
+			// A client that answered must not be told it could not be asked.
+			if strings.Contains(result.Content[0].Text, "cannot ask a human") {
+				t.Fatalf("a client decision was reported as a server limitation: %q", result.Content[0].Text)
+			}
+			if strings.Contains(session.model.body(), "served-run-ran") {
+				t.Fatalf("a denied tool call ran: %s", session.model.body())
+			}
+		})
+	}
+}
+
+// TestMCPRunTreatsANonBooleanApprovalAsADenial pins the conservative reading of
+// an unreadable answer: only the boolean true is consent, so a string or a
+// missing field denies the call instead of being treated as truthy.
+func TestMCPRunTreatsANonBooleanApprovalAsADenial(t *testing.T) {
+	cases := []struct {
+		name   string
+		answer string
+	}{
+		{"string", `{"action":"accept","content":{"approve":"true"}}`},
+		{"missing", `{"action":"accept","content":{}}`},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			session := startServedRunServe(t, servedRunShellCall(), textChunk("the served run finished"))
+			session.initialize(t, true)
+			session.callRun(t)
+			id, _ := session.elicitation(t)
+			session.answer(t, id, testCase.answer)
+
+			result := session.result(t)
+			if result.IsError {
+				t.Fatalf("a denied tool call failed the whole run: %#v", result.Content)
+			}
+			names := refusedToolCalls(t, result)
+			if len(names) != 1 || names[0] != "shell" {
+				t.Fatalf("refusedToolCalls = %#v", result.StructuredContent["refusedToolCalls"])
+			}
+			if len(result.Content) == 0 || !strings.Contains(result.Content[0].Text, "not a boolean") {
+				t.Fatalf("the denial did not explain the unreadable answer: %#v", result.Content)
+			}
+			if strings.Contains(session.model.body(), "served-run-ran") {
+				t.Fatalf("a non-boolean approval was treated as consent: %s", session.model.body())
+			}
+		})
+	}
+}
+
+// TestMCPRunRefusesWithoutElicitationUsingTheOldText pins the fallback a client
+// that never advertised elicitation gets: exactly the sentence served runs
+// produced before elicitation existed, with no elicitation frame on the wire
+// (the next frame after the call is its response).
+func TestMCPRunRefusesWithoutElicitationUsingTheOldText(t *testing.T) {
+	const preElicitationRefusal = "this MCP server serves runs without an operator, so it cannot prompt for approval; start it with --approve always to allow tools that need one"
+
+	session := startServedRunServe(t, servedRunShellCall(), textChunk("the served run finished"))
+	session.initialize(t, false)
+	session.callRun(t)
+
+	result := session.result(t)
+	if result.IsError {
+		t.Fatalf("a refused tool call failed the whole run: %#v", result.Content)
+	}
+	names := refusedToolCalls(t, result)
+	if len(names) != 1 || names[0] != "shell" {
+		t.Fatalf("refusedToolCalls = %#v", result.StructuredContent["refusedToolCalls"])
+	}
+	want := "the served run finished\n\n1 tool call(s) were refused because this server cannot ask a human to approve them: shell (" + preElicitationRefusal + ")"
+	if len(result.Content) == 0 || result.Content[0].Text != want {
+		t.Fatalf("text = %#v, want %q", result.Content, want)
+	}
+}
+
+// TestMCPRunFallsBackWhenTheElicitationStreamEnds pins that a client which
+// disappears mid-question is not waited on forever: the end of the stream wakes
+// the elicitation, the refusal resolves the call, and the run still returns its
+// result rather than hanging or writing after close.
+func TestMCPRunFallsBackWhenTheElicitationStreamEnds(t *testing.T) {
+	session := startServedRunServe(t, servedRunShellCall(), textChunk("the served run finished"))
+	session.initialize(t, true)
+	session.callRun(t)
+	session.elicitation(t)
+	// The client goes away instead of answering: the input stream ends while
+	// the elicitation is still in flight.
+	if err := session.clientWrite.Close(); err != nil {
+		t.Fatalf("close failed: %v", err)
+	}
+
+	result := session.result(t)
+	if result.IsError {
+		t.Fatalf("the fallback refusal failed the whole run: %#v", result.Content)
+	}
+	if len(result.Content) == 0 || !strings.Contains(result.Content[0].Text, "cannot ask a human") {
+		t.Fatalf("the fallback refusal was not used: %#v", result.Content)
+	}
+	names := refusedToolCalls(t, result)
+	if len(names) != 1 || names[0] != "shell" {
+		t.Fatalf("refusedToolCalls = %#v", result.StructuredContent["refusedToolCalls"])
+	}
+}
+
+// TestMCPRunFallsBackWhenTheClientCannotAnswer pins that an elicitation error --
+// here a client that answers with a JSON-RPC error rather than a decision -- is
+// not a decision: the run falls back to the refusal it used before elicitation
+// existed.
+func TestMCPRunFallsBackWhenTheClientCannotAnswer(t *testing.T) {
+	session := startServedRunServe(t, servedRunShellCall(), textChunk("the served run finished"))
+	session.initialize(t, true)
+	session.callRun(t)
+	id, _ := session.elicitation(t)
+	session.answerError(t, id, -32601, "elicitation is not supported")
+
+	result := session.result(t)
+	if result.IsError {
+		t.Fatalf("the fallback refusal failed the whole run: %#v", result.Content)
+	}
+	if len(result.Content) == 0 || !strings.Contains(result.Content[0].Text, "cannot ask a human") {
+		t.Fatalf("the fallback refusal was not used: %#v", result.Content)
+	}
+	names := refusedToolCalls(t, result)
+	if len(names) != 1 || names[0] != "shell" {
+		t.Fatalf("refusedToolCalls = %#v", result.StructuredContent["refusedToolCalls"])
+	}
+}
+
+// TestMCPRunNeverModeDoesNotElicit pins that `--approve never` is unchanged:
+// the operator's mode still governs -- a command the mode blocks is blocked by
+// the shell policy, not resolved by asking the client -- and the client is not
+// consulted even though it advertised that it could answer.
+func TestMCPRunNeverModeDoesNotElicit(t *testing.T) {
+	session := startServedRunServeWithApproval(t, "never", servedRunShellCall(), textChunk("the served run finished"))
+	session.initialize(t, true)
+	session.callRun(t)
+
+	// No elicitation is sent, so the run's own response is the next frame; an
+	// elicitation arriving first would fail the id check with "srv-1".
+	result := session.result(t)
+	if result.IsError {
+		t.Fatalf("the run reported an error: %#v", result.Content)
+	}
+	if names := refusedToolCalls(t, result); len(names) != 0 {
+		t.Fatalf("never mode resolved a call through the approval path: %#v", result.StructuredContent)
+	}
+	if !strings.Contains(session.model.body(), "command blocked") {
+		t.Fatalf("never mode did not block the command through the policy: %s", session.model.body())
+	}
+}
+
+// servedRunApprovalRequest is one valid approval request, as a tool would make
+// it, for tests that exercise the approval broker without a run behind it.
+func servedRunApprovalRequest() approval.Request {
+	return approval.Request{
+		ID:        "approval_test",
+		RunID:     "run_test",
+		ToolName:  "shell",
+		Operation: "shell.command",
+		Title:     "Approve shell command",
+		Risk:      approval.RiskHigh,
+		Options:   approval.DefaultOptions(),
+		CreatedAt: time.Now().UTC(),
+	}
+}
+
+// TestMCPRunFallsBackWhenTheElicitationTimesOut pins the timeout's fallback: a
+// client that is asked and never answers must not hold the run. The recorder's
+// own bound is shortened so the test does not wait out the five-minute default;
+// firing while the run's context is still alive, it denies the call with the
+// same refusal a client that cannot answer gets.
+func TestMCPRunFallsBackWhenTheElicitationTimesOut(t *testing.T) {
+	server, err := mcp.NewServer(mcp.ServerConfig{
+		Name:    "zenforge",
+		Version: "test",
+		Tools: []mcp.ServerTool{{
+			Name: "probe",
+			Handler: func(ctx context.Context, arguments json.RawMessage) (mcp.CallResult, error) {
+				return mcp.CallResult{Content: []mcp.Content{{Type: "text", Text: "ok"}}}, nil
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("NewServer returned error: %v", err)
+	}
+	session := startServedServer(t, server)
+	session.initialize(t, true)
+
+	const fallback = "the server could not ask"
+	recorder := &runApprovalRecorder{reason: fallback, elicit: true, elicitTimeout: 20 * time.Millisecond}
+	recorder.beginRun(server)
+
+	type outcome struct {
+		decision approval.Decision
+		err      error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		decision, err := recorder.Request(context.Background(), servedRunApprovalRequest())
+		done <- outcome{decision: decision, err: err}
+	}()
+
+	// The client is asked and then never answers.
+	request := readFrameWithin(t, session.reader, 5*time.Second)
+	if request["method"] != "elicitation/create" {
+		t.Fatalf("the frame was not an elicitation: %v", request)
+	}
+	select {
+	case got := <-done:
+		if got.err != nil {
+			t.Fatalf("the timeout returned an error instead of the refusal: %v", got.err)
+		}
+		if got.decision.Action != approval.DecisionReject || got.decision.Reason != fallback {
+			t.Fatalf("decision = %#v, want a rejection carrying the fallback reason", got.decision)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the elicitation timeout never fell back to the refusal")
+	}
+	if names := recorder.refused(); len(names) != 1 || names[0] != "shell" {
+		t.Fatalf("refused = %#v", names)
 	}
 }

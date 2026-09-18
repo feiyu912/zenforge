@@ -68,7 +68,7 @@ func Elicit(ctx context.Context, s *Server, message string, schema map[string]an
 	if !s.isServing() {
 		return ElicitationResult{}, ErrNotServing
 	}
-	if !s.elicitationAdvertised() {
+	if !s.ClientSupportsElicitation() {
 		return ElicitationResult{}, ErrElicitationUnsupported
 	}
 	text := strings.TrimSpace(message)
@@ -102,11 +102,19 @@ func Elicit(ctx context.Context, s *Server, message string, schema map[string]an
 	return result, nil
 }
 
-// elicitationAdvertised reports whether the last initialize named the
+// ClientSupportsElicitation reports whether the last initialize named the
 // elicitation capability in the client's capabilities block. The zero value is
 // false: a client that never initialized, or never said so, is not assumed to
 // support a method it never claimed.
-func (s *Server) elicitationAdvertised() bool {
+//
+// It is exported because Elicit is not the only caller that has to decide
+// before it writes anything. A server-initiated request is a visible act -- it
+// puts a frame on the client's stream and blocks the handler until the client
+// answers -- so a caller with something else to do when the client cannot
+// answer may check here and take that path without ever sending the request.
+// The answer is the client's own declaration, so it changes only when a new
+// initialize arrives; nothing this server advertises is affected.
+func (s *Server) ClientSupportsElicitation() bool {
 	if s == nil {
 		return false
 	}

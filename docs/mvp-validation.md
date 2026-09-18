@@ -211,6 +211,11 @@ rg -n '"[^"[:space:]]*agent-platform[^"[:space:]]*"' --glob "*.go" .
 | an unknown or late response is ignored, a request times out with no pending state left, and a request never outlives its stream | `TestServerIgnoresAResponseWithAnUnknownID`, `TestServerRequestTimesOutAndLeavesNoPendingState`, `TestServerRequestFailsWhenServeEnds`, `TestServerRequestRefusedWithNoStream`, `TestServerRequestNeedsACallerDeadline` |
 | elicitation accepts, declines, and cancels, and is refused when the client did not advertise it | `TestElicitationAcceptsDeclinesAndCancels`, `TestElicitationRefusedWhenTheClientDidNotAdvertiseIt`, `TestElicitationRefusedWithNoStream` |
 | concurrent handlers cannot kill the stream and a shutdown leaves nothing running | `TestServerConcurrentPanicDoesNotKillTheStream`, `TestServerServeShutdownLeavesNothingRunning` |
+| an approval gate asks an elicitation-capable client and runs the tool on approval | `TestMCPRunElicitsApprovalFromTheClient` |
+| a declined, cancelled, `approve:false`, or non-boolean answer denies the call and says the client declined | `TestMCPRunDeniesWhenTheClientDeclines`, `TestMCPRunTreatsANonBooleanApprovalAsADenial` |
+| a client that cannot answer gets the byte-for-byte old refusal (no capability, stream ended, timeout) | `TestMCPRunRefusesWithoutElicitationUsingTheOldText`, `TestMCPRunFallsBackWhenTheElicitationStreamEnds`, `TestMCPRunFallsBackWhenTheClientCannotAnswer`, `TestMCPRunFallsBackWhenTheElicitationTimesOut` |
+| `--approve never` never elicits | `TestMCPRunNeverModeDoesNotElicit` |
+| the handshake's elicitation capability is recorded, and a handler can reach its server | `TestClientSupportsElicitationFollowsTheHandshake`, `TestServerFromReachesTheServerFromAHandlerContext` |
 | a job is reported terminal only after its output has been drained | `jobs.TestRunWaitsForOutputWrittenAfterTheMainProcessExits`, `jobs.TestCollectSignalsDrainedOnlyAfterBothStreamsEnd` |
 | a job whose pipes are held open by a background grandchild still becomes terminal | `jobs.TestJobWhoseOutputIsHeldByAGrandchildStillBecomesTerminal` |
 | memory entries augment normalized tasks | `adapters/memory.TestAugmentTaskAddsMemoryBlockAndMetadata` |

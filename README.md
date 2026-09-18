@@ -742,9 +742,11 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
   early with `zenforge_run_cancel`. The tool is
   advertised without a read-only hint so the calling client asks its own
   operator, it does not exist without the grant from this host's operator, and
-  inside the served run `--approve always` is what allows approval-gated tools
-  — the default `prompt` cannot be honored on a stdio server, so it becomes a
-  refusal that the caller is told about along with the run's outcome.
+  inside the served run approval-gated tools are allowed when the calling
+  client advertises MCP elicitation (the gate asks it for a boolean decision and
+  grants that one call), while the default `prompt` falls back to a refusal —
+  reported with the run's outcome — for a client that cannot answer, and
+  `--approve always` skips the question entirely.
 - Configured MCP servers (DSH/codex MCP client): a `mcpServers` config section
   starts stdio servers and exposes their tools as `mcp__<server>__<tool>`,
   with `deferred: true` opting a server into `tool_search` activation. The
