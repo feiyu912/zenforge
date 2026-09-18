@@ -116,6 +116,18 @@ what is experimental, and what remains adapter territory.
   the only place a second provider's key can live. A name that cannot be
   resolved is a fatal `AGENT_START`, never a silent run on the host's model.
 
+## Webhook Runs
+
+- The webhook endpoint (`POST /webhook/run`) is registered only when a secret
+  is configured, and the signature covers `timestamp.body`, so a captured
+  request cannot be replayed with a fresh timestamp; a timestamp outside
+  -5 minutes/+1 minute is refused. There is no per-webhook scoping yet: one
+  secret authorises every webhook run this server accepts, and it starts runs
+  with the server's own workspace, tools, and approval mode.
+- The reply is an acknowledgement (`202` with the run id), not the answer: the
+  caller polls the run endpoints, and the durable store is where the result
+  lives.
+
 ## Schedules
 
 - A durable schedule is a file (`<checkpoint dir>/schedules.json`) plus

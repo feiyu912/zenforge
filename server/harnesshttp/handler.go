@@ -34,6 +34,7 @@ type Handler struct {
 	SSE           sse.Options
 	LiveBuffer    int
 	Access        AccessController
+	Webhook       WebhookOptions
 }
 
 type Operation struct {

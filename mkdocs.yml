@@ -207,6 +207,7 @@ nav:
       - 0067 A served run can outlive its call: adr/0067-a-served-run-can-outlive-its-call.md
       - 0068 A run a caller can stop: adr/0068-a-run-a-caller-can-stop.md
       - 0069 A schedule outlives the process that added it: adr/0069-a-schedule-outlives-the-process.md
+      - 0070 A signed webhook starts a run: adr/0070-a-signed-webhook-starts-a-run.md
 
 extra:
   social:

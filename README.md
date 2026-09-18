@@ -135,6 +135,11 @@ go run ./cmd/zenforge schedule list --config zenforge.json
 go run ./cmd/zenforge schedule run-due --config zenforge.json   # from cron/launchd
 ```
 
+`examples/http-harness-agent` serves the HTTP harness; with a webhook secret
+(`-webhook-secret` or `ZENFORGE_WEBHOOK_SECRET`) it also serves
+`POST /webhook/run`, which starts a run from an HMAC-SHA256-signed body so an
+external system can trigger work without holding a ZenForge credential.
+
 `run` executes a task in the configured workspace. `exec [prompt]` is the
 headless one-shot entry point: `--json` streams the run as JSONL events, `-o`
 /`--output-last-message` writes the final message to a file, and

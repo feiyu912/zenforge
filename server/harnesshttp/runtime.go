@@ -19,6 +19,7 @@ type RuntimeOptions struct {
 	ApprovalInbox  approval.Inbox
 	ApprovalBuffer int
 	LiveBuffer     int
+	Webhook        WebhookOptions
 }
 
 // Runtime is the canonical assembly for serving a ZenForge agent with
@@ -72,6 +73,7 @@ func NewRuntime(config zenforge.Config, durable eventlog.Store, opts RuntimeOpti
 	handler.Approvals = approvals
 	handler.Access = opts.Access
 	handler.LiveBuffer = opts.LiveBuffer
+	handler.Webhook = opts.Webhook
 
 	return &Runtime{
 		Agent:         agent,

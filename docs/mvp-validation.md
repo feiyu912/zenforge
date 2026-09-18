@@ -190,6 +190,10 @@ rg -n '"[^"[:space:]]*agent-platform[^"[:space:]]*"' --glob "*.go" .
 | `schedule run-due` runs an overdue schedule, records the run, reports the missed windows, and a dry run consumes nothing | `TestScheduleRunDueRunsAnOverdueScheduleAndReportsWhatItSkipped` |
 | `schedule run-due --json` is machine-readable and empty when nothing is due | `TestScheduleRunDueJSONIsMachineReadableAndEmptyWhenNothingIsDue` |
 | a failed firing is recorded, still advances the schedule, and makes run-due exit non-zero | `TestScheduleRunDueFailsLoudly` |
+| a correctly signed webhook starts a run and answers 202 with its id | `TestWebhookRunStartsSignedRun`, `TestWebhookRunRouteRegisteredWithSecret` |
+| a wrong, missing, or body-only signature is refused and starts no run | `TestWebhookRunRejectsWrongSignatureAndStartsNoRun`, `TestWebhookRunRejectsMissingSignature`, `TestWebhookRunRejectsSignatureWithoutTimestampPrefix` |
+| a stale, future, missing, or unparsable timestamp is refused even with a valid signature for it | `TestWebhookRunRejectsStaleTimestampEvenWithValidSignature`, `TestWebhookRunRejectsFutureTimestampEvenWithValidSignature`, `TestWebhookRunRejectsMissingOrUnparsableTimestamp` |
+| the webhook route does not exist without a configured secret, and rejects non-POST | `TestWebhookRunRouteAbsentWithoutSecret`, `TestWebhookRunRejectsNonPostMethod` |
 | a job is reported terminal only after its output has been drained | `jobs.TestRunWaitsForOutputWrittenAfterTheMainProcessExits`, `jobs.TestCollectSignalsDrainedOnlyAfterBothStreamsEnd` |
 | a job whose pipes are held open by a background grandchild still becomes terminal | `jobs.TestJobWhoseOutputIsHeldByAGrandchildStillBecomesTerminal` |
 | memory entries augment normalized tasks | `adapters/memory.TestAugmentTaskAddsMemoryBlockAndMetadata` |

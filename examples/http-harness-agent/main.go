@@ -49,6 +49,7 @@ func main() {
 	var skillRoot string
 	var recoverStale bool
 	var recoveryMax int
+	var webhookSecret string
 	flag.StringVar(&address, "addr", "127.0.0.1:8080", "loopback HTTP listen address")
 	flag.StringVar(&dataDir, "data-dir", ".zenforge/http-harness", "directory for SQLite state")
 	flag.StringVar(&workspace, "workspace", ".", "host workspace mounted read-only into Docker")
@@ -56,6 +57,10 @@ func main() {
 	flag.StringVar(&skillRoot, "skill-root", envOrDefault("ZENFORGE_SKILL_ROOT", "examples/harness-agent/skills"), "Agent Skill catalog directory")
 	flag.BoolVar(&recoverStale, "recover-stale", false, "explicitly resume expired detached runs during startup")
 	flag.IntVar(&recoveryMax, "recovery-max", 32, "maximum stale runs to recover when -recover-stale is set")
+	// The secret falls back to the environment so it can be kept out of argv,
+	// where every local process could read it. An empty secret disables the
+	// signed-webhook route entirely rather than allowing unauthenticated runs.
+	flag.StringVar(&webhookSecret, "webhook-secret", envOrDefault("ZENFORGE_WEBHOOK_SECRET", ""), "shared secret for the signed POST /webhook/run trigger; empty disables the endpoint")
 	flag.Parse()
 
 	if !isLoopbackAddress(address) {
@@ -159,6 +164,7 @@ func main() {
 		MaxSteps:    12,
 	}, events, harnesshttp.RuntimeOptions{
 		ApprovalInbox: approvalInbox,
+		Webhook:       harnesshttp.WebhookOptions{Secret: webhookSecret},
 		Manager: harnesshttp.RunManagerOptions{
 			MaxActive:         16,
 			RunTimeout:        10 * time.Minute,
@@ -199,6 +205,9 @@ func main() {
 	mux.HandleFunc("/runs/cancel", runtime.Handler.ServeDetachedCancel)
 	mux.HandleFunc("/approvals", runtime.Handler.ServeApprovals)
 	mux.HandleFunc("/approval", runtime.Handler.ServeApproval)
+	// The signed-webhook trigger is registered only when a secret is set;
+	// an accidental deployment without one 404s instead of starting runs.
+	runtime.Handler.RegisterWebhookRun(mux)
 
 	server := &http.Server{Addr: address, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	signalCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
