@@ -223,6 +223,7 @@ nav:
       - 0080 The module graph is validated: adr/0080-the-module-graph-is-validated.md
       - 0081 The console answers in envelopes: adr/0081-the-console-answers-in-envelopes.md
       - 0082 The host names the model and records what it cannot answer: adr/0082-the-host-names-what-it-cannot-answer.md
+      - 0083 The streams are mounted with the console: adr/0083-the-streams-are-mounted-with-the-console.md
 
 extra:
   social:

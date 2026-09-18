@@ -96,3 +96,4 @@ later ADRs supersede earlier ones, never edit.
 | [0080](0080-the-module-graph-is-validated.md) | The module graph is validated |
 | [0081](0081-the-console-answers-in-envelopes.md) | The console answers in envelopes |
 | [0082](0082-the-host-names-what-it-cannot-answer.md) | The host names the model and records what it cannot answer |
+| [0083](0083-the-streams-are-mounted-with-the-console.md) | The streams are mounted with the console |

@@ -17,10 +17,11 @@ import (
 	"time"
 
 	"github.com/feiyu912/zenforge/approval"
+	"github.com/feiyu912/zenforge/internal/dshmount"
+	"github.com/feiyu912/zenforge/internal/dshstream"
 	"github.com/feiyu912/zenforge/model"
 	"github.com/feiyu912/zenforge/model/provider"
 	"github.com/feiyu912/zenforge/server/harnesshttp"
-	"github.com/feiyu912/zenforge/webui"
 )
 
 const (
@@ -213,37 +214,95 @@ func newServeApp(ctx context.Context, opts *options, ioStreams IO, config serveC
 		workspace = absolute
 	}
 
+	// The DSH console is the product surface: its boot-injected shell, staged
+	// assets, module bundles, and unary RPCs share one origin, which is what the
+	// console requires (its RPC base is hard-wired to the page origin). Building
+	// it is where a roster that cannot boot fails, before a listener is opened.
+	console, err := dshmount.New(runtime.Manager, runtime.Events, dshmount.Config{AllowRemote: config.allowRemote})
+	if err != nil {
+		return nil, err
+	}
+
+	// The console cannot follow a session over unary RPC: sessions, live events
+	// and approvals travel on the WebSocket mux, and an approval is answered on
+	// its own route. Both are the same handler, mounted at the paths that
+	// package exports, so the two halves cannot drift apart.
+	stream, err := dshstream.New(runtime.Manager, runtime.Events, inbox, dshstream.Config{AllowRemote: config.allowRemote})
+	if err != nil {
+		return nil, err
+	}
+
+	mux := newServeMux(serveMuxConfig{
+		registerHarness: func(mux *http.ServeMux) {
+			handler := runtime.Handler
+			mux.HandleFunc("/runs/start", handler.ServeDetachedStart)
+			mux.HandleFunc("/runs/resume", handler.ServeDetachedResume)
+			mux.HandleFunc("/runs/status", handler.ServeDetachedStatus)
+			mux.HandleFunc("/runs", handler.ServeDetachedRuns)
+			mux.HandleFunc("/runs/attach", handler.ServeDetachedAttach)
+			mux.HandleFunc("/runs/cancel", handler.ServeDetachedCancel)
+			mux.HandleFunc("/approvals", handler.ServeApprovals)
+			mux.HandleFunc("/approval", handler.ServeApproval)
+			// The signed-webhook trigger is registered only when a secret is set, so
+			// a deployment without one 404s instead of starting runs unauthenticated.
+			handler.RegisterWebhookRun(mux)
+		},
+		settings:    settings,
+		workspace:   workspace,
+		allowRemote: config.allowRemote,
+		dsh:         console,
+		stream:      stream,
+	})
+
+	return &serveApp{runtime: runtime, handler: mux, settings: settings, workspace: workspace}, nil
+}
+
+// serveMuxConfig is the route table's inputs. They are handlers and a
+// registration callback rather than the runtime itself so the table can be
+// built and asserted in a test without a model, an event store, or a run
+// manager; newServeApp is the only production caller.
+type serveMuxConfig struct {
+	registerHarness func(*http.ServeMux)
+	settings        *settingsStore
+	workspace       string
+	allowRemote     bool
+	dsh             http.Handler
+	stream          http.Handler
+}
+
+// newServeMux assembles every served route. Precedence is the point:
+//
+//   - the harness routes, the settings API, and the server-info route register
+//     their exact patterns and win over the console catch-all;
+//   - the DSH console is mounted at "/", where its own handler claims the shell,
+//     the staged assets, /plugins/..., and /api/... — the root path is required
+//     because the shell's asset URLs are relative.
+//
+// The console is the only HTML surface serve offers: the interim first-party
+// console is deliberately not mounted, so a browser that asks for /classic/
+// falls through to the console's own 404 rather than a second interface.
+func newServeMux(cfg serveMuxConfig) *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/runs/start", runtime.Handler.ServeDetachedStart)
-	mux.HandleFunc("/runs/resume", runtime.Handler.ServeDetachedResume)
-	mux.HandleFunc("/runs/status", runtime.Handler.ServeDetachedStatus)
-	mux.HandleFunc("/runs", runtime.Handler.ServeDetachedRuns)
-	mux.HandleFunc("/runs/attach", runtime.Handler.ServeDetachedAttach)
-	mux.HandleFunc("/runs/cancel", runtime.Handler.ServeDetachedCancel)
-	mux.HandleFunc("/approvals", runtime.Handler.ServeApprovals)
-	mux.HandleFunc("/approval", runtime.Handler.ServeApproval)
-	// The signed-webhook trigger is registered only when a secret is set, so
-	// a deployment without one 404s instead of starting runs unauthenticated.
-	runtime.Handler.RegisterWebhookRun(mux)
-	mux.HandleFunc("/api/settings", settings.serveHTTP)
+	if cfg.registerHarness != nil {
+		cfg.registerHarness(mux)
+	}
+	mux.HandleFunc("/api/settings", cfg.settings.serveHTTP)
 	mux.HandleFunc("/api/server", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			writeServeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "server info requires GET")
 			return
 		}
 		writeServeJSON(w, http.StatusOK, map[string]any{
-			"workspace":   workspace,
-			"allowRemote": config.allowRemote,
+			"workspace":   cfg.workspace,
+			"allowRemote": cfg.allowRemote,
 		})
 	})
-	// The console serves both its own entry point and its assets. Registering
-	// both patterns makes the intent explicit and keeps a future asset
-	// directory from being shadowed by the catch-all.
-	console := webui.Handler()
-	mux.Handle("/assets/", console)
-	mux.Handle("/", console)
-
-	return &serveApp{runtime: runtime, handler: mux, settings: settings, workspace: workspace}, nil
+	if cfg.stream != nil {
+		mux.Handle(dshstream.MuxPath, cfg.stream)
+		mux.Handle(dshstream.EventsResultPath, cfg.stream)
+	}
+	mux.Handle("/", cfg.dsh)
+	return mux
 }
 
 // isLoopbackListenAddr reports whether addr proves it binds only the loopback

@@ -140,6 +140,26 @@ what is experimental, and what remains adapter territory.
 - `session/create` refuses `cwd`/`workspaceId`/`agentPreset` for the same
   reason: per-run working directories and presets do not exist in this harness.
 
+## Browser Console
+
+- The console that `zenforge serve` offers at `/` is the **rebranded upstream
+  DSH console**, so its model configuration is **host-side** by upstream design:
+  a browser session sends no credentials. Give the endpoint and key to the
+  process (`--base-url`, `--model`, `--api-key`, or the environment) and the
+  console's model picker reports that configuration through
+  `session/modelCatalog`.
+- A session maps to one run, so a session cannot yet continue after its run
+  finishes (multi-turn); a second prompt is refused with a clear error.
+- The sidebar does not mutate live, background-job panels are empty, and
+  assistant prose does not stream through the console's delta channel: this
+  harness has a per-run event log, no global change feed, no job projections and
+  no console-shaped delta protocol. Session lists, event follow and approvals do
+  work. See ADR 0083.
+- Panels needing namespaces this host does not serve (workspace files, tools,
+  subagents, plugin manager) show a feature-level error rather than data; the
+  host logs which endpoint was asked for, which is how the remaining ones get
+  prioritised.
+
 ## MCP Sampling
 
 - A sampled run reasons in text. `sampling/createMessage` has no tool field, so
