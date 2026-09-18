@@ -73,3 +73,4 @@ later ADRs supersede earlier ones, never edit.
 | [0057](0057-workflow-engine-javascript-sandbox.md) | The workflow engine is a JavaScript sandbox inside the Go process |
 | [0058](0058-job-terminal-after-output-drain.md) | A job is terminal only after its output is drained |
 | [0059](0059-workflow-tool-wiring.md) | A workflow script drives sub-agent runs through the orchestrator |
+| [0060](0060-terminal-jobs-and-head-tail-buffers.md) | A terminal job is a session, and a bounded buffer keeps both ends |

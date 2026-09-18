@@ -260,11 +260,19 @@ long test run stops blocking the turn: `exec_command` with
 `background=true` returns a job id, `job_output` reads each stream from the
 offsets it returns (and reports when the bounded buffer dropped output
 instead of hiding it), `write_stdin` feeds interactive programs, and
-`job_kill` stops a job. A job is reported as finished only after its output
-has been drained into those buffers (ADR 0058), so the terminal state and a
-readable result arrive together; a command that hands its pipes to a
-background process is bounded by the manager's drain grace instead of waiting
-forever. The manager is closed when the command's context ends, so
+`job_kill` stops a job. `background=true, pty=true` runs the command on a
+terminal instead, which is what an interactive program, a prompt, or a
+full-screen tool needs: its output and errors arrive as one stream, writing
+to it is `write_stdin`, and killing it signals the whole session's process
+group, so a foreground child that ignored `SIGHUP` does not keep the terminal
+open (ADR 0060). A job is reported as finished only after its output has been
+drained into those buffers (ADR 0058), so the terminal state and a readable
+result arrive together; a command that hands its pipes to a background
+process is bounded by the manager's drain grace instead of waiting forever.
+The bounded buffer keeps both ends of a stream, so a flooded job still shows
+its first lines, and a read that crossed the discarded middle reports how many
+bytes it skipped (`elidedBytes`, `output-dropped(N)`) rather than hiding the
+hole. The manager is closed when the command's context ends, so
 interrupting the CLI does not leave a background process behind.
 
 ## Goals and Ralph

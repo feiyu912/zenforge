@@ -197,6 +197,7 @@ nav:
       - 0057 Workflow engine JavaScript sandbox: adr/0057-workflow-engine-javascript-sandbox.md
       - 0058 Job terminal after output drain: adr/0058-job-terminal-after-output-drain.md
       - 0059 Workflow tool wiring: adr/0059-workflow-tool-wiring.md
+      - 0060 Terminal jobs and head+tail buffers: adr/0060-terminal-jobs-and-head-tail-buffers.md
 
 extra:
   social:

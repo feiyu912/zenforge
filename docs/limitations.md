@@ -99,6 +99,26 @@ what is experimental, and what remains adapter territory.
   no per-child model resolver yet, so a script that asks for one fails loudly
   instead of silently running on the host's model.
 
+## Long-Running Commands
+
+- A terminal job (`pty: true`) has one stream: its stderr view is always empty
+  and its stdout carries both, and the terminal's own behaviour applies
+  (`\n` becomes `\r\n`, typed input is echoed, full-screen escape sequences
+  land in the output). Do not choose `pty` for output a program must parse.
+- A terminal job's environment gets a `TERM` only when the resolved
+  environment has none; an explicit host or spec environment is never
+  overridden, so a caller that wants colours must set `TERM` itself.
+- Terminal jobs are Unix-only: off Unix `pty: true` is refused with a clear
+  error rather than run on pipes while claiming a terminal, and the
+  process-group kill that stops a terminal session's children is Unix-only.
+- A job's environment is never rendered (`Spec.Env` is `json:"-"`), which is
+  why no credential scrubber exists: there is no snapshot surface to scrub.
+  A host that starts recording job environments must add the scrubber with
+  that surface (ADR 0060).
+- The bounded buffer keeps a head of at most 8KiB (a quarter of the stream
+  cap) plus the newest bytes, so a reader that never polls still loses the
+  middle; it is told how much (`elidedBytes`).
+
 ## Deferred Systems
 
 - Full platform memory extraction is not included. Retrieved memory can be

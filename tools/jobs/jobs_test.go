@@ -299,3 +299,83 @@ func TestOutputHintPointersForARunningJob(t *testing.T) {
 	}
 	h.call(t, KillName, killInput{JobID: id, Reason: "done"})
 }
+
+func TestExecCommandRunsAnInteractivePTYSession(t *testing.T) {
+	h := newHarness(t)
+	started := h.call(t, ExecName, map[string]any{
+		"command":    "read line; echo \"got:$line\"",
+		"background": true,
+		"pty":        true,
+		"rows":       40,
+		"cols":       120,
+	})
+	id, _ := started["jobId"].(string)
+	if id == "" {
+		t.Fatalf("pty session was not started: %#v", started)
+	}
+	snapshot, err := h.manager.Get(id)
+	if err != nil {
+		t.Fatalf("Get returned error: %v", err)
+	}
+	if !snapshot.Spec.PTY || snapshot.Spec.Rows != 40 || snapshot.Spec.Cols != 120 {
+		t.Fatalf("pty spec was not carried through: %#v", snapshot.Spec)
+	}
+	h.call(t, WriteName, map[string]any{"jobId": id, "input": "hi\n"})
+	deadline := time.Now().Add(5 * time.Second)
+	var output map[string]any
+	for time.Now().Before(deadline) {
+		output = h.call(t, OutputName, map[string]any{"jobId": id, "maxBytes": 4096})
+		if text, _ := output["output"].(string); strings.Contains(text, "got:hi") {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	text, _ := output["output"].(string)
+	if !strings.Contains(text, "got:hi") {
+		t.Fatalf("interactive session never answered: %q", text)
+	}
+	// A terminal has one stream: the merged output arrives as stdout and the
+	// stderr view stays empty.
+	if stderr, _ := output["stderr"].(string); stderr != "" {
+		t.Fatalf("pty session produced a separate stderr stream: %q", stderr)
+	}
+	if total, ok := output["stderrTotal"].(float64); ok && total != 0 {
+		t.Fatalf("pty session reported stderr bytes: %v", total)
+	}
+}
+
+func TestExecCommandRefusesTerminalSizeWithoutAPTY(t *testing.T) {
+	h := newHarness(t)
+	err := h.callErr(t, ExecName, map[string]any{"command": "true", "rows": 40})
+	if err == nil || !strings.Contains(err.Error(), "rows") {
+		t.Fatalf("terminal size without pty error = %v", err)
+	}
+}
+
+func TestJobOutputReportsElidedBytes(t *testing.T) {
+	h := newHarness(t)
+	started := h.call(t, ExecName, map[string]any{
+		"command":        "for i in 1 2 3 4 5 6 7 8 9 10; do echo line-$i; done",
+		"maxOutputBytes": 64,
+	})
+	id, _ := started["jobId"].(string)
+	if id == "" {
+		t.Fatalf("job was not started: %#v", started)
+	}
+	head := h.call(t, OutputName, map[string]any{"jobId": id, "maxBytes": 4096})
+	if text, _ := head["output"].(string); !strings.Contains(text, "line-1") {
+		t.Fatalf("head of the output was not kept: %q", text)
+	}
+	next, _ := head["stdoutOffset"].(float64)
+	tail := h.call(t, OutputName, map[string]any{"jobId": id, "stdoutOffset": int(next), "maxBytes": 4096})
+	output, _ := tail["output"].(string)
+	if !strings.Contains(output, "line-10") {
+		t.Fatalf("tail of the output was not readable: %q", output)
+	}
+	if elided, _ := tail["elidedBytes"].(float64); elided <= 0 {
+		t.Fatalf("elided bytes were not reported: %#v", tail)
+	}
+	if !strings.Contains(output, "output-dropped(") {
+		t.Fatalf("the rendered footer did not report the hole: %q", output)
+	}
+}

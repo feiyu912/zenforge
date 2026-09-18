@@ -505,6 +505,14 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
 - A background job is announced as terminal only after its output has been
   drained, so a foreground `Run` returns the output a command produced instead
   of racing the pipe copies (ADR 0058).
+- `exec_command` can run a command on a pseudo-terminal (`pty: true`, with
+  `rows`/`cols`): interactive programs, prompts, and full-screen tools behave
+  as they would for a human, the merged stream arrives as the job's stdout,
+  `write_stdin` drives it, and killing it signals the session's whole process
+  group so a `SIGHUP`-ignoring child cannot keep the terminal open (ADR 0060).
+  A bounded output buffer keeps both ends of a stream, so a flooded job still
+  shows its first lines and any read that crossed the discarded middle reports
+  how many bytes it skipped.
 - `workflow/` runs the reference's orchestration scripts in-process (ADR
   0057): a JavaScript body with top-level `await`, `agent()`/`parallel()`/
   `pipeline()`/`phase()`/`log()` hooks, an `args` input, a bounded

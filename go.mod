@@ -3,6 +3,7 @@ module github.com/feiyu912/zenforge
 go 1.26.0
 
 require (
+	github.com/creack/pty v1.1.24
 	github.com/dop251/goja v0.0.0-20260917113740-793a2a65c13b
 	go.opentelemetry.io/otel v1.35.0
 	go.opentelemetry.io/otel/sdk v1.35.0

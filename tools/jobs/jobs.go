@@ -32,9 +32,9 @@ const (
 // Description mirrors the reference execution model: one interface for
 // foreground commands, background jobs, input, and output.
 const (
-	ExecDescription   = "Run a shell command. With background=true the command keeps running after this call returns and you poll it with job_output, feed it with write_stdin, and stop it with job_kill; use that for dev servers, watch loops, and anything long-running. Foreground commands block until they finish or hit timeoutMs and return their output and exit code."
+	ExecDescription   = "Run a shell command. With background=true the command keeps running after this call returns and you poll it with job_output, feed it with write_stdin, and stop it with job_kill; use that for dev servers, watch loops, and anything long-running. Foreground commands block until they finish or hit timeoutMs and return their output and exit code. Set pty=true for an interactive session: the command runs on a terminal (so prompts, prompts-driven tools, and full-screen programs work), its output and errors arrive as one stream, and write_stdin feeds it."
 	WriteDescription  = "Send input to a running job's stdin, optionally closing it afterwards so a reader-driven program learns that no more input is coming."
-	OutputDescription = "Read a running or finished job's output. Pass the stdoutOffset/stderrOffset from the previous read to get only new bytes; the response returns the next offsets and flags when the job's bounded buffer dropped older output, so you never silently miss it. waitMs lets the call block briefly for new output instead of polling in a tight loop."
+	OutputDescription = "Read a running or finished job's output. Pass the stdoutOffset/stderrOffset from the previous read to get only new bytes; the response returns the next offsets and flags when the job's bounded buffer dropped older output, with how many bytes were skipped, so you never silently miss it. A bounded buffer keeps the beginning of the stream as well as its newest bytes, so a flooded job still shows how it started. waitMs lets the call block briefly for new output instead of polling in a tight loop."
 	ListDescription   = "List the jobs this session has started, with their status, exit codes, and byte counts."
 	KillDescription   = "Stop a job and its process. Killing an already finished job is not an error."
 )
@@ -87,6 +87,9 @@ type execInput struct {
 	Stdin          string `json:"stdin,omitempty" jsonschema:"description=Input written to the command's stdin before it is read"`
 	TimeoutMs      int    `json:"timeoutMs,omitempty" jsonschema:"description=Timeout in milliseconds; a foreground command returns on timeout, a background command is killed"`
 	MaxOutputBytes int    `json:"maxOutputBytes,omitempty" jsonschema:"description=Per-stream output cap in bytes"`
+	PTY            bool   `json:"pty,omitempty" jsonschema:"description=Run the command on a terminal: interactive programs behave normally, output and errors merge into one stream, and write_stdin feeds it"`
+	Rows           int    `json:"rows,omitempty" jsonschema:"description=Terminal rows for a pty command; defaults to 24"`
+	Cols           int    `json:"cols,omitempty" jsonschema:"description=Terminal columns for a pty command; defaults to 80"`
 }
 
 type execOutput struct {
@@ -100,6 +103,7 @@ type execOutput struct {
 	StdoutTotal int64  `json:"stdoutTotal,omitempty"`
 	StderrTotal int64  `json:"stderrTotal,omitempty"`
 	Truncated   bool   `json:"truncated,omitempty"`
+	ElidedBytes int64  `json:"elidedBytes,omitempty"`
 	DurationMs  int64  `json:"durationMs"`
 }
 
@@ -118,6 +122,9 @@ func newExec(config Config) (tool.Tool, error) {
 			Stdin:          in.Stdin,
 			Timeout:        time.Duration(in.TimeoutMs) * time.Millisecond,
 			MaxOutputBytes: in.MaxOutputBytes,
+			PTY:            in.PTY,
+			Rows:           in.Rows,
+			Cols:           in.Cols,
 		}
 		if spec.MaxOutputBytes <= 0 {
 			spec.MaxOutputBytes = config.MaxOutputBytes
@@ -156,6 +163,7 @@ func renderExec(job jobspkg.Job, result jobspkg.Result) execOutput {
 		StdoutTotal: job.StdoutTotal,
 		StderrTotal: job.StderrTotal,
 		Truncated:   result.Stdout.Dropped || result.Stderr.Dropped,
+		ElidedBytes: result.Stdout.Elided + result.Stderr.Elided,
 		DurationMs:  job.Duration.Milliseconds(),
 	}
 	var builder strings.Builder
@@ -177,7 +185,7 @@ func renderExec(job jobspkg.Job, result jobspkg.Result) execOutput {
 		fmt.Fprintf(&builder, " error=%q", job.Error)
 	}
 	if out.Truncated {
-		builder.WriteString(" output-dropped")
+		fmt.Fprintf(&builder, " output-dropped(%d)", out.ElidedBytes)
 	}
 	builder.WriteString("]")
 	out.Output = strings.TrimLeft(builder.String(), "\n")
@@ -259,6 +267,7 @@ type outputOutput struct {
 	StderrTotal   int64  `json:"stderrTotal"`
 	StdoutDropped bool   `json:"stdoutDropped,omitempty"`
 	StderrDropped bool   `json:"stderrDropped,omitempty"`
+	ElidedBytes   int64  `json:"elidedBytes,omitempty"`
 	Running       bool   `json:"running"`
 	DurationMs    int64  `json:"durationMs"`
 	Hint          string `json:"hint,omitempty"`
@@ -326,6 +335,7 @@ func renderOutput(result jobspkg.Result, in outputInput, maxBytes int) outputOut
 		StderrTotal:   job.StderrTotal,
 		StdoutDropped: result.Stdout.Dropped || job.StdoutDropped,
 		StderrDropped: result.Stderr.Dropped || job.StderrDropped,
+		ElidedBytes:   result.Stdout.Elided + result.Stderr.Elided,
 		Running:       job.Running(),
 		DurationMs:    job.Duration.Milliseconds(),
 	}
@@ -348,7 +358,7 @@ func renderOutput(result jobspkg.Result, in outputInput, maxBytes int) outputOut
 		fmt.Fprintf(&builder, " exit=%d", *job.ExitCode)
 	}
 	if out.StdoutDropped || out.StderrDropped {
-		builder.WriteString(" output-dropped")
+		fmt.Fprintf(&builder, " output-dropped(%d)", out.ElidedBytes)
 	}
 	builder.WriteString("]")
 	out.Output = builder.String()

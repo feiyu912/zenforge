@@ -145,6 +145,9 @@ func (m *Manager) Start(ctx context.Context, spec Spec) (Job, error) {
 	command := exec.CommandContext(jobCtx, m.shell, "-c", spec.Command)
 	command.Dir = m.workingDir(spec)
 	command.Env = m.environment(spec)
+	if spec.PTY {
+		return m.startPTY(id, rec, command, jobCtx)
+	}
 	// The pipes are created here rather than through StdoutPipe: StdoutPipe's
 	// read end is closed by Wait, which races the copies still draining the
 	// bytes a fast command left in the pipe. These read ends belong to the
@@ -209,6 +212,46 @@ func (m *Manager) Start(ctx context.Context, spec Spec) (Job, error) {
 	drained := make(chan struct{})
 	go m.collect(rec, stdout, stderr, drained)
 	go m.wait(rec, command, drained, stdout, stderr)
+	return m.snapshot(id)
+}
+
+// startPTY attaches a started command to a pseudo-terminal. The terminal is
+// one stream: the master carries what the process writes and what is typed
+// back to it, so the job's stdout receives both stdout and stderr, and the
+// stderr view stays empty.
+func (m *Manager) startPTY(id string, rec *record, command *exec.Cmd, jobCtx context.Context) (Job, error) {
+	_ = jobCtx
+	rows, cols := rec.job.Spec.TerminalSize()
+	master, err := startTerminal(command, rows, cols)
+	if err != nil {
+		m.fail(id, fmt.Errorf("start pty: %w", err))
+		return m.snapshot(id)
+	}
+	timeout := rec.job.Spec.Timeout
+	if timeout == 0 {
+		timeout = m.defaultTimeout
+	}
+	m.mu.Lock()
+	// Writing to the master is writing to the process's stdin, and closing
+	// it is how the process learns that no more input is coming.
+	rec.stdin = master
+	rec.job.PID = command.Process.Pid
+	if timeout > 0 {
+		rec.timer = time.AfterFunc(timeout, func() {
+			m.kill(id, fmt.Sprintf("timeout after %s", timeout))
+		})
+	}
+	m.mu.Unlock()
+	if rec.job.Spec.Stdin != "" {
+		if _, err := io.WriteString(master, rec.job.Spec.Stdin); err != nil {
+			_ = master.Close()
+			m.fail(id, fmt.Errorf("write stdin: %w", err))
+			return m.snapshot(id)
+		}
+	}
+	drained := make(chan struct{})
+	go m.collect(rec, master, nil, drained)
+	go m.wait(rec, command, drained, master)
 	return m.snapshot(id)
 }
 
@@ -350,8 +393,16 @@ func (m *Manager) kill(id, reason string) error {
 	if timer != nil {
 		timer.Stop()
 	}
+	ptyJob := rec.job.Spec.PTY
+	pid := rec.job.PID
 	m.mu.Unlock()
 	if !terminal {
+		// A terminal job is a session leader, so killing its process group
+		// takes the foreground child it started with it. The context cancel
+		// then reaps the shell itself.
+		if ptyJob {
+			_ = terminateProcessGroup(pid)
+		}
 		cancel()
 	}
 	return nil
@@ -407,15 +458,32 @@ func (m *Manager) workingDir(spec Spec) string {
 	return m.defaultCWD
 }
 
-// environment resolves a spec's environment.
+// environment resolves a spec's environment. A terminal job gets a TERM so
+// that full-screen and colouring programs see the terminal they are on.
 func (m *Manager) environment(spec Spec) []string {
-	if len(spec.Env) > 0 {
-		return spec.Env
+	var env []string
+	switch {
+	case len(spec.Env) > 0:
+		env = append([]string(nil), spec.Env...)
+	case len(m.env) > 0:
+		env = append([]string(nil), m.env...)
+	default:
+		env = os.Environ()
 	}
-	if len(m.env) > 0 {
-		return m.env
+	if spec.PTY && !hasEnv(env, "TERM") {
+		env = append(env, "TERM=xterm-256color")
 	}
-	return os.Environ()
+	return env
+}
+
+func hasEnv(env []string, name string) bool {
+	prefix := name + "="
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // collect drains both pipes into their buffers and reports when it is done.
@@ -423,17 +491,20 @@ func (m *Manager) environment(spec Spec) []string {
 // the pipe when its process exits.
 func (m *Manager) collect(rec *record, stdout, stderr io.ReadCloser, drained chan<- struct{}) {
 	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() {
+	drain := func(dst *Buffer, src io.ReadCloser) {
 		defer wg.Done()
-		defer func() { _ = stdout.Close() }()
-		_, _ = io.Copy(rec.stdout, stdout)
-	}()
-	go func() {
-		defer wg.Done()
-		defer func() { _ = stderr.Close() }()
-		_, _ = io.Copy(rec.stderr, stderr)
-	}()
+		defer func() { _ = src.Close() }()
+		// A terminal read reports EIO once the child is gone; the bytes that
+		// were buffered have already arrived, so the error ends the copy
+		// rather than failing the job.
+		_, _ = io.Copy(dst, src)
+	}
+	wg.Add(1)
+	go drain(rec.stdout, stdout)
+	if stderr != nil {
+		wg.Add(1)
+		go drain(rec.stderr, stderr)
+	}
 	wg.Wait()
 	close(drained)
 }

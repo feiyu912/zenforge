@@ -26,28 +26,36 @@ func waitFor(t *testing.T, manager *Manager, id string) Job {
 	return Job{}
 }
 
-func TestBufferKeepsOffsetsAcrossDrops(t *testing.T) {
+func TestBufferKeepsTheHeadAndTheNewestBytes(t *testing.T) {
+	// A quarter of the capacity, at most 8KiB, is kept as the head; the rest
+	// is the newest output, so a flooded stream still shows how it began.
 	buffer := NewBuffer(8)
+	if buffer.headCap != 2 {
+		t.Fatalf("head capacity = %d, want 2", buffer.headCap)
+	}
 	_, _ = buffer.Write([]byte("abcd"))
-	_, _ = buffer.Write([]byte("efgh"))
 	chunk := buffer.Read(0, 0)
-	if string(chunk.Data) != "abcdefgh" || chunk.Dropped {
-		t.Fatalf("chunk = %#v", chunk)
+	if string(chunk.Data) != "ab" || chunk.Dropped {
+		t.Fatalf("head chunk = %#v", chunk)
 	}
-	// Writing past the capacity drops the oldest bytes, and the reader is
-	// told its view has a hole rather than silently losing them.
+	if chunk.Next != 2 {
+		t.Fatalf("head next = %d", chunk.Next)
+	}
+	// The middle is dropped once the tail fills, and the reader is told its
+	// view has a hole of a known size rather than silently losing it.
+	_, _ = buffer.Write([]byte("efgh"))
 	_, _ = buffer.Write([]byte("ijkl"))
-	chunk = buffer.Read(0, 0)
-	if string(chunk.Data) != "efghijkl" || !chunk.Dropped {
-		t.Fatalf("chunk = %#v", chunk)
-	}
-	// A reader that stayed current only sees the new bytes.
-	chunk = buffer.Read(8, 0)
-	if string(chunk.Data) != "ijkl" || chunk.Dropped {
-		t.Fatalf("chunk = %#v", chunk)
+	chunk = buffer.Read(2, 0)
+	if string(chunk.Data) != "ghijkl" || !chunk.Dropped || chunk.Elided != 4 {
+		t.Fatalf("tail chunk = %#v", chunk)
 	}
 	if chunk.Total != 12 {
 		t.Fatalf("total = %d", chunk.Total)
+	}
+	// A reader that stayed current only sees the new bytes.
+	fresh := buffer.Read(10, 0)
+	if string(fresh.Data) != "kl" || fresh.Dropped {
+		t.Fatalf("fresh chunk = %#v", fresh)
 	}
 	// Reading at the end returns nothing and does not move.
 	chunk = buffer.Read(chunk.Next, 0)
@@ -348,7 +356,7 @@ func TestOutputReportsDroppedBytes(t *testing.T) {
 	defer manager.Close()
 	job, err := manager.Start(context.Background(), Spec{
 		Command:        "for i in 1 2 3 4 5 6 7 8 9 10; do echo line-$i; done",
-		MaxOutputBytes: 16,
+		MaxOutputBytes: 64,
 	})
 	if err != nil {
 		t.Fatalf("Start returned error: %v", err)
@@ -357,15 +365,26 @@ func TestOutputReportsDroppedBytes(t *testing.T) {
 	if !final.StdoutDropped {
 		t.Fatalf("dropped bytes were not reported: %#v", final)
 	}
-	result, err := manager.Output(job.ID, 0, 0, 0)
+	// The head is still readable after the flood, which is the point of
+	// keeping both ends.
+	head, err := manager.Output(job.ID, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("Output returned error: %v", err)
 	}
-	if !result.Stdout.Dropped {
-		t.Fatal("the read did not report the hole")
+	if !strings.HasPrefix(string(head.Stdout.Data), "line-1\nline-2") || head.Stdout.Dropped {
+		t.Fatalf("head of the output was not kept: %#v", head.Stdout)
 	}
-	if len(result.Stdout.Data) > 16 {
-		t.Fatalf("retained %d bytes with a 16-byte buffer", len(result.Stdout.Data))
+	// Continuing past the head crosses the discarded middle, and the reader
+	// is told how many bytes it missed.
+	tail, err := manager.Output(job.ID, head.Stdout.Next, 0, 0)
+	if err != nil {
+		t.Fatalf("Output returned error: %v", err)
+	}
+	if !tail.Stdout.Dropped || tail.Stdout.Elided <= 0 {
+		t.Fatalf("the hole was not reported and measured: %#v", tail.Stdout)
+	}
+	if len(tail.Stdout.Data) > 64 {
+		t.Fatalf("retained %d bytes in one read with a 64-byte buffer", len(tail.Stdout.Data))
 	}
 }
 
@@ -383,5 +402,139 @@ func TestRunHonoursCallerCancellation(t *testing.T) {
 	}
 	if _, err := manager.Get(job.ID); err != nil && !errors.Is(err, context.Canceled) {
 		t.Fatalf("Get returned error: %v", err)
+	}
+}
+
+// waitForOutput polls a job's stdout until it contains want, which is how a
+// session test observes output that arrives between writes.
+func waitForOutput(t *testing.T, manager *Manager, id, want string) string {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	seen := ""
+	for time.Now().Before(deadline) {
+		result, err := manager.Output(id, 0, 0, -1)
+		if err != nil {
+			t.Fatalf("Output returned error: %v", err)
+		}
+		seen = string(result.Stdout.Data)
+		if strings.Contains(seen, want) {
+			return seen
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("job %s never produced %q; saw %q", id, want, seen)
+	return ""
+}
+
+func TestPTYJobSeesATerminalAndMergesStreams(t *testing.T) {
+	manager := New(Config{DefaultTimeout: 10 * time.Second})
+	defer manager.Close()
+	command := "if [ -t 0 ]; then echo stdin-is-a-tty; else echo stdin-is-a-pipe; fi; echo diagnostics >&2"
+	piped, _, err := manager.Run(context.Background(), Spec{Command: command})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	pipedResult, err := manager.Output(piped.ID, 0, 0, -1)
+	if err != nil {
+		t.Fatalf("Output returned error: %v", err)
+	}
+	if !strings.Contains(string(pipedResult.Stdout.Data), "stdin-is-a-pipe") {
+		t.Fatalf("piped run saw a terminal: %q", pipedResult.Stdout.Data)
+	}
+	if !strings.Contains(string(pipedResult.Stderr.Data), "diagnostics") {
+		t.Fatalf("piped run lost stderr: %q", pipedResult.Stderr.Data)
+	}
+
+	job, err := manager.Start(context.Background(), Spec{Command: command, PTY: true})
+	if err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	seen := waitForOutput(t, manager, job.ID, "diagnostics")
+	if !strings.Contains(seen, "stdin-is-a-tty") {
+		t.Fatalf("terminal job did not see a terminal: %q", seen)
+	}
+	final := waitFor(t, manager, job.ID)
+	result, err := manager.Output(job.ID, 0, 0, -1)
+	if err != nil {
+		t.Fatalf("Output returned error: %v", err)
+	}
+	if final.StderrTotal != 0 || len(result.Stderr.Data) != 0 {
+		t.Fatalf("a terminal has one stream, but stderr carried %d bytes", final.StderrTotal)
+	}
+	if !strings.Contains(string(result.Stdout.Data), "diagnostics") {
+		t.Fatalf("terminal output lost the merged stderr: %q", result.Stdout.Data)
+	}
+	if final.ExitCode == nil || *final.ExitCode != 0 {
+		t.Fatalf("terminal job exit = %#v", final.ExitCode)
+	}
+}
+
+func TestPTYSessionAcceptsInputAndReportsItsExit(t *testing.T) {
+	manager := New(Config{DefaultTimeout: 10 * time.Second})
+	defer manager.Close()
+	// A terminal session is driven by writes, not by a spec's stdin: the
+	// script reads a line and answers it.
+	job, err := manager.Start(context.Background(), Spec{Command: "read line; echo \"got:$line\"", PTY: true, Rows: 40, Cols: 120})
+	if err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	if job.Spec.Rows != 40 || job.Spec.Cols != 120 {
+		t.Fatalf("terminal size was not recorded: %#v", job.Spec)
+	}
+	if err := manager.Write(job.ID, []byte("hello\n")); err != nil {
+		t.Fatalf("Write returned error: %v", err)
+	}
+	// The terminal echoes what was typed, which is what makes an interactive
+	// session readable, and the program's answer follows it.
+	seen := waitForOutput(t, manager, job.ID, "got:hello")
+	if !strings.Contains(seen, "hello") {
+		t.Fatalf("typed input was not echoed: %q", seen)
+	}
+	final := waitFor(t, manager, job.ID)
+	if final.ExitCode == nil || *final.ExitCode != 0 {
+		t.Fatalf("session exit = %#v (error %q)", final.ExitCode, final.Error)
+	}
+}
+
+func TestPTYJobGetsATerminalEnvironment(t *testing.T) {
+	manager := New(Config{DefaultTimeout: 10 * time.Second})
+	defer manager.Close()
+	job, _, err := manager.Run(context.Background(), Spec{Command: "printf '%s' \"$TERM\"", PTY: true, Env: []string{"PATH=/usr/bin:/bin"}})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	result, err := manager.Output(job.ID, 0, 0, -1)
+	if err != nil {
+		t.Fatalf("Output returned error: %v", err)
+	}
+	if !strings.Contains(string(result.Stdout.Data), "xterm") {
+		t.Fatalf("TERM was not set for a terminal job: %q", result.Stdout.Data)
+	}
+}
+
+func TestPTYSpecIsValidated(t *testing.T) {
+	cases := []struct {
+		name string
+		spec Spec
+	}{
+		{name: "rows-without-pty", spec: Spec{Command: "true", Rows: 40}},
+		{name: "cols-without-pty", spec: Spec{Command: "true", Cols: 120}},
+		{name: "rows-too-large", spec: Spec{Command: "true", PTY: true, Rows: MaxTerminalAxis + 1}},
+		{name: "cols-negative", spec: Spec{Command: "true", PTY: true, Cols: -1}},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if err := testCase.spec.Validate(); err == nil {
+				t.Fatal("expected a validation error")
+			}
+		})
+	}
+	spec := Spec{Command: "true", PTY: true}
+	if err := spec.Validate(); err != nil {
+		t.Fatalf("a plain terminal spec was refused: %v", err)
+	}
+	rows, cols := spec.TerminalSize()
+	if rows != DefaultRows || cols != DefaultCols {
+		t.Fatalf("default terminal size = %dx%d", rows, cols)
 	}
 }

@@ -53,6 +53,38 @@ type Spec struct {
 	Timeout time.Duration `json:"timeout,omitempty"`
 	// MaxOutputBytes caps each stream; zero uses the manager default.
 	MaxOutputBytes int `json:"maxOutputBytes,omitempty"`
+	// PTY runs the command on a pseudo-terminal instead of pipes. The
+	// process then sees a terminal, so interactive programs, prompts, and
+	// programs that colour or page their output behave as they would for a
+	// human, and the terminal's echo makes typed input visible. A terminal
+	// has one stream: stdout and stderr are merged into the job's stdout
+	// and the stderr view stays empty.
+	PTY bool `json:"pty,omitempty"`
+	// Rows and Cols set the terminal size; zero uses 24x80. They are only
+	// meaningful with PTY.
+	Rows int `json:"rows,omitempty"`
+	Cols int `json:"cols,omitempty"`
+}
+
+// Default terminal size for a PTY job.
+const (
+	DefaultRows = 24
+	DefaultCols = 80
+	// MaxTerminalAxis bounds a requested terminal dimension so a caller
+	// cannot ask the manager to allocate an absurd window.
+	MaxTerminalAxis = 1000
+)
+
+// TerminalSize resolves the spec's terminal size with defaults applied.
+func (s Spec) TerminalSize() (rows, cols int) {
+	rows, cols = s.Rows, s.Cols
+	if rows <= 0 {
+		rows = DefaultRows
+	}
+	if cols <= 0 {
+		cols = DefaultCols
+	}
+	return rows, cols
 }
 
 // Validate rejects a spec that cannot be run.
@@ -62,6 +94,17 @@ func (s Spec) Validate() error {
 	}
 	if s.CWD != "" && !strings.HasPrefix(s.CWD, "/") {
 		return fmt.Errorf("cwd %q must be absolute", s.CWD)
+	}
+	if !s.PTY && (s.Rows != 0 || s.Cols != 0) {
+		return fmt.Errorf("rows/cols require pty")
+	}
+	for _, axis := range []struct {
+		name  string
+		value int
+	}{{"rows", s.Rows}, {"cols", s.Cols}} {
+		if axis.value < 0 || axis.value > MaxTerminalAxis {
+			return fmt.Errorf("%s %d is outside 1..%d", axis.name, axis.value, MaxTerminalAxis)
+		}
 	}
 	return nil
 }

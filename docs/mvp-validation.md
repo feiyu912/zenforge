@@ -152,6 +152,10 @@ rg -n '"[^"[:space:]]*agent-platform[^"[:space:]]*"' --glob "*.go" .
 | a workflow run that trips a host limit reports the engine's failure text to the model and starts only the children that fit | `TestWorkflowToolReportsAFatalFailureToTheModel` |
 | a workflow `provider`/`model` override is refused instead of silently ignored, and the host resolves the worker sub-agent deterministically | `TestWorkflowToolRefusesUnsupportedModelOverrides`, `TestWorkflowToolNeedsAConfiguredSubAgent` |
 | a schema child's JSON answer is parsed (fences and prose tolerated) and the tool renders both outcome paths | `TestWorkflowStructuredOutput`, `TestWorkflowToolOutcomeRendersBothPaths` |
+| a terminal job sees a terminal, merges its streams, injects a `TERM`, and reports its exit | `TestPTYJobSeesATerminalAndMergesStreams`, `TestPTYJobGetsATerminalEnvironment`, `TestPTYSessionAcceptsInputAndReportsItsExit` |
+| killing a terminal session signals its process group, so a `SIGHUP`-ignoring child does not survive or hold the terminal | `TestKillingAPTYSessionStopsItsProcessGroup` |
+| a terminal spec is validated, and a bounded buffer keeps the head and the newest bytes with a measured hole | `TestPTYSpecIsValidated`, `TestBufferKeepsTheHeadAndTheNewestBytes`, `TestOutputReportsDroppedBytes` |
+| the job tools carry `pty` through the schema, refuse a terminal size without it, and report elided bytes | `TestExecCommandRunsAnInteractivePTYSession`, `TestExecCommandRefusesTerminalSizeWithoutAPTY`, `TestJobOutputReportsElidedBytes` |
 | a job is reported terminal only after its output has been drained | `jobs.TestRunWaitsForOutputWrittenAfterTheMainProcessExits`, `jobs.TestCollectSignalsDrainedOnlyAfterBothStreamsEnd` |
 | a job whose pipes are held open by a background grandchild still becomes terminal | `jobs.TestJobWhoseOutputIsHeldByAGrandchildStillBecomesTerminal` |
 | memory entries augment normalized tasks | `adapters/memory.TestAugmentTaskAddsMemoryBlockAndMetadata` |
