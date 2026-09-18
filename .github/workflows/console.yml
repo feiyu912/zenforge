@@ -1,0 +1,64 @@
+name: Console artifacts
+
+# The console is built from a pinned revision of the upstream (MIT) sources and
+# committed as artifacts, so the normal build stays a Go build and the main CI
+# stays free of a several-hundred-package Node install. This workflow is the
+# reproducible path for the other half of that bargain (ADR 0079): anyone who
+# needs to rebuild, bump, or audit the console runs it by hand and reviews the
+# resulting diff, instead of every commit paying for a build that only changes
+# when the pin changes.
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_revision:
+        description: "Upstream revision to build (defaults to the pin in scripts/build-console.sh)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build-console:
+    name: Rebuild the rebranded console
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Enable the pinned package manager
+        run: corepack enable
+
+      - name: Build the console and stage the artifacts
+        env:
+          DSH_CONSOLE_REVISION: ${{ inputs.upstream_revision }}
+        run: ./scripts/build-console.sh
+
+      - name: Verify the brand and the artifact tree
+        run: |
+          set -eu
+          # The rebrand is the reason this build exists, so a staged tree that
+          # still carries an upstream product name fails the job rather than
+          # being uploaded for someone to notice later.
+          if grep -rIl --exclude='*.map' -e 'DeepSeek Harness' -e 'DSH Local Build' webui/dsh; then
+            echo "::error::an upstream product name survived the rebrand"
+            exit 1
+          fi
+          grep -q '<title>ZenForge</title>' webui/dsh/index.html
+          echo "staged size: $(du -sh webui/dsh | cut -f1)"
+
+      - name: Show what changed
+        run: git status --short -- webui/dsh scripts | head -50
+
+      - name: Upload the staged artifacts for review
+        uses: actions/upload-artifact@v4
+        with:
+          name: console-artifacts
+          path: webui/dsh
+          retention-days: 7
+          if-no-files-found: error

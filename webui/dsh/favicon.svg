@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="50" height="50" viewBox="0 0 50 50" fill="none" role="img" aria-label="ZenForge">
+	<style>
+		@media (prefers-color-scheme: dark) {
+			rect { fill: #f8fafc; }
+			path { fill: #0f172a; }
+		}
+	</style>
+	<rect width="50" height="50" rx="11" fill="#0f172a"/>
+	<path d="M13 13h24v4.8L20.1 35H37v5H13v-4.8L26.9 18H13z" fill="#f8fafc"/>
+</svg>

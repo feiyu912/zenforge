@@ -116,6 +116,18 @@ what is experimental, and what remains adapter territory.
   the only place a second provider's key can live. A name that cannot be
   resolved is a fatal `AGENT_START`, never a silent run on the host's model.
 
+## Browser Console
+
+- The rebranded upstream console is **built and staged but not yet served**:
+  holding it needs the host protocol (module graph, `/api` RPC, the WebSocket
+  streams, and the approval bridge), which is the work in progress. Until it
+  lands, `zenforge serve` serves the first-party console from ADR 0078, which
+  needs no plugin graph and is the fallback for a host without the artifacts.
+- The staged artifacts are a built dependency, not source: they are committed
+  with their pinned upstream revision, patch, and recipe (`scripts/build-console.sh`,
+  rebuildable through the manually triggered console workflow), because the
+  upstream build cannot be renamed at runtime (ADR 0079).
+
 ## MCP Sampling
 
 - A sampled run reasons in text. `sampling/createMessage` has no tool field, so
