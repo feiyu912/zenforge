@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/feiyu912/zenforge/adapters/mcp"
 )
@@ -49,18 +50,28 @@ func mcpServerCommand(ctx context.Context, args []string, ioStreams IO) error {
 	// first agent is built.
 	defer drainClosers(&opts, ioStreams)
 
-	tools, err := mcpServerTools(ctx, opts.checkpointType, opts.checkpointDir)
+	// The registry is the server's memory of the runs it started, and it is
+	// bound to this command's context: a detached run outlives the call that
+	// asked for it but not the server itself.
+	registry := newServedRunRegistry(ctx)
+	defer func() {
+		stopCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		registry.shutdown(stopCtx)
+	}()
+
+	tools, err := mcpServerTools(ctx, opts.checkpointType, opts.checkpointDir, registry)
 	if err != nil {
 		return err
 	}
 	instructions := "ZenForge is a coding agent harness. These tools inspect its recorded runs; they do not start new ones."
 	if *allowRun {
-		runTool, err := newMCPRunTool(ctx, &opts, ioStreams, *runTimeout)
+		runTool, err := newMCPRunTool(ctx, &opts, ioStreams, *runTimeout, registry)
 		if err != nil {
 			return err
 		}
 		tools = append(tools, runTool)
-		instructions = "ZenForge is a coding agent harness. These tools inspect its recorded runs, and zenforge_run starts one in the workspace this server was configured with."
+		instructions = "ZenForge is a coding agent harness. These tools inspect its recorded runs, and zenforge_run starts one in the workspace this server was configured with; zenforge_run can also detach a run, whose state zenforge_run_status then reports."
 		if opts.approve != "always" {
 			// Say it once, before serving: a served run that needs a human
 			// cannot ask one, and the operator should hear that from the
@@ -85,8 +96,9 @@ func mcpServerCommand(ctx context.Context, args []string, ioStreams IO) error {
 
 // mcpServerTools builds the read-only tool set. It is separate from the
 // command so a test can call a tool without a transport.
-func mcpServerTools(ctx context.Context, storeType, path string) ([]mcp.ServerTool, error) {
+func mcpServerTools(ctx context.Context, storeType, path string, registry *servedRunRegistry) ([]mcp.ServerTool, error) {
 	return []mcp.ServerTool{
+		newMCPRunStatusTool(ctx, storeType, path, registry),
 		{
 			Name:        "zenforge_runs",
 			Description: "List the runs this ZenForge install recorded: id, status, timestamps, and the task each one was given. Read-only.",

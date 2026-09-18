@@ -204,6 +204,7 @@ nav:
       - 0064 A child can name its model: adr/0064-a-child-can-name-its-model.md
       - 0065 A structured answer is checked: adr/0065-a-structured-answer-is-checked.md
       - 0066 Workflow progress is its own event family: adr/0066-workflow-progress-is-its-own-event.md
+      - 0067 A served run can outlive its call: adr/0067-a-served-run-can-outlive-its-call.md
 
 extra:
   social:

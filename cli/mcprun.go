@@ -31,7 +31,7 @@ const mcpRunToolName = "zenforge_run"
 // request. The run itself is configured entirely by the operator's flags --
 // workspace, tool set, sandbox, approval mode -- so the remote caller chooses
 // only the task.
-func newMCPRunTool(ctx context.Context, opts *options, ioStreams IO, timeout time.Duration) (mcp.ServerTool, error) {
+func newMCPRunTool(ctx context.Context, opts *options, ioStreams IO, timeout time.Duration, registry *servedRunRegistry) (mcp.ServerTool, error) {
 	served := *opts
 	refusals := &runApprovalRecorder{}
 	if served.approve != "always" {
@@ -74,6 +74,10 @@ func newMCPRunTool(ctx context.Context, opts *options, ioStreams IO, timeout tim
 					"type":        "string",
 					"description": "The task for the run. It becomes the run's input message.",
 				},
+				"detach": map[string]any{
+					"type":        "boolean",
+					"description": "Return the run id as soon as the run has started, instead of waiting for its answer. The run keeps going on the server (bounded by the operator's --run-timeout) and its state is available through zenforge_run_status. Use it for work longer than a single call can hold.",
+				},
 			},
 			"required": []string{"prompt"},
 		},
@@ -83,15 +87,75 @@ func newMCPRunTool(ctx context.Context, opts *options, ioStreams IO, timeout tim
 		// the approval path; --allow-run is the server-side half.
 		ReadOnly: false,
 		Handler: func(ctx context.Context, arguments json.RawMessage) (mcp.CallResult, error) {
+			prompt, detach, err := decodeMCPRunArguments(arguments)
+			if err != nil {
+				return mcp.CallResult{}, err
+			}
+			if !detach {
+				select {
+				case runSlot <- struct{}{}:
+					defer func() { <-runSlot }()
+				case <-ctx.Done():
+					return mcp.CallResult{}, fmt.Errorf("another served run is in progress and this call was cancelled while waiting: %w", ctx.Err())
+				}
+				// The caller is waiting, so its own context bounds the run: a
+				// cancelled request should stop the work it asked for — and
+				// the operator's run timeout still bounds every served run.
+				runCtx, cancel := context.WithTimeout(ctx, timeout)
+				defer cancel()
+				return mcpRunCallResult(runServedTask(runCtx, agent, refusals, "", timeout, prompt), refusals), nil
+			}
+			// A detached run outlives the call that asked for it, so it must
+			// not be bound to that call's context: the server's own context,
+			// with the operator's timeout, is what keeps it alive and what
+			// eventually stops it.
 			select {
 			case runSlot <- struct{}{}:
-				defer func() { <-runSlot }()
-			case <-ctx.Done():
-				return mcp.CallResult{}, fmt.Errorf("another served run is in progress and this call was cancelled while waiting: %w", ctx.Err())
+			default:
+				return mcp.CallResult{}, errors.New("another served run is in progress; ask for zenforge_run_status on it or retry when it finishes")
 			}
-			return serveMCPRun(ctx, agent, refusals, timeout, arguments)
+			runID := zenforge.NewRunID()
+			detachedCtx, cancel := context.WithTimeout(registry.context(), timeout)
+			if err := registry.start(runID, cancel); err != nil {
+				<-runSlot
+				cancel()
+				return mcp.CallResult{}, err
+			}
+			go func() {
+				defer func() { <-runSlot }()
+				defer cancel()
+				registry.finish(runServedTask(detachedCtx, agent, refusals, runID, timeout, prompt))
+			}()
+			return mcp.CallResult{
+				Content: []mcp.Content{{Type: "text", Text: fmt.Sprintf(
+					"run %s started and is running on the server; ask zenforge_run_status for its state (it is bounded by this server's run timeout)", runID)}},
+				StructuredContent: map[string]any{
+					"runId":    runID,
+					"status":   servedRunRunning,
+					"detached": true,
+				},
+			}, nil
 		},
 	}, nil
+}
+
+// decodeMCPRunArguments reads the run tool's arguments once, so the blocking
+// and detached paths cannot disagree about what was asked for.
+func decodeMCPRunArguments(arguments json.RawMessage) (string, bool, error) {
+	var input struct {
+		Prompt string `json:"prompt"`
+		Detach bool   `json:"detach"`
+	}
+	if len(arguments) > 0 {
+		if err := json.Unmarshal(arguments, &input); err != nil {
+			return "", false, fmt.Errorf("invalid arguments: %w", err)
+		}
+	}
+	prompt := strings.TrimSpace(input.Prompt)
+	if prompt == "" {
+		return "", false, errors.New("prompt is required")
+	}
+	return prompt, input.Detach, nil
 }
 
 // serveMCPRun runs one task and projects the outcome onto an MCP result.
@@ -101,65 +165,68 @@ func newMCPRunTool(ctx context.Context, opts *options, ioStreams IO, timeout tim
 // answer already reflects the refusal. A run that errored, timed out, or was
 // cancelled is an `isError` result, and it still carries the run id so the
 // caller can inspect what happened in the durable log.
-func serveMCPRun(ctx context.Context, agent *zenforge.Agent, refusals *runApprovalRecorder, timeout time.Duration, arguments json.RawMessage) (mcp.CallResult, error) {
-	var input struct {
-		Prompt string `json:"prompt"`
-	}
-	if len(arguments) > 0 {
-		if err := json.Unmarshal(arguments, &input); err != nil {
-			return mcp.CallResult{}, fmt.Errorf("invalid arguments: %w", err)
-		}
-	}
-	prompt := strings.TrimSpace(input.Prompt)
-	if prompt == "" {
-		return mcp.CallResult{}, errors.New("prompt is required")
-	}
-	runCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
+func runServedTask(ctx context.Context, agent *zenforge.Agent, refusals *runApprovalRecorder, runID string, timeout time.Duration, prompt string) servedRunState {
 	refusals.reset()
-
-	result, runErr := agent.Run(runCtx, zenforge.Task{Input: prompt})
-	refused := refusals.refused()
+	// A detached run names itself before it starts, so the caller can be told
+	// which run it is holding; a blocking one lets the agent choose.
+	result, runErr := agent.Run(ctx, zenforge.Task{RunID: runID, Input: prompt})
 	if result == nil {
 		result = &zenforge.Result{}
 	}
-	status := "completed"
-	text := result.Output
+	state := servedRunState{
+		RunID:    result.RunID,
+		Status:   servedRunCompleted,
+		Output:   result.Output,
+		Refused:  refusals.refused(),
+		Detached: runID != "",
+	}
 	if runErr != nil {
 		switch {
 		case errors.Is(runErr, approval.ErrRequired):
-			status = "awaiting-approval"
-			text = "the served run stopped while an approval request was open, which this server cannot answer"
+			state.Status = "awaiting-approval"
+			state.Message = "the served run stopped while an approval request was open, which this server cannot answer"
 		case errors.Is(runErr, context.DeadlineExceeded):
-			status = "timeout"
-			text = fmt.Sprintf("the served run was cancelled after %s", timeout)
+			state.Status = "timeout"
+			state.Message = fmt.Sprintf("the served run was cancelled after %s", timeout)
 		case errors.Is(runErr, context.Canceled):
-			status = "cancelled"
-			text = "the served run was cancelled"
+			state.Status = "cancelled"
+			state.Message = "the served run was cancelled"
 		default:
-			status = "failed"
-			text = runErr.Error()
+			state.Status = "failed"
+			state.Message = runErr.Error()
 		}
-		if result.RunID != "" {
-			text = fmt.Sprintf("run %s %s: %s", result.RunID, status, text)
+		if state.RunID != "" {
+			state.Message = fmt.Sprintf("run %s %s: %s", state.RunID, state.Status, state.Message)
 		}
 	}
-	if len(refused) > 0 && runErr == nil {
-		// The caller is told what was refused and what would change it: the
-		// refusal is a property of how this server was started, and the
-		// remote agent may be able to ask its operator to change that.
+	return state
+}
+
+// mcpRunCallResult projects a served run onto an MCP result.
+//
+// A run that refused a tool call for lack of an approver is a completed run,
+// and its answer already reflects the refusal; the caller is told what was
+// refused and what would change it, because the refusal is a property of how
+// this server was started and the remote agent may be able to ask its operator
+// to change that.
+func mcpRunCallResult(state servedRunState, refusals *runApprovalRecorder) mcp.CallResult {
+	text := state.Output
+	if state.Status != servedRunCompleted {
+		text = state.Message
+	}
+	if state.Status == servedRunCompleted && len(state.Refused) > 0 {
 		text = strings.TrimSpace(text) + fmt.Sprintf(
 			"\n\n%d tool call(s) were refused because this server cannot ask a human to approve them: %s (%s)",
-			len(refused), strings.Join(refused, ", "), refusals.reason,
+			len(state.Refused), strings.Join(state.Refused, ", "), refusals.reason,
 		)
 	}
 	structured := map[string]any{
-		"runId":  result.RunID,
-		"output": result.Output,
-		"status": status,
+		"runId":  state.RunID,
+		"output": state.Output,
+		"status": state.Status,
 	}
-	if len(refused) > 0 {
-		structured["refusedToolCalls"] = refused
+	if len(state.Refused) > 0 {
+		structured["refusedToolCalls"] = state.Refused
 	}
 	return mcp.CallResult{
 		Content:           []mcp.Content{{Type: "text", Text: text}},
@@ -168,8 +235,8 @@ func serveMCPRun(ctx context.Context, agent *zenforge.Agent, refusals *runApprov
 		// with it: the caller can still report which run it was and why it
 		// ended. The server only synthesizes the error text when a handler
 		// returns an error, so the flag is set here rather than delegated.
-		IsError: runErr != nil,
-	}, nil
+		IsError: state.Status != servedRunCompleted,
+	}
 }
 
 // runApprovalRecorder is the broker installed for a served run. It records

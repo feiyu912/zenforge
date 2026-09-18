@@ -714,14 +714,19 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
   remote tools are namespaced `mcp__<server>__<tool>` with their read-only
   hints read into the definition so an approval decision can use them.
   `zenforge mcp-server` serves ZenForge itself the same way, exposing
-  `zenforge_runs` and `zenforge_version` as read-only tools. `--allow-run`
-  adds `zenforge_run`, which starts a run in the configured workspace and
-  returns its answer, id, and status: the tool is advertised without a
-  read-only hint so the calling client asks its own operator, it does not
-  exist without the grant from this host's operator, and inside the served run
-  `--approve always` is what allows approval-gated tools — the default
-  `prompt` cannot be honored on a stdio server, so it becomes a refusal that
-  the caller is told about along with the run's outcome.
+  `zenforge_runs`, `zenforge_run_status`, and `zenforge_version` as read-only
+  tools (status answers for one run: live state for a run this server started,
+  the durable summary for a run this install recorded, and `unknown`
+  otherwise). `--allow-run` adds `zenforge_run`, which starts a run in the
+  configured workspace and returns its answer, id, and status; with
+  `detach: true` it instead returns the id as soon as the run has started, so
+  a task longer than one call can hold keeps running on the server (bounded by
+  `--run-timeout`) and is polled through `zenforge_run_status`. The tool is
+  advertised without a read-only hint so the calling client asks its own
+  operator, it does not exist without the grant from this host's operator, and
+  inside the served run `--approve always` is what allows approval-gated tools
+  — the default `prompt` cannot be honored on a stdio server, so it becomes a
+  refusal that the caller is told about along with the run's outcome.
 - Configured MCP servers (DSH/codex MCP client): a `mcpServers` config section
   starts stdio servers and exposes their tools as `mcp__<server>__<tool>`,
   with `deferred: true` opting a server into `tool_search` activation. The

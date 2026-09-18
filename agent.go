@@ -303,6 +303,14 @@ func newRunID() string {
 	return fmt.Sprintf("run_%d", time.Now().UnixNano())
 }
 
+// NewRunID returns a run id in the shape this package generates. A caller that
+// must tell someone which run it started *before* that run finishes supplies it
+// as Task.RunID; exporting the rule keeps the naming in one place instead of
+// letting a caller invent a second format.
+func NewRunID() string {
+	return newRunID()
+}
+
 func agentModeForConfig(config Config) AgentMode {
 	switch config.Mode {
 	case ModeReact, ModeOneshot, ModePlanExecute:

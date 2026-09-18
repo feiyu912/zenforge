@@ -175,6 +175,11 @@ rg -n '"[^"[:space:]]*agent-platform[^"[:space:]]*"' --glob "*.go" .
 | the CLI resolver keeps the host's credentials for its own provider and reads a second provider's environment | `TestCLIModelResolverKeepsTheHostConfigurationForItsOwnProvider`, `TestCLIModelResolverReadsAnotherProvidersEnvironment`, `TestCLIModelResolverFallsBackToTheHostModel` |
 | a structured answer is validated against the whole schema subset, every violation at once | `TestValidateObjectValueAcceptsConformingAnswers`, `TestValidateObjectValueReportsEveryViolation`, `TestValidateObjectValueReadsATypelessNodeByShape`, `TestValidateObjectValueWithoutASchemaAcceptsAnything` |
 | a non-conforming or non-object structured answer is a null item whose reason reaches the workflow log | `TestAgentNullsAStructuredAnswerThatViolatesTheSchema`, `TestAgentNullsANonObjectAnswerForAnObjectSchema` |
+| a detached served run reports `running` immediately and its answer once it finishes | `TestDetachedServedRunReportsRunningThenItsAnswer` |
+| a detached served run outlives (and is not cancelled by) the call that asked for it | `TestDetachedRunOutlivesTheCallThatAskedForIt` |
+| the status tool reports a durable run this server did not start, and `unknown` for an id in neither place | `TestServedRunStatusReportsDurableRunsAndUnknownIDs` |
+| the served-run registry is bounded and cancels what it still runs on shutdown | `TestServedRunRegistryBoundsItsMemoryAndNeverDropsALiveRun`, `TestServedRunRegistryShutdownCancelsAndWaits` |
+| the status tool is read-only and the run tool offers `detach` without claiming read-only | `TestServedRunStatusToolIsReadOnlyAndTheRunToolOffersDetach` |
 | a job is reported terminal only after its output has been drained | `jobs.TestRunWaitsForOutputWrittenAfterTheMainProcessExits`, `jobs.TestCollectSignalsDrainedOnlyAfterBothStreamsEnd` |
 | a job whose pipes are held open by a background grandchild still becomes terminal | `jobs.TestJobWhoseOutputIsHeldByAGrandchildStillBecomesTerminal` |
 | memory entries augment normalized tasks | `adapters/memory.TestAugmentTaskAddsMemoryBlockAndMetadata` |

@@ -116,6 +116,22 @@ what is experimental, and what remains adapter territory.
   the only place a second provider's key can live. A name that cannot be
   resolved is a fatal `AGENT_START`, never a silent run on the host's model.
 
+## Served Runs
+
+- A detached MCP run lives in the server process: its state is in an
+  in-process registry capped at 100 terminal records (oldest evicted first; a
+  live run is never forgotten), and the durable checkpoint store remains the
+  long-term record. A server that exits takes the registry with it, so a
+  detached run's own answer is available from `zenforge_run_status` only while
+  that server is up; afterwards the durable summary is what remains.
+- The registry is read by `zenforge_run_status`, which answers for a run this
+  server started (live or terminal), then for a run this install recorded, and
+  `unknown` for an id in neither. `unknown` is a result, not an error.
+- A server cancels its live runs on the way out and waits a bounded time for
+  them, so it does not exit while a detached run is still writing to its
+  workspace. A detached run is still bounded by `--run-timeout`, and a caller
+  cannot cancel one early: there is no cancel tool yet.
+
 ## Long-Running Commands
 
 - A terminal job (`pty: true`) has one stream: its stderr view is always empty

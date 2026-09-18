@@ -40,7 +40,7 @@ func servedRunStreams() IO {
 
 func TestMCPRunToolIsNotReadOnlyAndRequiresAPrompt(t *testing.T) {
 	opts := servedRunOptions(t, "http://127.0.0.1:1")
-	runTool, err := newMCPRunTool(context.Background(), &opts, servedRunStreams(), time.Minute)
+	runTool, err := newMCPRunTool(context.Background(), &opts, servedRunStreams(), time.Minute, newServedRunRegistry(context.Background()))
 	if err != nil {
 		t.Fatalf("newMCPRunTool returned error: %v", err)
 	}
@@ -71,7 +71,7 @@ func TestMCPRunToolIsNotReadOnlyAndRequiresAPrompt(t *testing.T) {
 func TestMCPRunToolReturnsTheFinalAnswerAndRecordsTheRun(t *testing.T) {
 	model := newOpenAISSEStub(t, textChunk("the answer from the served run"))
 	opts := servedRunOptions(t, model.url)
-	runTool, err := newMCPRunTool(context.Background(), &opts, servedRunStreams(), time.Minute)
+	runTool, err := newMCPRunTool(context.Background(), &opts, servedRunStreams(), time.Minute, newServedRunRegistry(context.Background()))
 	if err != nil {
 		t.Fatalf("newMCPRunTool returned error: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestServedRunRefusesToolCallsThatNeedAnOperatorAndSaysSo(t *testing.T) {
 		textChunk("the shell call was refused"),
 	)
 	opts := servedRunOptions(t, model.url)
-	runTool, err := newMCPRunTool(context.Background(), &opts, servedRunStreams(), time.Minute)
+	runTool, err := newMCPRunTool(context.Background(), &opts, servedRunStreams(), time.Minute, newServedRunRegistry(context.Background()))
 	if err != nil {
 		t.Fatalf("newMCPRunTool returned error: %v", err)
 	}
@@ -151,7 +151,7 @@ func TestServedRunRunsApprovalGatedToolsWhenTheOperatorAllowedThem(t *testing.T)
 	)
 	opts := servedRunOptions(t, model.url)
 	opts.approve = "always"
-	runTool, err := newMCPRunTool(context.Background(), &opts, servedRunStreams(), time.Minute)
+	runTool, err := newMCPRunTool(context.Background(), &opts, servedRunStreams(), time.Minute, newServedRunRegistry(context.Background()))
 	if err != nil {
 		t.Fatalf("newMCPRunTool returned error: %v", err)
 	}
@@ -190,7 +190,7 @@ func TestServedRunReportsATimeoutWithTheRunID(t *testing.T) {
 	defer close(release)
 
 	opts := servedRunOptions(t, model.URL)
-	runTool, err := newMCPRunTool(context.Background(), &opts, servedRunStreams(), 50*time.Millisecond)
+	runTool, err := newMCPRunTool(context.Background(), &opts, servedRunStreams(), 50*time.Millisecond, newServedRunRegistry(context.Background()))
 	if err != nil {
 		t.Fatalf("newMCPRunTool returned error: %v", err)
 	}
@@ -220,7 +220,7 @@ func TestMCPServerRunToolAppearsOnlyWithTheOperatorGrant(t *testing.T) {
 
 	// Without the grant the handler is never built, and an attempt to call the
 	// tool by name is an unknown tool for the protocol layer.
-	tools, err := mcpServerTools(context.Background(), opts.checkpointType, opts.checkpointDir)
+	tools, err := mcpServerTools(context.Background(), opts.checkpointType, opts.checkpointDir, newServedRunRegistry(context.Background()))
 	if err != nil {
 		t.Fatalf("mcpServerTools returned error: %v", err)
 	}
@@ -233,7 +233,7 @@ func TestMCPServerRunToolAppearsOnlyWithTheOperatorGrant(t *testing.T) {
 		}
 	}
 
-	runTool, err := newMCPRunTool(context.Background(), &opts, servedRunStreams(), time.Minute)
+	runTool, err := newMCPRunTool(context.Background(), &opts, servedRunStreams(), time.Minute, newServedRunRegistry(context.Background()))
 	if err != nil {
 		t.Fatalf("newMCPRunTool returned error: %v", err)
 	}
@@ -315,7 +315,7 @@ func newHoldableOpenAISSEStub(t *testing.T, response string) (url string, starte
 func TestServedRunHoldsTheServerSlot(t *testing.T) {
 	url, started, release := newHoldableOpenAISSEStub(t, textChunk("first"))
 	opts := servedRunOptions(t, url)
-	runTool, err := newMCPRunTool(context.Background(), &opts, servedRunStreams(), time.Minute)
+	runTool, err := newMCPRunTool(context.Background(), &opts, servedRunStreams(), time.Minute, newServedRunRegistry(context.Background()))
 	if err != nil {
 		t.Fatalf("newMCPRunTool returned error: %v", err)
 	}

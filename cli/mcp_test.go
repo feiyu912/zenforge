@@ -18,7 +18,7 @@ import (
 // deliberately not read-only (see TestMCPRunToolIsNotReadOnlyAndRequiresAPrompt)
 // so a conforming client asks its own operator before calling it.
 func TestMCPServerToolsAreReadOnly(t *testing.T) {
-	tools, err := mcpServerTools(context.Background(), "jsonl", t.TempDir())
+	tools, err := mcpServerTools(context.Background(), "jsonl", t.TempDir(), newServedRunRegistry(context.Background()))
 	if err != nil {
 		t.Fatalf("mcpServerTools returned error: %v", err)
 	}
@@ -36,7 +36,7 @@ func TestMCPServerToolsAreReadOnly(t *testing.T) {
 }
 
 func TestMCPVersionToolReportsTheVersion(t *testing.T) {
-	tools, err := mcpServerTools(context.Background(), "jsonl", t.TempDir())
+	tools, err := mcpServerTools(context.Background(), "jsonl", t.TempDir(), newServedRunRegistry(context.Background()))
 	if err != nil {
 		t.Fatalf("mcpServerTools returned error: %v", err)
 	}
@@ -106,7 +106,9 @@ func TestMCPServerCommandSpeaksTheProtocol(t *testing.T) {
 	if initialized.Result.ServerInfo.Name != "zenforge" || initialized.Result.ProtocolVersion != "2025-06-18" {
 		t.Fatalf("initialize = %#v", initialized.Result)
 	}
-	// tools/list: both tools are advertised as read-only.
+	// tools/list: the read-only tools are advertised as read-only, and the
+	// status tool comes first because a caller that cannot wait for a run
+	// needs to ask about it without starting one.
 	line, err = reader.ReadString('\n')
 	if err != nil {
 		t.Fatalf("read failed: %v", err)
@@ -119,11 +121,12 @@ func TestMCPServerCommandSpeaksTheProtocol(t *testing.T) {
 	if err := json.Unmarshal([]byte(line), &listed); err != nil {
 		t.Fatalf("the tools/list response is not JSON (%v): %s", err, line)
 	}
-	if len(listed.Result.Tools) != 2 || listed.Result.Tools[0].Name != "zenforge_runs" {
+	if len(listed.Result.Tools) != 3 || listed.Result.Tools[0].Name != "zenforge_run_status" ||
+		listed.Result.Tools[1].Name != "zenforge_runs" {
 		t.Fatalf("tools = %#v", listed.Result.Tools)
 	}
-	if !listed.Result.Tools[0].ReadOnly() {
-		t.Fatalf("zenforge_runs is not advertised read-only: %#v", listed.Result.Tools[0])
+	if !listed.Result.Tools[0].ReadOnly() || !listed.Result.Tools[1].ReadOnly() {
+		t.Fatalf("a read-only tool is not advertised read-only: %#v", listed.Result.Tools)
 	}
 	// tools/call: an empty store answers with an empty list, not an error.
 	line, err = reader.ReadString('\n')
