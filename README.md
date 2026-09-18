@@ -1,25 +1,92 @@
+<div align="center">
+
 # ZenForge
 
-> Production-first Go agent runtime for long-running, tool-using, observable, and recoverable agents.
+**Production-first Go agent runtime for long-running, tool-using, observable,
+and recoverable agents.**
 
-ZenForge is a batteries-included agent harness for Go services. A single `zenforge.Agent` runs real multi-step work, with replaceable adapters for every concern — model, tools, workspace, planner, checkpoint store, event log, trace sink, approval broker, sandbox, and HTTP/SSE edge. Resume is first-class, not bolted on.
+<p>
+  <a href="https://feiyu912.github.io/zenforge/"><img src="https://img.shields.io/badge/docs-GitHub%20Pages-4285F4?style=for-the-badge&logo=readthedocs&logoColor=white" alt="Documentation"></a>
+  <a href="https://github.com/feiyu912/zenforge/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/feiyu912/zenforge/ci.yml?branch=main&style=for-the-badge&label=CI" alt="CI status"></a>
+  <a href="https://pkg.go.dev/github.com/feiyu912/zenforge"><img src="https://pkg.go.dev/badge/github.com/feiyu912/zenforge.svg" alt="Go Reference"></a>
+  <a href="https://github.com/feiyu912/zenforge/releases/tag/v0.1.0"><img src="https://img.shields.io/github/v/tag/feiyu912/zenforge?style=for-the-badge&label=release&color=0a9396" alt="Latest release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue?style=for-the-badge" alt="Apache-2.0 license"></a>
+</p>
 
-It is **not** a Go clone of LangChain. The goal is a small, opinionated runtime that you can embed in a backend, a CLI, a desktop app, or a gateway, instead of pulling in a Python agent framework.
+<a href="https://feiyu912.github.io/zenforge/tutorial/">Tutorial</a> ·
+<a href="https://feiyu912.github.io/zenforge/quickstart/">Quickstart</a> ·
+<a href="https://feiyu912.github.io/zenforge/concepts/">Concepts</a> ·
+<a href="https://feiyu912.github.io/zenforge/sdk-guide/">SDK guide</a> ·
+<a href="https://pkg.go.dev/github.com/feiyu912/zenforge">API</a> ·
+<a href="CHANGELOG.md">Changelog</a>
 
-Current release: `v0.1.0`. The `main` branch carries additional v0.1.x capabilities on top of that tag — see [Project Status](#project-status).
+</div>
+
+ZenForge is a batteries-included agent harness for Go services. A single
+`zenforge.Agent` runs real multi-step work, with a replaceable adapter for
+every concern — model, tools, workspace, planner, checkpoint store, event log,
+trace sink, approval broker, sandbox, and HTTP/SSE edge. **Resume is
+first-class, not bolted on**: the state machine checkpoints every boundary, so
+a crashed service picks runs back up exactly where they stopped.
+
+It is **not** a Go clone of LangChain. The goal is a small, opinionated runtime
+you can embed in a backend, a CLI, a desktop app, or a gateway — instead of
+pulling in a Python agent framework and a sidecar process to babysit it.
+
+The framework owns the loop; **your application owns the choices**:
+
+| Framework owns | Application owns |
+| --- | --- |
+| Agent loop, streaming, tool dispatch, approval lifecycle, checkpointing, resume, event log, trace redaction | Model, tools, approval broker, sandbox backend, workspace, event/checkpoint stores, trace sink, sub-agent roster, auth and tenancy |
+
+The boundary is one struct: `zenforge.Config`. Every adapter point is a Go
+interface you can satisfy, wrap, mock, or leave `nil`.
 
 ## Why
 
 Most agent frameworks target notebooks. ZenForge targets services:
 
-- **Durable runs** — checkpoints at every boundary, resume after crashes.
-- **Observable execution** — typed event stream + JSONL/SQLite/OTel sinks, with fail-closed event-log writes.
-- **Replaceable parts** — swap models, stores, transports, even the planner, without rewriting the loop.
-- **Small public surface** — a focused root package for agent construction,
-  normalized tasks, run results, and events, with replaceable interfaces in
-  focused subpackages.
+- **Durable runs** — checkpoints at every boundary, resume after crashes, fork
+  and time-travel through run history.
+- **Observable execution** — typed event stream with JSONL/SQLite/OTel sinks,
+  and fail-closed event-log writes: unrecorded progress is never published.
+- **Replaceable parts** — swap models, stores, transports, even the planner,
+  without rewriting the loop.
+- **Security by construction** — deny-by-default shell policy built on a
+  complete Bash AST, four OS-level sandbox backends, SSRF-safe web tools, and
+  fail-closed approval and file-policy paths.
+- **Small public surface** — a focused root package for construction, tasks,
+  results, and events; replaceable interfaces live in focused subpackages.
 
-## Quick Look
+## At a glance
+
+| | |
+| --- | --- |
+| **~114k** lines of Go across **~100** packages | **1,500+** test functions, race + vet gated in CI |
+| **81** Architecture Decision Records | **100+** pages of [documentation](https://feiyu912.github.io/zenforge/) |
+| Go **1.26** only, zero cgo (pure-Go SQLite) | Apache-2.0, third-party attributions tracked in-repo |
+
+```text
+ ┌────────────────────────────── your application ──────────────────────────────┐
+ │  model client · tools · approval policy · sandbox · workspace · store paths  │
+ └──────────────────────────────────┬───────────────────────────────────────────┘
+                                    │ zenforge.Config (interfaces at every seam)
+ ┌──────────────────────────────────▼───────────────────────────────────────────┐
+ │                              zenforge.Agent                                  │
+ │                       Run · Stream · Resume · Steer                          │
+ ├──────────────────────────────────────────────────────────────────────────────┤
+ │                             harness.Runner core                              │
+ │            state machine · step boundaries · durable checkpoints             │
+ ├───────────────┬───────────────┬────────────────┬─────────────────────────────┤
+ │   eventlog    │   checkpoint  │    approval    │  trace (memory·stdout·      │
+ │  memory·jsonl │  memory·jsonl │  broker·inbox  │   jsonl·OpenTelemetry)      │
+ │   ·sqlite     │   ·sqlite     │  ·grants       │                             │
+ └───────────────┴───────────────┴────────────────┴─────────────────────────────┘
+   server/harnesshttp (detached runs · SSE · web console)     cmd/zenforge (CLI)
+   subagents · workflow engine · Agent Skills · MCP · jobs · goals · time travel
+```
+
+## Quick look
 
 ```go
 import (
@@ -79,8 +146,8 @@ result, err := agent.Run(ctx, zenforge.Task{
 
 `Task.InitialMessages` supplies prior conversation in model order. ZenForge
 checkpoints that history before appending the current `Input`; checkpoint
-resume reuses it without duplication. In `plan_execute`, only the planning
-stage receives the conversation history.
+resume reuses it without duplication. In `plan_execute` mode, only the
+planning stage receives the conversation history.
 
 ## Install
 
@@ -89,15 +156,195 @@ go get github.com/feiyu912/zenforge@main
 go install github.com/feiyu912/zenforge/cmd/zenforge@main
 ```
 
-Go 1.26 only. Both local development and CI require a Go 1.26.x toolchain;
-CI sets `GOTOOLCHAIN=local` and rejects other versions. The core uses the
+Go 1.26 only: both local development and CI require a Go 1.26.x toolchain
+(CI sets `GOTOOLCHAIN=local` and rejects other versions). The core uses the
 OpenTelemetry SDK, pure-Go SQLite via `modernc.org/sqlite` (no cgo), and
 `mvdan.cc/sh/v3` for structural shell safety analysis.
 
-## Run The Complete Harness Example
+## Command line
 
-The application owns the selected model, tools, approval broker, and sandbox.
-ZenForge supplies public adapters so the assembly stays small:
+The same runtime ships as a durable CLI. Every capability is observable:
+events, checkpoints, approvals, and traces land under the workspace.
+
+```bash
+zenforge init                                   # writes zenforge.json (JSON config only)
+zenforge run --config zenforge.json "Analyze this repo"
+zenforge code --config zenforge.json ./repo "Review and improve this codebase"
+zenforge exec --json "Summarize the open changes"   # headless one-shot, JSONL events
+zenforge resume run_123                         # continue a durable checkpoint
+zenforge events run_123                         # replay the event history
+zenforge fork run_123 --at 42                   # branch a child run from any boundary
+zenforge runs                                   # list durable run summaries
+zenforge grants list                            # inspect standing approval rules
+zenforge schedule add --spec "every 1h" --task "Review the open changes"
+zenforge mcp-server                             # serve ZenForge itself over MCP
+zenforge goal "Objective"                       # persisted goal, driven round by round
+zenforge ralph "Objective"                      # fresh agents over a shared workspace
+zenforge serve                                  # HTTP runtime + local web console
+```
+
+Provider selection is protocol-shaped, not vendor-shaped: `--provider openai`
+for OpenAI-compatible Chat Completions, `--provider anthropic` for
+Anthropic-compatible Messages. Other vendors stay as `--base-url` overrides
+instead of becoming new core provider names, and SDK users can pass any
+application-owned `model.Model`, so custom gateways and test models live
+outside the harness. `--plan` starts a read-only plan mode; `--sandbox
+none|seatbelt|bwrap|landlock|docker` confines shell execution; `--jobs`,
+`--goals`, `--memory`, `--hooks`, and `--review` opt into the runtime tool
+families. CLI failures use stable exit codes: `0` success, `1` runtime error,
+`2` invalid config or usage, `3` cancellation, `4` approval rejection, `5`
+unsupported resume state.
+
+See [Quickstart](https://feiyu912.github.io/zenforge/quickstart/) and the
+[configuration reference](https://feiyu912.github.io/zenforge/config-reference/).
+
+## Capabilities
+
+### Durable runtime
+
+- Single `zenforge.Agent` with `Stream`, `Run`, `Resume`, and in-process
+  `Steer`; the root loop delegates to the independently testable
+  `harness.Runner` state machine.
+- Model stream drafts are checkpointed before publication. A crash supersedes
+  the interrupted attempt and restarts the same logical step without
+  committing partial text, tool calls, or usage twice.
+- `react`, `oneshot`, and `plan_execute` modes (with a built-in todo
+  manager), persisted across resume.
+- Durable event log and checkpoint stores: memory, JSONL, SQLite. JSONL stores
+  reject path-like run IDs, serialize writers across processes with advisory
+  `flock`, and recover interrupted saves through a pending journal.
+- **Time travel**: `fork <run>` starts a child run from any checkpoint
+  boundary; `revert --to <seq>` rewinds without ever truncating history.
+
+### Approval & human-in-the-loop
+
+- Run-scoped pending broker plus optional durable approval inboxes (memory or
+  SQLite): the waiting checkpoint and the registered request are saved before
+  `approval.requested` is emitted, HTTP submit commits the decision before
+  returning, and a resumed waiter can consume a decision submitted by another
+  process.
+- Approval requests pause durably — the model can never continue past a risky
+  tool without a decision.
+- Grants by exact fingerprint or rule key, isolated by tenant/subject, with
+  TTL and revocation: a standing grant is the rule, not a replayable token.
+- A durable `ask_user` tool delivers structured questions with options and
+  multi-select through the same approval channel.
+- Lifecycle hooks (`PreToolUse`/`PostToolUse`/`SessionStart`/`Stop`) run user
+  commands around the loop; a malformed hook decision fails closed.
+
+### Sub-agents & workflows
+
+- Checkpoint-aware `task` tool: children resume independently, terminal
+  children are reused, cancelled children propagate honestly.
+- Child progress streams into the parent as real-time `subtask.event` records;
+  host-owned limits drive the advertised schema and cannot be widened by the
+  model. Nested delegation requires explicit opt-in plus a finite depth.
+- `workflow/` executes JavaScript orchestration scripts in-process —
+  `agent()` / `parallel()` / `pipeline()` / `phase()` with concurrency caps,
+  cooperative cancellation, and JSON-Schema-checked structured results.
+
+### Sandboxing & security
+
+- Shell policy runs the complete platform Bash AST with security classifiers:
+  dangerous or ambiguous forms are hard-blocked, redirections and complex
+  structures route to approval, and every command in a chain must satisfy the
+  allowlist — deny by default.
+- Four confinement backends: macOS **Seatbelt**, Linux **bubblewrap**, Linux
+  **Landlock + seccomp** (in-process, re-exec helper), and **Docker** (no
+  network by default). An unavailable backend fails with `sandbox_unavailable`
+  instead of running unsandboxed.
+- A model-visible escalation ladder: permission requests never bypass the
+  allowlist, always require a fresh approval under a namespaced fingerprint,
+  and run the approved call locally once.
+- Workspace file policy: read/write roots, run-scoped read-before-write
+  snapshots with SHA-256 stale-write detection, symlink-escape rejection.
+- `web_fetch` pins DNS-resolved addresses to public unicast answers, so DNS
+  rebinding cannot reach private services; every fetched page is framed as
+  untrusted data, not instructions.
+
+### Context & memory
+
+- `compaction/`: pressure compaction at step boundaries and forced overflow
+  recovery on provider context-window errors, with durable history and
+  `compaction.*` events.
+- `instructions/`: hierarchical AGENTS.md-style instruction discovery with a
+  frozen environment-context block; both persist into run state, so resume
+  replays the exact prompting.
+- Provider rate-limit headers normalize into a token meter;
+  `get_context_remaining` reports the live budget to the agent.
+- Turn-diff tracking renders unified diffs at every turn boundary; oversized
+  tool output spills to a private on-disk store with a UTF-8-safe preview;
+  repeat-guard middleware counts loops and answers with escalating reminders.
+- Durable cross-run memories: `--memory` keeps learnings in readable markdown
+  and injects them into later runs; `--memory-distill` extracts them with one
+  model call per finished run.
+
+### Models, tools & extensibility
+
+- OpenAI-compatible and Anthropic adapters with streaming text and tool calls;
+  reasoning replay where the provider requires it, on its own
+  `model.reasoning` event.
+- `modelretry/`: a fail-closed failure taxonomy with jittered backoff,
+  Retry-After support, superseded-attempt chaining, and a stream idle watchdog.
+- Typed tools infer JSON Schema from Go structs; middleware composes panic
+  recovery, repeat guards, spilling, budgets, timeouts, and redaction.
+- **Agent Skills**: filesystem `SKILL.md` catalogs with progressive
+  disclosure — descriptors first, instructions and indexed resources on
+  demand, every byte carrying SHA-256 identity and provenance. Skills are
+  instruction packages, not executable tools.
+- **MCP both directions**: configure stdio servers whose tools arrive as
+  `mcp__<server>__<tool>` behind per-tool approval rules, or serve ZenForge
+  itself as an MCP server (tools, resources, prompts, progress, elicitation,
+  detachable runs).
+- `apply_patch` with the four-pass context search, plus a complete workspace
+  tool family: read/list/glob/grep/write/edit, `view_image`, `present`
+  deliverables, deferred loading through `tool_search`.
+
+### Serving & operations
+
+- `server/harnesshttp`: canonical runtime assembly for detached
+  start/resume/status/list/attach/cancel — durable SSE reconnect with
+  `Last-Event-ID`, replay-to-live attach, explicit cross-replica
+  cancellation, active-run admission, and stale-run recovery.
+- Optional run registries (memory/SQLite) share claims, leases, and durable
+  status across managers; applications still own auth, routes, and lifecycle.
+- HMAC-signed webhooks can start runs without holding a credential; a local
+  web console rides in `zenforge serve`.
+- Background jobs (`exec_command`/`write_stdin`/`job_output`) run detached,
+  including pseudo-terminals for interactive programs, with bounded head+tail
+  buffers that report — never hide — dropped output.
+- Trace sinks: memory, stdout, JSONL, OpenTelemetry spans; redaction helpers
+  keep secrets out of durable events.
+
+### Platform adapters
+
+- `adapters/zenmind` — platform catalog/session DTOs with host-owned
+  resolution, strict history conversion, fail-closed routing, run-scoped
+  projection, and event-driven approval correlation. Wire goldens are pinned
+  against captured platform fixtures. See the
+  [ZenMind adapter guide](https://feiyu912.github.io/zenforge/zenmind-adapter-guide/).
+- `adapters/mcp` — bidirectional MCP: a stdio client that bridges remote tools
+  behind approval rules, and a server mode that serves runs, resources, and
+  prompts. OAuth stays with the host. See the
+  [MCP guide](https://feiyu912.github.io/zenforge/mcp-adapter-guide/).
+- `adapters/memory` — scoped memory augmentation into normalized tasks.
+
+## Examples
+
+Each example is a runnable Go program under [`examples/`](examples/). The SDK
+embedded example runs locally without an API key; provider-backed examples need
+`OPENAI_API_KEY` or an OpenAI-compatible endpoint.
+
+| Example | What it shows |
+| --- | --- |
+| [`sdk-embedded-agent`](examples/sdk-embedded-agent) | Embed ZenForge in a Go service; runs without an API key. |
+| [`harness-agent`](examples/harness-agent) | Env provider + Agent Skills + typed tool + HITL + Docker sandbox. |
+| [`http-harness-agent`](examples/http-harness-agent) | Loopback-only HTTP service: detached runs, SSE, durable SQLite stores, webhooks. |
+| [`simple-tool-agent`](examples/simple-tool-agent) | Minimal model + tool loop. |
+| [`code-review-agent`](examples/code-review-agent) | Workspace + shell with approval. |
+| [`repo-refactor-agent`](examples/repo-refactor-agent) | Long task with checkpoints and resume. |
+
+The flagship assembly end to end:
 
 ```bash
 export ZENFORGE_PROVIDER=anthropic
@@ -109,872 +356,60 @@ go run ./examples/harness-agent -question \
   "Load the project skill, inspect this project, and prove the shell runs in Docker."
 ```
 
-Choose `openai` or `anthropic` according to the endpoint protocol. MiniMax and
-other compatible vendors are BaseURL configurations, not additional ZenForge
-provider types. The key must belong to the selected endpoint. This example uses
-an Agent Skill catalog, a separate typed `inspect_path` tool, numbered HITL
-approval, and the built-in Docker sandbox with a read-only workspace mount.
-Override the bundled skill directory with `-skill-root` or
-`ZENFORGE_SKILL_ROOT`.
-
-## CLI
-
-```bash
-go run ./cmd/zenforge init
-export OPENAI_API_KEY=...
-go run ./cmd/zenforge run --config zenforge.json "Analyze this repo"
-go run ./cmd/zenforge code --config zenforge.json ./repo "Review and improve this codebase"
-go run ./cmd/zenforge run --checkpoint-type sqlite --checkpoint-dir .zenforge/runs.db "..."
-go run ./cmd/zenforge resume --config zenforge.json run_123
-go run ./cmd/zenforge events --config zenforge.json run_123
-go run ./cmd/zenforge runs --config zenforge.json
-go run ./cmd/zenforge grants list --config zenforge.json
-go run ./cmd/zenforge grants revoke mcp__files__delete --config zenforge.json
-go run ./cmd/zenforge --user-commands ~/.config/zenforge/commands run /review
-# commands come from <workspace>/.zenforge/commands and the user directory;
-# a workspace command of the same name wins and the shadowed one is listed
-go run ./cmd/zenforge schedule add --config zenforge.json --spec "every 1h" --task "Review the open changes"
-go run ./cmd/zenforge schedule list --config zenforge.json
-go run ./cmd/zenforge schedule run-due --config zenforge.json   # from cron/launchd
-```
-
-`examples/http-harness-agent` serves the HTTP harness; with a webhook secret
-(`-webhook-secret` or `ZENFORGE_WEBHOOK_SECRET`) it also serves
-`POST /webhook/run`, which starts a run from an HMAC-SHA256-signed body so an
-external system can trigger work without holding a ZenForge credential.
-
-`run` executes a task in the configured workspace. `exec [prompt]` is the
-headless one-shot entry point: `--json` streams the run as JSONL events, `-o`
-/`--output-last-message` writes the final message to a file, and
-`--output-schema <file>` constrains the final response to a JSON Schema (the
-prompt is read from `-` or piped stdin when omitted). `code <repo> <task>`
-binds workspace and shell execution to the resolved repository. `resume <runID>`
-continues a supported durable checkpoint, `events <runID>` prints its event
-history (`--json` for JSON), and `runs` lists durable run summaries (`--json`
-for JSON). Config is JSON and `init` creates `zenforge.json`; flags override
-the file. See [`docs/config-reference.md`](docs/config-reference.md) and
-[`docs/cli-design.md`](docs/cli-design.md).
-
-CLI failures use stable exit codes: `1` runtime error, `2` invalid config or
-usage, `3` cancellation, `4` approval rejection, and `5` unsupported resume
-state (`0` is success).
-
-Provider selection is protocol-shaped, not vendor-shaped: use
-`--provider openai` for OpenAI-compatible Chat Completions and
-`--provider anthropic` for Anthropic-compatible Messages. Other vendors stay as
-`--base-url` overrides instead of becoming new core provider names. For
-DeepAgents-style MiniMax:
-
-```bash
-export ANTHROPIC_API_KEY=...
-go run ./cmd/zenforge run \
-  --provider anthropic \
-  --model MiniMax-M3 \
-  --api-key-env ANTHROPIC_API_KEY \
-  --base-url https://api.minimax.io/anthropic \
-  "Analyze this repo"
-```
-
-SDK users can pass any application-owned `model.Model` to `zenforge.New`, so
-custom gateways and test models live outside the harness instead of becoming
-new core provider names.
-
-When a compatible provider returns `401` or `403`, ZenForge reports a
-sanitized endpoint and tells you to check that the key belongs to that BaseURL
-and protocol. `404` errors usually mean the BaseURL is not the expected API
-root. Provider error output redacts the configured API key.
-
-## Highlights
-
-**Runtime**
-- Single `zenforge.Agent` with `Stream`, `Run`, `Resume`.
-- Root Agent assembly delegates the durable model/tool state machine to the independently testable `harness.Runner`.
-- Model stream drafts are checkpointed before publication. A process crash
-  supersedes the interrupted attempt and restarts the same logical step without
-  committing partial text, tool calls, or usage twice; attempt history is
-  bounded and validated on load.
-- Platform-compatible `react`, `oneshot`, and `plan_execute` execution modes, persisted across resume.
-- Plan/execute preset with built-in todo manager.
-- Run-scoped pending approval broker (`approval.PendingBroker`) plus optional
-  durable approval inboxes (`approval.Inbox`) backed by memory or SQLite.
-- Broker-free approval requests pause durably instead of allowing the model to continue past a risky tool.
-- When an approval inbox is configured, the waiting checkpoint is saved and the
-  request is registered durably before `approval.requested` is emitted.
-  HTTP approval submit commits the decision before returning success, and a
-  resumed waiter can consume a decision submitted by another process.
-- Run and rule approval scopes are checkpointed grants matched by exact
-  fingerprint or rule key. Optional `approval.GrantStore` persistence reuses
-  only `ScopeRule` across runs — a standing grant is the rule, so it covers
-  that tool with any arguments and stores no fingerprint, while a
-  fingerprint-pinned grant from an earlier store is still honoured. Grants are
-  isolated by tenant/subject, with TTL and revocation support, and the CLI
-  opts in by naming an `approval.grantsFile` (ADR 0062).
-- Durable event log and checkpoint stores: memory, JSONL, SQLite.
-- Canonical `server/harnesshttp.NewRuntime` assembly for detached HTTP
-  start/resume/status/list/attach/cancel, durable SSE reconnect with
-  `Last-Event-ID`, explicit cancellation, active-run limits, timeout, and
-  terminal status retention.
-- Optional detached run registry (`RunRegistry`) for shared start/resume
-  claims, lease refresh, durable status lookup, and run listing across managers, with
-  memory and SQLite implementations.
-- JSONL stores reject path-like run IDs and serialize writers across processes
-  with advisory `flock`; checkpoint saves recover through a pending journal.
-- Sub-agent runtime tool with checkpoint-aware child resume; nested sub-agents blocked by default.
-- S7 child progress is forwarded into the parent stream as real-time
-  `subtask.event` records, while terminal child results retain stable task order.
-- Host-owned sub-agent limits drive the advertised task schema and cannot be widened by model requests.
-- Sub-agent tools are available independently of planner/todo configuration.
-- Nested delegation remains off by default and requires explicit host opt-in plus a finite maximum depth.
-- Child metadata is isolated by default; `InheritContext` explicitly carries trusted parent run metadata into children.
-- Task file scopes are exposed to children as `subagent.files`, and child configs retain the host workspace boundary.
-
-**Models**
-- OpenAI-compatible and Anthropic adapters.
-- Environment factory for `ZENFORGE_*`, `OPENAI_*`, or `ANTHROPIC_*`
-  configuration.
-- Streaming text and tool calls.
-
-**Tools**
-- Typed tool helper that infers JSON schema from Go structs.
-- Typed tool handlers can opt into the runtime `tool.Context` for run-scoped decisions.
-- Workspace, shell (deny-by-default), todo, MCP bridge, sub-agent task tool.
-- Workspace file policy supports read/write roots, approval requests, run-scoped read snapshots, and SHA256 stale-write detection.
-- Workspace reads and grep reuse the platform binary-extension/device denylist in addition to content-based NUL detection.
-- Shell policy uses the complete platform Bash AST and security classifiers. It hard-blocks dangerous or ambiguous forms, routes output redirections and complex structures to approval, and requires every parsed command in a chain or substitution to satisfy the allowlist.
-
-**Agent Skills**
-- Filesystem `SKILL.md` catalogs with bounded metadata/content validation.
-- Progressive disclosure through `Config.Skills`: the first model request sees
-  descriptors only. `load_skill` returns instructions plus a bounded auxiliary
-  resource index, and the same tool loads one indexed resource on demand. All
-  returned content includes SHA-256 identity and safe relative provenance.
-- Skills are instruction packages, not executable tools. Catalog ownership,
-  installation, trust, allowlists, and marketplace integration stay with the
-  embedding application or platform.
-
-Agent Skills are optional. An application that wants them owns the directory
-and passes an immutable bundle:
-
-```go
-catalog, err := skillfs.New("./skills", skillfs.Options{Source: "my-app"})
-if err != nil {
-    return err
-}
-skills, err := skill.NewBundle(ctx, catalog, nil)
-if err != nil {
-    return err
-}
-agent := zenforge.New(zenforge.Config{
-    Model:  modelClient,
-    Skills: skills,
-})
-```
-
-Each immediate child of `./skills` is one package:
-
-```text
-skills/
-  project-review/
-    SKILL.md
-    references/
-      checklist.md
-```
-
-- Memory augmenter that hydrates normalized tasks from a store.
-- Explicit transient-error retry, per-run call budgets, UTF-8-safe output caps, and recursive audit argument redaction.
-- Shell capture is bounded while commands run, and Container Hub response
-  bodies are rejected when they exceed the adapter limit.
-
-**HTTP / SSE edge** — `server/harnesshttp`
-- `POST /run`, `POST /resume`, `GET /events` (bounded replay), and `GET /live`
-  (live fanout or durable replay-to-live with `replay=true`).
-- `GET /approvals`, `POST /approval` for run-scoped pending approval flows.
-- Canonical `NewRuntime` wiring for detached start, resume, status, list,
-  attach, explicit cancel, and safe-boundary steer. It shares one fanout store, bus, and approval inbox;
-  disconnecting an attachment does not cancel the run.
-- Every `zenforge.Agent` creates an in-process run controller by default, so
-  SDK callers can use `Agent.Steer` without extra wiring.
-- The manager is single-process by default. Configure `RunManagerOptions.Registry`
-  with `NewMemoryRunRegistry` or `OpenSQLiteRunRegistry` to add shared run
-  claims, lease refresh, durable status/list lookup, and cross-manager durable
-  replay attachment. Their optional `RunCancellationRegistry` extension also
-  lets any replica persist cancellation for the active owner; a recovering
-  owner consumes a pending request before opening the resumed agent stream.
-  Their optional `RunRegistryDeleter` extension lets explicit terminal
-  `RunManager.Forget` cleanup remove a registry status record while preserving
-  durable events and checkpoints.
-  Steer is owner-local: it becomes a user message after pending tools and
-  before the next model request. Multi-worker hosts route it to `OwnerID` or
-  use an application-owned durable control queue.
-  Applications still own model provider/protocol and compatible base URL
-  configuration, auth, route paths, durable store closure, lifecycle shutdown,
-  and idempotent external side effects.
-- Hosts can explicitly recover expired, nonterminal registry records with
-  `RunManager.RecoverStale`; normal resume claims keep concurrent recovery
-  workers fenced, and per-run outcomes remain visible to the caller.
-- The [deployment guide](docs/deployment-guide.md) defines supported
-  single-process, shared-host, and multi-host topologies; per-operation routing;
-  external side-effect idempotency; distributed cancellation; crash recovery;
-  and graceful rollout acceptance.
-- `examples/http-harness-agent` is the runnable loopback-only service assembly:
-  environment-selected OpenAI/Anthropic protocol, SQLite events/checkpoints/
-  approvals/runs, Agent Skills, typed tool, Docker shell sandbox, HITL, and
-  detached HTTP lifecycle endpoints.
-
-**Live events**
-- `eventlog.Bus` and `eventlog.FanoutStore` for multiple live subscribers.
-- `GET /live?replay=true&afterSeq=N` subscribes before replay, catches up from
-  the durable store, de-duplicates by sequence, and accepts `Last-Event-ID` on
-  reconnect. Plain `/live` remains ephemeral fanout.
-
-**Observability**
-- Trace sinks: memory, stdout, JSONL, OpenTelemetry spans.
-- Trace metadata enrichment.
-- Redaction helpers for common secret-bearing keys.
-
-**Platform adapters**
-- `adapters/zenmind` — platform catalog/session DTOs with host-owned
-  model/skill/tool/workspace resolution, strict history conversion,
-  fail-closed AgentKey/ChatID/RunID routing, run-scoped strict projection,
-  event-driven approval correlation, and platform event-line JSONL output.
-- `adapters/mcp` — MCP tool bridge (resources/prompts/sampling/OAuth stay with the host).
-- `adapters/memory` — scoped memory augmentation into normalized tasks.
-
-The ZenMind wire contract is checked against fixtures captured from
-`agent-platform@1893edb5` under
-[`adapters/zenmind/testdata/platform`](adapters/zenmind/testdata/platform).
-These goldens cover catalog/session input, flat stream envelopes, content/tool
-lifecycles, approval ask/submit/answer, and chat event lines. A checked
-`manifest.json` pins every fixture's source files and SHA-256. Downstream
-integration is implemented and tested on `agent-platform` branch
-`codex/zenforge-engine-bridge` at `82ca4d3`: it includes the engine bridge,
-feature-flag selector, HTTP sync/async, SSE, WebSocket, approval, attach, and
-legacy-fallback paths. `agent-platform` `main@f6d89da` restores the bridge,
-selector, routing, initialization, and rollout documentation; platform Go
-1.26 tests, race tests, and HTTP stream integration pass. The existing
-`agent-webclient` protocol consumer also passes 90 focused query/attach/submit,
-event-processing, and HITL tests and its production build. This remains
-narrower than deployed UI evidence. An isolated local Platform canary with
-`ZENFORGE_ENABLED=true` and a real compatible provider also emitted
-`request.query`, `run.start`, `content.*`, usage, and `run.complete` over SSE.
-The local webclient selected the canary agent, rendered its streamed response,
-and returned to `Idle` through its SSE proxy. The opt-in Container Hub adapter
-also completed a real local Hub `shell` session with Docker-backed
-create/execute/close. Neither local smoke substitutes for a production
-deployment. For a deployed Platform endpoint, use the opt-in
-[`verify-platform-deployment.sh`](scripts/verify-platform-deployment.sh)
-canary: it checks the catalog by default and, with `--run-query`, checks a real
-ZenForge SSE lifecycle with a fresh chat/run/request identity.
-
-`BuildRun` maps `Session.HistoryMessages` into `Task.InitialMessages`, including
-OpenAI `tool_calls` and snake/camel tool-call IDs, and rejects malformed history
-with its message index. `Session.ResolvedPrompt` takes precedence over the
-legacy catalog instruction field. Raw tool arguments are copied into run-owned
-state so later caller mutation cannot alter model requests or checkpoints.
-Catalog skills, tools/overrides, and workspace root/host access are resolved by
-host callbacks. Declared `HostAccess` or `ToolOverrides` without the matching
-resolver fail closed. The complete runtime-owned tool, approval, planner,
-sub-agent, persistence, trace, mode, planning, and step configuration is
-propagated into `zenforge.Config`.
-
-For the platform event-line read model, project events first, then append each
-`StreamEvent` with an explicit chat ID:
-
-```go
-projector := zenmind.NewProjectorWithIdentity(zenmind.ProjectorIdentity{
-    RunID: runID, ChatID: chatID, AgentKey: agentKey,
-})
-writer := zenmind.NewChatJSONLWriter(root)
-projectedEvents, err := projector.ProjectStrict(event)
-if err != nil {
-    return err
-}
-for _, projected := range projectedEvents {
-    if err := writer.Append(ctx, chatID, projected); err != nil {
-        return err
-    }
-}
-lines, err := zenmind.ReadEventLines(ctx, root, chatID)
-```
-
-Persist `projector.Snapshot()` beside the host's attach cursor and restore it
-with `zenmind.NewProjectorFromState`; open content/tool blocks and platform
-sequence numbers then continue without reused IDs.
-Version 2 snapshots preserve the run binding. Version 1 snapshots remain
-readable as unbound compatibility state, but fail closed under `ProjectStrict`.
-
-`ChatJSONLWriter` writes `root/chatId.jsonl` platform `EventLine` records with
-top-level `chatId`, `runId`, `updatedAt`, `liveSeq`, `event`, and `_type`, and
-rejects duplicate or decreasing cursors for the same run. The deprecated
-`LegacyChatJSONLWriter` type, constructed with
-`NewLegacyChatJSONLWriter(root, mapper)`, and `ReadChatRecords` retain the old
-`root/runId/chat.jsonl` `zenmind.chat_trace.v1` format only for existing callers.
-Neither writer implements complete Chat Storage V3.1.
-
-**Sandbox**
-- Local shell tools execute directly in the configured workspace; they are not
-  a `sandbox.Sandbox` backend.
-- `sandbox/docker` provides a local Docker backend with a read-only root
-  filesystem, no network by default, bounded output, and no host fallback.
-- `sandbox/fake` provides a test backend, and `sandbox/containerhub` provides
-  an optional beta Container Hub backend.
-- Scoped `sandbox.State` helpers for same-run/subtask session continuity.
-- Closed or cross-scope sessions are never written back as reusable checkpoint state.
-
-## Examples
-
-Each example is a runnable Go program under [`examples/`](examples/). The SDK
-embedded example runs locally without an API key; provider-backed examples need
-`OPENAI_API_KEY` or an OpenAI-compatible endpoint.
-
-| Example | What it shows |
-| --- | --- |
-| [`sdk-embedded-agent`](examples/sdk-embedded-agent) | Embed ZenForge in a Go service; runs without an API key. |
-| [`harness-agent`](examples/harness-agent) | Env provider + Agent Skill catalog + typed tool + HITL + Docker sandbox. |
-| [`simple-tool-agent`](examples/simple-tool-agent) | Minimal model + tool loop. |
-| [`code-review-agent`](examples/code-review-agent) | Workspace + shell with approval. |
-| [`repo-refactor-agent`](examples/repo-refactor-agent) | Long task with checkpoints and resume. |
-
 ## Documentation
 
-Start here:
-- [Quickstart](docs/quickstart.md)
-- [SDK Guide](docs/sdk-guide.md)
-- [Provider Guide](docs/provider-guide.md)
-- [Tool Authoring](docs/tool-authoring-guide.md)
-- [Agent Skills Spec](docs/agent-skills-spec.md)
-- [Deployment Guide](docs/deployment-guide.md)
+The full site is built from [`docs/`](docs/) with MkDocs Material and hosted
+on GitHub Pages at **[feiyu912.github.io/zenforge](https://feiyu912.github.io/zenforge/)**.
 
-Server and edge:
-- [Server HTTP Guide](docs/server-http-guide.md) · [Server SSE Guide](docs/server-sse-guide.md)
-- [Approval Guide](docs/approval-guide.md) · [Checkpoint & Resume](docs/checkpoint-resume-guide.md)
+| Start here | Deep dives |
+| --- | --- |
+| [Tutorial](https://feiyu912.github.io/zenforge/tutorial/) — a working agent in 15 minutes | [Architecture](https://feiyu912.github.io/zenforge/architecture/) |
+| [Quickstart](https://feiyu912.github.io/zenforge/quickstart/) | [Harness state machine](https://feiyu912.github.io/zenforge/harness-state-machine/) |
+| [Concepts](https://feiyu912.github.io/zenforge/concepts/) | [Approvals](https://feiyu912.github.io/zenforge/approval-guide/) · [Checkpoint & resume](https://feiyu912.github.io/zenforge/checkpoint-resume-guide/) |
+| [SDK guide](https://feiyu912.github.io/zenforge/sdk-guide/) | [Compaction](https://feiyu912.github.io/zenforge/compaction-guide/) · [Sub-agents](https://feiyu912.github.io/zenforge/subagent-guide/) · [Planner](https://feiyu912.github.io/zenforge/planner-guide/) |
+| [Tool authoring](https://feiyu912.github.io/zenforge/tool-authoring-guide/) | [Sandboxing](https://feiyu912.github.io/zenforge/sandbox-guide/) · [Security](https://feiyu912.github.io/zenforge/security-guide/) |
+| [Providers](https://feiyu912.github.io/zenforge/provider-guide/) | [HTTP server](https://feiyu912.github.io/zenforge/server-http-guide/) · [SSE](https://feiyu912.github.io/zenforge/server-sse-guide/) · [Deployment](https://feiyu912.github.io/zenforge/deployment-guide/) |
+| [Agent Skills](https://feiyu912.github.io/zenforge/agent-skills-spec/) | [MCP](https://feiyu912.github.io/zenforge/mcp-adapter-guide/) · [Memory](https://feiyu912.github.io/zenforge/memory-adapter-guide/) · [ZenMind](https://feiyu912.github.io/zenforge/zenmind-adapter-guide/) |
+| [Configuration reference](https://feiyu912.github.io/zenforge/config-reference/) | [Failure modes](https://feiyu912.github.io/zenforge/failure-modes/) · [Limitations](https://feiyu912.github.io/zenforge/limitations/) · [Tracing](https://feiyu912.github.io/zenforge/trace-guide/) |
 
-Adapters and integrations:
-- [ZenMind Adapter](docs/zenmind-adapter-guide.md) · [MCP Adapter](docs/mcp-adapter-guide.md) · [Memory Adapter](docs/memory-adapter-guide.md)
-- [Sandbox Guide](docs/sandbox-guide.md) · [Sub-Agent Guide](docs/subagent-guide.md) · [Planner Guide](docs/planner-guide.md) · [Trace Guide](docs/trace-guide.md)
+Eighty-one architecture decision records live in
+[`docs/adr/`](docs/adr/) and on the
+[site](https://feiyu912.github.io/zenforge/adr/).
 
-Design and operation:
-- [Architecture](docs/architecture.md) · [Harness State Machine](docs/harness-state-machine.md) · [Failure Modes](docs/failure-modes.md) · [Security Guide](docs/security-guide.md) · [Limitations](docs/limitations.md)
-- [Compaction Guide](docs/compaction-guide.md) · [Reference Parity Plan](docs/reference-parity-plan.md)
-- [MVP Validation](docs/mvp-validation.md) · [v0.1 Release Notes](docs/release-notes-v0.1.md) · [Release Checklist](docs/release-checklist.md)
-- [Vision](docs/vision.md) · [Product Roadmap](docs/product-roadmap.md)
+## Project status
 
-Architecture decision records live in [`docs/adr/`](docs/adr/).
+`v0.1.0` (2026-05-30) is the first usable release candidate; the `main` branch
+carries additional v0.1.x capabilities on top of the tag without intentional
+breaking changes. The highlights of `main`:
 
-## Project Status
+- Context management: compaction with overflow recovery, model-retry
+  taxonomy, token meter, hierarchical AGENTS.md instructions, turn diffs.
+- Orchestration: in-process JavaScript workflow engine, checkpoint-aware
+  sub-agents, plan mode, goals, Ralph, durable background jobs and PTYs.
+- Safety: Seatbelt, bubblewrap, Landlock+seccomp, and Docker sandbox
+  backends; Bash-AST shell policy; SSRF-safe web tools; durable approvals
+  with grants and `ask_user`.
+- Protocol surface: MCP client and server modes, signed webhooks, detached
+  HTTP lifecycle with cross-replica registries, a local web console.
+- Time travel: fork from any checkpoint boundary; revert with full history.
 
-`v0.1.0` is the first usable release candidate. The current `main` branch adds the following on top of the v0.1.0 tag without intentional breaking changes:
+The complete [CHANGELOG](CHANGELOG.md) tracks every change since v0.1.0, and
+the [release notes](https://feiyu912.github.io/zenforge/release-notes-v0.1/)
+cover the 0.1 feature set.
 
-- `server/harnesshttp` access control hook for auth and tenancy injection.
-- `eventlog.Bus` and `eventlog.FanoutStore` for live multi-subscriber event fanout.
-- `approval.PendingBroker` for simple process-local pending approvals, or
-  `approval.StoreBroker` with `approval/memory` or `approval/sqlite.OpenInbox`
-  for shared approval listing/submission across processes.
-- Optional cross-run rule authorization through memory or SQLite
-  `approval.GrantStore` implementations; no store preserves checkpoint-only
-  behavior, while configured store errors fail closed.
-- `adapters/zenmind`: run configuration mapping, chat JSONL projection, and a
-  fail-closed routing helper for a host-owned feature flag.
-- Platform sessions can provide a fully resolved prompt and strict conversation
-  history, including tool-call turns, without duplicating history on resume.
-- `adapters/memory`: scoped memory augmentation.
-- Sub-agent resume reuses terminal children and continues existing child checkpoints.
-- Child checkpoint backend failures stop before model execution, while missing checkpoints alone start fresh child runs.
-- Cancelled child runs propagate as failed subtask results instead of false completion.
-- Pure sub-agent agents advertise `task` and `agent_invoke` without requiring planning, and validate host limits before child state is checkpointed.
-- Host-bounded nested delegation inherits child orchestration only below the configured maximum depth.
-- Sub-agent context inheritance is explicit: task metadata, trusted parent context, host spec metadata, and runtime-owned fields have deterministic precedence.
-- Child task file scopes are copied into `subagent.files`, and the configured workspace is retained through nested child configs.
-- Active tool resume is covered through durable JSONL checkpoints.
-- CLI run/resume are covered against local OpenAI-compatible streaming and durable JSONL checkpoints.
-- CLI argument error output is covered for common command mistakes.
-- `zenforge code <repo> <task>` binds workspace and shell execution to the resolved positional repository and rejects missing, nonexistent, or non-directory targets.
-- Config reference is checked against the generated `zenforge init` defaults.
-- Release notes version coverage is checked against `VERSION`.
-- Durable schema version docs and flattened event contract docs are checked.
-- CLI todo rendering is covered for typed plan/execute payloads.
-- The code review example wires workspace snapshots and CLI approval for risky shell commands.
-- The code review example README documents its approval prompt and effective read-only workspace posture.
-- The code review example safety wiring is checked in the examples test suite.
-- MVP validation evidence is checked against existing test and benchmark names.
-- The docs test suite rejects platform brand coupling outside
-  `adapters/zenmind` and rejects platform-module or `internal` imports inside
-  that adapter.
-- The SDK embedded example is run in tests without an API key.
-- MVP scope now reflects the current CLI, adapter, resume, and example surface.
-- Product roadmap MVP scope now reflects the current MCP, memory, sub-agent, and CLI inspection surface.
-- Product roadmap resume scope now matches supported checkpoint-boundary resume.
-- Max-step finalization drains the last pending tool calls before the final no-tool answer turn.
-- MVP validation maps max-step final no-tool behavior to a concrete end-to-end test.
-- Cancellation before model or tool execution persists a cancelled terminal checkpoint and event.
-- Failure-mode docs and MVP validation describe durable cancellation semantics.
-- Final no-tool turns fail clearly if a provider still returns tool calls.
-- Failure-mode, resume, and MVP docs cover final-turn provider contract errors.
-- Plan/execute checkpoints continue sequence numbers across stages and persist the terminal summary.
-- Resume and MVP docs map durable plan/execute summaries to a SQLite end-to-end test.
-- Served MCP runs are gated by `--allow-run`, never prompt on the protocol
-  streams, and report refused tool calls with the run's outcome; `--run-timeout`
-  bounds one run and a timed-out run still carries its id.
-- An interrupted checkpoint save no longer masks its own failure: the JSONL
-  store completes a durably-pending save under a context that cannot be
-  cancelled, and the loop re-derives its checkpoint counter after a failed save.
-- A background job is announced as terminal only after its output has been
-  drained, so a foreground `Run` returns the output a command produced instead
-  of racing the pipe copies (ADR 0058).
-- `exec_command` can run a command on a pseudo-terminal (`pty: true`, with
-  `rows`/`cols`): interactive programs, prompts, and full-screen tools behave
-  as they would for a human, the merged stream arrives as the job's stdout,
-  `write_stdin` drives it, and killing it signals the session's whole process
-  group so a `SIGHUP`-ignoring child cannot keep the terminal open (ADR 0060).
-  A bounded output buffer keeps both ends of a stream, so a flooded job still
-  shows its first lines and any read that crossed the discarded middle reports
-  how many bytes it skipped.
-- `workflow/` runs the reference's orchestration scripts in-process (ADR
-  0057): a JavaScript body with top-level `await`, `agent()`/`parallel()`/
-  `pipeline()`/`phase()`/`log()` hooks, an `args` input, a bounded
-  concurrency/total-agent/item cap, cooperative cancellation with a grace
-  timer, and an enforced JSON-Schema subset for structured child results.
-- The `workflow` tool wires those scripts to real sub-agent runs (ADR 0059):
-  it is advertised wherever sub-agents are configured, each `agent()` call is
-  a one-task sub-agent run through the existing orchestrator (same identity,
-  nesting depth, options merge, and live `subtask.*` events), `phase()`/`log()`
-  progress rides the subtask event carrier, `Config.WorkflowAgent` picks the
-  worker and `Config.WorkflowLimits` bounds the run, a completed run returns
-  the reference's text shape plus structured
-  `{workflow, agentsStarted, stopReason, value}`, and a `provider`/`model`
-  override is refused with a fatal `AGENT_START` rather than silently ignored.
-- Plan/execute internal stages no longer leak terminal run lifecycle events or continue after stage failure.
-- Planner spec, guide, and MVP validation document the single top-level run lifecycle.
-- Plan/execute orchestration failures persist terminal checkpoints and resume without retrying completed work.
-- Planner and failure-mode docs map durable orchestration failures to concrete resume tests.
-- Plan/execute failure and cancellation paths fail closed when their terminal checkpoint cannot be saved.
-- Workspace tools enforce file read/write roots before adapter access, return approval requests for policy exceptions, and reuse approved fingerprint/rule metadata.
-- Workspace read-before-write snapshots are scoped by run and compare SHA256 in addition to size, mtime, and file type.
-- Successful `workspace_write` calls emit `workspace.changed` and persist dirty paths in run state.
-- Local workspace writes reject final symlink escapes and non-regular targets before writing.
-- Complete platform-derived `safety/bashast` and `safety/bashsec` packages provide fail-closed AST, legacy-validator, wrapper-command, redirection, and embedded-script review; unsupported syntax requires approval or is denied.
-- Failed plan/execute saves cannot mutate the last durable checkpoint through shared state metadata.
-- Planner update failures are surfaced and checkpointed instead of emitting a false todo/task transition.
-- Core checkpoint writes fail closed before model/tool progress or successful terminal events.
-- Resume, failure-mode, and MVP docs map checkpoint fail-closed behavior to concrete tests.
-- Checkpoint loads and resume fail closed on unknown run-state version, phase,
-  or mode while retaining legacy empty version/mode compatibility.
-- Event-log sequence and append failures stop execution and surface a live `run.error` instead of publishing unrecorded progress.
-- Trace exporters remain best-effort platform observability and cannot change the harness result.
-- Architecture package layout is aligned with the current repository.
-- Historical API sketch is labeled and current guides are prioritized.
-- README Quick Look and architecture snippets use current store/interface names.
-- User-facing guides no longer present themselves as drafts and use current tool, shell, and sandbox APIs.
-- Approval guide examples use neutral core decisions, with platform payload mapping kept at adapter edges.
-- CLI workspace writes require a fresh read snapshot by default.
-- Quickstart and config reference document the CLI workspace write snapshot default and configurable file roots.
-- CLI workspace read/write byte limits from config are applied at runtime.
-- MVP validation maps CLI workspace byte-limit enforcement to a concrete test.
-- CLI workspace read/write roots from config are applied to runtime file policy.
-- Code-review and repo-refactor examples now wire explicit workspace file roots and read-before-write snapshots.
-- CLI config rejects invalid shell timeout durations instead of silently falling back.
-- Config reference and MVP validation document invalid shell timeout handling.
-- CLI config rejects invalid agent planning modes instead of disabling planning silently.
-- Config reference and MVP validation document invalid planning mode handling.
-- CLI config rejects invalid approval modes before building the runtime.
-- Config reference and MVP validation document invalid approval mode handling.
-- CLI config rejects invalid model providers and checkpoint store types before runtime setup.
-- Config reference and MVP validation document invalid provider/checkpoint handling.
-- CLI config rejects negative agent, workspace, and shell limit values.
-- Config reference and MVP validation document negative CLI limit handling.
-- HTTP approval submit bad JSON and invalid decisions are covered.
-- MVP validation maps HTTP approval bad request handling to a concrete test.
-- HTTP event replay rejects invalid `afterSeq` and `limit` query values.
-- MVP validation maps HTTP event replay query validation to a concrete test.
-- HTTP live event streaming rejects invalid negative buffer configuration.
-- MVP validation maps HTTP live buffer validation to a concrete test.
-- HTTP handler method guards are covered across run, resume, event, live event, and approval endpoints.
-- MVP validation maps HTTP handler method guards to a concrete test.
-- HTTP resume distinguishes invalid POST JSON from a missing run id.
-- Approval without a broker closes the current stream at a resumable waiting checkpoint; `Run` returns `approval.ErrRequired`.
-- Approval abort decisions persist a cancelled terminal checkpoint instead of a generic failed run.
-- `Agent.Run` returns cancellation and deadline terminal events as matching Go errors.
-- Approval run/rule grants survive checkpoints and resume, while mismatched scope keys require a new decision.
-- Harness-owned approval run/tool identity overrides tool-provided values, and mismatched broker decision IDs fail closed.
-- Generic approval middleware binds decisions to the exact request and scope key before retrying a tool; aborts expose both `approval.ErrAborted` and `context.Canceled`.
-- MVP validation maps HTTP resume invalid JSON handling to a concrete test.
-- Sandbox checkpoint state binds sessions to the exact run/subtask scope.
-- Sandbox close is best-effort and cannot replace a successful command result.
-- Container Hub transport deadlines map to stable `sandbox_timeout` errors.
-- JSONL event/checkpoint stores use cross-process file locks, reject unsafe
-  run IDs, and recover interrupted checkpoint saves from a pending journal.
-- Shell output capture and Container Hub response reads are bounded in memory.
-- Tool retries require `tool.MarkRetryable`; permanent and policy errors run once.
-- `ToolArgumentRedaction` removes configured nested keys from durable `tool.call` events without changing tool input.
-- Tool call budgets are isolated by run, and output truncation preserves valid UTF-8.
-- Trace metadata enrichment.
-- A hardening test suite and a failure-mode guide.
-- The root Agent loop is now an adapter around `harness.Runner`; runner-level tests cover text completion, tool continuation, and oneshot finalization directly.
-- Production Agent checkpoint creation and `checkpoint.created` payloads are
-  shared across normal, planner, terminal, and cancellation paths; `recorder`
-  remains a low-level ordered-write helper rather than the Agent lifecycle.
-- ZenMind adapter wire goldens are pinned to `agent-platform@1893edb5`, while
-  downstream engine/feature-flag/HTTP/SSE/WS/approval/attach integration is
-  tested on `agent-platform` branch `codex/zenforge-engine-bridge@82ca4d3`.
-  Platform `main@f6d89da` restores the ZenForge bridge, selector, routing,
-  initialization, and rollout documentation. The existing `agent-webclient`
-  focused protocol tests and production build pass; production deployment
-  acceptance remains external.
-- ZenMind run assembly rejects missing or typed-nil models and explicitly
-  declared unavailable tools, while preserving undeclared, explicitly empty,
-  and legacy tool-list semantics.
-- ZenMind host resolvers assemble skills, tool overrides, and workspace access;
-  approval events correlate to awaiting wire with snapshot recovery; and
-  `ProjectStrict` enforces one run with v2/v1 state compatibility. This remains
-  adapter behavior, not complete Chat Storage or platform wiring.
-- `compaction/`: context management modeled on DSH and codex — pressure
-  compaction at step boundaries (summarize shadowed history with a retain
-  budget, with optional library-level tool-result pruning via `Policy.Prune`),
-  forced overflow recovery on provider context-window errors, durable
-  `CompactionRecord` history, and `compaction.*` events. Opt-in via
-  `Config.Compaction`; the CLI always wires it, so overflow recovery works
-  without a configured window and pressure compaction activates once
-  `--context-window` / `model.contextWindow` is set.
-- `modelretry/`: fail-closed model-failure taxonomy (rate limit, server,
-  timeout, transport, empty response, context window, auth, quota), exponential
-  backoff with jitter, capped Retry-After support parsed from OpenAI/Anthropic
-  response headers, superseded model-attempt chaining, durable `model.retry`
-  events emitted before the wait, and a stream idle watchdog
-  (`Config.StreamIdleTimeout`, typed `model.StreamIdleError`).
-- `workspace_edit`: exact-match file editing with `replaceAll`, recoverable
-  ambiguous/not-found errors, and the same read-before-write snapshot CAS as
-  `workspace_write`, routed through the file-policy approval path.
-- `instructions/`: hierarchical AGENTS.md-compatible project instruction
-  discovery (root markers, root-to-cwd chain, override files, compat
-  filenames, user-global scope, 32 KiB merged budget dropping broader scopes
-  first) plus a frozen `<environment_context>` block; both persist into
-  `RunState.Meta` at run start so resume replays the exact prompting, with an
-  `instructions.loaded` event.
-- Shell sandbox escalation ladder: model-visible `sandboxPermissions` +
-  `justification` arguments exist only while the shell is confined, never
-  bypass the command allowlist, always require a fresh approval under a
-  namespaced fingerprint, and run the approved call locally once; a
-  conservative denial classifier (`policy.IsLikelySandboxDenied`) appends
-  DSH-grammar sandbox-denial markers and the escalation hint to confined
-  failures.
-- `tools/askuser`: durable ask-user tool with stable per-question ids echoed
-  in answers, structured options, multi-select, and a root-agent-only rule;
-  answers ride `approval.Decision.Payload` through the new
-  `approval.MetadataDecisionPayload` key, and the interactive CLI broker
-  renders questions and collects answers.
-- `tool.Spill` middleware: oversized tool output moves to a private 0700/0600
-  on-disk store with a UTF-8-safe head/tail preview and pointer inline
-  (50 KiB default cap), fail-soft to bounded truncation when the store is
-  unavailable; the CLI spills under `<workspace>/.zenforge/spill` so the read
-  tool can reach full outputs.
-- `tool.RepeatGuard` middleware: consecutive identical tool calls per run are
-  counted at thresholds 3/5/8 and answered with escalating in-result
-  reminders; the real result is never blocked or replaced.
-- CLI composes `RecoverPanic → RepeatGuard → Spill` as its tool runtime and
-  gained `--context-window`, `model.retry.*`, `agent.environmentContext`, and
-  `agent.projectInstructions` configuration, all covered by the generated
-  config reference.
-- `docs/reference-parity-plan.md` maps every observed DSH/codex capability to
-  its ZenForge status (shipped, already had, roadmap) with adoption sketches,
-  backed by ADRs 0023–0027 and the Compaction Guide.
-- Token meter (ADR 0027): adapters normalize provider rate-limit headers
-  (`x-ratelimit-*`, `anthropic-ratelimit-*`) into `model.Usage.RateLimits`,
-  persisted as `UsageState.RateLimits` and emitted as `model.ratelimits`
-  events; the `get_context_remaining` tool reports the live remaining budget
-  the agent injects into tool-call metadata, or null without a configured
-  context window.
-- `workspace_glob` discovery tool: DSH-style `**` matcher, basename-at-any-
-  depth patterns, VCS excludes, newest-first ordering, visit budget; plus the
-  DSH search caps — glob keeps 100 paths inline with the complete sorted list
-  saved to a shared `tool.SpillStore`, grep caps at 250 matches with
-  2000-byte rune-safe line previews, and every over-cap result carries an
-  explicit footer.
-- Turn-diff tracker (codex TurnDiff): Write/Edit mutations are captured in
-  `tools/workspace.TurnDiffStore` and rendered at each turn boundary under a
-  100ms budget as unified diffs (new `diff/` package, bounded Myers with
-  coarse fallback) in `turn.diff` events; oversized or over-budget files
-  degrade to path-only notes and unchanged files are omitted.
-- Diff-only environment re-injection (codex WorldState): live environment
-  facts are re-rendered at each model-call boundary, and only a change
-  appends an `<environment_update>` system message plus an
-  `environment.updated` event; the frozen `<environment_context>` baseline
-  is never rewritten, so resume semantics are unchanged.
-- `present` tool (DSH tool-present): the model declares existing workspace
-  files as final deliverables; a successful call emits a
-  `deliverables.presented` event carrying the tool-call id and the validated
-  workspace-relative paths, while missing files and directories are rejected
-  with recoverable errors before anything is announced.
-- Session titles (DSH session-title): OSC/CSI/ESC sequences, control
-  characters, and bidirectional marks are stripped and titles are capped on
-  rune boundaries; an explicit `--title`/`agent.sessionTitle` wins, otherwise
-  the first eight words of the task input become the deterministic fallback.
-  Titles live in run-state meta plus the `session.title` event and never
-  enter the model prompt.
-- Completed write observation policy (DSH fs-observation-policy): with
-  read-before-write enabled, existing files need a fresh same-run snapshot and
-  new files need a same-run observed absence (a read that reported
-  not-found), so a blind create is refused; `workspace.ErrPathNotFound` now
-  also satisfies `errors.Is(err, fs.ErrNotExist)`.
-- MCP server mode (DSH MCP server): `adapters/mcp/server.go` exposes
-  ZenForge as an MCP server over any reader/writer pair — `initialize` with
-  version negotiation, `tools/list` with read-only annotations, and
-  `tools/call` with the protocol's own error taxonomy (a tool failure is
-  `isError`, a malformed request is a JSON-RPC error, a notification is
-  never answered). The client's stdio framing was corrected to the spec's
-  newline-delimited JSON while still reading `Content-Length` headers, and
-  remote tools are namespaced `mcp__<server>__<tool>` with their read-only
-  hints read into the definition so an approval decision can use them.
-  `zenforge mcp-server` serves ZenForge itself the same way, exposing
-  `zenforge_runs`, `zenforge_run_status`, and `zenforge_version` as read-only
-  tools, `zenforge://runs` and `zenforge://runs/{runId}` as read-only
-  resources, and the workspace's commands as prompts (`prompts/get` renders one
-  as inert text, with inline shell disabled), none of which needs an operator
-  grant. A client that supplies an MCP progress token gets
-  `notifications/progress` while `zenforge_run` works through a run; without
-  one it receives exactly the frames it did before
-  tools (status answers for one run: live state for a run this server started,
-  the durable summary for a run this install recorded, and `unknown`
-  otherwise). `--allow-run` adds `zenforge_run`, which starts a run in the
-  configured workspace and returns its answer, id, and status; with
-  `detach: true` it instead returns the id as soon as the run has started, so
-  a task longer than one call can hold keeps running on the server (bounded by
-  `--run-timeout`), is polled through `zenforge_run_status`, and can be stopped
-  early with `zenforge_run_cancel`. The tool is
-  advertised without a read-only hint so the calling client asks its own
-  operator, it does not exist without the grant from this host's operator, and
-  inside the served run approval-gated tools are allowed when the calling
-  client advertises MCP elicitation (the gate asks it for a boolean decision and
-  grants that one call), while the default `prompt` falls back to a refusal —
-  reported with the run's outcome — for a client that cannot answer, and
-  `--approve always` skips the question entirely.
-- Configured MCP servers (DSH/codex MCP client): a `mcpServers` config section
-  starts stdio servers and exposes their tools as `mcp__<server>__<tool>`,
-  with `deferred: true` opting a server into `tool_search` activation. The
-  section is validated before anything is spawned and a server that cannot
-  start fails the command, because the file is the operator's own. A call the
-  server did not declare read-only goes through the approval broker with the
-  reference's rule (destructive asks, read-only runs, absent hints ask), and
-  the request carries a per-tool rule key plus an argument fingerprint so a
-  broad grant cannot be replayed for a different payload. Both time bounds are
-  per server (`startupTimeout`, covering `initialize` and `tools/list`, and
-  `toolCallTimeout` per call), so a cold container or a long-running remote
-  tool says so in its own entry instead of moving the default for every
-  server. Server processes get
-  the ambient environment minus credential-shaped names, are owned by the
-  command that started them, and are drained on every exit path — including a
-  repeated schedule, which drains per firing. The stdio client now dispatches
-  responses by id, so a declared per-call timeout really fires and the
-  connection survives it, and `Close` waits for both the process and the
-  reader goroutine.
-- Images and reasoning (codex `view_image`, reasoning replay): the
-  `view_image` tool shows the model an image from the workspace — confined
-  like any other file read, format verified from magic bytes, and carried on
-  the tool result so it is replayed on later turns and survives a resume.
-  Provider reasoning is captured with its signature and replayed verbatim
-  where the provider requires it (Anthropic thinking blocks), streaming on
-  its own `model.reasoning` event so it is never mistaken for answer text.
-- Canned commands and schedules (DSH commands/schedule): `--commands
-  <dir>` loads `*.md` prompt templates invoked as `/name args`
-  (subdirectories namespace them as `/git:commit`), with `$ARGUMENTS`,
-  `$1..$9`, workspace-confined `@file` includes, and `!`cmd`` inline shell
-  that requires an explicit `run-bash: true` and still goes through the
-  shell policy. `--schedule 'every 1h'` (or a cron subset) repeats a task
-  in-process, surviving a failed firing and stopping cleanly on
-  cancellation.
-- A guardian review (`--review report|enforce`): one adversarial model call
-  over the finished run — task, answer, changed files, real unified diffs
-  read back from the run's turn-diff events, commands, failures. Report mode
-  records findings and finishes; enforce mode sends a `request_changes`
-  verdict back as the agent's next instruction, bounded by the same
-  three-refusal limit as Stop hooks. A malformed verdict is an error, never
-  an approval, and a broken reviewer can neither block nor approve.
-- Durable cross-run memories (codex memories): `--memory <dir>` keeps
-  learnings in two readable markdown files — an append-only raw file and a
-  consolidated summary that is injected as instructions (frozen into run
-  state, so a resume replays it). Identity is the content, so the same
-  learning found twice is one memory; `--memory-scope` decides visibility.
-  `--memory-distill` adds one model call per finished run to extract new
-  learnings; a distillation failure is reported and never costs the user
-  their answer.
-- Lifecycle hooks in the agent loop: `SessionStart` and `UserPromptSubmit`
-  run once at run start, their context is frozen into durable run state and
-  rendered as a system section, and a block fails the run before any model
-  call; a `Stop` hook can refuse to let the agent finish, sending it back to
-  work with the hook's reason as its next instruction, bounded at three
-  refusals per terminal path so a hook that never relents cannot hold the
-  agent hostage.
-- Lifecycle hooks (codex `hooks` crate): `--hooks <file>` runs user
-  commands at `PreToolUse`/`PostToolUse` (wired as tool middleware, so a
-  blocking hook prevents the call and `updatedInput` rewrites it) and the
-  engine also implements `SessionStart`/`UserPromptSubmit`/`Stop`. A JSON
-  payload goes to stdin, exit 0 parses a JSON decision, exit 2 blocks with
-  stderr as the reason, and a malformed decision is a failure rather than a
-  silent allow; failures fail open unless the hook sets `failClosed`.
-- Model-facing job tools: `--jobs` (or `agent.jobs`) registers
-  `exec_command` (foreground or `background=true`), `write_stdin`,
-  `job_output` (offset reads, `waitMs` long-polling, dropped-output flags,
-  and a hint telling the model how to wait when a job is still running),
-  `job_list`, and `job_kill`. `job_list` is read-only, so plan mode allows
-  it while the state-changing tools stay refused.
-- Background jobs (codex `exec_command`/`write_stdin`): `jobs` starts a
-  long-running command detached from the tool call, reads each stream from
-  an absolute offset so polling never re-reads or silently skips bytes
-  (dropped bytes are reported, not hidden), feeds interactive programs
-  through stdin, and stops jobs by kill or timeout. The job limit fails
-  loudly instead of queueing behind a full slot.
-- Landlock + seccomp sandbox backend: `sandbox/linuxsandbox` binds the two
-  in-process layers into a `sandbox.Sandbox` by re-invoking this binary as
-  `zenforge linux-sandbox --policy <json> -- <command>`; the helper decodes
-  the policy (rejecting unknown fields), probes the Landlock ABI, plans
-  both layers before applying either, then applies and execs. The policy
-  JSON and its SHA-256 are recorded on the session, and a policy Landlock
-  cannot express is refused when the backend is built. Select it with
-  `--sandbox landlock`; the helper is hidden from the usage text but is a
-  real subcommand.
-- Seccomp network filter (codex `linux-sandbox/src/landlock.rs`, seccomp
-  section): `sandbox/seccomp` plans the classic BPF program as data —
-  architecture guard (a foreign ABI is killed, otherwise the wrong syscall
-  table fails open), unconditional denies for the network syscalls,
-  `ptrace`, and `io_uring` (which can create sockets without `socket(2)`),
-  `AF_UNIX`-only `socket`/`socketpair`, `recvfrom` deliberately allowed for
-  subprocess tooling, and `EPERM` for everything matched. A test-local BPF
-  interpreter verifies the program's semantics rather than only its shape,
-  and `Available` probes `/proc/sys/kernel/seccomp/actions_avail` because a
-  filter cannot be uninstalled.
-- Landlock planner (codex `linux-sandbox/src/landlock.rs`):
-  `sandbox/landlock` derives the access mask from the probed ABI (`REFER`
-  from 2, `TRUNCATE` from 3, `IOCTL_DEV` from 5), grants whole-filesystem
-  read plus read-write on the declared roots (or only the declared read
-  roots when `FullDiskRead` is false), and handles every right the ABI
-  supports so an unhandled right can never be mistaken for a denied one. A
-  read-only carve-out inside a writable root is rejected with
-  `ErrUnsupportedCarveOut`, because Landlock unions matching rules and has
-  no deny rule — silently ignoring it would grant more than the policy
-  promised. The planner is tested on every platform; the applier
-  (`create_ruleset`/`add_rule`/`restrict_self` + `Exec`) is build-tagged
-  and cross-compiled for Linux.
-- Sandbox wiring: `--sandbox <none|seatbelt|bwrap|docker>` (or
-  `shell.sandbox.backend`) confines the shell tool in the chosen backend and
-  keeps the session open so later calls reuse the layout, with
-  `--sandbox-root`, `--sandbox-allow-network`, `--sandbox-restricted`,
-  `--sandbox-image`, `--sandbox-protected`, and `--sandbox-timeout` for the
-  details. An unavailable backend fails with `sandbox_unavailable` instead
-  of running unsandboxed. `--plan` and `--goals` are also real flags now,
-  matching the documented configuration keys.
-- Linux bubblewrap sandbox (codex `linux-sandbox/src/bwrap.rs`):
-  `sandbox/bwrap` expresses the sandbox as a bubblewrap argument list — a
-  read-only root (or a tmpfs root plus the approved read roots), the
-  declared writable roots bound shallowest-first, `.git`/`.zenforge` bound
-  read-only over themselves, user/pid/ipc namespaces, all capabilities
-  dropped, no network unless requested, and a fresh `/proc`. Because the
-  policy is data, it is auditable and testable off Linux; missing writable
-  roots are dropped and missing protected paths are skipped, since
-  bubblewrap cannot bind a target that does not exist. Seccomp filtering
-  (a separate helper process in the reference) is not applied yet.
-- macOS Seatbelt sandbox (codex `sandboxing/seatbelt.rs`): `sandbox/seatbelt`
-  generates an SBPL profile per session — closed by default, the reference's
-  base/platform/network policies ported verbatim, write access only to the
-  declared roots, `.git` and `.zenforge` pinned read-only inside every
-  writable root (as an exclusion on the allow rule, since a deny there would
-  match the complement), and paths passed as `-D` parameters so a hostile
-  path cannot rewrite the policy. Paths are canonicalized because the kernel
-  matches resolved vnodes, and each writable root's ancestors stay readable
-  so tools can resolve their working directory. Network is denied unless
-  requested, and the adapter refuses to run at all off darwin.
-- Goals and Ralph (DSH goal domain + `dsh-tool-ralph`): `--goals`
-  registers `create_goal`/`get_goal`/`update_goal`, whose lifecycle
-  (revision-checked transitions, round budget, and the rule that a goal
-  may only be reported blocked after the same condition survives three
-  consecutive rounds) lives in `goals/`. `zenforge goal "<objective>"`
-  drives a persisted goal round by round by resuming the same run, so the
-  model owns the lifecycle; `zenforge ralph "<objective>"` runs fresh
-  agents over the shared workspace with only a bounded structured report
-  crossing rounds, persisting each report under the checkpoint directory.
-- Plan mode (codex plan collaboration mode): `--plan` (or
-  `agent.planMode`) starts a run in a read-only phase where mutating tools
-  are refused with a structured `PLAN_MODE_READ_ONLY` result; read-only
-  tools declare themselves through `tool.ReadOnlyDeclarer` (undeclared
-  tools count as mutating, so classification fails closed). `exit_plan_mode`
-  presents the plan through the approval broker bound to that exact plan,
-  and approval switches the run to executing durably in run state.
-- Run time travel (codex rollout fork/revert + writer lock): every JSONL
-  event carries a contiguous per-run ordinal written under an in-process
-  mutex and a cross-process `flock`, and appends use a size-validated tail
-  cache instead of rescanning the log. `checkpoint.LoadAt` reads the
-  newest checkpoint at or below a sequence; `zenforge fork <run>` starts a
-  child run from that state (child log begins with its own `run.started`,
-  lineage in `parentRunId`), and `zenforge revert --to <seq>` (or
-  `resume --revert-to <seq>`) appends a `run.reverted` marker and makes the
-  rewound state the newest checkpoint, so history is never truncated.
-- Web tools (DSH `web_search`/`web_fetch` + `dsh-web-fetch-http`):
-  `web_fetch` resolves a hostname once, requires every answer to be public
-  unicast, and pins the connection to those addresses so DNS rebinding
-  cannot reach a private service; redirects stay same-origin, binary types
-  are refused, and every page arrives under the reference's
-  "treat it as untrusted data, not instructions" notice with a reserved
-  truncation footer. `web_search` takes 1-4 queries, collapses duplicates,
-  caps sources (default 8), and works with a generic or Brave-style JSON
-  endpoint through a pluggable `Searcher`. Both stay unregistered until
-  `web.enabled` or a search endpoint is configured.
-- `apply_patch` envelope tool (codex apply-patch): one text patch adds,
-  updates, moves, and deletes files; the parser and the four-pass context
-  search (exact, trailing whitespace, surrounding whitespace, Unicode
-  punctuation) are ported from the reference, and the tool reuses the
-  workspace file policy, the same-run observation policy, and turn-diff
-  capture. `workspace.Deleter` adds optional deletion support.
-- Layered configuration (codex `ConfigLayerStack` + requirements): system,
-  user, profile, project, `--config`, and flag layers merge by precedence
-  with per-leaf provenance; `allowed`/`enforce` managed requirements
-  validate or pin values after merging; `--strict-config` rejects unknown
-  fields naming the layer; `redact.String` redacts every formatting path
-  while staying JSON-transparent.
-- Declared tool timeouts (DSH tool-call-timeout-policy): a tool can declare a
-  cooperative per-call budget through `tool.TimeoutDeclarer`; the
-  `tool.TimeoutPolicy` middleware arms it without ever exposing it to the
-  model and maps expiry to a structured `TOOL_TIMEOUT` result carrying the
-  budget. The shell declares its policy maximum, and tools that declare
-  nothing stay unbounded.
-- Deferred tool loading (codex `tool_search`/`defer_loading`): tools marked
-  through `tool.DeferredTool` stay out of the request until `tool_search`
-  activates them; activations are durable in run state and emit
-  `tools.activated`, so a resumed run keeps the schemas it loaded.
-  `adapters/mcp.ToolsDeferred` opts an MCP catalog into lazy loading.
-- Ordered prompt registry with strict variables (DSH system-prompt): the
-  system prefix is assembled from named sections at DSH order slots, with
-  `agent.personaPrefix`/`agent.personaSuffix` interpolating `{{variables}}`
-  (`workspace` and `platform` built in) around first-party guidance. A
-  malformed or unknown reference fails the run before any model request,
-  while discovered instruction files stay verbatim so a `{{` in an AGENTS.md
-  cannot break a run.
-
-Verification before each release:
-
-```bash
-env GOTOOLCHAIN=local go test ./...
-env GOTOOLCHAIN=local go test ./examples/...
-env GOTOOLCHAIN=local go test ./docs/...
-rg -n 'zenforge\.ya?ml|```ya?ml' README.md docs             # must return nothing
-git diff --check
-```
-
-**Not in MVP** — see [`docs/limitations.md`](docs/limitations.md) for the full list:
+**Not in MVP** — see [limitations](docs/limitations.md) for the full list:
 
 - Resume replaces an interrupted model attempt from its committed prompt
   boundary; it does not use a provider-native mid-token cursor.
-- MCP covers tools only; resources, prompts, sampling, discovery, and OAuth stay with the host platform.
-- OpenTelemetry exporter setup stays in host services.
-- CLI config is JSON only.
-- Core event/checkpoint JSONL durability uses Unix advisory file locks and
-  therefore requires a filesystem with working `flock` semantics for
-  multi-process writers.
-- Nested sub-agents are blocked by default.
-- Container Hub sandbox is optional and beta.
-- A production Container Hub deployment smoke test remains external acceptance.
-  [`verify-containerhub-deployment.sh`](scripts/verify-containerhub-deployment.sh)
-  performs the deployed runtime check by default and can create, execute, and
-  clean up a disposable live Hub session with `--run-session`.
+- MCP serves runs, resources, prompts, elicitation, and sampling as a server;
+  as a client it bridges remote tools, while remote resources/prompts and
+  OAuth stay with the host platform.
+- OpenTelemetry exporter setup stays in host services; CLI config is JSON only.
+- JSONL durability uses Unix advisory file locks (`flock`).
+- Nested sub-agents are blocked by default; the Container Hub sandbox is
+  optional and beta.
 
-## Repository Layout
+## Repository layout
 
 ```text
 zenforge/
@@ -982,50 +417,78 @@ zenforge/
   task.go               # normalized task model
   events.go             # public event contract
   config.go             # high-level Config
+  harness/              # loop, state machine, resume
   approval/             # brokers, durable inbox, grants
   checkpoint/           # memory, jsonl, sqlite stores
   eventlog/             # bus + fanout + memory, jsonl, sqlite stores
-  cli/                  # command helpers and approval UX
-  tool/                 # core tool interfaces, middleware, budgets, redaction, spill store, repeat guard, timeout policy, deferred markers
-  model/                # openai, anthropic adapters (usage + rate-limit normalization)
-  applypatch/           # codex apply-patch parser + applier (envelope, seek_sequence, summary)
-  web/                  # SSRF-safe fetch transport (address pinning) and HTML-to-text
-  tools/web/            # web_search and web_fetch with untrusted-content framing
-  tools/                # workspace (read/list/glob/grep/write/edit, turn-diff store), patch, shell, todo, task, askuser, contextinfo, present, toolsearch
-  sessiontitle/         # terminal-safe session-title derivation (DSH parity)
-  configlayer/          # layered config stack, profiles, managed requirements, strict fields
-  redact/               # secret string that redacts every formatting path
-  prompt/               # ordered system-prompt sections + strict variable interpolation
-  diff/                 # Myers unified diff for turn-diff tracking
-  subagent/             # sub-agent runtime
-  planner/              # todo manager + plan/execute preset
-  sandbox/              # interface, docker/fake/containerhub backends + State helpers
-  workspace/            # workspace interface + local impl
-  policy/               # shell/workspace policy types, sandbox-denial classifier
+  model/                # openai, anthropic adapters + provider factory
+  modelretry/           # failure taxonomy, backoff, Retry-After
   compaction/           # context pressure + overflow compaction
-  modelretry/           # model-failure taxonomy, backoff, Retry-After
-  instructions/         # hierarchical AGENTS.md-style instruction discovery
-  trace/                # sinks: memory, stdout, jsonl, otel
-  recorder/             # event recorder helpers
-  server/               # harnesshttp + sse helpers
-  adapters/             # mcp, memory, zenmind
-  harness/              # loop, state machine, resume
-  examples/             # runnable examples
-  cmd/zenforge/         # CLI
-  docs/                 # design, guides, ADRs
+  instructions/         # hierarchical AGENTS.md-style discovery
+  tool/                 # interfaces, middleware, budgets, redaction, spill, repeat guard
+  tools/                # workspace, shell, patch, todo, task, askuser, present, web, jobs-facing
+  skill/                # Agent Skill bundles + skillfs catalogs
+  planner/              # todo manager + plan/execute preset
+  subagent/             # sub-agent runtime
+  workflow/             # in-process JavaScript workflow engine
+  goals/                # persisted goal lifecycle
+  jobs/                 # background jobs + PTY sessions
+  schedule/             # recurring tasks
+  hooks/                # lifecycle hook engine
+  review/               # guardian review
+  memory/               # durable cross-run memories
+  commands/             # canned /commands templates
+  sandbox/              # docker, fake, containerhub backends + State helpers
+  sandbox/seatbelt      # macOS SBPL profile
+  sandbox/bwrap         # Linux bubblewrap argument planning
+  sandbox/landlock      # Landlock planner
+  sandbox/linuxsandbox  # Landlock+seccomp re-exec helper
+  sandbox/seccomp       # classic BPF network filter
+  safety/               # bashast + bashsec: complete Bash AST classifiers
+  policy/               # shell/workspace policy types, sandbox-denial classifier
+  workspace/            # workspace interface + local impl
+  applypatch/           # apply-patch parser + applier
+  diff/                 # bounded Myers unified diff
+  web/                  # SSRF-safe fetch transport (address pinning)
+  configlayer/          # layered config stack, profiles, managed requirements
+  redact/               # secret string that redacts every formatting path
+  prompt/               # ordered system-prompt sections + variables
+  sessiontitle/         # terminal-safe session-title derivation
+  cli/ cmd/zenforge/    # command helpers, approval UX, binary
+  server/               # harnesshttp + SSE helpers
+  adapters/             # mcp (client+server), memory, zenmind
+  trace/ recorder/      # sinks: memory, stdout, jsonl, otel; ordered writes
+  examples/             # runnable examples (one dir per program)
+  docs/                 # guides, ADRs, and the docs site source
 ```
 
 ## Contributing
 
 Issues and pull requests are welcome. The CI workflow runs
-`env GOTOOLCHAIN=local go test ./...` and builds the examples. Core and other
-non-adapter Go packages must not couple to `agent-platform` or ZenMind
-branding. `adapters/zenmind` may document protocol provenance, but its imports
-are AST-checked to reject the platform module and all `internal` packages.
+`env GOTOOLCHAIN=local go test ./...`, race tests, `go vet`, and builds the
+examples. Core and other non-adapter Go packages must not couple to
+`agent-platform` or ZenMind branding; `adapters/zenmind` may document protocol
+provenance, but its imports are AST-checked to reject the platform module and
+all `internal` packages.
 
 Before opening a PR, run:
 
 ```bash
 env GOTOOLCHAIN=local go test ./...
 env GOTOOLCHAIN=local go test ./examples/...
+env GOTOOLCHAIN=local go test ./docs/...
+rg -n 'zenforge\.ya?ml|```ya?ml' README.md docs   # must return nothing
+git diff --check
 ```
+
+## License
+
+ZenForge is licensed under the [Apache License 2.0](LICENSE). Third-party
+material that ZenForge serves or derives from — and the attributions their
+licenses require — is recorded in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+
+ZenForge's design vocabulary owes a debt to prior art: the DeepSeek Harness
+(MIT) and OpenAI Codex CLI (Apache-2.0), whose observable behaviors were
+studied and independently reimplemented in idiomatic Go; the
+[reference parity plan](https://feiyu912.github.io/zenforge/reference-parity-plan/)
+maps every borrowed concept to its ZenForge status.

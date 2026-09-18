@@ -30,8 +30,8 @@ else: the model, the tools, the approval policy, the sandbox.
 
     ---
 
-    Four reference agents, from a single typed tool up to a flagship
-    plan / execute / summary workflow with approval gating.
+    Six reference agents, from a single typed tool up to a full detached HTTP
+    service with approval gating and a web console.
 
     [:octicons-arrow-right-24: Browse the examples](examples.md)
 
@@ -187,7 +187,7 @@ interface that you can satisfy, wrap, mock, or leave nil.
    OpenAI, MiniMax, and custom adapters.
 4. **Embedding ZenForge in an existing Go service?** → [SDK guide](sdk-guide.md)
    covers the import paths, lifecycle, and edge cases.
-5. **Looking for code to copy?** → [Examples](examples.md) ships four
+5. **Looking for code to copy?** → [Examples](examples.md) ships six
    reference agents you can read top-to-bottom.
 6. **Running long, tool-heavy conversations?** → [Compaction
    guide](compaction-guide.md) covers retry, pressure compaction, and
