@@ -77,6 +77,7 @@ plugins:
 exclude_docs: |
   # Internal planning artifacts — must not be served publicly.
   dsh-console-protocol-recon.md
+  dsh-console-handover.md
   s0-*.md
   s1-*.md
   s2-*.md
