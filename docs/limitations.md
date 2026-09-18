@@ -116,6 +116,20 @@ what is experimental, and what remains adapter territory.
   the only place a second provider's key can live. A name that cannot be
   resolved is a fatal `AGENT_START`, never a silent run on the host's model.
 
+## MCP Resources And Prompts
+
+- `resources/subscribe`, `resources/templates/list`, `listChanged` and progress
+  notifications, elicitation, and sampling are not implemented. The
+  `initialize` capabilities say so (`subscribe: false`, `listChanged: false`),
+  and a URI template such as `zenforge://runs/{runId}` is listed verbatim in
+  `resources/list` rather than in a templates listing.
+- Prompt arguments come from a command's `argument-hint`: `<x>` is required and
+  `[x]` optional, a command with no hint but `$ARGUMENTS`/`$1`..`$9` gets one
+  optional `arguments` argument, and a value containing whitespace is quoted so
+  a positional stays whole — which means `$ARGUMENTS` sees those quotes.
+- A prompt never runs inline shell (`!`...`` stays verbatim) and never reads
+  outside the workspace (`@file` includes are workspace-confined).
+
 ## Webhook Runs
 
 - The webhook endpoint (`POST /webhook/run`) is registered only when a secret

@@ -84,3 +84,4 @@ later ADRs supersede earlier ones, never edit.
 | [0068](0068-a-run-a-caller-can-stop.md) | A run a caller can stop |
 | [0069](0069-a-schedule-outlives-the-process.md) | A schedule outlives the process that added it |
 | [0070](0070-a-signed-webhook-starts-a-run.md) | A signed webhook starts a run |
+| [0071](0071-resources-and-prompts-not-only-tools.md) | Resources and prompts, not only tools |

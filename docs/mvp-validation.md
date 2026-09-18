@@ -194,6 +194,11 @@ rg -n '"[^"[:space:]]*agent-platform[^"[:space:]]*"' --glob "*.go" .
 | a wrong, missing, or body-only signature is refused and starts no run | `TestWebhookRunRejectsWrongSignatureAndStartsNoRun`, `TestWebhookRunRejectsMissingSignature`, `TestWebhookRunRejectsSignatureWithoutTimestampPrefix` |
 | a stale, future, missing, or unparsable timestamp is refused even with a valid signature for it | `TestWebhookRunRejectsStaleTimestampEvenWithValidSignature`, `TestWebhookRunRejectsFutureTimestampEvenWithValidSignature`, `TestWebhookRunRejectsMissingOrUnparsableTimestamp` |
 | the webhook route does not exist without a configured secret, and rejects non-POST | `TestWebhookRunRouteAbsentWithoutSecret`, `TestWebhookRunRejectsNonPostMethod` |
+| a server lists and reads its resources, including a `{name}` URI template | `TestServerListsResources`, `TestServerReadsResourcesAndTemplates` |
+| an unrecorded resource URI is -32002, and a resource or prompt panic survives the stream | `TestServerReportsUnknownResourcesAsResourceNotFound`, `TestServerSurvivesAResourceHandlerPanic`, `TestServerSurvivesAPromptHandlerPanic` |
+| capabilities are advertised only when something is behind them | `TestServerAdvertisesCapabilitiesOnlyWhenServed` |
+| prompts list and render with arguments, and a bad prompt or argument is -32602 | `TestServerListsPromptsWithArguments`, `TestServerGetsAPromptWithArguments`, `TestServerReportsPromptErrorsAsInvalidParams` |
+| the CLI server serves `zenforge://runs` and `zenforge://runs/{id}`, and renders workspace commands as prompts with inline shell disabled | `TestMCPServerResourcesListTheRunsIndex`, `TestMCPServerResourcesServeRecordedRuns`, `TestMCPServerPromptsRoundTripACommand`, `TestMCPServerPromptsAreAbsentWithoutACommandCatalog`, `TestMCPServerPromptArgumentsComeFromTheCommand`, `TestMCPServerPromptRenderingNeverRunsInlineShell` |
 | a job is reported terminal only after its output has been drained | `jobs.TestRunWaitsForOutputWrittenAfterTheMainProcessExits`, `jobs.TestCollectSignalsDrainedOnlyAfterBothStreamsEnd` |
 | a job whose pipes are held open by a background grandchild still becomes terminal | `jobs.TestJobWhoseOutputIsHeldByAGrandchildStillBecomesTerminal` |
 | memory entries augment normalized tasks | `adapters/memory.TestAugmentTaskAddsMemoryBlockAndMetadata` |

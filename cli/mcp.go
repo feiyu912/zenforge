@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/feiyu912/zenforge/adapters/mcp"
+	"github.com/feiyu912/zenforge/commands"
 )
 
 // mcpServerCommand exposes ZenForge to another agent as an MCP server over
@@ -82,11 +83,20 @@ func mcpServerCommand(ctx context.Context, args []string, ioStreams IO) error {
 			)
 		}
 	}
+	// Resources and prompts are read-only surfaces, so they need no operator
+	// grant: they expose what this install already recorded and the command
+	// definitions the workspace already has, and neither can change anything.
+	prompts, err := mcpServerPrompts(opts)
+	if err != nil {
+		return err
+	}
 	server, err := mcp.NewServer(mcp.ServerConfig{
 		Name:         "zenforge",
 		Version:      Version,
 		Instructions: instructions,
 		Tools:        tools,
+		Resources:    mcpServerResources(opts.checkpointType, opts.checkpointDir),
+		Prompts:      prompts,
 	})
 	if err != nil {
 		return err
@@ -159,4 +169,209 @@ func mcpServerTools(ctx context.Context, storeType, path string, registry *serve
 			},
 		},
 	}, nil
+}
+
+// Resource URIs the server exposes. They are a second way to read the store
+// zenforge_runs already reads, not a second store: a resource handler calls
+// listRuns on every read, so it can never disagree with the tool.
+const (
+	mcpRunsIndexURI  = "zenforge://runs"
+	mcpRunsURIPrefix = "zenforge://runs/"
+	// mcpRunsInstanceURI is the registered template. The {runId} segment is
+	// what the protocol layer matches a concrete run URI against, which is why
+	// one resource serves every run without enumerating ids at startup.
+	mcpRunsInstanceURI = mcpRunsURIPrefix + "{runId}"
+)
+
+// mcpServerResources builds the read-only resource set. It is separate from
+// the command so a test can read a resource without a transport.
+func mcpServerResources(storeType, path string) []mcp.ServerResource {
+	return []mcp.ServerResource{
+		{
+			URI:         mcpRunsIndexURI,
+			Name:        "Recorded runs",
+			Description: "An index of the runs this ZenForge install recorded, as JSON: id, status, phase, step, and when each was saved.",
+			MimeType:    "application/json",
+			Handler: func(ctx context.Context, uri string) ([]mcp.ResourceContent, error) {
+				summaries, closeStore, err := listRuns(ctx, storeType, path)
+				if err != nil {
+					return nil, err
+				}
+				defer func() { _ = closeStore() }()
+				encoded, err := json.Marshal(summaries)
+				if err != nil {
+					return nil, err
+				}
+				return []mcp.ResourceContent{{URI: uri, MimeType: "application/json", Text: string(encoded)}}, nil
+			},
+		},
+		{
+			URI:         mcpRunsInstanceURI,
+			Name:        "Recorded run",
+			Description: "One recorded run summary by id, as JSON: replace {runId} in the URI with an id zenforge://runs lists.",
+			MimeType:    "application/json",
+			Handler: func(ctx context.Context, uri string) ([]mcp.ResourceContent, error) {
+				runID := strings.TrimPrefix(uri, mcpRunsURIPrefix)
+				summaries, closeStore, err := listRuns(ctx, storeType, path)
+				if err != nil {
+					return nil, err
+				}
+				defer func() { _ = closeStore() }()
+				for _, summary := range summaries {
+					if summary.RunID != runID {
+						continue
+					}
+					encoded, err := json.Marshal(summary)
+					if err != nil {
+						return nil, err
+					}
+					return []mcp.ResourceContent{{URI: uri, MimeType: "application/json", Text: string(encoded)}}, nil
+				}
+				// The spec's resource-not-found error, so a client can tell
+				// "no such run" from "the read broke".
+				return nil, fmt.Errorf("no recorded run %q: %w", runID, mcp.ErrResourceNotFound)
+			},
+		},
+	}
+}
+
+// mcpServerPrompts turns the workspace's command definitions into prompts. A
+// catalog with no commands produces no prompts at all, so the server omits the
+// prompts capability rather than advertising an empty set.
+func mcpServerPrompts(opts options) ([]mcp.ServerPrompt, error) {
+	catalog, err := buildCatalog(opts)
+	if err != nil {
+		return nil, err
+	}
+	if catalog == nil || catalog.Len() == 0 {
+		return nil, nil
+	}
+	prompts := make([]mcp.ServerPrompt, 0, catalog.Len())
+	for _, command := range catalog.Commands() {
+		prompts = append(prompts, serverPromptForCommand(command, opts))
+	}
+	return prompts, nil
+}
+
+// serverPromptForCommand turns one command into a prompt. The prompt renders
+// the same task text /name produces, through the same expander, with one
+// deliberate difference: inline shell is never run. prompts/get arrives from
+// another process with no approval in front of it, so a run-bash command must
+// not become an execution primitive; clearing AllowBash on the copy leaves any
+// !`...` expression verbatim and keeps only the bounded, workspace-confined
+// @file reads.
+func serverPromptForCommand(command commands.Command, opts options) mcp.ServerPrompt {
+	arguments := promptArguments(command.ArgumentHint)
+	if len(arguments) == 0 && commandUsesArguments(command.Body) {
+		// A command with no argument-hint can still use $ARGUMENTS or $1..$9;
+		// the placeholder in the template is the declaration, so the prompt
+		// takes one raw argument rather than none.
+		arguments = []mcp.PromptArgument{{Name: "arguments", Description: "Arguments for /" + command.Name}}
+	}
+	return mcp.ServerPrompt{
+		Name:        command.Name,
+		Description: commands.Describe(command),
+		Arguments:   arguments,
+		Handler: func(ctx context.Context, values map[string]string) (mcp.PromptResult, error) {
+			renderable := command
+			renderable.AllowBash = false
+			expanded, err := commands.Expand(renderable, promptArgumentText(arguments, values), commands.ExpandOptions{
+				Workspace: opts.workspace,
+			})
+			if err != nil {
+				return mcp.PromptResult{}, err
+			}
+			return mcp.PromptResult{
+				Messages: []mcp.PromptMessage{{
+					Role:    mcp.PromptRoleUser,
+					Content: mcp.Content{Type: "text", Text: expanded},
+				}},
+			}, nil
+		},
+	}
+}
+
+// promptArguments reads the argument names out of a command's argument-hint.
+// The hint is the shell-like form the catalog already renders in listings
+// ("<path>", "[reason]"), and its placeholder names are the positions $1..$9
+// already expect, so no new declaration format is introduced. A hint that is
+// free prose with no placeholder becomes one optional argument named
+// "arguments", which is the raw string $ARGUMENTS uses.
+func promptArguments(hint string) []mcp.PromptArgument {
+	hint = strings.TrimSpace(hint)
+	if hint == "" {
+		return nil
+	}
+	arguments := make([]mcp.PromptArgument, 0, 1)
+	for index := 0; index < len(hint); {
+		open := hint[index]
+		var closing byte
+		switch open {
+		case '<':
+			closing = '>'
+		case '[':
+			closing = ']'
+		default:
+			index++
+			continue
+		}
+		end := strings.IndexByte(hint[index+1:], closing)
+		if end < 0 {
+			break
+		}
+		name := strings.TrimSpace(hint[index+1 : index+1+end])
+		if name != "" {
+			arguments = append(arguments, mcp.PromptArgument{
+				Name:     name,
+				Required: open == '<',
+			})
+		}
+		index += end + 2
+	}
+	if len(arguments) == 0 {
+		arguments = append(arguments, mcp.PromptArgument{Name: "arguments", Description: hint})
+	}
+	return arguments
+}
+
+// promptArgumentText rebuilds the argument string the command's expander
+// expects, in declared order. A value containing whitespace is quoted so it
+// stays one positional argument: without that, $1 would silently become the
+// first word of a phrase.
+func promptArgumentText(arguments []mcp.PromptArgument, values map[string]string) string {
+	parts := make([]string, 0, len(arguments))
+	for _, argument := range arguments {
+		value := strings.TrimSpace(values[argument.Name])
+		if value == "" {
+			continue
+		}
+		if strings.ContainsAny(value, " \t\n") {
+			value = `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(value) + `"`
+		}
+		parts = append(parts, value)
+	}
+	return strings.Join(parts, " ")
+}
+
+// commandUsesArguments reports whether a command body substitutes arguments.
+// The scan honours "$$", which the expander treats as an escaped literal
+// dollar, so a body that only prints "$5" is not mistaken for one that takes
+// five positional arguments.
+func commandUsesArguments(body string) bool {
+	for index := 0; index < len(body); index++ {
+		if body[index] != '$' {
+			continue
+		}
+		if index+1 < len(body) && body[index+1] == '$' {
+			index++
+			continue
+		}
+		if strings.HasPrefix(body[index:], "$ARGUMENTS") {
+			return true
+		}
+		if index+1 < len(body) && body[index+1] >= '1' && body[index+1] <= '9' {
+			return true
+		}
+	}
+	return false
 }

@@ -723,6 +723,10 @@ Architecture decision records live in [`docs/adr/`](docs/adr/).
   hints read into the definition so an approval decision can use them.
   `zenforge mcp-server` serves ZenForge itself the same way, exposing
   `zenforge_runs`, `zenforge_run_status`, and `zenforge_version` as read-only
+  tools, `zenforge://runs` and `zenforge://runs/{runId}` as read-only
+  resources, and the workspace's commands as prompts (`prompts/get` renders one
+  as inert text, with inline shell disabled), none of which needs an operator
+  grant
   tools (status answers for one run: live state for a run this server started,
   the durable summary for a run this install recorded, and `unknown`
   otherwise). `--allow-run` adds `zenforge_run`, which starts a run in the

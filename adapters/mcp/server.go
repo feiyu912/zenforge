@@ -31,6 +31,11 @@ const (
 	codeMethodNotFound = -32601
 	codeInvalidParams  = -32602
 	codeInternalError  = -32603
+	// codeResourceNotFound is the spec's resource-not-found code. It is kept
+	// apart from codeInvalidParams because "this server has no such resource"
+	// is a fact about the server, while invalid params is a fact about the
+	// request, and a client acts differently on the two.
+	codeResourceNotFound = -32002
 )
 
 // ServerHandler runs one tool call. A returned error is a *tool* failure and
@@ -60,6 +65,12 @@ type ServerConfig struct {
 	// context, mirroring the field's meaning on the client side.
 	Instructions string
 	Tools        []ServerTool
+	// Resources and Prompts are the read-only surfaces, declared the same way
+	// tools are. Either may be empty; initialize advertises a capability only
+	// when something is behind it, so a client never sees a promise this
+	// server cannot keep.
+	Resources []ServerResource
+	Prompts   []ServerPrompt
 }
 
 // Server implements the server half of the MCP protocol. It is transport
@@ -72,11 +83,15 @@ type ServerConfig struct {
 // long and stateful, so concurrency here would buy nothing and would make
 // interleaved output harder to attribute.
 type Server struct {
-	name         string
-	version      string
-	instructions string
-	tools        []ServerTool
-	byName       map[string]ServerTool
+	name          string
+	version       string
+	instructions  string
+	tools         []ServerTool
+	byName        map[string]ServerTool
+	resources     []ServerResource
+	resourceByURI map[string]ServerResource
+	prompts       []ServerPrompt
+	promptByName  map[string]ServerPrompt
 
 	mu       sync.Mutex
 	shutdown bool
@@ -98,11 +113,15 @@ func NewServer(config ServerConfig) (*Server, error) {
 		return nil, errors.New("mcp server needs at least one tool")
 	}
 	server := &Server{
-		name:         name,
-		version:      version,
-		instructions: config.Instructions,
-		tools:        make([]ServerTool, 0, len(config.Tools)),
-		byName:       make(map[string]ServerTool, len(config.Tools)),
+		name:          name,
+		version:       version,
+		instructions:  config.Instructions,
+		tools:         make([]ServerTool, 0, len(config.Tools)),
+		byName:        make(map[string]ServerTool, len(config.Tools)),
+		resources:     make([]ServerResource, 0, len(config.Resources)),
+		resourceByURI: make(map[string]ServerResource, len(config.Resources)),
+		prompts:       make([]ServerPrompt, 0, len(config.Prompts)),
+		promptByName:  make(map[string]ServerPrompt, len(config.Prompts)),
 	}
 	for _, serverTool := range config.Tools {
 		toolName := strings.TrimSpace(serverTool.Name)
@@ -122,6 +141,49 @@ func NewServer(config ServerConfig) (*Server, error) {
 		server.tools = append(server.tools, serverTool)
 		server.byName[toolName] = serverTool
 	}
+	for _, serverResource := range config.Resources {
+		uri := strings.TrimSpace(serverResource.URI)
+		if uri == "" {
+			return nil, errors.New("mcp server resource uri is required")
+		}
+		if _, exists := server.resourceByURI[uri]; exists {
+			return nil, fmt.Errorf("mcp server resource %q is declared twice", uri)
+		}
+		if serverResource.Handler == nil {
+			return nil, fmt.Errorf("mcp server resource %q has no handler", uri)
+		}
+		serverResource.URI = uri
+		server.resources = append(server.resources, serverResource)
+		server.resourceByURI[uri] = serverResource
+	}
+	for _, serverPrompt := range config.Prompts {
+		promptName := strings.TrimSpace(serverPrompt.Name)
+		if promptName == "" {
+			return nil, errors.New("mcp server prompt name is required")
+		}
+		if _, exists := server.promptByName[promptName]; exists {
+			return nil, fmt.Errorf("mcp server prompt %q is declared twice", promptName)
+		}
+		if serverPrompt.Handler == nil {
+			return nil, fmt.Errorf("mcp server prompt %q has no handler", promptName)
+		}
+		serverPrompt.Name = promptName
+		seen := make(map[string]bool, len(serverPrompt.Arguments))
+		for index, argument := range serverPrompt.Arguments {
+			argumentName := strings.TrimSpace(argument.Name)
+			if argumentName == "" {
+				return nil, fmt.Errorf("mcp server prompt %q has an unnamed argument", promptName)
+			}
+			if seen[argumentName] {
+				return nil, fmt.Errorf("mcp server prompt %q declares argument %q twice", promptName, argumentName)
+			}
+			seen[argumentName] = true
+			argument.Name = argumentName
+			serverPrompt.Arguments[index] = argument
+		}
+		server.prompts = append(server.prompts, serverPrompt)
+		server.promptByName[promptName] = serverPrompt
+	}
 	return server, nil
 }
 
@@ -130,6 +192,22 @@ func NewServer(config ServerConfig) (*Server, error) {
 func (s *Server) Tools() []ServerTool {
 	out := make([]ServerTool, len(s.tools))
 	copy(out, s.tools)
+	return out
+}
+
+// Resources returns the declared resources, for a caller that wants them
+// without going through the protocol.
+func (s *Server) Resources() []ServerResource {
+	out := make([]ServerResource, len(s.resources))
+	copy(out, s.resources)
+	return out
+}
+
+// Prompts returns the declared prompts, for a caller that wants them without
+// going through the protocol.
+func (s *Server) Prompts() []ServerPrompt {
+	out := make([]ServerPrompt, len(s.prompts))
+	copy(out, s.prompts)
 	return out
 }
 
@@ -216,6 +294,14 @@ func (s *Server) dispatch(ctx context.Context, method string, params json.RawMes
 		return s.listTools()
 	case "tools/call":
 		return s.callTool(ctx, params)
+	case "resources/list":
+		return s.listResources()
+	case "resources/read":
+		return s.readResource(ctx, params)
+	case "prompts/list":
+		return s.listPrompts()
+	case "prompts/get":
+		return s.getPrompt(ctx, params)
 	default:
 		return nil, &rpcError{Code: codeMethodNotFound, Message: fmt.Sprintf("unknown method %q", method)}
 	}
@@ -237,14 +323,26 @@ func (s *Server) initialize(params json.RawMessage) (json.RawMessage, *rpcError)
 			break
 		}
 	}
+	// A capability is advertised only when something is behind it. Claiming
+	// resources or prompts that do not exist would make a conforming client
+	// call a method that answers with an empty list at best, and the whole
+	// point of the capability block is that the client can trust it.
+	// listChanged and subscribe are false because both sets are fixed at
+	// startup and this server sends no update notifications: promising them
+	// would promise a notification that never arrives.
+	capabilities := map[string]any{
+		"tools": map[string]any{"listChanged": false},
+	}
+	if len(s.resources) > 0 {
+		capabilities["resources"] = map[string]any{"subscribe": false, "listChanged": false}
+	}
+	if len(s.prompts) > 0 {
+		capabilities["prompts"] = map[string]any{"listChanged": false}
+	}
 	result := map[string]any{
 		"protocolVersion": version,
-		"capabilities": map[string]any{
-			// listChanged is false because the tool set is fixed at startup:
-			// claiming it would promise a notification this server never sends.
-			"tools": map[string]any{"listChanged": false},
-		},
-		"serverInfo": map[string]any{"name": s.name, "version": s.version},
+		"capabilities":    capabilities,
+		"serverInfo":      map[string]any{"name": s.name, "version": s.version},
 	}
 	if s.instructions != "" {
 		result["instructions"] = s.instructions
