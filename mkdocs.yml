@@ -225,6 +225,7 @@ nav:
       - 0082 The host names the model and records what it cannot answer: adr/0082-the-host-names-what-it-cannot-answer.md
       - 0083 The streams are mounted with the console: adr/0083-the-streams-are-mounted-with-the-console.md
       - 0084 One credential, and it stays write-only: adr/0084-one-credential-that-stays-write-only.md
+      - 0085 The provider directory is served, discovery is not: adr/0085-the-provider-directory-is-served-discovery-is-not.md
 
 extra:
   social:

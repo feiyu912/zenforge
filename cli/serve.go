@@ -244,11 +244,33 @@ func newServeApp(ctx context.Context, opts *options, ioStreams IO, config serveC
 			Failures: []dshapi.ModelCatalogFailure{},
 		}
 	}
+	// The Models page loads its provider directory before it renders any card,
+	// so a missing answer is not a missing nicety: the page reports that loading
+	// the directory failed and shows nothing. The live half is the route this
+	// host is configured to serve; the configurable half is every route the
+	// host's own adapter factory accepts.
+	llmDirectory := func() dshapi.LlmDirectory {
+		liveProvider := strings.TrimSpace(settings.view().Provider)
+		if liveProvider == "" {
+			liveProvider = provider.OpenAI
+		}
+		return dshapi.LlmDirectory{
+			Live: []dshapi.LlmProviderInfo{{
+				ID:   liveProvider,
+				Name: consoleProviderName(liveProvider),
+			}},
+			Configurable: []dshapi.LlmConfigurableProvider{
+				{Provider: provider.OpenAI, DisplayName: "OpenAI", SettingsNS: "llm-openai", SettingsPath: []string{}},
+				{Provider: provider.Anthropic, DisplayName: "Anthropic", SettingsNS: "llm-anthropic", SettingsPath: []string{}},
+			},
+		}
+	}
 	console, err := dshmount.New(runtime.Manager, runtime.Events, dshmount.Config{
 		AllowRemote:  config.allowRemote,
 		ModelCatalog: modelCatalog,
 		Logger:       slog.Default(),
 		Credentials:  consoleCredentials{settings: settings},
+		LlmDirectory: llmDirectory,
 	})
 	if err != nil {
 		return nil, err
@@ -512,6 +534,20 @@ func (s *settingsStore) replaceAPIKey(key string) error {
 	s.mu.Unlock()
 	s.model.set(adapter, nil)
 	return nil
+}
+
+// consoleProviderName is the human-readable name the console's selector shows
+// for a route key. A route this host does not recognise keeps its own key
+// rather than an invented label.
+func consoleProviderName(route string) string {
+	switch route {
+	case provider.OpenAI:
+		return "OpenAI"
+	case provider.Anthropic:
+		return "Anthropic"
+	default:
+		return route
+	}
 }
 
 // consoleCredentials adapts the settings store to the console's credentials

@@ -50,6 +50,10 @@ type Config struct {
 	// store the value an operator types. Without it those methods answer an
 	// honest unimplemented error (ADR 0084).
 	Credentials dshapi.CredentialStore
+	// LlmDirectory answers the console's provider directory reads. Without it
+	// the Models page reports that loading the directory failed and renders no
+	// cards at all.
+	LlmDirectory dshapi.LlmDirectorySource
 }
 
 // Mux is the assembled console host. It is immutable after New, which is what
@@ -96,6 +100,9 @@ func New(manager *harnesshttp.RunManager, events eventlog.Store, cfg Config) (*M
 	}
 	if cfg.Credentials != nil {
 		api.SetCredentials(cfg.Credentials)
+	}
+	if cfg.LlmDirectory != nil {
+		api.SetLlmDirectory(cfg.LlmDirectory)
 	}
 	return &Mux{
 		shell:         shellHandler(bundle.Inject(string(shell))),

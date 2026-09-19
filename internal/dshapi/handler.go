@@ -61,6 +61,11 @@ type Handler struct {
 	// command, and importing it here would cycle.
 	credentialsMu sync.RWMutex
 	credentials   CredentialStore
+
+	// llmDirectory is the injected provider directory, installed by
+	// SetLlmDirectory after New.
+	llmDirectoryMu sync.RWMutex
+	llmDirectory   LlmDirectorySource
 }
 
 // pendingSession is a session id allocated by session/create that has not
@@ -165,6 +170,15 @@ func (h *Handler) method(endpoint string) (methodFunc, bool) {
 		return nil, false
 	}
 	switch namespace {
+	case "llm":
+		switch name {
+		case "listProviders":
+			return h.llmListProviders, true
+		case "listConfigurableProviders":
+			return h.llmListConfigurableProviders, true
+		case "discoverModels":
+			return h.llmDiscoverModels, true
+		}
 	case "credentials":
 		switch name {
 		case "describe":
