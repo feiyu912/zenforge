@@ -186,7 +186,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeNotFound(w)
 		return
 	}
-	value, failure := method(r.Context(), request.args)
+	value, failure := method(r.Context(), unwrapRequestArguments(request.args))
 	if failure != nil {
 		writeResult(w, request.rawRPCID, rpcResult{Error: &rpcError{
 			Code: failure.code, Message: failure.message, Details: failure.details,

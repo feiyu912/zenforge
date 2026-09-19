@@ -145,6 +145,12 @@ func (h *Handler) latestTitle(ctx context.Context, runID string) (string, bool) 
 // session id or allocates one, and remembers an unstarted session so the first
 // prompt can start a run under that exact id.
 func (h *Handler) sessionCreate(ctx context.Context, args map[string]json.RawMessage) (any, *methodError) {
+	// Every field the client's SessionCreateRequest can carry, and nothing else:
+	// a typo used to be ignored, which is how a wrapped workspaceId went
+	// unnoticed while the console looked like it was grouping sessions.
+	if failure := rejectUnknownArguments(args, "workspaceId", "cwd", "agentPreset", "sessionId"); failure != nil {
+		return nil, failure
+	}
 	workspaceID, _, failure := stringArg(args, "workspaceId")
 	if failure != nil {
 		return nil, failure

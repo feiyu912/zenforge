@@ -205,7 +205,10 @@ func discoveryRejected(settingsNS, baseURL, message string) *methodError {
 // button sends the draft endpoint and credential directly, because a provider
 // being added has no route to name yet.
 func (h *Handler) llmDiscoverModels(ctx context.Context, args map[string]json.RawMessage) (any, *methodError) {
-	if failure := rejectUnknownArguments(args, "settingsNs", "request"); failure != nil {
+	// request is the client's own parameter name and the dispatch layer already
+	// flattens it; both the flattened fields and the wrapper are accepted so the
+	// method keeps working whichever shape reaches it.
+	if failure := rejectUnknownArguments(args, "settingsNs", "request", "provider", "baseURL", "api", "apiKey"); failure != nil {
 		return nil, failure
 	}
 	settingsNS, present, failure := stringArg(args, "settingsNs")
@@ -219,7 +222,21 @@ func (h *Handler) llmDiscoverModels(ctx context.Context, args map[string]json.Ra
 	}
 	rawRequest, ok := args["request"]
 	if !ok {
-		return nil, argumentRequired("request")
+		// The dispatch layer flattened the request object into the args, so the
+		// fields it carried are the request. Re-encoding names them back for the
+		// decoder that reads them, which keeps one validation path.
+		flat := make(map[string]json.RawMessage, len(args))
+		for name, value := range args {
+			if name == "settingsNs" {
+				continue
+			}
+			flat[name] = value
+		}
+		encoded, err := json.Marshal(flat)
+		if err != nil {
+			return nil, fail(codeInternal, "encode discovery request: "+err.Error(), nil)
+		}
+		rawRequest = encoded
 	}
 	request, failure := decodeDiscoveryRequest(settingsNS, rawRequest)
 	if failure != nil {

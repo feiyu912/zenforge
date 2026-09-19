@@ -153,16 +153,30 @@ type followRequest struct {
 	assistantStream bool
 }
 
-// decodeFollowRequest validates the follow args:
+// decodeFollowRequest validates the follow args. The shipped console sends the
+// named request object:
 //
-//	{address: {kind: "session", sessionId}, maxMessages?, assistantStream?}
+//	{request: {address: {kind: "session", sessionId}, maxMessages?, assistantStream?}}
 //
-// Only the top-level "session" address arm is served; a subagent address names
-// a child session this host does not model, exactly as session/page reports.
+// and the flattened spelling without the request wrapper is accepted too, so a
+// caller that sends the fields directly is not refused over a shape the
+// protocol does not distinguish. Only the top-level "session" address arm is
+// served; a subagent address names a child session this host does not model,
+// exactly as session/page reports.
 func decodeFollowRequest(payload []byte) (followRequest, *streamError) {
 	args, failure := endpointArgs(payload)
 	if failure != nil {
 		return followRequest{}, failure
+	}
+	if _, ok := args["address"]; !ok {
+		if rawRequest, ok := args["request"]; ok {
+			request, err := decodeJSONObject(rawRequest)
+			if err != nil {
+				return followRequest{}, streamFail(codeArgumentsInvalid, `"request" must be a JSON object`,
+					map[string]any{"argument": "request"})
+			}
+			args = request
+		}
 	}
 	rawAddress, ok := args["address"]
 	if !ok {

@@ -281,7 +281,11 @@ func TestLlmDiscoverModelsEnforcesItsArguments(t *testing.T) {
 		detail string
 	}{
 		{"the namespace is missing", `{"request":{"provider":"openai"}}`, "settingsNs"},
-		{"the request is missing", `{"settingsNs":"llm-pi-ai"}`, "request"},
+		// An omitted request and a flattened empty one are the same shape once
+		// the named parameter is spliced into the args, so this call is answered
+		// by the refusal that names what is missing (no endpoint, no provider)
+		// rather than by an argument error that would claim a request this host
+		// cannot tell apart from an empty one. See requestargs.go.
 		{"the request is not an object", `{"settingsNs":"llm-pi-ai","request":"baseURL"}`, "request"},
 		{"a misspelled request field", `{"settingsNs":"llm-pi-ai","request":{"baseUrl":"https://example.test/v1"}}`, "request.baseUrl"},
 		{"a non-string request field", `{"settingsNs":"llm-pi-ai","request":{"provider":7}}`, "request.provider"},
