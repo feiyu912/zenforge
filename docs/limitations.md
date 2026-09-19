@@ -440,3 +440,15 @@ rollout documentation. The existing `agent-webclient` protocol tests and
 production build pass, but deployed UI verification and a production Container
 Hub deployment remain environment acceptance items; the adapter has an opt-in
 disposable live-Hub test.
+
+## A console session's earlier turns are not in its page
+
+A console session outlives its runs (ADR 0086): the second prompt to a
+conversation starts a new run that carries the exchange so far, so the model
+answers in context. What is **not** merged is the paged transcript. The wire
+cursor of `session/page` is a sequence number and each run's log numbers its own
+events from one, so a merged page would need a synthetic coordinate and
+rewritten per-event ids -- and the console reads an event's id as the session's
+identity. Until that exists, `session/page` serves the newest turn, and an
+earlier turn's transcript is not reachable through it. The conversation itself is
+complete in the durable logs, one log per turn.

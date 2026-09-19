@@ -148,6 +148,18 @@ machine, and it also relaxes the settings API to non-loopback callers.
   machine while short runs passed; CI was the reliable arbiter. Prefer targeted
   `-run`/single-package runs locally and let CI run the suite.
 
+## Multi-turn: shipped, with one known gap
+
+The seam described below is now implemented (ADR 0086): a session's turns are
+named by the deterministic chain in `internal/dshsession`, `session/prompt`
+starts the next turn with `InitialMessages` rebuilt from the durable logs,
+`session/list` groups the turns under one session, and `session/follow` and
+`session/page` resolve a session to its newest turn. The remaining gap is that a
+session's turns are **not** merged into one paged log -- see `docs/limitations.md`
+-- so an earlier turn's transcript is not reachable through `session/page`.
+
+The research that decided it, kept because it explains the choices:
+
 ## Multi-turn: the seam exists, the mapping is the work (researched)
 
 A session maps to one run today, so a prompt to a finished run answers
