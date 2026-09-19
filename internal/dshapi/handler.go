@@ -224,6 +224,15 @@ func (h *Handler) method(endpoint string) (methodFunc, bool) {
 		case "execute":
 			return h.commandsExecute, true
 		}
+	case "directoryPicker":
+		switch name {
+		case "list":
+			return h.directoryPickerList, true
+		case "createDirectory":
+			return h.directoryPickerCreateDirectory, true
+		case "pick":
+			return h.directoryPickerPick, true
+		}
 	case "workspaceFiles":
 		switch name {
 		case "list":

@@ -241,6 +241,7 @@ nav:
       - 0097 The console's model discovery interrogates the draft endpoint: adr/0097-the-consoles-model-discovery-interrogates-the-draft-endpoint.md
       - 0098 A declared profile is edited field by field: adr/0098-a-declared-profile-is-edited-field-by-field.md
       - 0099 The framework core and the console adapter are separate layers: adr/0099-the-framework-core-and-the-console-adapter-are-separate-layers.md
+      - 0100 The directory picker serves the browse half and refuses the native half: adr/0100-the-directory-picker-serves-the-browse-half-and-refuses-the-native-half.md
 
 extra:
   social:

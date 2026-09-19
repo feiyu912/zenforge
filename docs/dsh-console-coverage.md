@@ -26,16 +26,16 @@ methods are the remaining work, in priority order at the end of this page.
 
 ## Summary
 
-This host answers **30** of the client's **109** methods, mounts
-**2** of them as logical streams, refuses **15** by name, and
-does not serve the remaining **62**.
+This host answers **32** of the client's **109** methods, mounts
+**2** of them as logical streams, refuses **16** by name, and
+does not serve the remaining **59**.
 
 | State | Count |
 | --- | --- |
-| served | 30 |
+| served | 32 |
 | stream | 2 |
-| refused | 15 |
-| unserved | 62 |
+| refused | 16 |
+| unserved | 59 |
 | **client methods total** | **109** |
 
 The WebSocket mux also mounts `$events`, which is not part of the client's
@@ -52,6 +52,8 @@ method list.
 | `credentials/describe` | served | Whether a credential reference is set — never its value. |
 | `credentials/set` | served | Store the one credential this host holds, in memory. |
 | `credentials/unset` | served | Clear the stored credential. |
+| `directoryPicker/createDirectory` | served | Create one child directory under an existing parent. |
+| `directoryPicker/list` | served | One directory level with its ancestry, for the in-app browser. |
 | `llm/discoverModels` | served | Interrogate a draft endpoint, or answer from a declared profile. |
 | `llm/listConfigurableProviders` | served | The provider directory: declared profiles and configurable families. |
 | `llm/listProviders` | served | The registered provider routes. |
@@ -85,6 +87,7 @@ method list.
 | `agentPresets/copy` | refused | this host's execution presets are built in; it has no preset directory to author |
 | `agentPresets/deletePreset` | refused | this host's execution presets are built in; it has no preset directory to author |
 | `agentPresets/select` | refused | this host fixes its execution preset at startup (--mode), so a session cannot select one; start the host with the mode the session needs |
+| `directoryPicker/pick` | refused | this host has no operator display to open a native directory chooser on; directoryPicker/list and directoryPicker/createDirectory serve the console's in-app browser instead |
 | `pluginManager/cancelInstall` | refused | this host ships a fixed set of console bundles and has no loader, so it cannot install, enable, disable or remove a plugin |
 | `pluginManager/inspect` | refused | this host ships a fixed set of console bundles and has no loader, so it cannot install, enable, disable or remove a plugin |
 | `pluginManager/installBundle` | refused | this host ships a fixed set of console bundles and has no loader, so it cannot install, enable, disable or remove a plugin |
@@ -105,9 +108,6 @@ method list.
 | `agentTeams/createTask` | unserved | no agent-team feature in this host |
 | `agentTeams/updateTask` | unserved | no agent-team feature in this host |
 | `agentTeams/view` | unserved | no agent-team feature in this host |
-| `directoryPicker/createDirectory` | unserved | no browse backend is mounted — see Next up |
-| `directoryPicker/list` | unserved | no browse backend is mounted — see Next up |
-| `directoryPicker/pick` | unserved | no browse backend is mounted — see Next up |
 | `dynamicCordisRunner/getClientCode` | unserved | no dynamic plugin runtime in this host |
 | `dynamicCordisRunner/inventory` | unserved | no dynamic plugin runtime in this host |
 | `dynamicCordisRunner/invoke` | unserved | no dynamic plugin runtime in this host |
@@ -169,11 +169,15 @@ method list.
 
 The gaps in the order they block the page, from what the console asks first:
 
-1. **`directoryPicker/list`, `directoryPicker/createDirectory`, `directoryPicker/pick`**
-   — the workspace picker's browse backend. Without them the picker cannot list
-   or select anything. `list` and `createDirectory` are host filesystem reads
-   and writes that this host can serve; `pick` opens the operator's native
-   dialog, which a headless server cannot do and should refuse by name.
+1. **`ui-directory-picker-browse` is withheld, so the workspace picker has no
+   add action at all.** The host half is now served (`directoryPicker/list` and
+   `directoryPicker/createDirectory` answer; `pick` is refused by name), but the
+   console plugin that renders the in-app browser is in the roster's `blocked`
+   list: a running host once reported it — and only it — failing activation, and
+   the reason was not established. DSH degrades a plugin *absent* from the graph
+   to a slot fallback, while one *present* and unable to activate is a fatal boot
+   page, so it was withheld. Re-testing it is the next step, on a scratch port so
+   a boot failure cannot take the working console with it.
 2. **`session/openWorkspacePath`, `session/canOpenWorkspacePath`** — opening a
    workspace into a session, the other half of selection.
 3. **`session/search`, `session/fork`, `session/attachment`, `session/updateQueue`**
