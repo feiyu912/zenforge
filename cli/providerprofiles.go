@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"fmt"
 	"strings"
 	"sync"
 
@@ -85,25 +84,12 @@ func (s *consoleProviderProfiles) RemoveProviderProfile(providerID string) error
 // serviceability returns the reason this host cannot serve the profile, or an
 // empty string when it can.
 func (s *consoleProviderProfiles) serviceability(profile dshapi.ProviderProfile) string {
-	protocol, ok := consoleProtocol(profile.API)
-	if !ok {
-		// Unreachable through the console: the schema offers only these, and the
-		// API layer refuses anything else. Answered anyway rather than assumed.
-		return fmt.Sprintf("protocol %q is not one this host speaks", profile.API)
-	}
 	if len(profile.Models) == 0 {
 		return "the profile declares no model"
 	}
-	// The credential is resolved exactly the way the run resolves it, so
-	// "serviceable" means the same thing here and at run time.
-	key, ref := consoleProfileCredential(s.settings, profile)
-	adapter, err := provider.FromEnv(provider.Config{
-		Protocol:  protocol,
-		Model:     strings.TrimSpace(profile.Models[0].ID),
-		BaseURL:   strings.TrimSpace(profile.BaseURL),
-		APIKey:    key,
-		APIKeyEnv: ref,
-	})
+	// The build is the same one a run performs, so "serviceable" means the same
+	// thing here and at run time.
+	adapter, err := consoleBuildAdapter(s.settings, profile, profile.Models[0].ID)
 	if err != nil {
 		return err.Error()
 	}

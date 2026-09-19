@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -40,11 +39,20 @@ func (m consoleModels) Catalog() dshapi.ModelCatalog {
 			Models: []dshapi.ModelCatalogModel{{ID: modelName, Name: modelName}},
 		})
 		catalog.Default = dshapi.ModelSelection{Provider: configuredRoute, Model: modelName}
-		if _, err := m.settings.model.current(); err == nil {
-			catalog.RoutableProviders = append(catalog.RoutableProviders, configuredRoute)
+		catalog.RoutableProviders = append(catalog.RoutableProviders, configuredRoute)
+		if _, err := m.settings.model.current(); err != nil {
+			// A registered route whose adapter will not build is still a route:
+			// upstream registers adapters and reports an authentication failure
+			// when a request is made, and the console keeps the composer usable.
+			// The reason is carried for repair rather than hiding the route.
+			catalog.Failures = append(catalog.Failures, dshapi.ModelCatalogFailure{
+				ID:      configuredRoute,
+				Name:    consoleProviderName(configuredRoute),
+				Message: err.Error(),
+			})
 		}
 	}
-	for _, status := range m.profiles.ProviderProfiles() {
+	for _, status := range m.declared() {
 		models := consoleProfileModels(status.Profile)
 		if len(models) == 0 {
 			continue
@@ -64,7 +72,6 @@ func (m consoleModels) Catalog() dshapi.ModelCatalog {
 				Name:    name,
 				Message: status.Error,
 			})
-			continue
 		}
 		catalog.RoutableProviders = append(catalog.RoutableProviders, status.Profile.Provider)
 		if catalog.Default.Model == "" {
@@ -74,49 +81,73 @@ func (m consoleModels) Catalog() dshapi.ModelCatalog {
 	return catalog
 }
 
-// Resolve turns a selection into the adapter a run would use, or explains why
-// this host cannot serve it. Membership is checked against the same catalog the
-// picker renders, so the two cannot disagree about what is selectable.
-func (m consoleModels) Resolve(selection dshapi.ModelSelection) (model.Model, error) {
+// declared is the declared profiles this host holds. A host with no profile store
+// -- a serve command without one, and a test -- declares none rather than panicking.
+func (m consoleModels) declared() []dshapi.ProviderProfileStatus {
+	if m.profiles == nil {
+		return nil
+	}
+	return m.profiles.ProviderProfiles()
+}
+
+// Offers reports whether this host has a route that lists this model. It is the
+// membership rule the picker and the selection both use, and it deliberately does
+// not require the credential a run needs: a route with no credential is registered
+// and selectable, and the credential failure is what the catalog's failures and the
+// prompt-time apply report.
+func (m consoleModels) Offers(selection dshapi.ModelSelection) error {
 	catalog := m.Catalog()
 	if !slices.Contains(catalog.RoutableProviders, selection.Provider) {
-		for _, failure := range catalog.Failures {
-			if failure.ID == selection.Provider {
-				return nil, errors.New(failure.Message)
-			}
+		if len(catalog.RoutableProviders) == 0 {
+			return fmt.Errorf("provider %q is not one this host can route to: no provider is configured or declared yet", selection.Provider)
 		}
-		known := make([]string, 0, len(catalog.RoutableProviders))
-		known = append(known, catalog.RoutableProviders...)
+		known := append([]string{}, catalog.RoutableProviders...)
 		slices.Sort(known)
-		return nil, fmt.Errorf("provider %q is not one this host can route to (it serves %s)",
+		return fmt.Errorf("provider %q is not one this host can route to (it serves %s)",
 			selection.Provider, strings.Join(known, ", "))
 	}
 	if !consoleGroupOffers(catalog.Groups, selection.Provider, selection.Model) {
-		return nil, fmt.Errorf("model %q is not one provider %q offers", selection.Model, selection.Provider)
+		return fmt.Errorf("model %q is not one provider %q offers", selection.Model, selection.Provider)
+	}
+	return nil
+}
+
+// AdapterFor builds the adapter a selection names, or explains why it cannot be
+// built: the model is not offered, or the route's credential is missing.
+func (m consoleModels) AdapterFor(selection dshapi.ModelSelection) (model.Model, error) {
+	if err := m.Offers(selection); err != nil {
+		return nil, err
 	}
 	view := m.settings.view()
 	if selection.Provider == consoleConfiguredRoute(view) && selection.Model == strings.TrimSpace(view.Model) {
 		// The configured route is already built and live.
 		return m.settings.model.current()
 	}
-	for _, status := range m.profiles.ProviderProfiles() {
+	for _, status := range m.declared() {
 		if status.Profile.Provider != selection.Provider {
 			continue
 		}
-		protocol, ok := consoleProtocol(status.Profile.API)
-		if !ok {
-			return nil, fmt.Errorf("protocol %q is not one this host speaks", status.Profile.API)
-		}
-		key, ref := consoleProfileCredential(m.settings, status.Profile)
-		return provider.FromEnv(provider.Config{
-			Protocol:  protocol,
-			Model:     selection.Model,
-			BaseURL:   strings.TrimSpace(status.Profile.BaseURL),
-			APIKey:    key,
-			APIKeyEnv: ref,
-		})
+		return consoleBuildAdapter(m.settings, status.Profile, selection.Model)
 	}
 	return nil, fmt.Errorf("provider %q has no profile this host can build an adapter from", selection.Provider)
+}
+
+// consoleBuildAdapter builds the adapter a declared profile serves one of its
+// models with. Serviceability, the catalog's failures and a run's apply all go
+// through it, so "can this host serve it" has one answer.
+func consoleBuildAdapter(settings *settingsStore, profile dshapi.ProviderProfile, modelID string) (model.Model, error) {
+	protocol, ok := consoleProtocol(profile.API)
+	if !ok {
+		return nil, fmt.Errorf("protocol %q is not one this host speaks", profile.API)
+	}
+	key, ref := consoleProfileCredential(settings, profile)
+	return provider.FromEnv(provider.Config{
+		Protocol:  protocol,
+		Model:     strings.TrimSpace(modelID),
+		BaseURL:   strings.TrimSpace(profile.BaseURL),
+		APIKey:    key,
+		APIKeyEnv: ref,
+	})
 }
 
 // consoleDerivedKeyRef mirrors the credential reference the console's card derives
@@ -248,7 +279,7 @@ func (s *consoleModelSelection) SelectModel(sessionID string, selection dshapi.M
 	if strings.TrimSpace(selection.ReasoningEffort) != "" {
 		return dshapi.ModelSelection{}, fmt.Errorf("this host exposes no reasoning-effort choices, so %q cannot be selected", selection.ReasoningEffort)
 	}
-	if _, err := s.models.Resolve(selection); err != nil {
+	if err := s.models.Offers(selection); err != nil {
 		return dshapi.ModelSelection{}, err
 	}
 	recorded := dshstream.ModelSelection{Provider: selection.Provider, Model: selection.Model}
@@ -274,7 +305,7 @@ func (s *consoleModelSelection) ApplyModelSelection(sessionID string) error {
 		return nil
 	}
 	selection := dshapi.ModelSelection{Provider: record.selection.Provider, Model: record.selection.Model}
-	adapter, err := s.models.Resolve(selection)
+	adapter, err := s.models.AdapterFor(selection)
 	if err != nil {
 		return err
 	}

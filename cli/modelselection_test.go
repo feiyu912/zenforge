@@ -49,11 +49,15 @@ func TestCatalogListsTheConfiguredRouteAndDeclaredProviders(t *testing.T) {
 	if strings.Join(groups, ",") != "openai,acme,broken" {
 		t.Fatalf("groups = %v, want the configured route and both declared providers", groups)
 	}
-	if strings.Join(catalog.RoutableProviders, ",") != "openai,acme" {
-		t.Fatalf("routable = %v, want only the routes this host can serve", catalog.RoutableProviders)
+	// A route with a missing credential is still registered, the way upstream
+	// registers adapters and reports authentication at request time; the reason it
+	// cannot serve is carried in failures so the operator can repair it, and the
+	// composer stays usable in the meantime.
+	if strings.Join(catalog.RoutableProviders, ",") != "openai,acme,broken" {
+		t.Fatalf("routable = %v, want every registered route", catalog.RoutableProviders)
 	}
 	if len(catalog.Failures) != 1 || catalog.Failures[0].ID != "broken" {
-		t.Fatalf("failures = %+v, want the unserviceable declared route", catalog.Failures)
+		t.Fatalf("failures = %+v, want the route whose credential is missing", catalog.Failures)
 	}
 	if !strings.Contains(catalog.Failures[0].Message, "GATEWAY_TOKEN") {
 		t.Fatalf("failure message = %q, want the missing credential named", catalog.Failures[0].Message)
@@ -94,38 +98,58 @@ func TestCatalogFallsBackToADeclaredDefault(t *testing.T) {
 	}
 }
 
-func TestResolveAnswersForEveryRouteItLists(t *testing.T) {
+func TestOffersAndAdapterForAnswerForEveryRouteItLists(t *testing.T) {
 	models, _, _ := catalogFixture(t)
-	cases := []struct {
+	// Membership refusals: a route this host does not know, and a model the route
+	// does not offer. Both are what the picker would have prevented.
+	for _, testCase := range []struct {
 		name      string
 		selection dshapi.ModelSelection
 		wantError string
 	}{
 		{"a route this host does not know", dshapi.ModelSelection{Provider: "nope", Model: "m"}, "not one this host can route to"},
 		{"a model the route does not offer", dshapi.ModelSelection{Provider: "acme", Model: "nope"}, "is not one provider"},
-		{"a route whose credential is missing", dshapi.ModelSelection{Provider: "broken", Model: "broken-1"}, "GATEWAY_TOKEN"},
-	}
-	for _, testCase := range cases {
+	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			adapter, err := models.Resolve(testCase.selection)
+			err := models.Offers(testCase.selection)
 			if err == nil {
-				t.Fatalf("Resolve(%+v) = %v, want a refusal", testCase.selection, adapter)
+				t.Fatalf("Offers(%+v) = nil, want a refusal", testCase.selection)
 			}
 			if !strings.Contains(err.Error(), testCase.wantError) {
 				t.Fatalf("error = %q, want it to mention %q", err, testCase.wantError)
 			}
+			if _, err := models.AdapterFor(testCase.selection); err == nil {
+				t.Fatal("AdapterFor accepted what Offers refused")
+			}
 		})
 	}
-	// Both serveable routes resolve to a real adapter, including the declared one
-	// the console added in the previous batch.
+	// A route whose credential is missing is offered -- it is registered, and the
+	// console keeps the selection -- but it cannot be built into an adapter, which
+	// is the honest answer a run needs.
+	broken := dshapi.ModelSelection{Provider: "broken", Model: "broken-1"}
+	if err := models.Offers(broken); err != nil {
+		t.Fatalf("Offers(%+v) = %v, want a registered route to be selectable", broken, err)
+	}
+	adapter, err := models.AdapterFor(broken)
+	if err == nil || !strings.Contains(err.Error(), "GATEWAY_TOKEN") {
+		t.Fatalf("AdapterFor(%+v) = (%v, %v), want the missing credential named", broken, adapter, err)
+	}
+	// Both serveable routes build, including the declared one the console added.
 	for _, selection := range []dshapi.ModelSelection{
 		{Provider: provider.OpenAI, Model: "qwen-plus"},
 		{Provider: "acme", Model: "acme-think"},
 	} {
-		adapter, err := models.Resolve(selection)
+		adapter, err := models.AdapterFor(selection)
 		if err != nil || adapter == nil {
-			t.Fatalf("Resolve(%+v) = (%v, %v), want an adapter", selection, adapter, err)
+			t.Fatalf("AdapterFor(%+v) = (%v, %v), want an adapter", selection, adapter, err)
 		}
+	}
+	// With nothing configured and nothing declared, the host says so instead of
+	// listing nothing silently.
+	empty := consoleModels{settings: &settingsStore{current: serverSettings{provider: provider.OpenAI}, model: newSwappableModel()}}
+	err = empty.Offers(dshapi.ModelSelection{Provider: provider.OpenAI, Model: "gpt-4.1"})
+	if err == nil || !strings.Contains(err.Error(), "no provider is configured or declared yet") {
+		t.Fatalf("error = %q, want the empty host explained", err)
 	}
 }
 
@@ -214,14 +238,16 @@ func TestSelectModelRefusesWhatTheHostCannotServe(t *testing.T) {
 	if _, err := selections.SelectModel("run-1", dshapi.ModelSelection{Provider: "acme", Model: "acme-large", ReasoningEffort: "high"}); err == nil {
 		t.Fatal("an effort was accepted by a host that exposes none")
 	}
-	if _, err := selections.SelectModel("run-1", dshapi.ModelSelection{Provider: "broken", Model: "broken-1"}); err == nil {
-		t.Fatal("a selection the host cannot serve was recorded")
+	// A registered route whose credential is missing is recorded: the console
+	// keeps the selection and the run reports the credential (see the apply test).
+	if _, err := selections.SelectModel("run-1", dshapi.ModelSelection{Provider: "broken", Model: "broken-1"}); err != nil {
+		t.Fatalf("SelectModel on a registered route: %v", err)
 	}
 	if _, err := selections.SelectModel("run-1", dshapi.ModelSelection{Provider: "acme", Model: "nope"}); err == nil {
 		t.Fatal("a model the route does not offer was recorded")
 	}
-	if len(selections.States()) != 0 {
-		t.Fatalf("states = %+v, want every refusal to leave nothing recorded", selections.States())
+	if len(selections.States()) != 1 {
+		t.Fatalf("states = %+v, want only the registered route recorded", selections.States())
 	}
 }
 

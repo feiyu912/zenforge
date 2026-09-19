@@ -31,13 +31,20 @@ missing, and both are visible from the composer:
 
 `session/modelCatalog` merges the route the operator configured with every
 declared profile: one group per route (a declared profile's models come from the
-profile, falling back to the model id for a name), `routableProviders` is exactly
-the routes whose adapter builds, and a route that cannot be served yet appears in
-`failures` with the reason the directory already reports. When nothing is
-configured, `default` falls back to the first routable declared model, so an
-operator who declared a provider has something to select. `session/selectModel`
-resolves through the same function, so a model the picker offers is a model a run
-can use and the two cannot drift.
+profile, falling back to the model id for a name) and a `default`. Membership and
+adapter building are answered separately, because upstream separates them too: a
+provider is registered, and a request that cannot authenticate fails when it is
+made. So `routableProviders` lists the routes this host has registered -- the
+configured route when the settings name a model, and every declared profile whose
+protocol and endpoint this host can build for -- while `failures` carries the
+reason a registered route cannot actually serve (a missing credential, a profile
+that will not build), beside the reason `llm/listConfigurableProviders` already
+reports. Marking a credential-less route unselectable would grey out the composer
+of a host that has simply not been given a key yet, which is a worse lie than
+listing the route and naming what is missing. When nothing is configured,
+`default` falls back to the first declared model. `session/selectModel` uses this
+membership rule, and applying a selection builds the adapter through the same
+function, so what the picker offers and what a run can use cannot drift.
 
 ### A selection is validated, recorded, and reported as a projection
 
@@ -86,6 +93,9 @@ to an arbitrary declared endpoint is a credential leak, not a convenience.
   call goes to the declared endpoint with the credential the console stored.
 - The picker now shows a model at all. Before this batch the missing projection
   left the composer with no current selection even for the configured route.
+- An unconfigured host stays usable: the configured route is registered and
+  selectable, `failures` names the missing credential, and the run that follows
+  refuses the prompt with that reason rather than the composer being inert.
 - A declared provider's models are listed even when it cannot be served, beside
   the reason, so the operator sees what to repair rather than an empty page.
 - Two sessions running concurrently under different selections share whichever
@@ -141,12 +151,14 @@ refused prompt keeping its allocation).
 carrying the followed session's value at the snapshot cursor, and an unselected
 session carrying none.
 
-`go test ./cli/ -run TestCatalog|TestResolve|TestSelectModel|TestApply|TestDeclaredProfileCredentials`
+`go test ./cli/ -run TestCatalog|TestOffers|TestSelectModel|TestApply|TestDeclaredProfileCredentials`
 — the catalog's groups, routable set, failures and default (including the declared
-fallback), resolution refusals and successes, the recorded selection with its live
-update and unsubscribe, the applied adapter with the configured one restored for a
-session that chose nothing, a gone credential refusing the apply, and the
-credential rule for derived versus foreign references.
+fallback and the empty host explained by name), membership refusals and successes,
+a credential-less registered route being selectable while its adapter refuses to
+build, the recorded selection with its live update and unsubscribe, the applied
+adapter with the configured one restored for a session that chose nothing, a gone
+credential refusing the apply, and the credential rule for derived versus foreign
+references.
 
 Live, against `zenforge serve` with a stand-in OpenAI-compatible endpoint on
 `127.0.0.1:8899`: declaring `acme` through the card's payload reports

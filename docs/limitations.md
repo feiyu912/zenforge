@@ -166,7 +166,10 @@ what is experimental, and what remains adapter territory.
   **concurrently** under different selections share whichever adapter was applied
   last, because the harness's task carries no model field and this host owns one
   adapter; a selection lasts until the process exits; no model-selection event is
-  written to the session log; and no model exposes a reasoning-effort choice.
+  written to the session log; and no model exposes a reasoning-effort choice. A
+  route whose credential is missing is still listed and selectable -- the catalog's
+  `failures` names what is missing, and the run that follows refuses the prompt
+  with that reason.
 - `session/create` refuses `cwd`/`workspaceId`/`agentPreset`: per-run working
   directories and presets do not exist in this harness.
 - The staged artifacts are a built dependency, not source: they are committed
