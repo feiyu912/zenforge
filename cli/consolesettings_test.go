@@ -383,7 +383,7 @@ func TestConsoleSettingsDocumentNamesTheFieldsItOverrides(t *testing.T) {
 		t.Fatalf("view after restart = %+v, want the document's endpoint and model", got)
 	}
 	line := logs.String()
-	for _, want := range []string{"baseUrl", "model", "provider", "api-key"} {
+	for _, want := range []string{"baseUrl", "model", "api-key"} {
 		if !strings.Contains(line, want) {
 			t.Errorf("the startup line did not name the overridden %q field: %s", want, line)
 		}
@@ -392,6 +392,48 @@ func TestConsoleSettingsDocumentNamesTheFieldsItOverrides(t *testing.T) {
 		if strings.Contains(line, value) {
 			t.Errorf("the startup line carried the value %q rather than a field name: %s", value, line)
 		}
+	}
+	// The console never moved the provider, so the document does not name it and
+	// the flag keeps answering that field: an override is recorded only where an
+	// operator's later intent actually contradicted an earlier one.
+	if got := restarted.view().Provider; got != provider.Anthropic {
+		t.Errorf("provider after restart = %q, want the flag's value for a field the console never wrote", got)
+	}
+	if strings.Contains(line, "provider") {
+		t.Errorf("the startup line named a field the console never moved: %s", line)
+	}
+}
+
+func TestConsoleSettingsDocumentLeavesAFieldItNeverMovedAlone(t *testing.T) {
+	// The sharp case for that rule: a host configured with --api-key, whose
+	// console then writes only the endpoint and the model. Writing the whole live
+	// state would name the key as the empty string, and the next start would read
+	// that as "the console cleared the credential" -- wiping a key the operator
+	// keeps in a flag or an environment variable.
+	path := filepath.Join(t.TempDir(), consoleSettingsFileName)
+	seeded := serverSettings{
+		provider: provider.OpenAI,
+		baseURL:  "https://seed.test/v1",
+		model:    "seed-model",
+		apiKey:   "flag-supplied-key",
+	}
+	store, _ := newDocumentStores(t, path, seeded)
+	if err := store.replaceEndpoint(documentTestBaseURL, "qwen-max"); err != nil {
+		t.Fatalf("replaceEndpoint: %v", err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read the document: %v", err)
+	}
+	if strings.Contains(string(raw), "apiKey") {
+		t.Fatalf("the document named a credential the console never wrote: %s", raw)
+	}
+	restarted, _ := newDocumentStores(t, path, seeded)
+	if !restarted.view().HasAPIKey {
+		t.Fatal("the restart lost the flag-supplied key the console never touched")
+	}
+	if got := restarted.view().BaseURL; got != documentTestBaseURL {
+		t.Fatalf("baseUrl after restart = %q, want the endpoint the console did write", got)
 	}
 }
 

@@ -290,13 +290,15 @@ now, and what was decided along the way:
   The message never quotes the file, because the value the decoder is failing on may
   be the credential, and the standard JSON error quotes values; a type error is
   re-described here from its field name alone.
-- **The document is authoritative over the startup seed** and names the fields it
-  overrode at startup (`baseUrl`, `model`, `provider`, `api-key`), by name and never
-  by value -- and only the fields the seed actually carried, so a document that fills
-  a gap the flags left empty does not claim to have overridden a decision. Its four
-  settings fields are pointers, so "the console cleared this" and "nobody said
-  anything" stay different facts. `apiKeyEnv` -- the environment fallback -- is
-  startup configuration and is not copied into the file.
+- **The document names a field only where the console moved it.** The store holds the
+  whole configuration and writes a snapshot, so naming every field would let a write
+  that touched only the model record the credential as the empty string -- and the next
+  start would read that as a cleared key and wipe one the operator supplies with
+  `--api-key`. A field that differs from the startup seed is written (including a real
+  clear, which differs); a field nobody spoke about is left out and the seed keeps
+  answering it. The document outranks the seed for every field it does name, and the
+  host logs those field names -- `baseUrl`, `model`, `provider`, `api-key` -- never their
+  values. `apiKeyEnv` is startup configuration and is never copied into the file.
 - **`hasDocument` and the revisions come out of the file.** A store that versions its
   own namespaces is asked instead of the handler counting per process
   (`dshapi.SettingsRevisionStore`, implemented by the serve command's store), so a
@@ -339,18 +341,24 @@ restart, the mode with no staging leftover, the workspace refusal, the default p
 never inside the checkout, the loud process-local fallback when there is no
 configuration directory, six damaged documents refused by name with the credential
 absent from every message, a failed write keeping the old value standing, the startup
-line naming fields rather than values and staying quiet when it filled a gap rather
-than overrode a decision, a cleared override staying cleared, and the key appearing in
-exactly one file. And `go test ./internal/dshapi/ -run TestSettings`
+line naming fields rather than values, a field the console never moved staying out of
+the file so a host configured with `--api-key` keeps its key across a write that only
+touched the model, a cleared override staying cleared, and the key appearing in exactly
+one file. And `go test ./internal/dshapi/ -run TestSettings`
 -- the store's `hasDocument` passed through both ways, and a store that versions its
 own namespaces asked instead of the handler counting.
 
 ## Operator's one remaining step
 
-The host at `127.0.0.1:8787` runs the binary from *before* this chain, so it holds
-its key in memory only. Rebuilt and restarted, it needs the key typed **once more**;
-every start after that reads it back from the document. The one-time entry is the
-thing this chain exists to end, not a defect in it.
+The host at `127.0.0.1:8787` was rebuilt and restarted on this chain with its original
+flags (`serve --base-url https://dashscope.aliyuncs.com/compatible-mode/v1 --model
+qwen-plus --workspace <checkout>`), and the verification write put its document in
+place at `~/.config/zenforge/console-settings.json`. One thing remains: **the key, typed
+once into the Models page**. The old process held it in memory and the wire has no way
+to read it back -- that is ADR 0084 working, not a gap -- so the first host started
+before this chain cannot hand its credential to the second. Every start after that entry
+reads it back from the document. The one-time entry is the thing this chain exists to
+end, not a defect in it.
 
 ## Kickoff prompt for the next window
 

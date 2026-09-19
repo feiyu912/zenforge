@@ -562,7 +562,7 @@ func (s *settingsStore) documentFile() consoleSettingsFile {
 		return file
 	}
 	s.mu.RLock()
-	route, modelName, baseURL, apiKey := s.current.provider, s.current.model, s.current.baseURL, s.current.apiKey
+	current, seed := s.current, s.seed
 	sections := make(map[string]map[string]any, len(s.consoleSections))
 	for namespace, section := range s.consoleSections {
 		stored := make(map[string]any, len(section))
@@ -576,7 +576,10 @@ func (s *settingsStore) documentFile() consoleSettingsFile {
 		revisions[namespace] = revision
 	}
 	s.mu.RUnlock()
-	file.Provider, file.Model, file.BaseURL, file.APIKey = &route, &modelName, &baseURL, &apiKey
+	file.Provider = settingsField(current.provider, seed.provider)
+	file.Model = settingsField(current.model, seed.model)
+	file.BaseURL = settingsField(current.baseURL, seed.baseURL)
+	file.APIKey = settingsField(current.apiKey, seed.apiKey)
 	if len(sections) > 0 {
 		file.ConsoleSections = sections
 	}
@@ -587,6 +590,20 @@ func (s *settingsStore) documentFile() consoleSettingsFile {
 		file.ProviderProfiles = profileRecords(s.profiles.ProviderProfiles())
 	}
 	return file
+}
+
+// settingsField names a document field only where the live state moved off the
+// startup seed. Equal means the console never spoke about the field, so the
+// document leaves it out and the seed keeps answering it -- which is what stops a
+// host started with --api-key from being told, by a write that only ever touched
+// the model, that its credential had been cleared. Not equal means the console
+// wrote or cleared the field, and that is a fact worth persisting even when the
+// answer it recorded is the empty string.
+func settingsField(current, seeded string) *string {
+	if current == seeded {
+		return nil
+	}
+	return &current
 }
 
 // applyDocument copies a loaded document over the startup seed. A field the

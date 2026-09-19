@@ -91,20 +91,28 @@ The message is deliberately free of the file's contents. The standard decoder qu
 value it could not decode, and the value it is failing on may be precisely the
 credential, so a type error contributes the field it landed on and nothing more.
 
-### The document is authoritative, and says what it overrode
+### The document names only what the console moved, and says what it overrode
 
-On a start where a document exists, its fields replace the startup seed, and the host
-logs which fields it overrode -- `baseUrl`, `model`, `provider`, `api-key` -- by name and
-never by value. Only the fields the seed actually carried are named: a document that
-fills a gap the flags left empty filled a hole rather than overriding a decision, and a
-startup line that said otherwise would train the operator to ignore it. The rule is the
-one that makes the feature worth having: a console write is the operator's most recent
-intent, and a shell that repeats an older flag on every start must not silently undo it.
-A field the document leaves out keeps the seed's value; the four settings fields are
-stored as pointers for exactly that distinction, so "the console cleared this" and
-"nobody ever said anything" stay different facts. The environment fallback named by
-`--api-key-env` is startup configuration and is never copied into the file: a key the
-operator keeps in an environment variable stays there.
+The document records a settings field only where the live state moved off the startup
+seed, and leaves the field out otherwise. That omission is load-bearing: the store holds
+the whole configuration and writes a snapshot, so a console write that touched only the
+model would otherwise name the credential too -- as the empty string, because this host
+starts without one -- and the next start would read that as "the console cleared my key"
+and wipe a key the operator supplies with `--api-key` or keeps in the environment named
+by `--api-key-env`. Naming a field is how the document says the console spoke about it;
+silence is not the same as a statement, and the four settings fields are pointers so
+"the console cleared this" and "nobody ever said anything" stay different facts. A
+credential the console actually clears differs from a seed that carried one, so the
+clear is recorded and stays recorded.
+
+On a start where a document exists, every field it names replaces the seed's, and the
+host logs which fields it overrode -- `baseUrl`, `model`, `provider`, `api-key` -- by
+name and never by value. The rule is the one that makes the feature worth having: a
+console write is the operator's most recent intent, and a shell that repeats an older
+flag on every start must not silently undo it. A field the console never moved is not
+named, so the flag keeps answering it and the startup line stays quiet about it: a log
+that claimed an override where none happened would train the operator to ignore the one
+that is real.
 
 `hasDocument` reports what is now true, and the revisions come out of the file rather
 than starting again. A console tab held open across a restart fences its next write
@@ -186,8 +194,10 @@ the served workspace, the default path in the host's configuration directory and
 inside the checkout, the loud process-local fallback when there is no configuration
 directory, six damaged documents refused by name with the credential absent from every
 message, a failed write leaving the old value standing, the startup line that names the
-fields it overrode without naming their values, a cleared override staying cleared, and
-the key appearing in exactly one file.
+fields it overrode without naming their values, a field the console never moved staying
+out of the file so a host configured with `--api-key` keeps its key across a write that
+only touched the model, a cleared override staying cleared, and the key appearing in
+exactly one file.
 
 `go test ./internal/dshapi/ -run TestSettings` -- `hasDocument` answered from the store in
 both directions, and a store that versions its own namespaces asked instead of the handler
@@ -205,3 +215,9 @@ curl -s -X POST http://127.0.0.1:8787/api/settings/describe \
 # profiles, the endpoint and the credential are still there, and the revision did not
 # start over.
 ```
+
+Run against the operator's host, which serves the repository itself as its workspace:
+the write fenced at the revision `describe` reported was accepted and moved it by one,
+the superseded revision was refused as `settings/conflict`, and the document appeared at
+`~/.config/zenforge/console-settings.json`, mode `0600`, outside the workspace the page
+can browse -- which is the placement rule doing its job on the only host that matters.
