@@ -100,6 +100,11 @@ type Handler struct {
 	// installed by SetModelSelections after New.
 	modelSelectionsMu sync.RWMutex
 	modelSelections   ModelSelectionStore
+
+	// workspaces is the injected console workspace registry, installed by
+	// SetWorkspaces after New.
+	workspacesMu sync.RWMutex
+	workspaces   WorkspaceRegistry
 }
 
 // pendingSession is a session id allocated by session/create that has not
@@ -232,6 +237,19 @@ func (h *Handler) method(endpoint string) (methodFunc, bool) {
 			return h.directoryPickerCreateDirectory, true
 		case "pick":
 			return h.directoryPickerPick, true
+		}
+	case "workspace":
+		switch name {
+		case "create":
+			return h.workspaceCreate, true
+		case "rename":
+			return h.workspaceRename, true
+		case "delete":
+			return h.workspaceDelete, true
+		case "archiveSession":
+			return h.workspaceArchiveSession, true
+		case "unarchiveSession":
+			return h.workspaceUnarchiveSession, true
 		}
 	case "workspaceFiles":
 		switch name {

@@ -26,16 +26,16 @@ methods are the remaining work, in priority order at the end of this page.
 
 ## Summary
 
-This host answers **32** of the client's **109** methods, mounts
-**2** of them as logical streams, refuses **16** by name, and
-does not serve the remaining **59**.
+This host answers **37** of the client's **109** methods, mounts
+**3** of them as logical streams, refuses **16** by name, and
+does not serve the remaining **53**.
 
 | State | Count |
 | --- | --- |
-| served | 32 |
-| stream | 2 |
+| served | 37 |
+| stream | 3 |
 | refused | 16 |
-| unserved | 59 |
+| unserved | 53 |
 | **client methods total** | **109** |
 
 The WebSocket mux also mounts `$events`, which is not part of the client's
@@ -72,6 +72,11 @@ method list.
 | `settings/mutate` | served | Apply settings operations. |
 | `settings/replace` | served | Replace a settings value. |
 | `settings/update` | served | Update a settings value. |
+| `workspace/archiveSession` | served | Move a session into a workspace's archived list. |
+| `workspace/create` | served | Register a directory as a workspace. |
+| `workspace/delete` | served | Remove a registration; the host's own workspace is refused by name. |
+| `workspace/rename` | served | Retitle a workspace. |
+| `workspace/unarchiveSession` | served | Restore an archived session. |
 | `workspaceFiles/list` | served | List a directory in a session's workspace. |
 | `workspaceFiles/read` | served | Read a workspace file. |
 | `workspaceFiles/readAll` | served | Read a file with its full context. |
@@ -79,6 +84,7 @@ method list.
 | `workspaceFiles/stat` | served | Stat a workspace path. |
 | `session/control` | stream | The control stream: job and model-selection projections. |
 | `session/follow` | stream | The follow stream: a session's durable event log. |
+| `workspace/follow` | stream | The workspace stream: every registration and the archived set. |
 
 ## Refused by name
 
@@ -156,14 +162,8 @@ method list.
 | `terminal/retain` | unserved | no embedded terminal in this host |
 | `terminal/shells` | unserved | no embedded terminal in this host |
 | `terminal/write` | unserved | no embedded terminal in this host |
-| `workspace/archiveSession` | unserved | no workspace organizer (archive, rename, order) |
-| `workspace/create` | unserved | no workspace organizer (archive, rename, order) |
-| `workspace/delete` | unserved | no workspace organizer (archive, rename, order) |
-| `workspace/follow` | unserved | no workspace organizer (archive, rename, order) |
 | `workspace/insertBefore` | unserved | no workspace organizer (archive, rename, order) |
 | `workspace/insertSessionBefore` | unserved | no workspace organizer (archive, rename, order) |
-| `workspace/rename` | unserved | no workspace organizer (archive, rename, order) |
-| `workspace/unarchiveSession` | unserved | no workspace organizer (archive, rename, order) |
 
 ## Next up
 
@@ -187,8 +187,10 @@ The gaps in the order they block the page, from what the console asks first:
 5. **`skills/list`, `subagents/list`, `subagents/prompt`, `subagents/interruptByParent`**
    — framework features that are not exposed to the console yet.
 6. **`terminal/*`** — an embedded terminal, which this host does not claim.
-7. **`workspace/*`** — archiving, renaming, and ordering workspaces; the
-   session organizer.
+7. **`workspace/insertBefore`, `workspace/insertSessionBefore`** — the manual
+   row order inside the workspace list. Registrations, titles, deletion and the
+   archived set are served (ADR 0101); only the drag-to-reorder mutations are
+   left.
 8. **`messageFeedback/*`, `sessionFeedback/*`, `fileReferences/list`,
    `fileUploads/upload`, `officeToPdf/*`, `agentTeams/*`, `sessionReferenceResolver/candidates`,
    `dynamicCordisRunner/*`** — page features with no host-side counterpart yet.

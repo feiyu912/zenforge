@@ -217,6 +217,26 @@ func newServeApp(ctx context.Context, opts *options, ioStreams IO, config serveC
 		workspace = absolute
 	}
 
+	// The console groups sessions by workspace, and this host runs every
+	// session in one directory: the registry it hands the console is built
+	// around that directory (ADR 0101). A workspace that cannot be opened
+	// leaves the face nil, so the namespace answers unimplemented with the
+	// dependency named instead of showing an empty registry -- and the reason
+	// is logged once, here, instead of on every request.
+	workspaces, workspacesErr := newConsoleWorkspaces(workspace)
+	if workspacesErr != nil {
+		slog.Warn("console workspace grouping is disabled: the host workspace could not be opened",
+			"workspace", workspace, "error", workspacesErr)
+	}
+	var workspaceRegistry dshapi.WorkspaceRegistry
+	var workspaceBaseline func() dshstream.WorkspaceBaseline
+	var workspaceUpdates func(observe func(dshstream.WorkspaceUpdate)) (unsubscribe func())
+	if workspaces != nil {
+		workspaceRegistry = workspaces
+		workspaceBaseline = workspaces.Baseline
+		workspaceUpdates = workspaces.Subscribe
+	}
+
 	// The DSH console is the product surface: its boot-injected shell, staged
 	// assets, module bundles, and unary RPCs share one origin, which is what the
 	// console requires (its RPC base is hard-wired to the page origin). Building
@@ -268,6 +288,7 @@ func newServeApp(ctx context.Context, opts *options, ioStreams IO, config serveC
 		Presets:          consolePresets(opts),
 		WorkspaceFiles:   consoleFileFace(opts),
 		Commands:         consoleCommandCatalog(opts),
+		Workspaces:       workspaceRegistry,
 	})
 	if err != nil {
 		return nil, err
@@ -281,6 +302,8 @@ func newServeApp(ctx context.Context, opts *options, ioStreams IO, config serveC
 		AllowRemote:           config.allowRemote,
 		ModelSelections:       selections.States,
 		ModelSelectionUpdates: selections.Updates,
+		Workspaces:            workspaceBaseline,
+		WorkspaceUpdates:      workspaceUpdates,
 	})
 	if err != nil {
 		return nil, err

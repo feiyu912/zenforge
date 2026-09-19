@@ -131,3 +131,4 @@ and what the adapter answers today is
 | [0097](0097-the-consoles-model-discovery-interrogates-the-draft-endpoint.md) | The console's model discovery interrogates the draft endpoint |
 | [0098](0098-a-declared-profile-is-edited-field-by-field.md) | A declared profile is edited field by field |
 | [0100](0100-the-directory-picker-serves-the-browse-half-and-refuses-the-native-half.md) | The directory picker serves the browse half and refuses the native half |
+| [0101](0101-the-console-workspace-registry-is-process-local.md) | The console's workspace registry is process-local, and sessions run in the host's one directory |

@@ -70,6 +70,11 @@ type Config struct {
 	// ModelSelections holds each session's chosen provider and model, and applies
 	// the adapter a session's run should use.
 	ModelSelections dshapi.ModelSelectionStore
+	// Workspaces is the console's workspace registry: the directories an
+	// operator added and the sessions grouped under them. Without it the
+	// workspace namespace answers unimplemented and the console's "choose
+	// workspace" flow has nowhere to land.
+	Workspaces dshapi.WorkspaceRegistry
 }
 
 // Mux is the assembled console host. It is immutable after New, which is what
@@ -141,6 +146,9 @@ func New(manager *harnesshttp.RunManager, events eventlog.Store, cfg Config) (*M
 	}
 	if cfg.ModelSelections != nil {
 		api.SetModelSelections(cfg.ModelSelections)
+	}
+	if cfg.Workspaces != nil {
+		api.SetWorkspaces(cfg.Workspaces)
 	}
 	return &Mux{
 		shell:         shellHandler(bundle.Inject(string(shell))),

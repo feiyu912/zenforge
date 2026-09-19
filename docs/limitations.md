@@ -492,3 +492,25 @@ rewritten per-event ids -- and the console reads an event's id as the session's
 identity. Until that exists, `session/page` serves the newest turn, and an
 earlier turn's transcript is not reachable through it. The conversation itself is
 complete in the durable logs, one log per turn.
+
+## A console session runs in the host's one directory
+
+The console groups sessions by workspace, and this host serves that grouping:
+directories can be registered, renamed and removed, and the archived set is
+host-side state (ADR 0101). What the host cannot do is *run* a session in a
+registered directory other than its own. The harness agent carries exactly one
+workspace and the run request has no workspace field to override it, so every
+run of this process edits the directory `zenforge serve` was started with.
+Selecting any other directory is refused by name -- the message names both paths
+and the `--workspace` flag that would make the other directory the host's -- and
+the session the console opens is always grouped under the directory it actually
+runs in. Per-session workspaces need a framework change (a workspace override on
+the run request) before an adapter can honor them.
+
+## A registered workspace does not survive a restart
+
+Workspace registrations, their titles and the archived session set are
+process-local console state, like the settings the console writes (ADR 0094).
+The repository has no durable home for a console preference, so a restart starts
+the list from the host's own directory again. A session's transcript and its
+workspace files are unaffected: those live in the run logs and on disk.

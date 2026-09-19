@@ -99,6 +99,8 @@ func (h *Handler) runStream(ctx context.Context, endpoint string, payload json.R
 		return h.runControl(ctx, payload, send)
 	case "session/follow":
 		return h.runFollow(ctx, payload, send)
+	case "workspace/follow":
+		return h.runWorkspaceFollow(ctx, payload, send)
 	default:
 		return streamFail(codeNotFound, "stream endpoint not found: "+endpoint,
 			map[string]any{"endpoint": endpoint})

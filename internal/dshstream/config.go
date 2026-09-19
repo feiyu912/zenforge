@@ -35,6 +35,16 @@ type Config struct {
 	// because the session stream has no projection frame.
 	ModelSelectionUpdates func(observe func(ModelSelectionUpdate)) (unsubscribe func())
 
+	// Workspaces, when set, reports the console's workspace registry: the
+	// workspace/follow baseline publishes it and later changes arrive through
+	// WorkspaceUpdates. Nil reports none, which is what a host with no
+	// workspace grouping should say.
+	Workspaces func() WorkspaceBaseline
+
+	// WorkspaceUpdates, when set, delivers registry changes until the returned
+	// function is called. The workspace/follow stream is where they are sent.
+	WorkspaceUpdates func(observe func(WorkspaceUpdate)) (unsubscribe func())
+
 	// ApprovalPollInterval is how often the $events stream re-reads
 	// approval.Inbox for pending requests. The repository has no global
 	// approval notification source (eventlog.Bus is per-run and the pending

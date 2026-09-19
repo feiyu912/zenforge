@@ -161,15 +161,22 @@ func (h *Handler) sessionCreate(ctx context.Context, args map[string]json.RawMes
 	if failure != nil {
 		return nil, failure
 	}
-	// These fields describe a per-session execution context the run manager
-	// does not have: runs share the agent's configured working directory and
-	// preset. Rejecting them beats silently creating a session that ignores
-	// what the caller asked for.
-	if strings.TrimSpace(workspaceID) != "" {
-		return nil, fail(codeUnimplemented,
-			"session/create workspaceId is not supported: a session is one run and this host has no workspace grouping to attach it to",
-			map[string]any{"field": "workspaceId"})
+	// The console's workspace flow creates its session with the workspace it
+	// just adopted, so the id has to resolve. It resolves to a session only
+	// when the row points at the directory this host actually runs in: runs
+	// share the agent's configured working directory, and grouping a session
+	// under a different directory would tell the console it edits files the
+	// tools never touch.
+	requestedWorkspace := strings.TrimSpace(workspaceID)
+	if requestedWorkspace != "" {
+		if _, failure := h.workspaceViewForSession(requestedWorkspace); failure != nil {
+			return nil, failure
+		}
 	}
+	// These remaining fields describe a per-session execution context the run
+	// manager does not have: runs share the agent's configured working
+	// directory and preset. Rejecting them beats silently creating a session
+	// that ignores what the caller asked for.
 	if strings.TrimSpace(cwd) != "" {
 		return nil, fail(codeUnimplemented,
 			"session/create cwd is not supported: the run manager cannot override the agent's configured working directory per run",
@@ -181,13 +188,26 @@ func (h *Handler) sessionCreate(ctx context.Context, args map[string]json.RawMes
 			map[string]any{"field": "agentPreset"})
 	}
 
+	// Every session this host creates runs in its one workspace, so the console
+	// groups it there whether or not the caller named it: a session missing
+	// from its workspace's session list is a row the sidebar cannot show, even
+	// though the session exists.
+	answer := func(sessionID string) (any, *methodError) {
+		if workspaces := h.workspaceRegistry(); workspaces != nil {
+			if err := workspaces.AttachSession(requestedWorkspace, sessionID); err != nil {
+				return nil, workspaceFailure(err)
+			}
+		}
+		return map[string]any{"sessionId": sessionID}, nil
+	}
+
 	sessionID := strings.TrimSpace(requestedID)
 	if sessionID == "" {
 		sessionID = zenforge.NewRunID()
 		if failure := h.rememberPending(sessionID); failure != nil {
 			return nil, failure
 		}
-		return map[string]any{"sessionId": sessionID}, nil
+		return answer(sessionID)
 	}
 	if err := validateSessionID(sessionID); err != nil {
 		return nil, fail(codeArgumentsInvalid, err.Error(), map[string]any{"argument": "sessionId"})
@@ -196,7 +216,7 @@ func (h *Handler) sessionCreate(ctx context.Context, args map[string]json.RawMes
 	// durable log is already a session; only a truly unknown id becomes a
 	// pending allocation, so adopting twice never resets state.
 	if _, err := h.manager.Get(sessionID); err == nil {
-		return map[string]any{"sessionId": sessionID}, nil
+		return answer(sessionID)
 	} else if !errors.Is(err, harnesshttp.ErrRunNotFound) {
 		return nil, fail(codeInternal, "look up session: "+err.Error(), nil)
 	}
@@ -205,12 +225,12 @@ func (h *Handler) sessionCreate(ctx context.Context, args map[string]json.RawMes
 		return nil, fail(codeInternal, "read session log: "+err.Error(), nil)
 	}
 	if latest > 0 {
-		return map[string]any{"sessionId": sessionID}, nil
+		return answer(sessionID)
 	}
 	if failure := h.rememberPending(sessionID); failure != nil {
 		return nil, failure
 	}
-	return map[string]any{"sessionId": sessionID}, nil
+	return answer(sessionID)
 }
 
 // sessionPrompt answers POST /api/session/prompt. A pending session starts a

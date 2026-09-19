@@ -77,8 +77,11 @@ func TestSessionCreateAdoptsExplicitSessionID(t *testing.T) {
 
 func TestSessionCreateRejectsUnsupportedFields(t *testing.T) {
 	f := newFixture(t, Config{})
+	// workspaceId is no longer in this list: it now resolves against the
+	// workspace registry, and its refusals (no registry, unknown row, a row
+	// that is not the directory this host runs in) are covered by
+	// workspaces_test.go.
 	cases := []string{
-		`{"workspaceId":"ws-1"}`,
 		`{"cwd":"/tmp/elsewhere"}`,
 		`{"agentPreset":"fast"}`,
 	}
