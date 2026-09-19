@@ -72,3 +72,78 @@ artifact tree excludes `.map` and `dist/preview/`.
 - Never `git add -A` while an agent is writing: stage exact paths.
 - Tests must use `t.TempDir()`; an earlier batch committed stray run files from a
   test that used the default checkpoint directory.
+
+## State at the end of the first planning window (round 40)
+
+The console is **mounted and usable**: `zenforge serve` serves the rebranded DSH
+console at `/`, it boots without a plugin failure, the session sidebar loads, live
+event follow works, approvals can be answered, and the model selector reports the
+host's configured model. The interim first-party console is gone (`/classic/` is
+a 404) by the operator's decision.
+
+Shipped, each pushed with CI and docs green:
+
+| Commit | What |
+| --- | --- |
+| `9e9e54b` | `zenforge serve` + the interim console (ADR 0078) |
+| `a47f7c8` | ADR 0079 + the archived reconnaissance report |
+| `1d82100` | rebranded console artifacts + rebuild recipe + `console.yml` |
+| `24c7834`, `331eb1e`, `a6f8654` | boot half (ADR 0080), unary RPC + catalog + unserved-endpoint log (ADR 0081, 0082), catalog wired to the settings store |
+| `e267be6` | the `[hidden]` stylesheet fix |
+| `4daac90` | this handover note |
+| `8e76317` | the mount, the roster, the streams (ADR 0083) |
+
+Verified live at the end of that window: `/` is the injected shell under the
+ZenForge title; `WS /api/remote.mux` answers 101; `POST /api/session/list`
+answers a well-formed envelope; `/api/session/modelCatalog` answers
+`{"default":{"provider":"openai","model":"qwen-plus"},...}` on a host started
+with `--model qwen-plus`; `/classic/` is 404.
+
+### To run it
+
+```bash
+cd /Users/kaicheng/coding/zenmind-develop/zenforge
+go run ./cmd/zenforge serve \
+  --base-url https://dashscope.aliyuncs.com/compatible-mode/v1 \
+  --model qwen-plus --api-key "$DASHSCOPE_API_KEY"
+```
+
+The credential is host-side by upstream design: the console sends no credentials
+and has no key field. `--allow-remote` is required to reach it from another
+machine, and it also relaxes the settings API to non-loopback callers.
+
+### What remains, with the takeover point for each
+
+1. **The console's own model/settings panel** (so a model can be "defined" in the
+   browser). Its edits go to a host-owned settings document
+   (`settings/document-updated`, `settings/conflict`), not to a credential form.
+   The instrument is already in place: `serve` passes `slog.Default()` into the
+   RPC handler (`dshmount.Config.Logger` -> `dshapi.Config.Logger`), so every
+   endpoint the console asks for that this host does not serve prints one line
+   naming only `namespace` and `method`. Open the panel, read the log, implement
+   those methods in `internal/dshapi` in the order they appear. The log never
+   contains arguments, `rpcId`, or a key — keep it that way.
+2. **Multi-turn.** A session maps to one run, so a prompt to a finished run
+   answers `unimplemented`. The fix is a session→current-run table (a session id
+   that outlives its runs) or an agent API that appends a turn to a finished run.
+   Note the related deviation in ADR 0083: `session/follow` ends when the run
+   ends, which that layer should revisit.
+3. **The remaining panels** (workspace files, tools, subagents, jobs, plugin
+   manager): same log-driven approach; unimplemented namespaces must stay 404 so
+   the console degrades one feature rather than failing to boot.
+4. **`webui/`** is still referenced by `internal/dshmount` (as a fallback source),
+   so the package was not deleted with the `/classic/` route. If that reference is
+   removed, delete the package and record the supersession of ADR 0078.
+5. **Artifact rebuild** (`scripts/build-console.sh`) needs the corepack pnpm shim
+   described above; the roster then has to be regenerated
+   (`scripts/gen-dsh-roster.py`) because the module edges and the withheld entry
+   live in `internal/dshmount/roster.json`.
+
+### Environment notes that cost time here
+
+- `pkill -f 'zenforge serve'` kills only the `go run` parent; the compiled child
+  under `/tmp/zenforge-gotmp/go-build*/exe/zenforge` keeps the port. Kill by
+  `-f 'exe/zenforge'` too, and never `pkill -f 'go-build'` (it is the same path).
+- Long `go test` runs repeatedly produced no output and timed out on this
+  machine while short runs passed; CI was the reliable arbiter. Prefer targeted
+  `-run`/single-package runs locally and let CI run the suite.
