@@ -233,6 +233,7 @@ nav:
       - 0090 The console's slash commands are the host's commands: adr/0090-the-consoles-slash-commands-are-the-hosts-commands.md
       - 0091 The plugin inventory describes what this host publishes: adr/0091-the-plugin-inventory-describes-what-this-host-publishes.md
       - 0092 The console shows the product's name in its command form: adr/0092-the-console-shows-the-products-name-in-its-command-form.md
+      - 0093 The first-party console is deleted: adr/0093-the-first-party-console-is-deleted.md
 
 extra:
   social:

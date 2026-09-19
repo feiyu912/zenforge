@@ -2,6 +2,9 @@
 
 Status: accepted
 
+Superseded in part by ADR 0093: the first-party console is deleted; the console
+`zenforge serve` offers is the rebranded upstream one (ADR 0079).
+
 ## Context
 
 `server/harnesshttp` has served a complete detached-run API for several

@@ -106,3 +106,4 @@ later ADRs supersede earlier ones, never edit.
 | [0090](0090-the-consoles-slash-commands-are-the-hosts-commands.md) | The console's slash commands are the host's commands |
 | [0091](0091-the-plugin-inventory-describes-what-this-host-publishes.md) | The plugin inventory describes what this host publishes |
 | [0092](0092-the-console-shows-the-products-name-in-its-command-form.md) | The console shows the product's name in its command form |
+| [0093](0093-the-first-party-console-is-deleted.md) | The first-party console is deleted |

@@ -49,8 +49,9 @@ so a fresh session can continue without re-deriving anything.
    needs answers; a plugin in the graph without a service provider is a fatal
    boot failure.
 5. **Wire into `zenforge serve`** — mount `internal/dshboot` + `internal/dshapi`
-   + the WS mux, serve `webui/dsh` as the console (keeping the ADR 0078 console
-   as the fallback), then verify in a browser end to end.
+   + the WS mux, serve `webui/dsh` as the console, then verify in a browser end
+   to end. **Shipped**: the ADR 0078 console was not kept as a fallback -- it is
+   deleted, and `/classic/` is a 404 (ADR 0093).
 
 ## Rebuilding the console artifacts
 
@@ -157,10 +158,7 @@ machine, and it also relaxes the settings API to non-loopback callers.
 3. **The remaining panels** (workspace files, tools, subagents, jobs, plugin
    manager): same log-driven approach; unimplemented namespaces must stay 404 so
    the console degrades one feature rather than failing to boot.
-4. **`webui/`** is still referenced by `internal/dshmount` (as a fallback source),
-   so the package was not deleted with the `/classic/` route. If that reference is
-   removed, delete the package and record the supersession of ADR 0078.
-5. **Artifact rebuild** (`scripts/build-console.sh`) needs the corepack pnpm shim
+4. **Artifact rebuild** (`scripts/build-console.sh`) needs the corepack pnpm shim
    described above; the roster then has to be regenerated
    (`scripts/gen-dsh-roster.py`) because the module edges and the withheld entry
    live in `internal/dshmount/roster.json`.

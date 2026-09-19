@@ -118,47 +118,39 @@ what is experimental, and what remains adapter territory.
 
 ## Browser Console
 
-- The rebranded upstream console is **built and staged but not yet served**:
-  holding it needs the host protocol (module graph, `/api` RPC, the WebSocket
-  streams, and the approval bridge), which is the work in progress. Until it
-  lands, `zenforge serve` serves the first-party console from ADR 0078, which
-  needs no plugin graph and is the fallback for a host without the artifacts.
-- The staged artifacts are a built dependency, not source: they are committed
-  with their pinned upstream revision, patch, and recipe (`scripts/build-console.sh`,
-  rebuildable through the manually triggered console workflow), because the
-  upstream build cannot be renamed at runtime (ADR 0079).
-
-## Browser Console
-
-- The console cannot hold a **multi-turn conversation** yet: a session maps to a
-  run, and a run is one execution, so a second message after the first run
-  finished is answered `unimplemented`. Multi-turn needs either a
-  session-to-current-run map or an agent that appends a turn to a finished run.
-- Panels whose namespaces this host does not serve (model catalog, forks,
-  workspace files, subagents) show a feature-level error rather than data; that
-  is the intended degradation, not a bug.
-- `session/create` refuses `cwd`/`workspaceId`/`agentPreset` for the same
-  reason: per-run working directories and presets do not exist in this harness.
-
-## Browser Console
-
-- The console that `zenforge serve` offers at `/` is the **rebranded upstream
-  DSH console**, so its model configuration is **host-side** by upstream design:
-  a browser session sends no credentials. Give the endpoint and key to the
-  process (`--base-url`, `--model`, `--api-key`, or the environment) and the
-  console's model picker reports that configuration through
-  `session/modelCatalog`.
-- A session maps to one run, so a session cannot yet continue after its run
-  finishes (multi-turn); a second prompt is refused with a clear error.
+- The console `zenforge serve` offers at `/` is the **rebranded upstream DSH
+  console** (ADR 0079), served from `webui/dsh` with its boot graph injected into
+  the shell and its bundles under `/plugins` (ADR 0080). The first-party console
+  of ADR 0078 is **deleted**, so `/classic/` is a 404 (ADR 0093).
+- Its model configuration is **host-side** by upstream design: a browser session
+  sends no credentials. Give the endpoint and key to the process (`--base-url`,
+  `--model`, `--api-key`, or the environment) and the console's model picker
+  reports that configuration through `session/modelCatalog`. The console's own
+  settings panel can also write the endpoint, model and key (ADR 0087); the key
+  is write-only and the write refuses what this host cannot hold.
+- **Multi-turn works** (ADR 0086): a session's finished run continues as
+  `<session>~<turn>`, so a second message is a new turn rather than a refusal.
 - The sidebar does not mutate live, background-job panels are empty, and
   assistant prose does not stream through the console's delta channel: this
   harness has a per-run event log, no global change feed, no job projections and
-  no console-shaped delta protocol. Session lists, event follow and approvals do
-  work. See ADR 0083.
-- Panels needing namespaces this host does not serve (workspace files, tools,
-  subagents, plugin manager) show a feature-level error rather than data; the
-  host logs which endpoint was asked for, which is how the remaining ones get
-  prioritised.
+  no console-shaped delta protocol. Session lists, event follow, the workspace
+  file sidebar, commands, the model/settings panels and approvals do work. See
+  ADR 0083.
+- Every namespace a shipped panel calls is served or refused by name
+  (ADR 0084-0091). Methods this host does not implement -- `terminal`,
+  `subagents`, `officeToPdf`, session forks, search, `selectModel`, attachments --
+  answer a bare 404, which is the intended per-feature degradation rather than a
+  console failure, and the host logs the endpoint that was asked for, which is how
+  the remaining ones get prioritised.
+- `session/create` refuses `cwd`/`workspaceId`/`agentPreset`: per-run working
+  directories and presets do not exist in this harness.
+- The staged artifacts are a built dependency, not source: they are committed
+  with their pinned upstream revision, patch and recipe
+  (`scripts/build-console.sh`), because the upstream build cannot be renamed at
+  runtime (ADR 0079).
+- The console's browser-visible identity reads `zenforge` in its title, manifest,
+  favicon name and brand copy (ADR 0092); prose and documentation keep the
+  sentence-case `ZenForge` stylisation.
 
 ## MCP Sampling
 
