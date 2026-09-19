@@ -552,11 +552,34 @@ func consoleProviderName(route string) string {
 }
 
 // replaceEndpoint commits a new endpoint and model while keeping the provider and
-// the credential. It routes through apply so the same validation decides: a
-// base URL the provider cannot build leaves the running server untouched.
+// the credential.
+//
+// It validates what can be checked without a credential and then commits, rather
+// than routing through apply: apply refuses a configuration the provider cannot
+// build, and a host with no credential is a configuration this server
+// deliberately runs in (the run path reports the provider's own failure). The
+// console's Models page writes the endpoint before it writes the key, so
+// refusing the endpoint for the absence of the key would make the panel's own
+// order impossible. A malformed endpoint is still refused before anything is
+// stored.
 func (s *settingsStore) replaceEndpoint(baseURL, model string) error {
-	_, err := s.apply(settingsRequest{BaseURL: baseURL, Model: model})
-	return err
+	normalized, err := normalizeSettingsRequest(settingsRequest{BaseURL: baseURL, Model: model})
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	next := s.current
+	next.baseURL = normalized.BaseURL
+	if normalized.Model != "" {
+		next.model = normalized.Model
+	}
+	s.current = next
+	s.mu.Unlock()
+	// A rebuild that cannot build an adapter records the failure instead of
+	// returning it, exactly as startup does for an operator who has not
+	// configured a key yet.
+	s.rebuild()
+	return nil
 }
 
 // consoleSettings adapts the settings store to the console's settings namespace

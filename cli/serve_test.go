@@ -308,3 +308,44 @@ func TestConsoleCredentialsRespectAnEnvironmentSuppliedKey(t *testing.T) {
 		t.Fatal("hasApiKey = false, want the environment-supplied key still reported")
 	}
 }
+
+// The console's Models page writes the endpoint before it writes the key, so a
+// host with no credential must accept the endpoint. Refusing it for the absence
+// of a key -- which is what routing through apply would do -- makes the panel's
+// own write order impossible.
+func TestConsoleSettingsWriteTheEndpointBeforeTheKey(t *testing.T) {
+	store := newTestSettingsStore(t, false)
+	store.current.apiKey = ""
+	settings := consoleSettings{settings: store}
+	if err := settings.SetSettingsEndpoint("https://example.test/v1"); err != nil {
+		t.Fatalf("SetSettingsEndpoint without a key: %v", err)
+	}
+	if got := store.view().BaseURL; got != "https://example.test/v1" {
+		t.Fatalf("baseUrl = %q, want the endpoint committed", got)
+	}
+	if store.view().HasAPIKey {
+		t.Fatal("hasApiKey = true, want no credential reported")
+	}
+	// The model write keeps the endpoint that was just written.
+	if err := settings.SetSettingsModel("qwen-max"); err != nil {
+		t.Fatalf("SetSettingsModel: %v", err)
+	}
+	view := store.view()
+	if view.Model != "qwen-max" || view.BaseURL != "https://example.test/v1" {
+		t.Fatalf("view = %+v, want the model changed and the endpoint kept", view)
+	}
+	// A malformed endpoint is still refused before anything is stored.
+	if err := settings.SetSettingsEndpoint("not-a-url"); err == nil {
+		t.Fatal("SetSettingsEndpoint accepted a malformed endpoint")
+	}
+	if got := store.view().BaseURL; got != "https://example.test/v1" {
+		t.Fatalf("baseUrl = %q, want the refused write to have changed nothing", got)
+	}
+	// And a key written afterwards completes the configuration.
+	if err := settings.SetSettingsKey("sk-later"); err != nil {
+		t.Fatalf("SetSettingsKey: %v", err)
+	}
+	if !store.view().HasAPIKey {
+		t.Fatal("hasApiKey = false after writing a key")
+	}
+}
