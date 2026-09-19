@@ -275,6 +275,7 @@ func newServeApp(ctx context.Context, opts *options, ioStreams IO, config serveC
 		Settings:       consoleSettings{settings: settings},
 		Presets:        consolePresets(opts),
 		WorkspaceFiles: consoleFileFace(opts),
+		Commands:       consoleCommandCatalog(opts),
 	})
 	if err != nil {
 		return nil, err
@@ -638,6 +639,19 @@ func consolePresets(opts *options) dshapi.PresetSource {
 			Modes:       consoleExecutionModes(),
 		}
 	}
+}
+
+// consoleCommandCatalog builds the composer's slash-command catalog from the same
+// directories `zenforge run` reads (ADR 0090). A catalog that cannot be read
+// leaves the source nil, so the namespace answers unimplemented with the
+// dependency named rather than the menu reporting a failure it cannot explain.
+func consoleCommandCatalog(opts *options) dshapi.CommandSource {
+	catalog, err := buildCatalog(*opts)
+	if err != nil {
+		slog.Warn("console slash commands are disabled: the command catalog could not be read", "error", err)
+		return nil
+	}
+	return consoleCommands{catalog: catalog, opts: *opts}
 }
 
 // consoleFileFace builds the console's read-only workspace file face over the

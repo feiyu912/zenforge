@@ -80,6 +80,11 @@ type Handler struct {
 	// SetWorkspaceFiles after New.
 	workspaceMu    sync.RWMutex
 	workspaceFiles WorkspaceFiles
+
+	// commands is the injected command catalog, installed by SetCommands after
+	// New.
+	commandsMu sync.RWMutex
+	commands   CommandSource
 }
 
 // pendingSession is a session id allocated by session/create that has not
@@ -184,6 +189,13 @@ func (h *Handler) method(endpoint string) (methodFunc, bool) {
 		return nil, false
 	}
 	switch namespace {
+	case "commands":
+		switch name {
+		case "list":
+			return h.commandsList, true
+		case "execute":
+			return h.commandsExecute, true
+		}
 	case "workspaceFiles":
 		switch name {
 		case "list":

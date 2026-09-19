@@ -103,3 +103,4 @@ later ADRs supersede earlier ones, never edit.
 | [0087](0087-the-settings-panel-is-served-with-a-real-schema.md) | The settings panel is served with a real schema |
 | [0088](0088-the-preset-selectors-answer-with-the-hosts-own-settings.md) | The preset selectors answer with the host's own settings |
 | [0089](0089-the-console-browses-the-workspace-read-only.md) | The console browses the workspace read-only |
+| [0090](0090-the-consoles-slash-commands-are-the-hosts-commands.md) | The console's slash commands are the host's commands |

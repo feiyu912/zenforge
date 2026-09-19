@@ -301,6 +301,27 @@ func (a *stubAgent) taskRunIDs() []string {
 	return ids
 }
 
+// jsonString encodes a Go string as a JSON string, for building request bodies
+// that carry an id.
+func jsonString(value string) string {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		panic(err)
+	}
+	return string(encoded)
+}
+
+// decodeValueMap returns a successful response's value as raw JSON text, for a
+// test that asserts on a page's content rather than its shape.
+func decodeValueMap(t *testing.T, recorder *httptest.ResponseRecorder) string {
+	t.Helper()
+	envelope := decodeResponse(t, recorder)
+	if !envelope.Result.OK {
+		t.Fatalf("result not ok: %s", recorder.Body.String())
+	}
+	return string(envelope.Result.Value)
+}
+
 // createSession creates a pending session and returns its id.
 func (f *fixture) createSession(t *testing.T) string {
 	t.Helper()

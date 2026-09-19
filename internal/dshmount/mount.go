@@ -62,6 +62,8 @@ type Config struct {
 	Presets dshapi.PresetSource
 	// WorkspaceFiles answers the console's file sidebar and document preview.
 	WorkspaceFiles dshapi.WorkspaceFiles
+	// Commands answers the composer's slash menu and a submitted command line.
+	Commands dshapi.CommandSource
 }
 
 // Mux is the assembled console host. It is immutable after New, which is what
@@ -120,6 +122,9 @@ func New(manager *harnesshttp.RunManager, events eventlog.Store, cfg Config) (*M
 	}
 	if cfg.WorkspaceFiles != nil {
 		api.SetWorkspaceFiles(cfg.WorkspaceFiles)
+	}
+	if cfg.Commands != nil {
+		api.SetCommands(cfg.Commands)
 	}
 	return &Mux{
 		shell:         shellHandler(bundle.Inject(string(shell))),
