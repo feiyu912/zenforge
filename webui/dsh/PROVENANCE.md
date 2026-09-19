@@ -1,4 +1,4 @@
-# ZenForge console provenance
+# zenforge console provenance
 
 This directory is the staged output of `scripts/build-console.sh`. It is a
 rebranded build of the DeepSeek Harness browser console; the script is the
@@ -9,7 +9,7 @@ recipe and this file records what it produced.
 - **Upstream version**: `0.1.6-alpha.2`
 - **License**: MIT — Copyright (c) 2026 DeepSeek. The upstream `LICENSE` and
   the repository's `THIRD_PARTY_NOTICES.md` carry the attribution.
-- **Build command**: `DSH_CLIENT_TITLE=ZenForge DSH_CLIENT_BUILD_PROFILE=local pnpm run build`
+- **Build command**: `DSH_CLIENT_TITLE=zenforge DSH_CLIENT_BUILD_PROFILE=local pnpm run build`
   run from the pinned working tree with pnpm `11.7.0`.
 
 ## Patched files
@@ -17,17 +17,17 @@ recipe and this file records what it produced.
 Every replacement is asserted by `scripts/build-console.sh` before it is
 written; the patch starts from the pinned revision's pristine files.
 
-- `apps/web/public/manifest.webmanifest` — `name` "DeepSeek Harness" → "ZenForge"; `short_name` "DSH" → "ZenForge"
-- `apps/web/public/favicon.svg` — upstream whale replaced by a ZenForge Z mark
-- `apps/web/index.html` — `<title>DSH Local Build</title>` → `<title>ZenForge</title>`
+- `apps/web/public/manifest.webmanifest` — `name` "DeepSeek Harness" → "zenforge"; `short_name` "DSH" → "zenforge"
+- `apps/web/public/favicon.svg` — upstream whale replaced by a zenforge Z mark
+- `apps/web/index.html` — `<title>DSH Local Build</title>` → `<title>zenforge</title>`
 - `packages/client/web/src/boot-page.ts` — boot wordmark `HARNESS` → `ZENFORGE`
-- `packages/client/locale/src/locales/en.ts` — `brand.localBuild` "DSH Local Build" → "ZenForge Local Build"
-- `packages/client/locale/src/locales/zh.ts` — `brand.localBuild` "DSH 本地构建" → "ZenForge 本地构建"
-- `packages/client/ui-layout/src/client/AppFrame.tsx` — `productTitle` fallback → "ZenForge"
-- `packages/client/ui-sidebar/src/client/SidebarRoot.tsx` — whale fallback mark → ZenForge mark
-- `packages/client/ui-conversation/src/client/skeleton/EmptyHero.tsx` — whale hero → static ZenForge mark
-- `packages/client/ui-plugin-manager/src/client/locales.ts` — "DeepSeek Harness" copy → "ZenForge"
-- `packages/client/ui-settings-models/src/client/locales.ts` — "DeepSeek Harness"/"Harness developers"/"DSH plugin ecosystem" copy → ZenForge wording
+- `packages/client/locale/src/locales/en.ts` — `brand.localBuild` "DSH Local Build" → "zenforge Local Build"
+- `packages/client/locale/src/locales/zh.ts` — `brand.localBuild` "DSH 本地构建" → "zenforge 本地构建"
+- `packages/client/ui-layout/src/client/AppFrame.tsx` — `productTitle` fallback → "zenforge"
+- `packages/client/ui-sidebar/src/client/SidebarRoot.tsx` — whale fallback mark → zenforge mark
+- `packages/client/ui-conversation/src/client/skeleton/EmptyHero.tsx` — whale hero → static zenforge mark
+- `packages/client/ui-plugin-manager/src/client/locales.ts` — "DeepSeek Harness" copy → "zenforge"
+- `packages/client/ui-settings-models/src/client/locales.ts` — "DeepSeek Harness"/"Harness developers"/"DSH plugin ecosystem" copy → zenforge wording
 
 ## Dropped files
 

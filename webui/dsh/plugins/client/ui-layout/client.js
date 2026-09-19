@@ -263,7 +263,7 @@ window.__ModuleLoader__.load({
 			const onRightbarDrag = (0, react.useCallback)((dx) => {
 				actions.setRightbar(rightbarBase.current - dx);
 			}, [actions]);
-			const productTitle = "ZenForge";
+			const productTitle = "zenforge";
 			const sidebar = (0, react.useMemo)(() => renderSlot("sidebar", {
 				collapsed: sidebarCollapsed,
 				width: cols.sidebar

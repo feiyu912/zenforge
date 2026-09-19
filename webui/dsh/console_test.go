@@ -43,8 +43,8 @@ func TestStagedConsoleServesTheShellAndItsAssets(t *testing.T) {
 	if got := shell.Header().Get("Content-Type"); got != "text/html; charset=utf-8" {
 		t.Errorf("GET / content type = %q, want HTML", got)
 	}
-	if !strings.Contains(shell.Body.String(), "<title>ZenForge</title>") {
-		t.Error("the served shell does not carry the ZenForge title")
+	if !strings.Contains(shell.Body.String(), "<title>zenforge</title>") {
+		t.Error("the served shell does not carry the zenforge title")
 	}
 
 	types := map[string]string{

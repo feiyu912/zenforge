@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 
-# Reproduce the ZenForge browser console from pinned DeepSeek Harness sources.
+# Reproduce the zenforge browser console from pinned DeepSeek Harness sources.
 #
-# The console ZenForge serves is a rebranded build of the upstream browser
+# The console zenforge serves is a rebranded build of the upstream browser
 # frontend: the shell (apps/web/dist) plus its client plugin bundles
 # (packages/<group>/<pkg>/lib/client.js). This script is the whole recipe — it
 # pins the upstream revision and package manager, refreshes a working tree,
@@ -27,7 +27,7 @@ UPSTREAM_VERSION=0.1.6-alpha.2
 PNPM_VERSION=11.7.0
 
 # Working tree and staging target. The tree defaults outside the repository so a
-# build never mixes upstream sources into a ZenForge commit.
+# build never mixes upstream sources into a zenforge commit.
 SRC=${DSH_CONSOLE_SRC:-/tmp/dsh-console-src}
 STAGE="$REPO_ROOT/webui/dsh"
 
@@ -132,7 +132,7 @@ for relative in "${PATCHED_FILES[@]}"; do
 done
 
 python3 - "$SRC" <<'PY'
-"""Apply the ZenForge brand patch to a pristine upstream tree.
+"""Apply the zenforge brand patch to a pristine upstream tree.
 
 Every replacement asserts that the exact upstream text is present the expected
 number of times before it writes, so a drifted source file fails the build
@@ -170,11 +170,11 @@ def splice(rel: str, start: str, end: str, new: str) -> None:
     print(f"[patch] {rel}: replaced the block between {start!r} and {end!r}")
 
 
-# The ZenForge mark: a bold Z on the 24-unit design grid, two bars and a
+# The zenforge mark: a bold Z on the 24-unit design grid, two bars and a
 # diagonal, monochrome so `currentColor` follows the surrounding theme.
 ZENFORGE_MARK_PATH = "M4 4h16v3.2L9.4 17H20v3H4v-3.2L14.6 7H4z"
 
-ZENFORGE_FAVICON = """<svg xmlns="http://www.w3.org/2000/svg" width="50" height="50" viewBox="0 0 50 50" fill="none" role="img" aria-label="ZenForge">
+ZENFORGE_FAVICON = """<svg xmlns="http://www.w3.org/2000/svg" width="50" height="50" viewBox="0 0 50 50" fill="none" role="img" aria-label="zenforge">
 \t<style>
 \t\t@media (prefers-color-scheme: dark) {
 \t\t\trect { fill: #f8fafc; }
@@ -188,10 +188,10 @@ ZENFORGE_FAVICON = """<svg xmlns="http://www.w3.org/2000/svg" width="50" height=
 
 # Manifest: the installable-app name and short name are the console's public
 # identity, so both leave the upstream product name behind.
-replace("apps/web/public/manifest.webmanifest", '"name": "DeepSeek Harness"', '"name": "ZenForge"')
-replace("apps/web/public/manifest.webmanifest", '"short_name": "DSH"', '"short_name": "ZenForge"')
+replace("apps/web/public/manifest.webmanifest", '"name": "DeepSeek Harness"', '"name": "zenforge"')
+replace("apps/web/public/manifest.webmanifest", '"short_name": "DSH"', '"short_name": "zenforge"')
 
-# Favicon: the upstream whale is replaced wholesale by the ZenForge mark. The
+# Favicon: the upstream whale is replaced wholesale by the zenforge mark. The
 # assertion pins the upstream whale path so a changed upstream favicon fails
 # loudly instead of being overwritten blind.
 favicon_path = root / "apps/web/public/favicon.svg"
@@ -200,11 +200,11 @@ assert "M48.8354 10.0479" in favicon_upstream, \
     "apps/web/public/favicon.svg: upstream whale path anchor missing"
 favicon_path.write_text(ZENFORGE_FAVICON, encoding="utf-8")
 patched.append("apps/web/public/favicon.svg")
-print("[patch] apps/web/public/favicon.svg: upstream whale -> ZenForge mark")
+print("[patch] apps/web/public/favicon.svg: upstream whale -> zenforge mark")
 
 # The Vite title default. The build also injects DSH_CLIENT_TITLE, but the
 # source default must not carry the upstream name either.
-replace("apps/web/index.html", "<title>DSH Local Build</title>", "<title>ZenForge</title>")
+replace("apps/web/index.html", "<title>DSH Local Build</title>", "<title>zenforge</title>")
 
 # Boot page: the wordmark drawn before React arrives.
 replace(
@@ -217,15 +217,15 @@ replace(
 replace(
     "packages/client/locale/src/locales/en.ts",
     "'brand.localBuild': 'DSH Local Build'",
-    "'brand.localBuild': 'ZenForge Local Build'",
+    "'brand.localBuild': 'zenforge Local Build'",
 )
 replace(
     "packages/client/locale/src/locales/zh.ts",
     "'brand.localBuild': 'DSH 本地构建'",
-    "'brand.localBuild': 'ZenForge 本地构建'",
+    "'brand.localBuild': 'zenforge 本地构建'",
 )
 
-# Frame title: the pinned build title wins, and the fallback becomes ZenForge
+# Frame title: the pinned build title wins, and the fallback becomes zenforge
 # rather than the locale default. `t` existed only for that fallback, so its
 # destructuring is dropped with it (noUnusedParameters would otherwise fail).
 replace(
@@ -236,7 +236,7 @@ replace(
 replace(
     "packages/client/ui-layout/src/client/AppFrame.tsx",
     "const productTitle = process.env.DSH_CLIENT_TITLE ?? t('brand.localBuild')",
-    "const productTitle = process.env.DSH_CLIENT_TITLE ?? 'ZenForge'",
+    "const productTitle = process.env.DSH_CLIENT_TITLE ?? 'zenforge'",
 )
 
 # Sidebar: the slot fallback mark stops drawing the upstream whale, and the
@@ -250,8 +250,8 @@ replace(
     "packages/client/ui-sidebar/src/client/SidebarRoot.tsx",
     "import css from './SidebarRoot.module.css'\n",
     "import css from './SidebarRoot.module.css'\n\n"
-    "/** ZenForge brand mark on a 24-unit grid (replaces the upstream whale). */\n"
-    "function ZenForgeMark({ size = 24 }: { size?: number }) {\n"
+    "/** zenforge brand mark on a 24-unit grid (replaces the upstream whale). */\n"
+    "function zenforgeMark({ size = 24 }: { size?: number }) {\n"
     "  return (\n"
     '    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">\n'
     f'      <path d="{ZENFORGE_MARK_PATH}" fill="currentColor" />\n'
@@ -262,18 +262,18 @@ replace(
 replace(
     "packages/client/ui-sidebar/src/client/SidebarRoot.tsx",
     "<FishLogo size={24} />",
-    "<ZenForgeMark size={24} />",
+    "<zenforgeMark size={24} />",
     count=2,
 )
 
-# Conversation hero: the animated whale becomes the static ZenForge mark. The
+# Conversation hero: the animated whale becomes the static zenforge mark. The
 # whale's regional-deformation morph targets and the fish imports are removed
 # with it, so no whale geometry survives in this module.
 splice(
     "packages/client/ui-conversation/src/client/skeleton/EmptyHero.tsx",
     "/* Hover swim morph targets:",
     "function HeroFish(",
-    "/* ZenForge brand mark on the 24-unit design grid, drawn monochrome so\n"
+    "/* zenforge brand mark on the 24-unit design grid, drawn monochrome so\n"
     "   `currentColor` follows the theme. */\n"
     'const ZENFORGE_MARK_VIEWBOX = { width: 24, height: 24 }\n'
     f"const ZENFORGE_MARK_PATH = '{ZENFORGE_MARK_PATH}'\n\n"
@@ -315,50 +315,50 @@ replace(
 replace(
     "packages/client/ui-plugin-manager/src/client/locales.ts",
     "来源不明的插件可能损坏 DeepSeek Harness，或读取和泄露你的数据。",
-    "来源不明的插件可能损坏 ZenForge，或读取和泄露你的数据。",
+    "来源不明的插件可能损坏 zenforge，或读取和泄露你的数据。",
 )
 replace(
     "packages/client/ui-plugin-manager/src/client/locales.ts",
     "they run with your permissions and can damage DeepSeek Harness or leak your data.",
-    "they run with your permissions and can damage ZenForge or leak your data.",
+    "they run with your permissions and can damage zenforge or leak your data.",
 )
 replace(
     "packages/client/ui-settings-models/src/client/locales.ts",
     "DeepSeek Harness 0.1 remains in testing for Harness developers.",
-    "ZenForge 0.1 remains in testing for ZenForge developers.",
+    "zenforge 0.1 remains in testing for zenforge developers.",
 )
 replace(
     "packages/client/ui-settings-models/src/client/locales.ts",
     "DeepSeek Harness's core plugins and foundational APIs will continue to evolve rapidly over the coming months.",
-    "ZenForge's core plugins and foundational APIs will continue to evolve rapidly over the coming months.",
+    "zenforge's core plugins and foundational APIs will continue to evolve rapidly over the coming months.",
 )
 replace(
     "packages/client/ui-settings-models/src/client/locales.ts",
     "We welcome Harness developers everywhere to join the DSH plugin ecosystem.",
-    "We welcome ZenForge developers everywhere to join the plugin ecosystem.",
+    "We welcome zenforge developers everywhere to join the plugin ecosystem.",
 )
 replace(
     "packages/client/ui-settings-models/src/client/locales.ts",
     "DeepSeek Harness 目前的 0.1 版本仍处在面向 Harness 开发者进行测试的阶段",
-    "ZenForge 目前的 0.1 版本仍处在面向 ZenForge 开发者进行测试的阶段",
+    "zenforge 目前的 0.1 版本仍处在面向 zenforge 开发者进行测试的阶段",
 )
 replace(
     "packages/client/ui-settings-models/src/client/locales.ts",
     "预计 DeepSeek Harness 的核心插件以及基础 API 都会在接下来的一段时间内快速迭代、持续演化。",
-    "预计 ZenForge 的核心插件以及基础 API 都会在接下来的一段时间内快速迭代、持续演化。",
+    "预计 zenforge 的核心插件以及基础 API 都会在接下来的一段时间内快速迭代、持续演化。",
 )
 replace(
     "packages/client/ui-settings-models/src/client/locales.ts",
     "欢迎全球 Harness 开发者加入 DSH 插件生态。",
-    "欢迎全球 ZenForge 开发者加入插件生态。",
+    "欢迎全球 zenforge 开发者加入插件生态。",
 )
 
 print(f"[patch] applied to {len(patched)} file(s)")
 PY
 
 # --- build ------------------------------------------------------------------
-say "building with DSH_CLIENT_TITLE=ZenForge DSH_CLIENT_BUILD_PROFILE=local"
-(cd "$SRC" && DSH_CLIENT_TITLE=ZenForge DSH_CLIENT_BUILD_PROFILE=local pnpm run build) || \
+say "building with DSH_CLIENT_TITLE=zenforge DSH_CLIENT_BUILD_PROFILE=local"
+(cd "$SRC" && DSH_CLIENT_TITLE=zenforge DSH_CLIENT_BUILD_PROFILE=local pnpm run build) || \
   fail "upstream build failed"
 
 DIST="$SRC/apps/web/dist"
@@ -404,7 +404,7 @@ for drop in "${DROP_PLUGINS[@]}"; do
 done
 
 cat >"$STAGE/PROVENANCE.md" <<EOF
-# ZenForge console provenance
+# zenforge console provenance
 
 This directory is the staged output of \`scripts/build-console.sh\`. It is a
 rebranded build of the DeepSeek Harness browser console; the script is the
@@ -415,7 +415,7 @@ recipe and this file records what it produced.
 - **Upstream version**: \`$UPSTREAM_VERSION\`
 - **License**: MIT — Copyright (c) 2026 DeepSeek. The upstream \`LICENSE\` and
   the repository's \`THIRD_PARTY_NOTICES.md\` carry the attribution.
-- **Build command**: \`DSH_CLIENT_TITLE=ZenForge DSH_CLIENT_BUILD_PROFILE=local pnpm run build\`
+- **Build command**: \`DSH_CLIENT_TITLE=zenforge DSH_CLIENT_BUILD_PROFILE=local pnpm run build\`
   run from the pinned working tree with pnpm \`$PNPM_VERSION\`.
 
 ## Patched files
@@ -423,17 +423,17 @@ recipe and this file records what it produced.
 Every replacement is asserted by \`scripts/build-console.sh\` before it is
 written; the patch starts from the pinned revision's pristine files.
 
-- \`apps/web/public/manifest.webmanifest\` — \`name\` "DeepSeek Harness" → "ZenForge"; \`short_name\` "DSH" → "ZenForge"
-- \`apps/web/public/favicon.svg\` — upstream whale replaced by a ZenForge Z mark
-- \`apps/web/index.html\` — \`<title>DSH Local Build</title>\` → \`<title>ZenForge</title>\`
+- \`apps/web/public/manifest.webmanifest\` — \`name\` "DeepSeek Harness" → "zenforge"; \`short_name\` "DSH" → "zenforge"
+- \`apps/web/public/favicon.svg\` — upstream whale replaced by a zenforge Z mark
+- \`apps/web/index.html\` — \`<title>DSH Local Build</title>\` → \`<title>zenforge</title>\`
 - \`packages/client/web/src/boot-page.ts\` — boot wordmark \`HARNESS\` → \`ZENFORGE\`
-- \`packages/client/locale/src/locales/en.ts\` — \`brand.localBuild\` "DSH Local Build" → "ZenForge Local Build"
-- \`packages/client/locale/src/locales/zh.ts\` — \`brand.localBuild\` "DSH 本地构建" → "ZenForge 本地构建"
-- \`packages/client/ui-layout/src/client/AppFrame.tsx\` — \`productTitle\` fallback → "ZenForge"
-- \`packages/client/ui-sidebar/src/client/SidebarRoot.tsx\` — whale fallback mark → ZenForge mark
-- \`packages/client/ui-conversation/src/client/skeleton/EmptyHero.tsx\` — whale hero → static ZenForge mark
-- \`packages/client/ui-plugin-manager/src/client/locales.ts\` — "DeepSeek Harness" copy → "ZenForge"
-- \`packages/client/ui-settings-models/src/client/locales.ts\` — "DeepSeek Harness"/"Harness developers"/"DSH plugin ecosystem" copy → ZenForge wording
+- \`packages/client/locale/src/locales/en.ts\` — \`brand.localBuild\` "DSH Local Build" → "zenforge Local Build"
+- \`packages/client/locale/src/locales/zh.ts\` — \`brand.localBuild\` "DSH 本地构建" → "zenforge 本地构建"
+- \`packages/client/ui-layout/src/client/AppFrame.tsx\` — \`productTitle\` fallback → "zenforge"
+- \`packages/client/ui-sidebar/src/client/SidebarRoot.tsx\` — whale fallback mark → zenforge mark
+- \`packages/client/ui-conversation/src/client/skeleton/EmptyHero.tsx\` — whale hero → static zenforge mark
+- \`packages/client/ui-plugin-manager/src/client/locales.ts\` — "DeepSeek Harness" copy → "zenforge"
+- \`packages/client/ui-settings-models/src/client/locales.ts\` — "DeepSeek Harness"/"Harness developers"/"DSH plugin ecosystem" copy → zenforge wording
 
 ## Dropped files
 
@@ -459,13 +459,13 @@ EOF
 # --- verification -----------------------------------------------------------
 verify_failures=0
 
-# 1. The ZenForge identity is present where users see it.
-grep -q '<title>ZenForge</title>' "$STAGE/index.html" || \
-  { printf 'verify: shell title is not ZenForge\n' >&2; verify_failures=$((verify_failures + 1)); }
-grep -q '"name": "ZenForge"' "$STAGE/manifest.webmanifest" || \
-  { printf 'verify: manifest name is not ZenForge\n' >&2; verify_failures=$((verify_failures + 1)); }
-grep -q 'ZenForge' "$STAGE/favicon.svg" || \
-  { printf 'verify: favicon does not carry the ZenForge mark\n' >&2; verify_failures=$((verify_failures + 1)); }
+# 1. The zenforge identity is present where users see it.
+grep -q '<title>zenforge</title>' "$STAGE/index.html" || \
+  { printf 'verify: shell title is not zenforge\n' >&2; verify_failures=$((verify_failures + 1)); }
+grep -q '"name": "zenforge"' "$STAGE/manifest.webmanifest" || \
+  { printf 'verify: manifest name is not zenforge\n' >&2; verify_failures=$((verify_failures + 1)); }
+grep -q 'zenforge' "$STAGE/favicon.svg" || \
+  { printf 'verify: favicon does not carry the zenforge mark\n' >&2; verify_failures=$((verify_failures + 1)); }
 
 # 2. Upstream product names must not survive in any served asset. PROVENANCE.md
 #    is excluded because attribution requires naming the upstream project.

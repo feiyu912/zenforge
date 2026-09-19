@@ -168,7 +168,7 @@ func TestEveryAdvertisedBundleURLServesJavaScript(t *testing.T) {
 
 // The shell is only useful after Bundle.Inject has spliced in the boot rows:
 // a raw index.html is the console's guaranteed failure page. The mounted root
-// must carry all four injected pieces and the ZenForge title.
+// must carry all four injected pieces and the zenforge title.
 func TestMountedHandlerServesTheInjectedShellAtTheRoot(t *testing.T) {
 	mux := newTestMux(t)
 	recorder := httptest.NewRecorder()
@@ -181,7 +181,7 @@ func TestMountedHandlerServesTheInjectedShellAtTheRoot(t *testing.T) {
 	}
 	body := recorder.Body.String()
 	for _, wanted := range []string{
-		"<title>ZenForge</title>",
+		"<title>zenforge</title>",
 		"pendingQueue",                  // the queue sentinel the shell depends on
 		`window.__ModuleLoader__`,       // the module-loader facade
 		`globalThis["__DSH_BOOT__"]`,    // the boot graph global
@@ -197,8 +197,8 @@ func TestMountedHandlerServesTheInjectedShellAtTheRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read the raw staged shell: %v", err)
 	}
-	if !strings.Contains(string(raw), "<title>ZenForge</title>") {
-		t.Fatal("the staged shell lost its ZenForge title")
+	if !strings.Contains(string(raw), "<title>zenforge</title>") {
+		t.Fatal("the staged shell lost its zenforge title")
 	}
 	if strings.Contains(string(raw), "__DSH_BOOT__") {
 		t.Fatal("the raw staged shell already carries the boot graph; the injection test proves nothing")

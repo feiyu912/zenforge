@@ -149,8 +149,8 @@ window.__ModuleLoader__.load({
 		* scrollbar indirection away while it is elsewhere, so a list the user is not
 		* pointing at carries no bar.
 		*/
-		/** ZenForge brand mark on a 24-unit grid (replaces the upstream whale). */
-		function ZenForgeMark({ size = 24 }) {
+		/** zenforge brand mark on a 24-unit grid (replaces the upstream whale). */
+		function zenforgeMark({ size = 24 }) {
 			return (0, react_jsx_runtime.jsx)("svg", {
 				width: size,
 				height: size,
@@ -276,7 +276,7 @@ window.__ModuleLoader__.load({
 						!wide && !windowsTitlebar && (0, react_jsx_runtime.jsx)("span", {
 							className: SidebarRoot_module_css_default.railMark,
 							"aria-hidden": "true",
-							children: renderSlot("sidebar.brand.mark", { size: 24 }, { fallback: (0, react_jsx_runtime.jsx)(ZenForgeMark, { size: 24 }) })
+							children: renderSlot("sidebar.brand.mark", { size: 24 }, { fallback: (0, react_jsx_runtime.jsx)(zenforgeMark, { size: 24 }) })
 						}),
 						(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconPanelLeftOutline16, {
 							className: SidebarRoot_module_css_default.panelIcon,
@@ -316,7 +316,7 @@ window.__ModuleLoader__.load({
 								"aria-hidden": "true",
 								children: [(0, react_jsx_runtime.jsx)("span", {
 									className: SidebarRoot_module_css_default.brandMark,
-									children: renderSlot("sidebar.brand.mark", { size: 24 }, { fallback: (0, react_jsx_runtime.jsx)(ZenForgeMark, { size: 24 }) })
+									children: renderSlot("sidebar.brand.mark", { size: 24 }, { fallback: (0, react_jsx_runtime.jsx)(zenforgeMark, { size: 24 }) })
 								}), (0, react_jsx_runtime.jsx)("span", {
 									className: SidebarRoot_module_css_default.brandName,
 									children: renderSlot("sidebar.brand.name", {}, { fallback: buildVersion === void 0 ? (0, react_jsx_runtime.jsx)("span", {

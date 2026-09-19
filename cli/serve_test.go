@@ -201,8 +201,8 @@ func TestServeMountsTheDSHConsoleAtTheRootAndNothingElse(t *testing.T) {
 		t.Fatalf("GET / = %d, want 200", root.Code)
 	}
 	shell := root.Body.String()
-	if !strings.Contains(shell, "<title>ZenForge</title>") {
-		t.Error("GET / is not the ZenForge DSH shell")
+	if !strings.Contains(shell, "<title>zenforge</title>") {
+		t.Error("GET / is not the zenforge DSH shell")
 	}
 	if !strings.Contains(shell, "__DSH_BOOT__") || !strings.Contains(shell, "__DSH_BOOT_READY__") {
 		t.Error("GET / served a shell without the injected boot graph and readiness tail")

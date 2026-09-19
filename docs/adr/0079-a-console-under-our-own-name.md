@@ -2,6 +2,8 @@
 
 Status: accepted
 
+Amended by ADR 0092: the browser-visible identity is spelled `zenforge`.
+
 ## Context
 
 The reference harness ships a browser console that is genuinely good at the

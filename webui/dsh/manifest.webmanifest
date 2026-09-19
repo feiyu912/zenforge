@@ -1,7 +1,7 @@
 {
   "id": "/",
-  "name": "ZenForge",
-  "short_name": "ZenForge",
+  "name": "zenforge",
+  "short_name": "zenforge",
   "start_url": "/",
   "scope": "/",
   "display": "fullscreen",

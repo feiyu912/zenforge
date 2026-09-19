@@ -14,11 +14,69 @@ func TestIndexReturnsTheServedShell(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Index: %v", err)
 	}
-	if !strings.Contains(string(data), "<title>ZenForge</title>") {
-		t.Error("Index returned a shell without the ZenForge title")
+	if !strings.Contains(string(data), "<title>zenforge</title>") {
+		t.Error("Index returned a shell without the zenforge title")
 	}
 	if !strings.Contains(string(data), "./assets/") {
 		t.Error("Index returned a shell with no relative asset references")
+	}
+}
+
+// The console's public identity is the product's own name in its command form --
+// `zenforge`, the name of the binary an operator types -- everywhere a user sees
+// it: the page title, the installable-app name, the favicon's accessible name and
+// the brand plugins' own strings. A capitalised variant would be a second spelling
+// of the same product, and upstream's name must not survive in a brand position at
+// all. Both are asserted over the staged bytes, because a rebuild is what would
+// reintroduce either.
+func TestStagedIdentityIsTheProductsOwnName(t *testing.T) {
+	shell, err := Index()
+	if err != nil {
+		t.Fatalf("Index: %v", err)
+	}
+	page := string(shell)
+	if !strings.Contains(page, "<title>zenforge</title>") {
+		t.Error("the served shell does not carry the zenforge title")
+	}
+	// The upstream product name is what the rebrand exists to remove. Module
+	// specifiers are lowercase (`@deepseek-ai/...`), so this only matches the
+	// display name.
+	if strings.Contains(page, "DeepSeek Harness") {
+		t.Error("the served shell still carries the upstream product name")
+	}
+	manifest, err := fs.ReadFile(artifacts, "manifest.webmanifest")
+	if err != nil {
+		t.Fatalf("read the manifest: %v", err)
+	}
+	for _, want := range []string{`"name": "zenforge"`, `"short_name": "zenforge"`} {
+		if !strings.Contains(string(manifest), want) {
+			t.Errorf("manifest is missing %s", want)
+		}
+	}
+	favicon, err := fs.ReadFile(artifacts, "favicon.svg")
+	if err != nil {
+		t.Fatalf("read the favicon: %v", err)
+	}
+	if !strings.Contains(string(favicon), "zenforge") {
+		t.Error("the favicon does not carry the accessible brand name")
+	}
+	// No staged *browser-visible* byte may spell the brand any other way.
+	plugins := Plugins()
+	err = fs.WalkDir(plugins, ".", func(name string, entry fs.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return err
+		}
+		raw, readErr := fs.ReadFile(plugins, name)
+		if readErr != nil {
+			return readErr
+		}
+		if strings.Contains(string(raw), "ZenForge") {
+			t.Errorf("%s spells the brand with a capital: the console shows zenforge", name)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk the plugin tree: %v", err)
 	}
 }
 

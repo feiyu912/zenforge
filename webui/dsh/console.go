@@ -1,9 +1,9 @@
-// Package dshconsole serves the staged ZenForge build of the DeepSeek Harness
+// Package dshconsole serves the staged zenforge build of the DeepSeek Harness
 // browser console.
 //
 // The artifacts live beside this file and are embedded, so the console travels
 // inside the binary and needs no bundler, package registry, or CDN at run time.
-// The bytes are the upstream console with its branding patched to ZenForge by
+// The bytes are the upstream console with its branding patched to zenforge by
 // scripts/build-console.sh; webui/dsh/PROVENANCE.md records the revision, the
 // patch list, and what was deliberately left out of the staged tree.
 //
