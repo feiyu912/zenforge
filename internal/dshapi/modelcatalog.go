@@ -115,6 +115,13 @@ func (h *Handler) SetModelCatalog(source ModelCatalogSource) {
 	h.modelCatalogMu.Unlock()
 }
 
+// modelCatalogSource is the installed catalog source, or nil when none is.
+func (h *Handler) modelCatalogSource() ModelCatalogSource {
+	h.modelCatalogMu.RLock()
+	defer h.modelCatalogMu.RUnlock()
+	return h.modelCatalog
+}
+
 // sessionModelCatalog answers POST /api/session/modelCatalog. The upstream
 // method takes no arguments, and the gateway rejects any unexpected field as
 // gateway/arguments-invalid (packages/api/gateway/src/index.ts:1107-1132);
@@ -128,9 +135,7 @@ func (h *Handler) sessionModelCatalog(_ context.Context, args map[string]json.Ra
 	if failure := rejectUnexpectedArguments(args); failure != nil {
 		return nil, failure
 	}
-	h.modelCatalogMu.RLock()
-	source := h.modelCatalog
-	h.modelCatalogMu.RUnlock()
+	source := h.modelCatalogSource()
 	if source == nil {
 		return nil, fail(codeUnimplemented,
 			"session/modelCatalog is not configured: the host has no model catalog source; the serve command must install one with Handler.SetModelCatalog",

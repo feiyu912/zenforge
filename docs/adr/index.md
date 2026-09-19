@@ -110,3 +110,4 @@ later ADRs supersede earlier ones, never edit.
 | [0094](0094-the-host-holds-the-consoles-own-settings-namespaces.md) | The host holds the console's own settings namespaces |
 | [0095](0095-the-host-holds-hand-declared-provider-profiles.md) | The host holds hand-declared provider profiles |
 | [0096](0096-the-consoles-model-selection-is-served-per-session.md) | The console's model selection is served, per session |
+| [0097](0097-the-consoles-model-discovery-interrogates-the-draft-endpoint.md) | The console's model discovery interrogates the draft endpoint |

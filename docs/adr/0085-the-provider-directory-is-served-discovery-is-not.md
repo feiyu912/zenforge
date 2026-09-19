@@ -56,6 +56,12 @@ message, while a 404 would read as a broken install. Implementing it means
 deciding how a draft credential is handled and bounded (network policy, timeouts,
 what is logged), which is its own decision and is not smuggled in here.
 
+**Superseded in part by ADR 0097**: that decision was made and the method is
+served -- a named endpoint is interrogated once under an http/https rule, a
+20 second timeout and a 1 MiB read cap, with the draft credential in the
+protocol's header only, never stored and never logged; a route the host already
+describes is answered from its own model catalog with no network call.
+
 ### `declared` stays absent
 
 Upstream's optional `declared` flag means "the adapter knows this route only

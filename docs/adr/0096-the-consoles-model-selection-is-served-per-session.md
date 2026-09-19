@@ -103,8 +103,8 @@ to an arbitrary declared endpoint is a credential leak, not a convenience.
   task, which it does not have. `docs/limitations.md` states this plainly.
 - The selection is process-local, like every other console-written setting here
   (ADR 0094), and no model-selection event is recorded in the session's log.
-- `llm/discoverModels` (probing a draft endpoint for its model list) remains a
-  named capability gap (ADR 0085).
+- `llm/discoverModels` (probing a draft endpoint for its model list) was still a
+  named capability gap when this decision was made; ADR 0097 serves it.
 
 ## Alternatives Rejected
 

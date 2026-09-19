@@ -137,8 +137,8 @@ what is experimental, and what remains adapter territory.
   its reason (for example a credential that is not set) and reported in the provider
   directory as declared. A declared profile lasts until the process exits, like
   every other console-written setting (ADR 0094), and it **is selectable and
-  runnable** (ADR 0096); interrogating a draft endpoint for its model list
-  (`llm/discoverModels`) is still an unimplemented capability that says so.
+  runnable** (ADR 0096); a draft endpoint can be interrogated for its model list,
+  which is what the editor's fetch button does (ADR 0097).
 - **Multi-turn works** (ADR 0086): a session's finished run continues as
   `<session>~<turn>`, so a second message is a new turn rather than a refusal.
 - The sidebar does not mutate live, background-job panels are empty, and
@@ -148,12 +148,11 @@ what is experimental, and what remains adapter territory.
   file sidebar, commands, the model/settings panels and approvals do work. See
   ADR 0083.
 - Every namespace a shipped panel calls is served or refused by name
-  (ADR 0084-0096). Methods this host does not implement -- `terminal`,
-  `subagents`, `officeToPdf`, session forks, search, attachments,
-  `llm/discoverModels` -- answer a bare 404 or a named capability error, which is
-  the intended per-feature degradation rather than a console failure, and the host
-  logs the endpoint that was asked for, which is how the remaining ones get
-  prioritised.
+  (ADR 0084-0097). Methods this host does not implement -- `terminal`,
+  `subagents`, `officeToPdf`, session forks, search, attachments -- answer a bare
+  404 or a named capability error, which is the intended per-feature degradation
+  rather than a console failure, and the host logs the endpoint that was asked
+  for, which is how the remaining ones get prioritised.
 - **The model picker works, and a declared provider can be run on** (ADR 0096).
   `session/modelCatalog` lists the configured route and every declared provider's
   models, `session/selectModel` accepts a selection and refuses one this host
@@ -170,6 +169,16 @@ what is experimental, and what remains adapter territory.
   route whose credential is missing is still listed and selectable -- the catalog's
   `failures` names what is missing, and the run that follows refuses the prompt
   with that reason.
+- **Model discovery reads what an endpoint discloses and nothing more** (ADR
+  0097). The fetch button in the model list editor interrogates a draft endpoint
+  once (`GET {baseURL}/models`), for the two protocols this host speaks, with the
+  draft credential in that one request's header and nowhere else. Honest limits:
+  capacities appear only where the endpoint discloses them under the spellings
+  this host reads (`context_window`/`context_length`, `max_output_tokens`/
+  `max_tokens`), nothing is inferred from an unknown field, there is no
+  pagination (the response is read to 1 MiB), the call is bounded by a 20 second
+  timeout, and a provider route this host ships but is not configured for answers
+  an empty catalog rather than a fabricated model list.
 - `session/create` refuses `cwd`/`workspaceId`/`agentPreset`: per-run working
   directories and presets do not exist in this harness.
 - The staged artifacts are a built dependency, not source: they are committed
