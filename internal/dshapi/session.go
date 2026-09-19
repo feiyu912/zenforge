@@ -259,6 +259,13 @@ func (h *Handler) sessionPrompt(ctx context.Context, args map[string]json.RawMes
 	sessionID = h.resolveSession(ctx, sessionID)
 
 	if h.takePending(sessionID) {
+		if failure := h.applyModelSelection(sessionID); failure != nil {
+			// The allocation survives so the console can retry after fixing the
+			// selection; starting the run anyway would use a model the operator
+			// did not choose.
+			_ = h.rememberPending(sessionID)
+			return nil, failure
+		}
 		if _, err := h.manager.Start(ctx, zenforge.Task{RunID: sessionID, Input: text}); err != nil {
 			// The allocation survives a start that never happened, so the
 			// console can retry the prompt without re-creating the session.
@@ -300,6 +307,11 @@ func (h *Handler) sessionPrompt(ctx context.Context, args map[string]json.RawMes
 	// conversation: a new run id from the chain, carrying the exchange so far.
 	turn := dshsession.NextTurn(runIDs)
 	continuationID := dshsession.ContinuationRunID(sessionID, turn)
+	if failure := h.applyModelSelection(sessionID); failure != nil {
+		// Every turn re-applies the selection: the adapter is host-wide, so a
+		// later turn must not inherit whichever session ran last.
+		return nil, failure
+	}
 	task := zenforge.Task{
 		RunID:           continuationID,
 		Input:           text,
@@ -309,6 +321,22 @@ func (h *Handler) sessionPrompt(ctx context.Context, args map[string]json.RawMes
 		return nil, startFailure(continuationID, err)
 	}
 	return map[string]any{"accepted": true}, nil
+}
+
+// applyModelSelection makes the session's chosen model the adapter the run about
+// to start will use. A session that never chose one keeps the host's configured
+// adapter, and a host with no selection store has nothing to apply.
+func (h *Handler) applyModelSelection(sessionID string) *methodError {
+	store := h.modelSelectionStore()
+	if store == nil {
+		return nil
+	}
+	if err := store.ApplyModelSelection(sessionID); err != nil {
+		return fail(codeArgumentsInvalid,
+			fmt.Sprintf("session %q has a model selection this host cannot apply: %s", sessionID, err.Error()),
+			map[string]any{"sessionId": sessionID})
+	}
+	return nil
 }
 
 // decodePromptContent flattens the console content parts into the single text

@@ -135,12 +135,10 @@ what is experimental, and what remains adapter territory.
   `anthropic-messages`), a declared profile is validated by shape *and* by building
   the adapter a run would build, and a route that cannot be served yet is stored with
   its reason (for example a credential that is not set) and reported in the provider
-  directory as declared. Two limits belong here plainly: a declared profile lasts
-  until the process exits, like every other console-written setting (ADR 0094), and
-  **it is not yet selectable** -- `session/modelCatalog` does not list its models and
-  `session/selectModel` is unserved, so choosing a declared provider for a run is the
-  next batch. Interrogating a draft endpoint (`llm/discoverModels`) also stays an
-  unimplemented capability.
+  directory as declared. A declared profile lasts until the process exits, like
+  every other console-written setting (ADR 0094), and it **is selectable and
+  runnable** (ADR 0096); interrogating a draft endpoint for its model list
+  (`llm/discoverModels`) is still an unimplemented capability that says so.
 - **Multi-turn works** (ADR 0086): a session's finished run continues as
   `<session>~<turn>`, so a second message is a new turn rather than a refusal.
 - The sidebar does not mutate live, background-job panels are empty, and
@@ -150,11 +148,25 @@ what is experimental, and what remains adapter territory.
   file sidebar, commands, the model/settings panels and approvals do work. See
   ADR 0083.
 - Every namespace a shipped panel calls is served or refused by name
-  (ADR 0084-0091). Methods this host does not implement -- `terminal`,
-  `subagents`, `officeToPdf`, session forks, search, `selectModel`, attachments --
-  answer a bare 404, which is the intended per-feature degradation rather than a
-  console failure, and the host logs the endpoint that was asked for, which is how
-  the remaining ones get prioritised.
+  (ADR 0084-0096). Methods this host does not implement -- `terminal`,
+  `subagents`, `officeToPdf`, session forks, search, attachments,
+  `llm/discoverModels` -- answer a bare 404 or a named capability error, which is
+  the intended per-feature degradation rather than a console failure, and the host
+  logs the endpoint that was asked for, which is how the remaining ones get
+  prioritised.
+- **The model picker works, and a declared provider can be run on** (ADR 0096).
+  `session/modelCatalog` lists the configured route and every declared provider's
+  models, `session/selectModel` accepts a selection and refuses one this host
+  cannot serve, and the selection is published as the session's `modelSelection`
+  projection (control baseline, follow snapshot and live control frames), which is
+  what the composer renders. The selection is applied to this host's single model
+  adapter before each of that session's runs, first turn and continuations alike,
+  so a session that chose nothing gets the operator's configured model rather than
+  the previous session's choice. The honest limits: two sessions running
+  **concurrently** under different selections share whichever adapter was applied
+  last, because the harness's task carries no model field and this host owns one
+  adapter; a selection lasts until the process exits; no model-selection event is
+  written to the session log; and no model exposes a reasoning-effort choice.
 - `session/create` refuses `cwd`/`workspaceId`/`agentPreset`: per-run working
   directories and presets do not exist in this harness.
 - The staged artifacts are a built dependency, not source: they are committed

@@ -24,6 +24,17 @@ type Config struct {
 	// Zero selects that default.
 	HeartbeatInterval time.Duration
 
+	// ModelSelections, when set, reports every session's durable model selection:
+	// the control baseline publishes them and a follow snapshot carries the one
+	// the followed session holds. Nil reports none, which is what a host that
+	// cannot select a model should say.
+	ModelSelections func() map[string]ModelSelectionState
+
+	// ModelSelectionUpdates, when set, delivers later selections until the
+	// returned function is called. The control stream is where they are sent,
+	// because the session stream has no projection frame.
+	ModelSelectionUpdates func(observe func(ModelSelectionUpdate)) (unsubscribe func())
+
 	// ApprovalPollInterval is how often the $events stream re-reads
 	// approval.Inbox for pending requests. The repository has no global
 	// approval notification source (eventlog.Bus is per-run and the pending

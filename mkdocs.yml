@@ -236,6 +236,7 @@ nav:
       - 0093 The first-party console is deleted: adr/0093-the-first-party-console-is-deleted.md
       - 0094 The host holds the console's own settings namespaces: adr/0094-the-host-holds-the-consoles-own-settings-namespaces.md
       - 0095 The host holds hand-declared provider profiles: adr/0095-the-host-holds-hand-declared-provider-profiles.md
+      - 0096 The console's model selection is served, per session: adr/0096-the-consoles-model-selection-is-served-per-session.md
 
 extra:
   social:

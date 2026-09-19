@@ -109,3 +109,4 @@ later ADRs supersede earlier ones, never edit.
 | [0093](0093-the-first-party-console-is-deleted.md) | The first-party console is deleted |
 | [0094](0094-the-host-holds-the-consoles-own-settings-namespaces.md) | The host holds the console's own settings namespaces |
 | [0095](0095-the-host-holds-hand-declared-provider-profiles.md) | The host holds hand-declared provider profiles |
+| [0096](0096-the-consoles-model-selection-is-served-per-session.md) | The console's model selection is served, per session |

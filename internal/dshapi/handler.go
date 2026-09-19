@@ -95,6 +95,11 @@ type Handler struct {
 	// installed by SetProviderProfiles after New.
 	profilesMu sync.RWMutex
 	profiles   ProviderProfileStore
+
+	// modelSelections is the injected store for per-session model selections,
+	// installed by SetModelSelections after New.
+	modelSelectionsMu sync.RWMutex
+	modelSelections   ModelSelectionStore
 }
 
 // pendingSession is a session id allocated by session/create that has not
@@ -303,6 +308,8 @@ func (h *Handler) method(endpoint string) (methodFunc, bool) {
 			return h.sessionPage, true
 		case "modelCatalog":
 			return h.sessionModelCatalog, true
+		case "selectModel":
+			return h.sessionSelectModel, true
 		}
 	}
 	return nil, false

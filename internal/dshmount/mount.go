@@ -67,6 +67,9 @@ type Config struct {
 	// ProviderProfiles holds the provider profiles the console declares, and
 	// answers whether this host can serve each one.
 	ProviderProfiles dshapi.ProviderProfileStore
+	// ModelSelections holds each session's chosen provider and model, and applies
+	// the adapter a session's run should use.
+	ModelSelections dshapi.ModelSelectionStore
 }
 
 // Mux is the assembled console host. It is immutable after New, which is what
@@ -135,6 +138,9 @@ func New(manager *harnesshttp.RunManager, events eventlog.Store, cfg Config) (*M
 	api.SetPluginInventory(pluginInventorySnapshot(manifest))
 	if cfg.ProviderProfiles != nil {
 		api.SetProviderProfiles(cfg.ProviderProfiles)
+	}
+	if cfg.ModelSelections != nil {
+		api.SetModelSelections(cfg.ModelSelections)
 	}
 	return &Mux{
 		shell:         shellHandler(bundle.Inject(string(shell))),

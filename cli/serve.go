@@ -225,32 +225,15 @@ func newServeApp(ctx context.Context, opts *options, ioStreams IO, config serveC
 	// The settings store is the answer, so the picker reports the operator's
 	// own endpoint and model instead of an invented one; an unconfigured host
 	// returns an empty catalog and the console says so.
-	modelCatalog := func() dshapi.ModelCatalog {
-		view := settings.view()
-		if view.Model == "" {
-			return dshapi.ModelCatalog{}
-		}
-		provider := view.Provider
-		if provider == "" {
-			provider = "openai"
-		}
-		return dshapi.ModelCatalog{
-			Default:           dshapi.ModelSelection{Provider: provider, Model: view.Model},
-			RoutableProviders: []string{provider},
-			Groups: []dshapi.ModelProviderGroup{{
-				ID:     provider,
-				Name:   provider,
-				Models: []dshapi.ModelCatalogModel{{ID: view.Model, Name: view.Model}},
-			}},
-			Failures: []dshapi.ModelCatalogFailure{},
-		}
-	}
+	profiles := newConsoleProviderProfiles(settings)
+	models := consoleModels{settings: settings, profiles: profiles}
+	selections := newConsoleModelSelection(settings, models)
+	modelCatalog := models.Catalog
 	// The Models page loads its provider directory before it renders any card,
 	// so a missing answer is not a missing nicety: the page reports that loading
 	// the directory failed and shows nothing. The live half is the route this
 	// host is configured to serve; the configurable half is every route the
 	// host's own adapter factory accepts.
-	profiles := newConsoleProviderProfiles(settings)
 	llmDirectory := func() dshapi.LlmDirectory {
 		liveProvider := strings.TrimSpace(settings.view().Provider)
 		if liveProvider == "" {
@@ -281,6 +264,7 @@ func newServeApp(ctx context.Context, opts *options, ioStreams IO, config serveC
 		LlmDirectory:     llmDirectory,
 		Settings:         consoleSettings{settings: settings},
 		ProviderProfiles: profiles,
+		ModelSelections:  selections,
 		Presets:          consolePresets(opts),
 		WorkspaceFiles:   consoleFileFace(opts),
 		Commands:         consoleCommandCatalog(opts),
@@ -293,7 +277,11 @@ func newServeApp(ctx context.Context, opts *options, ioStreams IO, config serveC
 	// and approvals travel on the WebSocket mux, and an approval is answered on
 	// its own route. Both are the same handler, mounted at the paths that
 	// package exports, so the two halves cannot drift apart.
-	stream, err := dshstream.New(runtime.Manager, runtime.Events, inbox, dshstream.Config{AllowRemote: config.allowRemote})
+	stream, err := dshstream.New(runtime.Manager, runtime.Events, inbox, dshstream.Config{
+		AllowRemote:           config.allowRemote,
+		ModelSelections:       selections.States,
+		ModelSelectionUpdates: selections.Updates,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -781,6 +769,13 @@ func (s *settingsStore) view() settingsView {
 // hasAPIKey reports whether a key would be found: an inline key the operator
 // or page supplied, or the environment variable the CLI named. It never
 // reveals which.
+// setModelAdapter installs the adapter a session's selected model names. It
+// deliberately does not touch the stored settings: the operator's configuration
+// did not change, only which of the models this host can serve the run uses.
+func (s *settingsStore) setModelAdapter(adapter model.Model) {
+	s.model.set(adapter, nil)
+}
+
 // configuredAPIKey reports the operator's own key. It exists for the provider
 // profile serviceability check, which must resolve a credential exactly the way a
 // run would -- and that check cannot go through settingsView, which deliberately

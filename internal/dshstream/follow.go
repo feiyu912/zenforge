@@ -22,6 +22,20 @@ const (
 	maxFollowMessages = 1000
 )
 
+// sessionProjectionBaseline is the followed session's opening projection values.
+// The watermark is the session-log cursor the snapshot already cites -- the value
+// is current as of that cursor -- while the selection's own sequence orders the
+// control stream's live updates.
+func (h *Handler) sessionProjectionBaseline(sessionID string, cursor int64) projectionBaseline {
+	values := map[string]any{}
+	if h.cfg.ModelSelections != nil {
+		if state, ok := h.cfg.ModelSelections()[sessionID]; ok {
+			values[modelSelectionProjectionKey] = state.Projection
+		}
+	}
+	return projectionBaseline{AsOfSeq: cursor, Values: values}
+}
+
 // runFollow serves the session/follow logical stream.
 //
 // It sends exactly one opening snapshot, then the run's durable events as they
@@ -85,7 +99,7 @@ func (h *Handler) runFollow(ctx context.Context, payload []byte, send func(any) 
 		Cursor:          cursor,
 		Records:         records,
 		HasMore:         len(window) < len(events),
-		Projections:     projectionBaseline{AsOfSeq: cursor, Values: map[string]any{}},
+		Projections:     h.sessionProjectionBaseline(request.sessionID, cursor),
 		AssistantStream: nil,
 	}
 	if request.assistantStream {

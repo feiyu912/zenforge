@@ -94,15 +94,15 @@ func (s *consoleProviderProfiles) serviceability(profile dshapi.ProviderProfile)
 	if len(profile.Models) == 0 {
 		return "the profile declares no model"
 	}
-	// The credential is resolved the way the run would resolve it: the operator's
-	// configured key if there is one, otherwise the environment variable the
-	// profile names (ADR 0084: this host has one model credential).
+	// The credential is resolved exactly the way the run resolves it, so
+	// "serviceable" means the same thing here and at run time.
+	key, ref := consoleProfileCredential(s.settings, profile)
 	adapter, err := provider.FromEnv(provider.Config{
 		Protocol:  protocol,
 		Model:     strings.TrimSpace(profile.Models[0].ID),
 		BaseURL:   strings.TrimSpace(profile.BaseURL),
-		APIKey:    s.settings.configuredAPIKey(),
-		APIKeyEnv: strings.TrimSpace(profile.APIKeyEnv),
+		APIKey:    key,
+		APIKeyEnv: ref,
 	})
 	if err != nil {
 		return err.Error()
