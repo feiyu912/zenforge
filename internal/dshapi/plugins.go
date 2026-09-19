@@ -64,7 +64,7 @@ func (h *Handler) pluginInventorySource() PluginInventorySource {
 
 // pluginInventoryList answers POST /api/pluginInventory/list.
 func (h *Handler) pluginInventoryList(_ context.Context, args map[string]json.RawMessage) (any, *methodError) {
-	if failure := rejectUnexpectedArguments(args); failure != nil {
+	if failure := rejectUnexpectedArguments("pluginInventory/list", args); failure != nil {
 		return nil, failure
 	}
 	source := h.pluginInventorySource()

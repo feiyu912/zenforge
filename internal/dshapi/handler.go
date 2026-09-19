@@ -72,6 +72,16 @@ type Handler struct {
 	settingsMu sync.RWMutex
 	settings   SettingsDocumentStore
 
+	// settingsRevisionMu guards settingsRevisions, the version of each
+	// namespace's user section this host has served. A console editor fences its
+	// next write with the revision it was handed and reports the refusal as a
+	// conflict when the namespace moved underneath it, so a constant would leave
+	// every editor unable to tell an accepted write from a lost one
+	// (ui-settings-models/src/client/ProviderEditor.tsx:284 reads back
+	// written.view.revision, operations.ts:100 maps "settings/conflict").
+	settingsRevisionMu sync.Mutex
+	settingsRevisions  map[string]int64
+
 	// presets is the injected preset source, installed by SetPresets after New.
 	presetsMu sync.RWMutex
 	presets   PresetSource

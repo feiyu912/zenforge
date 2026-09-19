@@ -28,7 +28,7 @@ import (
 // node, so a profile without it renders no card at all.
 const settingsSchemaJSON = `{"uid":11,"refs":{"1":{"type":"string","meta":{"description":"Base URL of the OpenAI-compatible endpoint"}},"4":{"type":"string","meta":{"role":"secret","description":"API key for this endpoint"}},"6":{"type":"string","meta":{"description":"Default model id"}},"7":{"type":"object","meta":{"default":{}},"dict":{"baseURL":1,"apiKey":4,"model":6}},"8":{"type":"object","meta":{"default":{}},"dict":{"api":7}},"9":{"type":"dict","meta":{"default":{}},"inner":8,"sKey":10},"10":{"type":"string","meta":{}},"11":{"type":"object","meta":{"default":{}},"dict":{"providers":9}}}}`
 
-// settingsRevision is the revision this host reports. It has no versioned
+// settingsRevision is the revision a namespace starts at. It has no versioned
 // document to number -- the settings live in the running process -- so the value
 // is constant and a write returns it again. A client that sends back what it
 // read therefore never conflicts, and one that sends something else is refused
@@ -177,24 +177,71 @@ const (
 var consoleOnboardingSchemaJSON = []byte(`{"uid":2,"refs":{"1":{"type":"string","meta":{"description":"Last welcome notice version this console acknowledged"}},"2":{"type":"object","meta":{"default":{}},"dict":{"welcomeNoticeVersion":1}}}}`)
 
 // settingsConsoleNamespace reports whether this host holds the namespace for the
+// settingsRevisionFor reports the revision of one namespace's user section as
+// this host has served it. A namespace this process has not written yet starts
+// at settingsRevision, which is what an editor's first read fences against.
+func (h *Handler) settingsRevisionFor(namespace string) int64 {
+	h.settingsRevisionMu.Lock()
+	defer h.settingsRevisionMu.Unlock()
+	return h.settingsRevisionsFor(namespace)
+}
+
+// settingsRevisionsFor reads one namespace's revision. The caller holds
+// settingsRevisionMu.
+func (h *Handler) settingsRevisionsFor(namespace string) int64 {
+	if h.settingsRevisions == nil {
+		h.settingsRevisions = map[string]int64{}
+	}
+	revision, ok := h.settingsRevisions[namespace]
+	if !ok {
+		revision = settingsRevision
+		h.settingsRevisions[namespace] = revision
+	}
+	return revision
+}
+
+// advanceSettingsRevision records a committed change to one namespace and
+// returns the revision the change produced. Every accepted write moves it, so an
+// editor that reads the view back learns that its write landed.
+func (h *Handler) advanceSettingsRevision(namespace string) int64 {
+	h.settingsRevisionMu.Lock()
+	defer h.settingsRevisionMu.Unlock()
+	revision := h.settingsRevisionsFor(namespace) + 1
+	h.settingsRevisions[namespace] = revision
+	return revision
+}
+
+// settingsViewWithRevision hands a write's view back at the revision the write
+// produced. A view this host did not build is returned untouched.
+func settingsViewWithRevision(value any, revision int64) any {
+	if view, ok := value.(SettingsNamespaceView); ok {
+		view.Revision = revision
+		return view
+	}
+	return value
+}
+
 // console rather than mapping it to its own configuration.
 func settingsConsoleNamespace(namespace string) bool {
 	return namespace == consoleOnboardingNamespace
 }
 
 // settingsConsoleView builds a console-owned namespace's view.
-func settingsConsoleView(section map[string]any) SettingsNamespaceView {
+func settingsConsoleView(section map[string]any, revision int64) SettingsNamespaceView {
 	value := make(map[string]any, len(section))
 	for key, item := range section {
 		value[key] = item
 	}
 	return SettingsNamespaceView{
-		NS:       consoleOnboardingNamespace,
-		Schema:   consoleOnboardingSchemaJSON,
-		Value:    value,
+		NS:     consoleOnboardingNamespace,
+		Schema: consoleOnboardingSchemaJSON,
+		Value:  value,
+		// This namespace holds only what the console wrote, so the user layer is
+		// that section: a field's presence in it is what marks it overridden.
+		User:     value,
 		Applies:  "live",
 		Secrets:  []SettingsSecretView{},
-		Revision: settingsRevision,
+		Revision: revision,
 	}
 }
 
@@ -266,7 +313,8 @@ func settingsConsoleWrite(store SettingsDocumentStore, mode string, args map[str
 			"settings "+mode+": the host refused the change: "+err.Error(),
 			map[string]any{"namespace": consoleOnboardingNamespace})
 	}
-	return settingsConsoleView(section), nil
+	// The committed revision is stamped by the caller (settingsWrite).
+	return settingsConsoleView(section, settingsRevision), nil
 }
 
 // settingsConsoleOp turns one path op into a section edit.
@@ -312,7 +360,7 @@ func settingsConsolePathRefused(path []string) *methodError {
 }
 
 // settingsViewFor builds one namespace view from the host's profile.
-func settingsViewFor(route string, profile SettingsProfile) SettingsNamespaceView {
+func settingsViewFor(route string, profile SettingsProfile, revision int64) SettingsNamespaceView {
 	providers := map[string]any{}
 	if profile.Provider == route {
 		api := map[string]any{}
@@ -325,19 +373,23 @@ func settingsViewFor(route string, profile SettingsProfile) SettingsNamespaceVie
 		providers[route] = map[string]any{"api": api}
 	}
 	return SettingsNamespaceView{
-		NS:       settingsNamespaceFor(route),
-		Schema:   json.RawMessage(settingsSchemaJSON),
-		Value:    map[string]any{"providers": providers},
+		NS:     settingsNamespaceFor(route),
+		Schema: json.RawMessage(settingsSchemaJSON),
+		Value:  map[string]any{"providers": providers},
+		// Every field in this view came from the operator (a flag or a console
+		// write); this host keeps no defaults and no composition base behind it,
+		// so the user layer is the same section.
+		User:     map[string]any{"providers": providers},
 		Applies:  "live",
 		Secrets:  []SettingsSecretView{{Path: []string{"providers", route, "api", "apiKey"}, Set: profile.HasKey}},
-		Revision: settingsRevision,
+		Revision: revision,
 	}
 }
 
 // settingsDescribe answers POST /api/settings/describe: every namespace's
 // redacted view and the schema its page renders from.
 func (h *Handler) settingsDescribe(_ context.Context, args map[string]json.RawMessage) (any, *methodError) {
-	if failure := rejectUnexpectedArguments(args); failure != nil {
+	if failure := rejectUnexpectedArguments("settings/describe", args); failure != nil {
 		return nil, failure
 	}
 	store := h.settingsStore()
@@ -347,15 +399,15 @@ func (h *Handler) settingsDescribe(_ context.Context, args map[string]json.RawMe
 	profile := store.SettingsProfile()
 	namespaces := make([]SettingsNamespaceView, 0, len(consoleProviderRoutes))
 	for _, route := range consoleProviderRoutes {
-		namespaces = append(namespaces, settingsViewFor(route, profile))
+		namespaces = append(namespaces, settingsViewFor(route, profile, h.settingsRevisionFor(settingsNamespaceFor(route))))
 	}
 	// The console-owned namespace is reported beside the host's own, because the
 	// console writes it through this same wire.
-	namespaces = append(namespaces, settingsConsoleView(store.ConsoleSection(consoleOnboardingNamespace)))
+	namespaces = append(namespaces, settingsConsoleView(store.ConsoleSection(consoleOnboardingNamespace), h.settingsRevisionFor(consoleOnboardingNamespace)))
 	// The provider-profile namespace is reported only when a store holds it: its
 	// presence is what makes the console offer "Add a custom provider" at all.
 	if profiles := h.providerProfileStore(); profiles != nil {
-		namespaces = append(namespaces, settingsPiAiView(profiles.ProviderProfiles()))
+		namespaces = append(namespaces, settingsPiAiView(profiles.ProviderProfiles(), h.settingsRevisionFor(PiAiNamespace)))
 	}
 	return SettingsDescribeValue{Writable: true, HasDocument: false, Namespaces: namespaces}, nil
 }
@@ -395,23 +447,37 @@ func (h *Handler) settingsWrite(_ context.Context, args map[string]json.RawMessa
 			fmt.Sprintf("settings %s: namespace %q is not served by this host", mode, namespace),
 			map[string]any{"argument": "ns"})
 	}
-	// expectedRevision is optional upstream (undefined writes unconditionally).
-	if revision, present, failure := intArg(args, "expectedRevision"); failure != nil {
+	revision := h.settingsRevisionFor(namespace)
+	// expectedRevision is optional upstream (undefined writes unconditionally);
+	// when it is sent it fences the write, so an editor holding a snapshot this
+	// namespace has moved past is refused by name instead of overwriting a change
+	// it never saw. The code is the one the console maps to a conflict
+	// (ui-settings-models/src/client/operations.ts:100).
+	if expected, present, failure := intArg(args, "expectedRevision"); failure != nil {
 		return nil, failure
-	} else if present && revision != settingsRevision {
-		return nil, fail(codeSessionConflict,
-			fmt.Sprintf("settings %s: expected revision %d but this host is at %d", mode, revision, settingsRevision),
-			map[string]any{"expectedRevision": revision, "revision": settingsRevision})
+	} else if present && expected != revision {
+		return nil, fail(codeSettingsConflict,
+			fmt.Sprintf("settings namespace %q changed since it was read (expected revision %d, now %d)",
+				namespace, expected, revision),
+			map[string]any{"ns": namespace, "expectedRevision": expected, "revision": revision})
 	}
 	store := h.settingsStore()
 	if store == nil {
 		return nil, settingsDependencyMissing("settings/" + mode)
 	}
 	if consoleOwned {
-		return settingsConsoleWrite(store, mode, args)
+		value, failure := settingsConsoleWrite(store, mode, args)
+		if failure != nil {
+			return nil, failure
+		}
+		return settingsViewWithRevision(value, h.advanceSettingsRevision(namespace)), nil
 	}
 	if profilesOwned {
-		return settingsPiAiWrite(h.providerProfileStore(), mode, args)
+		value, failure := settingsPiAiWrite(h.providerProfileStore(), mode, args)
+		if failure != nil {
+			return nil, failure
+		}
+		return settingsViewWithRevision(value, h.advanceSettingsRevision(namespace)), nil
 	}
 	var edits []settingsFieldEdit
 	switch mode {
@@ -459,13 +525,22 @@ func (h *Handler) settingsWrite(_ context.Context, args map[string]json.RawMessa
 		edits = sectionEdits
 	}
 
+	applied := false
 	for _, edit := range edits {
 		if failure := applySettingsEdit(store, edit); failure != nil {
+			// An earlier edit already landed, so the namespace moved even though
+			// this write is refused: the revision has to say so, or the next
+			// editor would fence against a version that no longer describes the
+			// stored section.
+			if applied {
+				h.advanceSettingsRevision(namespace)
+			}
 			return nil, failure
 		}
+		applied = true
 	}
 	profile := store.SettingsProfile()
-	return settingsViewFor(route, profile), nil
+	return settingsViewWithRevision(settingsViewFor(route, profile, revision), h.advanceSettingsRevision(namespace)), nil
 }
 
 // settingsFieldEdit is one field write this host understands.
@@ -623,7 +698,7 @@ func settingsDependencyMissing(method string) *methodError {
 // settingsCanOpenAgentPresetDirectory answers the one native-open probe that is
 // a question rather than a command: this host has no native opener, so false.
 func (h *Handler) settingsCanOpenAgentPresetDirectory(_ context.Context, args map[string]json.RawMessage) (any, *methodError) {
-	if failure := rejectUnexpectedArguments(args); failure != nil {
+	if failure := rejectUnexpectedArguments("settings/canOpenAgentPresetDirectory", args); failure != nil {
 		return nil, failure
 	}
 	return false, nil

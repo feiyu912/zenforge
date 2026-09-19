@@ -193,6 +193,10 @@ what is experimental, and what remains adapter territory.
   with their pinned upstream revision, patch and recipe
   (`scripts/build-console.sh`), because the upstream build cannot be renamed at
   runtime (ADR 0079).
+- The **revision a settings namespace reports is process-local**: it counts the
+  writes this process has served and starts again at the initial revision after a
+  restart, so a console tab held open across a restart re-reads before it writes
+  rather than trusting the number it was holding.
 - The **welcome notice's acknowledgement is process-local**: it is stored with
   the rest of the console-written settings, so it survives a page reload but not a
   host restart, after which the notice appears again (ADR 0094).

@@ -132,7 +132,7 @@ func (h *Handler) modelCatalogSource() ModelCatalogSource {
 // panel that shows an error is a better failure than one that shows a model
 // this host is not configured with, which is this package's established rule.
 func (h *Handler) sessionModelCatalog(_ context.Context, args map[string]json.RawMessage) (any, *methodError) {
-	if failure := rejectUnexpectedArguments(args); failure != nil {
+	if failure := rejectUnexpectedArguments("session/modelCatalog", args); failure != nil {
 		return nil, failure
 	}
 	source := h.modelCatalogSource()
@@ -148,7 +148,7 @@ func (h *Handler) sessionModelCatalog(_ context.Context, args map[string]json.Ra
 // method that takes none. It names one offending field and never echoes its
 // value; the field name is sorted so a request with several extras logs and
 // reports deterministically.
-func rejectUnexpectedArguments(args map[string]json.RawMessage) *methodError {
+func rejectUnexpectedArguments(method string, args map[string]json.RawMessage) *methodError {
 	if len(args) == 0 {
 		return nil
 	}
@@ -158,7 +158,7 @@ func rejectUnexpectedArguments(args map[string]json.RawMessage) *methodError {
 	}
 	sort.Strings(names)
 	return fail(codeArgumentsInvalid,
-		fmt.Sprintf("session/modelCatalog takes no arguments: unexpected %q", names[0]),
+		fmt.Sprintf("%s takes no arguments: unexpected %q", method, names[0]),
 		map[string]any{"argument": names[0]})
 }
 

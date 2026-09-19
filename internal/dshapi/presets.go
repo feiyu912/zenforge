@@ -150,7 +150,7 @@ func permissionPresetOptions(presets ConsolePresets) []PresetOption {
 
 // permissionPresetsCatalog answers POST /api/permissionPresets/catalog.
 func (h *Handler) permissionPresetsCatalog(_ context.Context, args map[string]json.RawMessage) (any, *methodError) {
-	if failure := rejectUnexpectedArguments(args); failure != nil {
+	if failure := rejectUnexpectedArguments("permissionPresets/catalog", args); failure != nil {
 		return nil, failure
 	}
 	source := h.presetSource()
@@ -177,7 +177,7 @@ func consolePresetRows(presets ConsolePresets) []AgentPresetRow {
 
 // agentPresetsList answers POST /api/agentPresets/list.
 func (h *Handler) agentPresetsList(_ context.Context, args map[string]json.RawMessage) (any, *methodError) {
-	if failure := rejectUnexpectedArguments(args); failure != nil {
+	if failure := rejectUnexpectedArguments("agentPresets/list", args); failure != nil {
 		return nil, failure
 	}
 	source := h.presetSource()

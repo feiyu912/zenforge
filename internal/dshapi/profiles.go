@@ -139,18 +139,22 @@ func (h *Handler) providerProfileStore() ProviderProfileStore {
 // settingsPiAiView builds the namespace view. The value is the profile map the
 // console reads back: route ids it must not offer again, and each profile's
 // apiKeyEnv, which is the credential reference its card asks about.
-func settingsPiAiView(profiles []ProviderProfileStatus) SettingsNamespaceView {
+func settingsPiAiView(profiles []ProviderProfileStatus, revision int64) SettingsNamespaceView {
 	providers := make(map[string]any, len(profiles))
 	for _, status := range profiles {
 		providers[status.Profile.Provider] = status.Profile.section()
 	}
 	return SettingsNamespaceView{
-		NS:       PiAiNamespace,
-		Schema:   piAiSchemaJSON,
-		Value:    map[string]any{"providers": providers},
+		NS:     PiAiNamespace,
+		Schema: piAiSchemaJSON,
+		Value:  map[string]any{"providers": providers},
+		// The declared profiles are the raw user section: a provider's presence
+		// here is what makes the console's editor show it and mark its fields
+		// overridden (ProviderEditor.tsx:97 and :168 read the user layer).
+		User:     map[string]any{"providers": providers},
 		Applies:  "live",
 		Secrets:  []SettingsSecretView{},
-		Revision: settingsRevision,
+		Revision: revision,
 	}
 }
 
@@ -220,7 +224,9 @@ func settingsPiAiWrite(store ProviderProfileStore, mode string, args map[string]
 			}
 		}
 	}
-	return settingsPiAiView(store.ProviderProfiles()), nil
+	// The caller stamps the committed revision on the view it hands back
+	// (settingsWrite), so the value here is only a placeholder that never rides.
+	return settingsPiAiView(store.ProviderProfiles(), settingsRevision), nil
 }
 
 // settingsPiAiOp turns one path op into a store call.

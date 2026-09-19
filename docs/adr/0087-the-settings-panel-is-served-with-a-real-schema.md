@@ -62,6 +62,22 @@ The host reports a constant `revision` because it has no versioned document to
 number: a client that echoes what it read never conflicts, and one that sends
 something else is refused rather than silently overwriting state it did not read.
 
+**Amendment (2026-09-19):** the constant was wrong, and so was reporting no
+`user` layer. The console's own editors read a namespace's raw user section to
+know what the operator set, re-read it from the reply to the write, and fence
+their next write with the revision that reply hands back
+(`ui-settings-models/src/client/ProviderEditor.tsx:97`, `:168`, `:282`, `:284`).
+With neither field reported, a custom provider's fields came back blank the
+moment they were saved, and no editor could tell an accepted write from a lost
+one. Each namespace now reports its `user` section and a revision that moves by
+one per committed change; a stale fence is refused as `settings/conflict` -- the
+code the console maps to a conflict
+(`ui-settings-models/src/client/operations.ts:100`) -- with `expectedRevision`
+and `revision` in the details, and a write whose earlier ops landed before a
+later one was refused still moves the revision, because the stored section
+changed. The reasoning above still holds for a client that only echoes what it
+read; it was the second writer this host had to be able to name.
+
 ### Clearing follows what the host can actually do
 
 Clearing `apiKey` removes the stored credential and leaves an environment-supplied

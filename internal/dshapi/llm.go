@@ -97,7 +97,7 @@ func (h *Handler) llmDirectorySource() LlmDirectorySource {
 // llmListProviders answers POST /api/llm/listProviders: the routes that can
 // serve a request right now.
 func (h *Handler) llmListProviders(_ context.Context, args map[string]json.RawMessage) (any, *methodError) {
-	if failure := rejectUnexpectedArguments(args); failure != nil {
+	if failure := rejectUnexpectedArguments("llm/listProviders", args); failure != nil {
 		return nil, failure
 	}
 	source := h.llmDirectorySource()
@@ -117,7 +117,7 @@ func (h *Handler) llmListProviders(_ context.Context, args map[string]json.RawMe
 // llmListConfigurableProviders answers POST /api/llm/listConfigurableProviders:
 // every route an operator could configure through a settings namespace.
 func (h *Handler) llmListConfigurableProviders(_ context.Context, args map[string]json.RawMessage) (any, *methodError) {
-	if failure := rejectUnexpectedArguments(args); failure != nil {
+	if failure := rejectUnexpectedArguments("llm/listConfigurableProviders", args); failure != nil {
 		return nil, failure
 	}
 	source := h.llmDirectorySource()

@@ -23,8 +23,12 @@ const (
 	// codeUnimplemented is the honest answer for a method this host knows
 	// about but cannot implement without inventing semantics the repository
 	// does not have.
-	codeUnimplemented      = "unimplemented"
-	codeSessionNotFound    = "session/not-found"
+	codeUnimplemented   = "unimplemented"
+	codeSessionNotFound = "session/not-found"
+	// codeSettingsConflict is the code the console maps to a conflict when a
+	// settings write carries a revision the namespace has moved past
+	// (ui-settings-models/src/client/operations.ts:100).
+	codeSettingsConflict   = "settings/conflict"
 	codeSessionConflict    = "session/conflict"
 	codeUnsupportedContent = "session/unsupported-content"
 	codeTitleInvalid       = "session/title-invalid"

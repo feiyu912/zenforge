@@ -253,7 +253,7 @@ func TestSettingsWritesAreValidated(t *testing.T) {
 		code string
 	}{
 		{"an unknown namespace", `{"ns":"llm-not-a-route","ops":[{"op":"set","path":["providers","x","api","model"],"value":"m"}]}`, codeBadRequest},
-		{"a mismatched revision", fmt.Sprintf(`{"ns":"llm-openai","expectedRevision":%d,"ops":[{"op":"set","path":["providers","openai","api","model"],"value":"m"}]}`, settingsRevision+1), codeSessionConflict},
+		{"a mismatched revision", fmt.Sprintf(`{"ns":"llm-openai","expectedRevision":%d,"ops":[{"op":"set","path":["providers","openai","api","model"],"value":"m"}]}`, settingsRevision+1), codeSettingsConflict},
 		{"an unknown op", `{"ns":"llm-openai","ops":[{"op":"delete","path":["providers","openai","api","model"]}]}`, codeBadRequest},
 		{"a path this host does not store", `{"ns":"llm-openai","ops":[{"op":"set","path":["telemetry","endpoint"],"value":"x"}]}`, codeUnimplemented},
 		{"another provider's profile", `{"ns":"llm-openai","ops":[{"op":"set","path":["providers","anthropic","api","model"],"value":"m"}]}`, codeUnimplemented},
@@ -508,5 +508,110 @@ func TestSettingsMutateStillWritesTheProviderProfile(t *testing.T) {
 		`{"ns":"llm-openai","ops":[{"op":"set","path":["providers","openai","api","model"],"value":"qwen-max"}]}`)), &view)
 	if view.NS != "llm-openai" || len(store.models) != 1 || store.models[0] != "qwen-max" {
 		t.Fatalf("models = %v, view = %+v, want the provider write to land as before", store.models, view)
+	}
+}
+
+// namespaceIn returns one namespace's view from a describe payload.
+func namespaceIn(t *testing.T, described SettingsDescribeValue, ns string) SettingsNamespaceView {
+	t.Helper()
+	for _, view := range described.Namespaces {
+		if view.NS == ns {
+			return view
+		}
+	}
+	t.Fatalf("namespaces = %+v, want %s", described.Namespaces, ns)
+	return SettingsNamespaceView{}
+}
+
+// userOf returns one view's raw user layer. The console's editors read it to know
+// what the operator set and what an accepted write actually stored.
+func userOf(t *testing.T, view SettingsNamespaceView) map[string]any {
+	t.Helper()
+	if view.User == nil {
+		t.Fatalf("view %s = %+v, want a user layer", view.NS, view)
+	}
+	layer, ok := view.User.(map[string]any)
+	if !ok {
+		t.Fatalf("user = %#v, want a section object", view.User)
+	}
+	return layer
+}
+
+// The console's editors read a namespace's raw user layer and fence their next
+// write with the revision they were handed. This host used to report neither:
+// the layer was always absent, so a custom provider's fields came back blank
+// after every accepted write (ui-settings-models/src/client/ProviderEditor.tsx
+// reads namespace.user, then written.view.user and written.view.revision), and a
+// constant revision left the editor unable to tell an accepted write from a lost
+// one.
+func TestSettingsViewsCarryTheUserLayerAndAMovingRevision(t *testing.T) {
+	f, profiles := profilesFixture(t)
+	if _, err := profiles.SetProviderProfile(ProviderProfile{
+		Provider:    "qwen",
+		DisplayName: "qwen",
+		APIKeyEnv:   "QWEN_API_KEY",
+		API:         "openai-completions",
+		BaseURL:     "https://dashscope.aliyuncs.com/compatible-mode/v1",
+		Models:      []ProviderModel{{ID: "qwen3.8-flash"}},
+	}); err != nil {
+		t.Fatalf("declare the profile: %v", err)
+	}
+	var described SettingsDescribeValue
+	decodeValue(t, f.post(t, "/api/settings/describe", rpcBody(t, "s1", "settings/describe", "")), &described)
+
+	// The declared profile is the user layer of the custom-provider namespace.
+	user := userOf(t, namespaceIn(t, described, PiAiNamespace))
+	providers, ok := user["providers"].(map[string]any)
+	if !ok {
+		t.Fatalf("user = %#v, want the declared providers", user)
+	}
+	qwen, ok := providers["qwen"].(map[string]any)
+	if !ok {
+		t.Fatalf("user providers = %#v, want qwen declared", providers)
+	}
+	if qwen["baseURL"] != "https://dashscope.aliyuncs.com/compatible-mode/v1" {
+		t.Fatalf("user qwen = %#v, want the endpoint the operator declared", qwen)
+	}
+	if models, ok := qwen["models"].([]any); !ok || len(models) != 1 {
+		t.Fatalf("user qwen models = %#v, want the declared row", qwen["models"])
+	}
+	// The host's own namespace reports its layer too, so its editor behaves the
+	// same way rather than marking every field unset.
+	user = userOf(t, namespaceIn(t, described, "llm-openai"))
+	if providers, ok := user["providers"].(map[string]any); !ok || providers["openai"] == nil {
+		t.Fatalf("user = %#v, want the live route's configured provider", user)
+	}
+
+	// A committed write moves the revision, and the view it hands back carries
+	// both the revision the namespace now stands at and what the write stored.
+	var written SettingsNamespaceView
+	decodeValue(t, f.post(t, "/api/settings/mutate", rpcBody(t, "s2", "settings/mutate",
+		`{"ns":"llm-pi-ai","expectedRevision":1,"ops":[{"op":"set","path":["providers","qwen","baseURL"],"value":"https://moved.example.test/v1"}]}`)), &written)
+	if written.Revision != settingsRevision+1 {
+		t.Fatalf("revision = %d, want %d after an accepted write", written.Revision, settingsRevision+1)
+	}
+	stored, ok := userOf(t, written)["providers"].(map[string]any)
+	if !ok || stored["qwen"] == nil {
+		t.Fatalf("user = %#v, want the write's own view to carry what landed", written.User)
+	}
+	if moved := stored["qwen"].(map[string]any)["baseURL"]; moved != "https://moved.example.test/v1" {
+		t.Fatalf("user qwen baseURL = %v, want the value just written", moved)
+	}
+
+	// The revision the write was fenced at is stale now. The code is the one the
+	// console maps to a conflict, and the details say which revision to re-read
+	// (ui-settings-models/src/client/operations.ts:100).
+	stale := assertMethodFailure(t, f.post(t, "/api/settings/mutate", rpcBody(t, "s3", "settings/mutate",
+		`{"ns":"llm-pi-ai","expectedRevision":1,"ops":[{"op":"set","path":["providers","qwen","baseURL"],"value":"https://again.example.test/v1"}]}`)),
+		codeSettingsConflict)
+	if stale.Result.Error.Details["revision"] == nil || stale.Result.Error.Details["expectedRevision"] == nil {
+		t.Fatalf("details = %v, want the expected and actual revisions named", stale.Result.Error.Details)
+	}
+
+	// The revision the write produced fences the next one in.
+	fresh := f.post(t, "/api/settings/mutate", rpcBody(t, "s4", "settings/mutate",
+		`{"ns":"llm-pi-ai","expectedRevision":2,"ops":[{"op":"set","path":["providers","qwen","baseURL"],"value":"https://third.example.test/v1"}]}`))
+	if envelope := decodeResponse(t, fresh); !envelope.Result.OK {
+		t.Fatalf("the write fenced at the revision it was handed was refused: %+v", envelope.Result.Error)
 	}
 }
