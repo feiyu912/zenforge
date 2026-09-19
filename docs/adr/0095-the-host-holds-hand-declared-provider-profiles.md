@@ -1,6 +1,7 @@
 # ADR 0095: The Host Holds Hand-Declared Provider Profiles
 
 Status: accepted
+Superseded in part by ADR 0098: the namespace holds `providers.<route>.<field>` as well as `providers.<route>`, so an existing profile can be corrected field by field.
 
 ## Context
 

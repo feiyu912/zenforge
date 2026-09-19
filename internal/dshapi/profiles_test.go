@@ -2,6 +2,7 @@ package dshapi
 
 import (
 	"encoding/json"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -217,6 +218,148 @@ func TestMutateStoresTheCardProfile(t *testing.T) {
 	section, ok := providers["acme"].(map[string]any)
 	if !ok || section["apiKeyEnv"] != "ACME_API_KEY" {
 		t.Fatalf("providers = %v, want the stored profile read back", providers)
+	}
+}
+
+// The provider editor saves an edit by diffing the keys of the profile's subtree
+// and addressing each one (ProviderEditor.tsx:123-126), so a field write merges
+// into the stored profile instead of replacing it.
+func TestProviderProfileFieldWritesMerge(t *testing.T) {
+	f, store := profilesFixture(t)
+	decodeValue(t, f.post(t, "/api/settings/mutate", rpcBody(t, "s1", "settings/mutate", cardProfileOp)), &SettingsNamespaceView{})
+	fieldOp := func(id, ops string) *SettingsNamespaceView {
+		t.Helper()
+		var view SettingsNamespaceView
+		decodeValue(t, f.post(t, "/api/settings/mutate", rpcBody(t, id, "settings/mutate", ops)), &view)
+		return &view
+	}
+	// A new endpoint keeps the display name, protocol, credential reference and
+	// models the editor did not touch.
+	fieldOp("s2", `{"ns":"llm-pi-ai","ops":[{"op":"set","path":["providers","acme","baseURL"],"value":"https://gateway2.acme.example/v1"}]}`)
+	profile := store.profiles["acme"].Profile
+	if profile.BaseURL != "https://gateway2.acme.example/v1" {
+		t.Fatalf("baseURL = %q, want the edited endpoint", profile.BaseURL)
+	}
+	if profile.DisplayName != "Acme Gateway" || profile.API != ProtocolOpenAICompletions ||
+		profile.APIKeyEnv != "ACME_API_KEY" || len(profile.Models) != 1 || profile.Models[0].ID != "acme-large" {
+		t.Fatalf("profile = %+v, want every untouched field preserved", profile)
+	}
+	// The model list is one field like any other, and a window the operator
+	// corrected survives.
+	fieldOp("s3", `{"ns":"llm-pi-ai","ops":[{"op":"set","path":["providers","acme","models"],"value":[{"id":"acme-large","contextWindow":200000},{"id":"acme-mini"}]}]}`)
+	profile = store.profiles["acme"].Profile
+	if len(profile.Models) != 2 || profile.Models[0].ContextWindow == nil || *profile.Models[0].ContextWindow != 200000 {
+		t.Fatalf("models = %+v, want the edited list", profile.Models)
+	}
+	// An optional field the operator cleared is removed, and the read path the
+	// card renders from must show it gone rather than still there.
+	view := fieldOp("s4", `{"ns":"llm-pi-ai","ops":[{"op":"unset","path":["providers","acme","apiKeyEnv"]},{"op":"unset","path":["providers","acme","displayName"]}]}`)
+	profile = store.profiles["acme"].Profile
+	if profile.APIKeyEnv != "" || profile.DisplayName != "" {
+		t.Fatalf("profile = %+v, want the cleared fields removed", profile)
+	}
+	providers := view.Value.(map[string]any)["providers"].(map[string]any)
+	section := providers["acme"].(map[string]any)
+	if _, present := section["apiKeyEnv"]; present {
+		t.Fatalf("section = %v, want the cleared field absent from the view", section)
+	}
+	if section["baseURL"] != "https://gateway2.acme.example/v1" {
+		t.Fatalf("section = %v, want the edited endpoint read back", section)
+	}
+}
+
+// A field write that cannot be honoured changes nothing: no half-merged profile
+// is stored, and every refusal names the field it will not hold.
+func TestProviderProfileFieldWriteRefusals(t *testing.T) {
+	f, store := profilesFixture(t)
+	decodeValue(t, f.post(t, "/api/settings/mutate", rpcBody(t, "s1", "settings/mutate", cardProfileOp)), &SettingsNamespaceView{})
+	before := store.profiles["acme"].Profile
+	cases := []struct {
+		name      string
+		ops       string
+		wantCode  string
+		wantInMsg string
+	}{
+		{"a field this host does not store",
+			`{"ns":"llm-pi-ai","ops":[{"op":"set","path":["providers","acme","apiVersion"],"value":"v2"}]}`,
+			codeUnimplemented, `field "apiVersion" is not one this host stores`},
+		{"an edit to a route that is not there",
+			`{"ns":"llm-pi-ai","ops":[{"op":"set","path":["providers","nope","baseURL"],"value":"https://nope.example/v1"}]}`,
+			codeBadRequest, `no stored profile for provider "nope"`},
+		{"a protocol this host does not speak",
+			`{"ns":"llm-pi-ai","ops":[{"op":"set","path":["providers","acme","api"],"value":"gemini-generate"}]}`,
+			codeBadRequest, `protocol "gemini-generate" is not one this host speaks`},
+		{"clearing a required field",
+			`{"ns":"llm-pi-ai","ops":[{"op":"unset","path":["providers","acme","baseURL"]}]}`,
+			codeBadRequest, "baseURL"},
+		{"a path deeper than one field",
+			`{"ns":"llm-pi-ai","ops":[{"op":"set","path":["providers","acme","models","0","id"],"value":"acme-large"}]}`,
+			codeUnimplemented, "is not stored by this host"},
+		{"a model field this host does not store",
+			`{"ns":"llm-pi-ai","ops":[{"op":"set","path":["providers","acme","models"],"value":[{"id":"acme-large","input":["text"]}]}]}`,
+			codeBadRequest, `model field "input" is not one this host stores`},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			response := decodeResponse(t, f.post(t, "/api/settings/mutate",
+				rpcBody(t, "s1", "settings/mutate", testCase.ops)))
+			if response.Result.OK {
+				t.Fatalf("result = ok, want a refusal (value %s)", response.Result.Value)
+			}
+			if response.Result.Error.Code != testCase.wantCode {
+				t.Fatalf("code = %q, want %q (message %q)", response.Result.Error.Code, testCase.wantCode, response.Result.Error.Message)
+			}
+			if !strings.Contains(response.Result.Error.Message, testCase.wantInMsg) {
+				t.Fatalf("message = %q, want it to mention %q", response.Result.Error.Message, testCase.wantInMsg)
+			}
+			if after := store.profiles["acme"].Profile; after.BaseURL != before.BaseURL ||
+				after.API != before.API || len(after.Models) != len(before.Models) ||
+				after.APIKeyEnv != before.APIKeyEnv || after.DisplayName != before.DisplayName {
+				t.Fatalf("profile = %+v, want every refused write to change nothing (was %+v)", after, before)
+			}
+		})
+	}
+}
+
+// The field list this host accepts is the schema's own, so a field the console
+// can render is never refused and a field it cannot is never stored.
+func TestProviderProfileFieldsMatchTheSchema(t *testing.T) {
+	var envelope struct {
+		UID  json.Number             `json:"uid"`
+		Refs map[string]envelopeNode `json:"refs"`
+	}
+	if err := json.Unmarshal(piAiSchemaJSON, &envelope); err != nil {
+		t.Fatalf("decode the envelope: %v", err)
+	}
+	// The profile node is the providers dict's inner object; the model node is
+	// the models array's inner object.
+	var profileFields, modelFields []string
+	for _, node := range envelope.Refs {
+		if node.Type != "object" {
+			continue
+		}
+		if _, ok := node.Dict["baseURL"]; ok {
+			for name := range node.Dict {
+				profileFields = append(profileFields, name)
+			}
+		}
+		if _, ok := node.Dict["contextWindow"]; ok {
+			for name := range node.Dict {
+				modelFields = append(modelFields, name)
+			}
+		}
+	}
+	sort.Strings(profileFields)
+	sort.Strings(modelFields)
+	storedProfiles := append([]string{}, providerProfileFields...)
+	storedModels := append([]string{}, providerModelFields...)
+	sort.Strings(storedProfiles)
+	sort.Strings(storedModels)
+	if strings.Join(profileFields, ",") != strings.Join(storedProfiles, ",") {
+		t.Fatalf("schema profile fields = %v, want the stored set %v", profileFields, storedProfiles)
+	}
+	if strings.Join(modelFields, ",") != strings.Join(storedModels, ",") {
+		t.Fatalf("schema model fields = %v, want the stored set %v", modelFields, storedModels)
 	}
 }
 

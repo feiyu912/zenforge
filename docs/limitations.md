@@ -138,7 +138,15 @@ what is experimental, and what remains adapter territory.
   directory as declared. A declared profile lasts until the process exits, like
   every other console-written setting (ADR 0094), and it **is selectable and
   runnable** (ADR 0096); a draft endpoint can be interrogated for its model list,
-  which is what the editor's fetch button does (ADR 0097).
+  which is what the editor's fetch button does (ADR 0097); and it can be
+  **corrected after it exists** -- the editor's per-field saves merge into the
+  stored profile and a write that would leave the profile unserviceable is refused
+  and changes nothing (ADR 0098). Two limits belong here: a field write is accepted
+  one level deep only (`providers.<route>.<field>`, which is what the editor
+  addresses), and a model field this host does not store (`id`, `name`,
+  `contextWindow`, `maxTokens`) is refused rather than kept verbatim, so a model
+  adopted from an endpoint that disclosed an input-modality list is named and
+  refused instead of quietly trimmed.
 - **Multi-turn works** (ADR 0086): a session's finished run continues as
   `<session>~<turn>`, so a second message is a new turn rather than a refusal.
 - The sidebar does not mutate live, background-job panels are empty, and

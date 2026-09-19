@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
+	"sort"
 	"strings"
 )
 
@@ -153,9 +154,24 @@ func settingsPiAiView(profiles []ProviderProfileStatus) SettingsNamespaceView {
 	}
 }
 
-// settingsPiAiWrite applies one write to the profile namespace. The card sends a
-// single set at providers.<route>; update and replace carry sections, and unset
-// removes a route. Anything else is refused by name so a write is never lost.
+// providerProfileFields is the field set one declared profile holds, in the order
+// its schema declares it (the embedded envelope's profile node:
+// displayName, apiKeyEnv, api, baseURL, models).
+// TestProviderProfileFieldsMatchTheSchema holds this list to that envelope.
+var providerProfileFields = []string{"displayName", "apiKeyEnv", "api", "baseURL", "models"}
+
+// providerModelFields is the field set one model row holds. A row carrying
+// anything else is refused rather than silently dropped when the array is decoded
+// into the typed field, because a dropped field is a write that looks saved.
+var providerModelFields = []string{"id", "name", "contextWindow", "maxTokens"}
+
+// settingsPiAiWrite applies one write to the profile namespace. Two paths are
+// held: providers.<route> carries a whole profile, which is how a new provider is
+// declared, and providers.<route>.<field> carries one field of an existing
+// profile, which is how the provider editor saves an edit (it diffs the keys of
+// the profile's subtree and addresses each one: ProviderEditor.tsx:123-126).
+// update and replace carry sections, and unset removes a route or a field.
+// Anything else is refused by name so a write is never lost.
 func settingsPiAiWrite(store ProviderProfileStore, mode string, args map[string]json.RawMessage) (any, *methodError) {
 	switch mode {
 	case "mutate":
@@ -214,12 +230,15 @@ func settingsPiAiOp(store ProviderProfileStore, op SettingsPathOpView) *methodEr
 			fmt.Sprintf("settings mutate: op %q is not one of set or unset", op.Op),
 			map[string]any{"argument": "ops", "op": op.Op})
 	}
-	if len(op.Path) != 2 || op.Path[0] != "providers" {
+	if len(op.Path) < 2 || len(op.Path) > 3 || op.Path[0] != "providers" {
 		return settingsPiAiPathRefused(op.Path)
 	}
 	provider := strings.TrimSpace(op.Path[1])
 	if provider == "" {
 		return settingsPiAiPathRefused(op.Path)
+	}
+	if len(op.Path) == 3 {
+		return settingsPiAiFieldOp(store, provider, strings.TrimSpace(op.Path[2]), op)
 	}
 	if op.Op == "unset" {
 		if err := store.RemoveProviderProfile(provider); err != nil {
@@ -235,6 +254,66 @@ func settingsPiAiOp(store ProviderProfileStore, op SettingsPathOpView) *methodEr
 		return settingsPiAiRefused(err)
 	}
 	return nil
+}
+
+// settingsPiAiFieldOp applies one field write to an existing profile. The stored
+// profile is the merge of the fields the editor did not touch, and the merge is
+// validated as a whole before anything is stored, so a field write cannot leave a
+// profile this host would have refused to create: a refused write changes nothing.
+func settingsPiAiFieldOp(store ProviderProfileStore, provider, field string, op SettingsPathOpView) *methodError {
+	if !slices.Contains(providerProfileFields, field) {
+		return fail(codeUnimplemented,
+			fmt.Sprintf("settings write: field %q is not one this host stores for provider %q (it stores %s)",
+				field, provider, strings.Join(providerProfileFields, ", ")),
+			map[string]any{"argument": "providers", "provider": provider, "field": field})
+	}
+	current, stored := storedProviderProfile(store, provider)
+	if !stored {
+		return fail(codeBadRequest,
+			fmt.Sprintf("settings write: there is no stored profile for provider %q to edit; write providers.%s first",
+				provider, provider),
+			map[string]any{"argument": "providers", "provider": provider})
+	}
+	encoded, err := json.Marshal(current)
+	if err != nil {
+		return fail(codeInternal, "settings write: the stored profile could not be re-encoded: "+err.Error(),
+			map[string]any{"provider": provider})
+	}
+	fields, err := decodeJSONObject(encoded)
+	if err != nil {
+		return fail(codeInternal, "settings write: the stored profile could not be read back: "+err.Error(),
+			map[string]any{"provider": provider})
+	}
+	if op.Op == "unset" {
+		delete(fields, field)
+	} else {
+		fields[field] = op.Value
+	}
+	merged, err := json.Marshal(fields)
+	if err != nil {
+		return fail(codeInternal, "settings write: the merged profile could not be encoded: "+err.Error(),
+			map[string]any{"provider": provider})
+	}
+	profile, failure := settingsPiAiProfile(provider, merged)
+	if failure != nil {
+		return failure
+	}
+	if _, err := store.SetProviderProfile(profile); err != nil {
+		return settingsPiAiRefused(err)
+	}
+	return nil
+}
+
+// storedProviderProfile finds one stored profile. The store holds a handful, so a
+// scan is the lookup; finding it is what keeps a field write from landing on a
+// route that is not there.
+func storedProviderProfile(store ProviderProfileStore, provider string) (ProviderProfile, bool) {
+	for _, status := range store.ProviderProfiles() {
+		if status.Profile.Provider == provider {
+			return status.Profile, true
+		}
+	}
+	return ProviderProfile{}, false
 }
 
 // settingsPiAiProviders decodes an update/replace section.
@@ -272,10 +351,53 @@ func settingsPiAiProfile(provider string, raw json.RawMessage) (ProviderProfile,
 			map[string]any{"argument": "providers", "provider": provider})
 	}
 	profile.Provider = provider
+	if failure := settingsPiAiModelFields(provider, raw); failure != nil {
+		return ProviderProfile{}, failure
+	}
 	if failure := validateProviderProfile(profile); failure != nil {
 		return ProviderProfile{}, failure
 	}
 	return profile, nil
+}
+
+// settingsPiAiModelFields refuses a model row carrying a field this host does not
+// store. The typed decode would drop it, and a dropped field is a write that
+// looks saved: an adopted row whose endpoint disclosed something this host does
+// not hold is refused by name instead.
+func settingsPiAiModelFields(provider string, raw json.RawMessage) *methodError {
+	object, err := decodeJSONObject(raw)
+	if err != nil {
+		return nil
+	}
+	models, ok := object["models"]
+	if !ok {
+		return nil
+	}
+	var rows []json.RawMessage
+	if err := json.Unmarshal(models, &rows); err != nil {
+		return nil
+	}
+	for _, row := range rows {
+		fields, err := decodeJSONObject(row)
+		if err != nil {
+			continue
+		}
+		names := make([]string, 0, len(fields))
+		for name := range fields {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			if slices.Contains(providerModelFields, name) {
+				continue
+			}
+			return fail(codeBadRequest,
+				fmt.Sprintf("settings write: model field %q is not one this host stores (it stores %s)",
+					name, strings.Join(providerModelFields, ", ")),
+				map[string]any{"argument": "models", "provider": provider, "field": name})
+		}
+	}
+	return nil
 }
 
 // providerRoutePattern is the route grammar: a settings dict key that is also the
@@ -332,7 +454,7 @@ func validateProviderBaseURL(baseURL string) *methodError {
 // settingsPiAiPathRefused names the one path this namespace holds.
 func settingsPiAiPathRefused(path []string) *methodError {
 	return fail(codeUnimplemented,
-		fmt.Sprintf("settings write: path %q is not stored by this host; namespace %q holds provider profiles at providers.<route>",
+		fmt.Sprintf("settings write: path %q is not stored by this host; namespace %q holds provider profiles at providers.<route> and one field at providers.<route>.<field>",
 			strings.Join(path, "."), PiAiNamespace),
 		map[string]any{"path": path, "namespace": PiAiNamespace})
 }
