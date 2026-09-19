@@ -114,6 +114,11 @@ type SettingsDocumentStore interface {
 	SetSettingsKey(value string) error
 	// ClearSettingsKey forgets the stored credential.
 	ClearSettingsKey() error
+	// ConsoleSection reports the stored section of a namespace the console owns
+	// rather than the host. An empty map means nothing has been written yet.
+	ConsoleSection(namespace string) map[string]any
+	// SetConsoleSection records such a namespace's whole section.
+	SetConsoleSection(namespace string, section map[string]any) error
 }
 
 // SetSettingsDocument installs the store the settings methods answer from.
@@ -146,6 +151,165 @@ func settingsNamespaceRoute(namespace string) (string, bool) {
 // settingsNamespaceFor is the namespace a route's profile lives in, matching the
 // directory this host advertises (llm-openai, llm-anthropic).
 func settingsNamespaceFor(route string) string { return "llm-" + route }
+
+// The console owns a few settings namespaces: facts about the GUI itself rather
+// than this host's configuration. ui-onboarding carries the welcome notice
+// version the operator acknowledged -- the console reads it to decide whether to
+// show the "Internal Testing Notice" and writes it when Continue is pressed,
+// through the same namespace wire the model panels use
+// (client/ui-settings-models/src/onboarding-copy.ts:1-14; welcome-store.ts:84).
+//
+// A browser on loopback is told to persist settings on the host
+// (client/ui-settings/src/client/index.ts:58), so without this namespace the
+// notice's Continue button can only fail: the write is refused and the page says
+// the acknowledgement could not be saved.
+const (
+	consoleOnboardingNamespace = "ui-onboarding"
+	consoleOnboardingAckField  = "welcomeNoticeVersion"
+)
+
+// consoleOnboardingSchemaJSON is the schemastery envelope for that namespace,
+// generated with the pinned schemastery the console rehydrates with, like the
+// provider schema. The console treats a namespace whose envelope it cannot
+// rehydrate as vouching for no section, so this is not decoration
+// (client/ui-settings/src/client/settings-scope.ts:204-213). The field is
+// optional, so an unacknowledged namespace validates as an empty section.
+var consoleOnboardingSchemaJSON = []byte(`{"uid":2,"refs":{"1":{"type":"string","meta":{"description":"Last welcome notice version this console acknowledged"}},"2":{"type":"object","meta":{"default":{}},"dict":{"welcomeNoticeVersion":1}}}}`)
+
+// settingsConsoleNamespace reports whether this host holds the namespace for the
+// console rather than mapping it to its own configuration.
+func settingsConsoleNamespace(namespace string) bool {
+	return namespace == consoleOnboardingNamespace
+}
+
+// settingsConsoleView builds a console-owned namespace's view.
+func settingsConsoleView(section map[string]any) SettingsNamespaceView {
+	value := make(map[string]any, len(section))
+	for key, item := range section {
+		value[key] = item
+	}
+	return SettingsNamespaceView{
+		NS:       consoleOnboardingNamespace,
+		Schema:   consoleOnboardingSchemaJSON,
+		Value:    value,
+		Applies:  "live",
+		Secrets:  []SettingsSecretView{},
+		Revision: settingsRevision,
+	}
+}
+
+// settingsConsoleWrite applies one write to a console-owned namespace.
+//
+// The namespace holds one declared string field, so a path or key this host does
+// not declare is refused by name rather than dropped: a write that appears to
+// land is worse than one that reports it was not accepted.
+func settingsConsoleWrite(store SettingsDocumentStore, mode string, args map[string]json.RawMessage) (any, *methodError) {
+	section := make(map[string]any)
+	for key, value := range store.ConsoleSection(consoleOnboardingNamespace) {
+		section[key] = value
+	}
+	switch mode {
+	case "mutate":
+		raw, ok := args["ops"]
+		if !ok {
+			return nil, argumentRequired("ops")
+		}
+		var ops []SettingsPathOpView
+		if err := json.Unmarshal(raw, &ops); err != nil {
+			return nil, fail(codeBadRequest, `argument "ops" must be an array of path operations`,
+				map[string]any{"argument": "ops"})
+		}
+		for _, op := range ops {
+			if failure := settingsConsoleOp(section, op); failure != nil {
+				return nil, failure
+			}
+		}
+	default:
+		// update and replace carry a section rather than ops. update merges it
+		// into what is stored; replace swaps the section for it.
+		raw, ok := args["patch"]
+		if mode == "replace" {
+			raw, ok = args["section"]
+		}
+		if !ok {
+			key := "patch"
+			if mode == "replace" {
+				key = "section"
+			}
+			return nil, argumentRequired(key)
+		}
+		incoming, err := decodeJSONObject(raw)
+		if err != nil {
+			return nil, fail(codeBadRequest, "settings "+mode+": the section must be a JSON object",
+				map[string]any{"argument": "section"})
+		}
+		next := make(map[string]any, len(incoming))
+		if mode == "update" {
+			for key, value := range section {
+				next[key] = value
+			}
+		}
+		for key, value := range incoming {
+			if key != consoleOnboardingAckField {
+				return nil, settingsConsolePathRefused([]string{key})
+			}
+			text, failure := settingsConsoleFieldValue(key, value)
+			if failure != nil {
+				return nil, failure
+			}
+			next[key] = text
+		}
+		section = next
+	}
+	if err := store.SetConsoleSection(consoleOnboardingNamespace, section); err != nil {
+		return nil, fail(codeInternal,
+			"settings "+mode+": the host refused the change: "+err.Error(),
+			map[string]any{"namespace": consoleOnboardingNamespace})
+	}
+	return settingsConsoleView(section), nil
+}
+
+// settingsConsoleOp turns one path op into a section edit.
+func settingsConsoleOp(section map[string]any, op SettingsPathOpView) *methodError {
+	if op.Op != "set" && op.Op != "unset" {
+		return fail(codeBadRequest,
+			fmt.Sprintf("settings mutate: op %q is not one of set or unset", op.Op),
+			map[string]any{"argument": "ops", "op": op.Op})
+	}
+	if len(op.Path) != 1 || op.Path[0] != consoleOnboardingAckField {
+		return settingsConsolePathRefused(op.Path)
+	}
+	if op.Op == "unset" {
+		delete(section, consoleOnboardingAckField)
+		return nil
+	}
+	text, failure := settingsConsoleFieldValue(consoleOnboardingAckField, op.Value)
+	if failure != nil {
+		return failure
+	}
+	section[consoleOnboardingAckField] = text
+	return nil
+}
+
+// settingsConsoleFieldValue reads one declared field's value. The schema declares
+// it as a string, so anything else is refused rather than coerced.
+func settingsConsoleFieldValue(field string, raw json.RawMessage) (string, *methodError) {
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return "", fail(codeBadRequest,
+			fmt.Sprintf("settings write: %s must be a string", field),
+			map[string]any{"field": field})
+	}
+	return strings.TrimSpace(value), nil
+}
+
+// settingsConsolePathRefused names what this host stores instead.
+func settingsConsolePathRefused(path []string) *methodError {
+	return fail(codeUnimplemented,
+		fmt.Sprintf("settings write: path %q is not stored by this host; namespace %q holds one field, %s",
+			strings.Join(path, "."), consoleOnboardingNamespace, consoleOnboardingAckField),
+		map[string]any{"path": path, "namespace": consoleOnboardingNamespace})
+}
 
 // settingsViewFor builds one namespace view from the host's profile.
 func settingsViewFor(route string, profile SettingsProfile) SettingsNamespaceView {
@@ -185,6 +349,9 @@ func (h *Handler) settingsDescribe(_ context.Context, args map[string]json.RawMe
 	for _, route := range consoleProviderRoutes {
 		namespaces = append(namespaces, settingsViewFor(route, profile))
 	}
+	// The console-owned namespace is reported beside the host's own, because the
+	// console writes it through this same wire.
+	namespaces = append(namespaces, settingsConsoleView(store.ConsoleSection(consoleOnboardingNamespace)))
 	return SettingsDescribeValue{Writable: true, HasDocument: false, Namespaces: namespaces}, nil
 }
 
@@ -216,7 +383,8 @@ func (h *Handler) settingsWrite(_ context.Context, args map[string]json.RawMessa
 		return nil, failure
 	}
 	route, known := settingsNamespaceRoute(namespace)
-	if !known {
+	consoleOwned := settingsConsoleNamespace(namespace)
+	if !known && !consoleOwned {
 		return nil, fail(codeBadRequest,
 			fmt.Sprintf("settings %s: namespace %q is not served by this host", mode, namespace),
 			map[string]any{"argument": "ns"})
@@ -232,6 +400,9 @@ func (h *Handler) settingsWrite(_ context.Context, args map[string]json.RawMessa
 	store := h.settingsStore()
 	if store == nil {
 		return nil, settingsDependencyMissing("settings/" + mode)
+	}
+	if consoleOwned {
+		return settingsConsoleWrite(store, mode, args)
 	}
 	var edits []settingsFieldEdit
 	switch mode {

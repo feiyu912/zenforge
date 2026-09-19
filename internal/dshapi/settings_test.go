@@ -17,6 +17,8 @@ type stubSettings struct {
 	keys      []string
 	cleared   int
 	fail      error
+	// sections holds the namespaces the console owns (ADR 0094).
+	sections map[string]map[string]any
 }
 
 func (s *stubSettings) SettingsProfile() SettingsProfile { return s.profile }
@@ -57,6 +59,29 @@ func (s *stubSettings) ClearSettingsKey() error {
 	return nil
 }
 
+func (s *stubSettings) ConsoleSection(namespace string) map[string]any {
+	section := make(map[string]any, len(s.sections[namespace]))
+	for key, value := range s.sections[namespace] {
+		section[key] = value
+	}
+	return section
+}
+
+func (s *stubSettings) SetConsoleSection(namespace string, section map[string]any) error {
+	if s.fail != nil {
+		return s.fail
+	}
+	if s.sections == nil {
+		s.sections = make(map[string]map[string]any)
+	}
+	stored := make(map[string]any, len(section))
+	for key, value := range section {
+		stored[key] = value
+	}
+	s.sections[namespace] = stored
+	return nil
+}
+
 func settingsFixture(t *testing.T) (*fixture, *stubSettings) {
 	t.Helper()
 	f := newFixture(t, Config{})
@@ -81,8 +106,10 @@ func TestSettingsDescribeCarriesTheSchemaAndNoSecret(t *testing.T) {
 	if !value.Writable || value.HasDocument {
 		t.Fatalf("writable = %v hasDocument = %v, want true and false", value.Writable, value.HasDocument)
 	}
-	if len(value.Namespaces) != len(consoleProviderRoutes) {
-		t.Fatalf("namespaces = %d, want one per route", len(value.Namespaces))
+	// One view per provider route, plus the namespace the console owns (ADR
+	// 0094), so the count moving is deliberate rather than a route going missing.
+	if len(value.Namespaces) != len(consoleProviderRoutes)+1 {
+		t.Fatalf("namespaces = %d, want one per route plus the console's own", len(value.Namespaces))
 	}
 	view := value.Namespaces[0]
 	if view.NS != "llm-openai" {
@@ -346,5 +373,140 @@ func TestSettingsWriteFailureIsReportedWithoutTheSecret(t *testing.T) {
 	}
 	if !strings.Contains(response.Result.Error.Message, "[redacted]") {
 		t.Fatalf("message = %q, want the redaction marked", response.Result.Error.Message)
+	}
+}
+
+// sectionOf reads a namespace view's value as the section object it is on the
+// wire (SettingsNamespaceView.Value is `any` because a section is open-shaped).
+func sectionOf(t *testing.T, view SettingsNamespaceView) map[string]any {
+	t.Helper()
+	section, ok := view.Value.(map[string]any)
+	if !ok {
+		t.Fatalf("value = %#v, want a section object", view.Value)
+	}
+	return section
+}
+
+// The console's "Internal Testing Notice" is acknowledged through the settings
+// wire, into a namespace the host holds for the console rather than for its own
+// configuration. Without it a loopback browser can only fail the write, which is
+// what the Continue button did.
+func TestSettingsDescribeCarriesTheConsoleNamespace(t *testing.T) {
+	f, _ := settingsFixture(t)
+	var described SettingsDescribeValue
+	decodeValue(t, f.post(t, "/api/settings/describe", rpcBody(t, "s1", "settings/describe", "")), &described)
+	var onboarding *SettingsNamespaceView
+	for index := range described.Namespaces {
+		if described.Namespaces[index].NS == "ui-onboarding" {
+			onboarding = &described.Namespaces[index]
+		}
+	}
+	if onboarding == nil {
+		t.Fatalf("namespaces = %+v, want ui-onboarding beside the provider namespaces", described.Namespaces)
+	}
+	// The console refuses a namespace whose schemastery envelope it cannot
+	// rehydrate, so the envelope has to declare the field and leave it optional.
+	schema := string(onboarding.Schema)
+	if !strings.Contains(schema, "welcomeNoticeVersion") {
+		t.Fatalf("schema = %s, want the acknowledged field declared", schema)
+	}
+	if !strings.Contains(schema, `"uid"`) {
+		t.Fatalf("schema = %s, want a schemastery envelope", schema)
+	}
+	if len(sectionOf(t, *onboarding)) != 0 {
+		t.Fatalf("value = %v, want an empty section before anything is acknowledged", onboarding.Value)
+	}
+	if onboarding.Applies != "live" || len(onboarding.Secrets) != 0 {
+		t.Fatalf("view = %+v, want a live namespace with no secret slot", onboarding)
+	}
+}
+
+func TestSettingsMutateStoresTheWelcomeAcknowledgement(t *testing.T) {
+	f, store := settingsFixture(t)
+	var view SettingsNamespaceView
+	decodeValue(t, f.post(t, "/api/settings/mutate", rpcBody(t, "s1", "settings/mutate",
+		`{"ns":"ui-onboarding","ops":[{"op":"set","path":["welcomeNoticeVersion"],"value":"2026-08-13.1"}]}`)), &view)
+	if view.NS != "ui-onboarding" || sectionOf(t, view)["welcomeNoticeVersion"] != "2026-08-13.1" {
+		t.Fatalf("view = %+v, want the acknowledgement stored and returned", view)
+	}
+	if store.sections["ui-onboarding"]["welcomeNoticeVersion"] != "2026-08-13.1" {
+		t.Fatalf("stored sections = %v, want the field in the console's namespace", store.sections)
+	}
+	// The read path the notice decides from must see it too, otherwise the page
+	// would write successfully and still show the notice.
+	var described SettingsDescribeValue
+	decodeValue(t, f.post(t, "/api/settings/describe", rpcBody(t, "s2", "settings/describe", "")), &described)
+	for _, namespace := range described.Namespaces {
+		if namespace.NS == "ui-onboarding" && sectionOf(t, namespace)["welcomeNoticeVersion"] != "2026-08-13.1" {
+			t.Fatalf("describe value = %v, want the stored acknowledgement", namespace.Value)
+		}
+	}
+}
+
+func TestSettingsMutateUnsetsTheWelcomeAcknowledgement(t *testing.T) {
+	f, store := settingsFixture(t)
+	store.sections = map[string]map[string]any{"ui-onboarding": {"welcomeNoticeVersion": "2026-08-13.1"}}
+	var view SettingsNamespaceView
+	decodeValue(t, f.post(t, "/api/settings/mutate", rpcBody(t, "s1", "settings/mutate",
+		`{"ns":"ui-onboarding","ops":[{"op":"unset","path":["welcomeNoticeVersion"]}]}`)), &view)
+	if len(sectionOf(t, view)) != 0 {
+		t.Fatalf("value = %v, want the field cleared", view.Value)
+	}
+}
+
+func TestSettingsUpdateAndReplaceTheConsoleSection(t *testing.T) {
+	f, store := settingsFixture(t)
+	store.sections = map[string]map[string]any{"ui-onboarding": {"welcomeNoticeVersion": "old"}}
+	var view SettingsNamespaceView
+	decodeValue(t, f.post(t, "/api/settings/update", rpcBody(t, "s1", "settings/update",
+		`{"ns":"ui-onboarding","patch":{"welcomeNoticeVersion":"2026-08-13.1"}}`)), &view)
+	if sectionOf(t, view)["welcomeNoticeVersion"] != "2026-08-13.1" {
+		t.Fatalf("update value = %v, want the new version", view.Value)
+	}
+	decodeValue(t, f.post(t, "/api/settings/replace", rpcBody(t, "s2", "settings/replace",
+		`{"ns":"ui-onboarding","section":{}}`)), &view)
+	if len(sectionOf(t, view)) != 0 {
+		t.Fatalf("replace value = %v, want the section swapped for the empty one", view.Value)
+	}
+}
+
+func TestSettingsConsoleNamespaceRefusesWhatItDoesNotDeclare(t *testing.T) {
+	f, store := settingsFixture(t)
+	cases := []struct {
+		name   string
+		method string
+		body   string
+		code   string
+	}{
+		{"an undeclared path", "mutate", `{"ns":"ui-onboarding","ops":[{"op":"set","path":["theme"],"value":"dark"}]}`, codeUnimplemented},
+		{"a nested path", "mutate", `{"ns":"ui-onboarding","ops":[{"op":"set","path":["a","b"],"value":"x"}]}`, codeUnimplemented},
+		{"a non-string value", "mutate", `{"ns":"ui-onboarding","ops":[{"op":"set","path":["welcomeNoticeVersion"],"value":7}]}`, codeBadRequest},
+		{"an unknown op", "mutate", `{"ns":"ui-onboarding","ops":[{"op":"merge","path":["welcomeNoticeVersion"]}]}`, codeBadRequest},
+		{"an undeclared section key", "update", `{"ns":"ui-onboarding","patch":{"theme":"dark"}}`, codeUnimplemented},
+		{"a namespace the host does not serve", "mutate", `{"ns":"ui-theme","ops":[{"op":"set","path":["theme"],"value":"dark"}]}`, codeBadRequest},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			method := "settings/" + testCase.method
+			response := decodeResponse(t, f.post(t, "/api/"+method, rpcBody(t, "s1", method, testCase.body)))
+			if response.Result.OK || response.Result.Error.Code != testCase.code {
+				t.Fatalf("code = %q, want %q (%s)", response.Result.Error.Code, testCase.code, response.Result.Error.Message)
+			}
+		})
+	}
+	if len(store.sections) != 0 {
+		t.Fatalf("sections = %v, want every refused write to leave the namespace untouched", store.sections)
+	}
+}
+
+// The provider namespaces keep working: the console namespace is an addition,
+// not a replacement for the write path the Models page uses.
+func TestSettingsMutateStillWritesTheProviderProfile(t *testing.T) {
+	f, store := settingsFixture(t)
+	var view SettingsNamespaceView
+	decodeValue(t, f.post(t, "/api/settings/mutate", rpcBody(t, "s1", "settings/mutate",
+		`{"ns":"llm-openai","ops":[{"op":"set","path":["providers","openai","api","model"],"value":"qwen-max"}]}`)), &view)
+	if view.NS != "llm-openai" || len(store.models) != 1 || store.models[0] != "qwen-max" {
+		t.Fatalf("models = %v, view = %+v, want the provider write to land as before", store.models, view)
 	}
 }

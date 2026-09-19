@@ -124,25 +124,28 @@ machine, and it also relaxes the settings API to non-loopback callers.
 2. **The console browses the workspace** as of ADR 0089
    (`workspaceFiles/list|stat|read|readAll|readBytes`, with watching and relation
    reads refused by name and paths confined to the served workspace root).
-3. **The console's identity reads `zenforge`** as of ADR 0092, in the page
+3. **The console's own settings namespaces are held** as of ADR 0094
+   (`ui-onboarding`'s welcome-notice acknowledgement, so the notice's Continue
+   works on a loopback page and the notice stops reappearing within a run).
+4. **The console's identity reads `zenforge`** as of ADR 0092, in the page
    title, the installable-app name, the favicon's accessible name and the brand
    plugins' copy, with the capital form asserted absent from browser-visible
    bytes.
-4. **The console's slash commands run** as of ADR 0090
+5. **The console's slash commands run** as of ADR 0090
    (`commands/list|execute`: the menu lists the host's catalog, a submitted line
    expands with the host's own rules and starts its run, an unknown line is
    answered without a value). The one honest difference from upstream is that no
    `command/run`/`command/done` flow node is logged.
-5. **The console's plugin inventory is answered** as of ADR 0091
+6. **The console's plugin inventory is answered** as of ADR 0091
    (`pluginInventory/list` from the mount's roster, `managementAvailable: false`,
    every `pluginManager` write refused with its reason). With it, every namespace
    a shipped client panel calls is served or refused by name.
-6. **The console's preset selectors are answered** as of ADR 0088
+7. **The console's preset selectors are answered** as of ADR 0088
    (`permissionPresets/catalog`, `agentPresets/list|read`, with authoring and
    selection refused by name). These were found by reading the host's own
    "endpoint is not served" log lines rather than by guessing, which is the
    instrument to keep using for the remaining namespaces.
-7. **The console's own model/settings panel** (historical note). Its edits go to a host-owned settings document
+8. **The console's own model/settings panel** (historical note). Its edits go to a host-owned settings document
    (`settings/document-updated`, `settings/conflict`), not to a credential form.
    The instrument is already in place: `serve` passes `slog.Default()` into the
    RPC handler (`dshmount.Config.Logger` -> `dshapi.Config.Logger`), so every

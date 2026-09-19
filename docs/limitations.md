@@ -148,6 +148,9 @@ what is experimental, and what remains adapter territory.
   with their pinned upstream revision, patch and recipe
   (`scripts/build-console.sh`), because the upstream build cannot be renamed at
   runtime (ADR 0079).
+- The **welcome notice's acknowledgement is process-local**: it is stored with
+  the rest of the console-written settings, so it survives a page reload but not a
+  host restart, after which the notice appears again (ADR 0094).
 - The console's browser-visible identity reads `zenforge` in its title, manifest,
   favicon name and brand copy (ADR 0092); prose and documentation keep the
   sentence-case `ZenForge` stylisation.

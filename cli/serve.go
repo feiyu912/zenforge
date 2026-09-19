@@ -468,6 +468,41 @@ type settingsStore struct {
 	// allowRemote is the operator's --allow-remote decision, carried here so
 	// the write gate travels with the store the endpoint serves.
 	allowRemote bool
+	// consoleSections holds the settings namespaces the console owns: facts
+	// about the GUI rather than this host's configuration (ADR 0094). They live
+	// in this process with the rest of the console-written settings, which is
+	// what the document-less profile this host reports means.
+	consoleSections map[string]map[string]any
+}
+
+// ConsoleSection reports a console-owned namespace's stored section. The map is
+// copied, so a caller cannot reach into the store's state through it.
+func (s *settingsStore) ConsoleSection(namespace string) map[string]any {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	stored := s.consoleSections[namespace]
+	section := make(map[string]any, len(stored))
+	for key, value := range stored {
+		section[key] = value
+	}
+	return section
+}
+
+// SetConsoleSection records one. An empty section is stored as empty rather than
+// deleting the namespace, so a cleared field reads back the same way as one that
+// was never written.
+func (s *settingsStore) SetConsoleSection(namespace string, section map[string]any) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.consoleSections == nil {
+		s.consoleSections = make(map[string]map[string]any)
+	}
+	stored := make(map[string]any, len(section))
+	for key, value := range section {
+		stored[key] = value
+	}
+	s.consoleSections[namespace] = stored
+	return nil
 }
 
 // settingsView is the GET/POST response shape. It deliberately has no field
@@ -697,6 +732,17 @@ func (c consoleSettings) SetSettingsModel(model string) error {
 func (c consoleSettings) SetSettingsKey(value string) error { return c.settings.setAPIKey(value) }
 
 func (c consoleSettings) ClearSettingsKey() error { return c.settings.clearAPIKey() }
+
+// ConsoleSection and SetConsoleSection pass the console-owned namespaces
+// straight through: the store holds them, this host's configuration does not
+// have to understand them.
+func (c consoleSettings) ConsoleSection(namespace string) map[string]any {
+	return c.settings.ConsoleSection(namespace)
+}
+
+func (c consoleSettings) SetConsoleSection(namespace string, section map[string]any) error {
+	return c.settings.SetConsoleSection(namespace, section)
+}
 
 // consoleCredentials adapts the settings store to the console's credentials
 // namespace (ADR 0084). The host has one model credential, so every reference

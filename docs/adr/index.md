@@ -107,3 +107,4 @@ later ADRs supersede earlier ones, never edit.
 | [0091](0091-the-plugin-inventory-describes-what-this-host-publishes.md) | The plugin inventory describes what this host publishes |
 | [0092](0092-the-console-shows-the-products-name-in-its-command-form.md) | The console shows the product's name in its command form |
 | [0093](0093-the-first-party-console-is-deleted.md) | The first-party console is deleted |
+| [0094](0094-the-host-holds-the-consoles-own-settings-namespaces.md) | The host holds the console's own settings namespaces |

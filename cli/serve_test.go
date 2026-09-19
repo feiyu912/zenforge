@@ -349,3 +349,48 @@ func TestConsoleSettingsWriteTheEndpointBeforeTheKey(t *testing.T) {
 		t.Fatal("hasApiKey = false after writing a key")
 	}
 }
+
+// A console-owned settings namespace is held by the same store as the rest of the
+// console-written settings, and the section it hands back is a copy: a caller
+// cannot reach into the store through it.
+func TestSettingsStoreHoldsConsoleSections(t *testing.T) {
+	store := newTestSettingsStore(t, false)
+	if got := store.ConsoleSection("ui-onboarding"); len(got) != 0 {
+		t.Fatalf("ConsoleSection before any write = %v, want an empty section", got)
+	}
+	if err := store.SetConsoleSection("ui-onboarding", map[string]any{"welcomeNoticeVersion": "2026-08-13.1"}); err != nil {
+		t.Fatalf("SetConsoleSection: %v", err)
+	}
+	section := store.ConsoleSection("ui-onboarding")
+	if section["welcomeNoticeVersion"] != "2026-08-13.1" {
+		t.Fatalf("section = %v, want the stored acknowledgement", section)
+	}
+	// The returned map is a copy, or a caller could edit the store's state.
+	section["welcomeNoticeVersion"] = "tampered"
+	if store.ConsoleSection("ui-onboarding")["welcomeNoticeVersion"] != "2026-08-13.1" {
+		t.Fatal("the section handed back aliases the store's state")
+	}
+	// An empty section reads back the same way as one that was never written,
+	// which is what a cleared acknowledgement is.
+	if err := store.SetConsoleSection("ui-onboarding", map[string]any{}); err != nil {
+		t.Fatalf("SetConsoleSection(empty): %v", err)
+	}
+	if got := store.ConsoleSection("ui-onboarding"); len(got) != 0 {
+		t.Fatalf("section after clearing = %v, want empty", got)
+	}
+	if got := store.ConsoleSection("ui-theme"); len(got) != 0 {
+		t.Fatalf("an unrelated namespace = %v, want empty", got)
+	}
+}
+
+// The console's adapter passes the console-owned namespace straight through to
+// the store, so the notice's write and the notice's read see the same state.
+func TestConsoleSettingsPassTheOnboardingNamespaceThrough(t *testing.T) {
+	settings := consoleSettings{settings: newTestSettingsStore(t, false)}
+	if err := settings.SetConsoleSection("ui-onboarding", map[string]any{"welcomeNoticeVersion": "2026-08-13.1"}); err != nil {
+		t.Fatalf("SetConsoleSection: %v", err)
+	}
+	if got := settings.ConsoleSection("ui-onboarding")["welcomeNoticeVersion"]; got != "2026-08-13.1" {
+		t.Fatalf("value = %v, want the acknowledgement the console wrote", got)
+	}
+}
