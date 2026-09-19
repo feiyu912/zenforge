@@ -1,0 +1,610 @@
+package cli
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/feiyu912/zenforge/internal/dshapi"
+	"github.com/feiyu912/zenforge/model/provider"
+)
+
+// The tests here are the assertions ADR 0102 makes about the console's settings
+// document: the credential and the configuration around it survive a restart, the
+// file that holds them is reachable only by its owner, it is never somewhere the
+// console can already read, a damaged one stops the host by name, and the key never
+// appears anywhere but in that file.
+
+const (
+	documentTestBaseURL = "https://example.test/v1"
+	documentTestKey     = "sk-document-sentinel-9d2c"
+)
+
+// newDocumentStores wires the stores around a settings document the way
+// newServeApp does, so a test that calls it twice with the same path is a host
+// before a restart and the same host after one.
+func newDocumentStores(t *testing.T, path string, seed serverSettings) (*settingsStore, *consoleProviderProfiles) {
+	t.Helper()
+	store := &settingsStore{
+		current:     seed,
+		seed:        seed,
+		model:       newSwappableModel(),
+		allowRemote: false,
+	}
+	profiles := newConsoleProviderProfiles(store)
+	store.profiles = profiles
+	if _, err := newConsoleSettingsDocument(path, "", store, profiles); err != nil {
+		t.Fatalf("wire the settings document at %s: %v", path, err)
+	}
+	store.rebuild()
+	return store, profiles
+}
+
+func documentSeed() serverSettings {
+	return serverSettings{
+		baseURL:  "https://seed.test/v1",
+		model:    "seed-model",
+		provider: provider.OpenAI,
+	}
+}
+
+func TestConsoleSettingsDocumentSurvivesARestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "console-settings.json")
+	store, profiles := newDocumentStores(t, path, documentSeed())
+
+	if store.HasSettingsDocument() {
+		t.Fatal("hasDocument = true before anything was written; the host creates the file on the first write")
+	}
+	if err := store.replaceEndpoint(documentTestBaseURL, "qwen-max"); err != nil {
+		t.Fatalf("replaceEndpoint: %v", err)
+	}
+	if err := store.setAPIKey(documentTestKey); err != nil {
+		t.Fatalf("setAPIKey: %v", err)
+	}
+	if err := store.SetConsoleSection("ui-onboarding", map[string]any{"welcomeNoticeVersion": "2026-09-19.1"}); err != nil {
+		t.Fatalf("SetConsoleSection: %v", err)
+	}
+	if _, err := profiles.SetProviderProfile(dshapi.ProviderProfile{
+		Provider:    "acme",
+		DisplayName: "Acme",
+		API:         dshapi.ProtocolOpenAICompletions,
+		BaseURL:     "https://acme.test/v1",
+		Models:      []dshapi.ProviderModel{{ID: "acme-1"}},
+	}); err != nil {
+		t.Fatalf("SetProviderProfile: %v", err)
+	}
+	if got := store.AdvanceSettingsRevision("llm-openai"); got != 2 {
+		t.Fatalf("revision after one write = %d, want 2", got)
+	}
+	if !store.HasSettingsDocument() {
+		t.Fatal("hasDocument = false after a committed write")
+	}
+
+	// The restart: a fresh set of stores over the same file, seeded with the flags
+	// this host was started with.
+	restarted, restartedProfiles := newDocumentStores(t, path, serverSettings{
+		baseURL:  "https://a-different-flag.test/v1",
+		model:    "flag-model",
+		provider: provider.Anthropic,
+	})
+	view := restarted.view()
+	if view.BaseURL != documentTestBaseURL {
+		t.Errorf("baseUrl after restart = %q, want the endpoint the console wrote, not the flag", view.BaseURL)
+	}
+	if view.Model != "qwen-max" {
+		t.Errorf("model after restart = %q, want the model the console wrote", view.Model)
+	}
+	if !view.HasAPIKey {
+		t.Errorf("hasApiKey after restart = false, want the stored credential back")
+	}
+	if got := restarted.configuredAPIKey(); got != documentTestKey {
+		t.Errorf("the reloaded credential is not the one that was stored")
+	}
+	if got := restarted.SettingsRevision("llm-openai"); got != 2 {
+		t.Errorf("revision after restart = %d, want the number the document carries: a fence that resets is not a fence", got)
+	}
+	if got := restarted.ConsoleSection("ui-onboarding")["welcomeNoticeVersion"]; got != "2026-09-19.1" {
+		t.Errorf("the welcome notice acknowledgement after restart = %v, want the stored version", got)
+	}
+	listed := restartedProfiles.ProviderProfiles()
+	if len(listed) != 1 || listed[0].Profile.Provider != "acme" {
+		t.Fatalf("declared profiles after restart = %+v, want the one route the console declared", listed)
+	}
+	if listed[0].Profile.Models[0].ID != "acme-1" {
+		t.Errorf("declared profile models = %+v, want the declared row", listed[0].Profile.Models)
+	}
+	if !restarted.HasSettingsDocument() {
+		t.Error("hasDocument = false with a document on disk")
+	}
+}
+
+func TestConsoleSettingsDocumentIsOwnerReadableOnly(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nested", "console-settings.json")
+	store, _ := newDocumentStores(t, path, documentSeed())
+	if err := store.setAPIKey(documentTestKey); err != nil {
+		t.Fatalf("setAPIKey: %v", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("the document was not created where it was configured: %v", err)
+	}
+	if mode := info.Mode().Perm(); mode != 0o600 {
+		t.Errorf("document mode = %04o, want 0600: it holds the credential", mode)
+	}
+	// The staging file is renamed into place, so a completed write leaves nothing
+	// else behind in the directory.
+	entries, err := os.ReadDir(filepath.Dir(path))
+	if err != nil {
+		t.Fatalf("read the document directory: %v", err)
+	}
+	for _, entry := range entries {
+		if entry.Name() != filepath.Base(path) {
+			t.Errorf("the write left %q behind in the document directory", entry.Name())
+		}
+	}
+	// What is on disk is the document, and it holds the key -- the one place this
+	// host writes it.
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read the document: %v", err)
+	}
+	if !strings.Contains(string(raw), documentTestKey) {
+		t.Fatal("the document does not carry the credential it exists to persist")
+	}
+}
+
+func TestConsoleSettingsDocumentNeverLandsInsideTheWorkspace(t *testing.T) {
+	workspace := t.TempDir()
+	inside := filepath.Join(workspace, "console-settings.json")
+	if err := refuseSettingsFileInWorkspace(inside, workspace); err == nil {
+		t.Fatal("a settings document inside the served workspace was accepted; the console reads workspace files back to the browser")
+	} else if !strings.Contains(err.Error(), inside) || !strings.Contains(err.Error(), "--settings-file") {
+		t.Fatalf("refusal = %q, want it to name the path and the flag", err)
+	}
+	for _, allowed := range []string{
+		filepath.Join(filepath.Dir(workspace), "console-settings.json"),
+		filepath.Join(workspace, "..", "console-settings.json"),
+		"",
+	} {
+		if err := refuseSettingsFileInWorkspace(allowed, workspace); err != nil {
+			t.Errorf("refuseSettingsFileInWorkspace(%q) = %v, want it accepted", allowed, err)
+		}
+	}
+}
+
+func TestConsoleSettingsDocumentPathIsTheHostConfigDir(t *testing.T) {
+	configDir := filepath.Join(t.TempDir(), "zenforge-config")
+	t.Setenv("ZENFORGE_CONFIG_DIR", configDir)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	defaultPath, err := consoleSettingsPath("")
+	if err != nil {
+		t.Fatalf("consoleSettingsPath: %v", err)
+	}
+	if want := filepath.Join(configDir, consoleSettingsFileName); defaultPath != want {
+		t.Fatalf("default path = %q, want %q", defaultPath, want)
+	}
+	repository, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("get the working directory: %v", err)
+	}
+	if relative, err := filepath.Rel(repository, defaultPath); err == nil &&
+		!strings.HasPrefix(relative, "..") && !filepath.IsAbs(relative) {
+		t.Fatalf("default path %q is inside the checkout at %q", defaultPath, repository)
+	}
+	explicit, err := consoleSettingsPath(filepath.Join(t.TempDir(), "elsewhere.json"))
+	if err != nil {
+		t.Fatalf("consoleSettingsPath with an explicit file: %v", err)
+	}
+	if filepath.Base(explicit) != "elsewhere.json" {
+		t.Fatalf("explicit path = %q, want the operator's own file", explicit)
+	}
+}
+
+func TestConsoleSettingsDocumentWithoutAConfigDirStaysProcessLocal(t *testing.T) {
+	// No home, no XDG directory, no explicit flag: there is nowhere host-owned to
+	// write, and the host says so rather than putting a credential somewhere
+	// surprising.
+	t.Setenv("HOME", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("ZENFORGE_CONFIG_DIR", "")
+	path, err := consoleSettingsPath("")
+	if err != nil {
+		t.Fatalf("consoleSettingsPath: %v", err)
+	}
+	if path != "" {
+		t.Fatalf("path = %q, want the empty answer that means no durable home", path)
+	}
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	store, _ := newDocumentStores(t, "", documentSeed())
+	if err := store.setAPIKey(documentTestKey); err != nil {
+		t.Fatalf("setAPIKey on a host with no durable home: %v", err)
+	}
+	if !store.view().HasAPIKey {
+		t.Error("the key was not held in memory by a host with no document")
+	}
+	if store.HasSettingsDocument() {
+		t.Error("hasDocument = true with no document anywhere")
+	}
+	line := logs.String()
+	if !strings.Contains(line, "restart") {
+		t.Errorf("the host did not say its settings will not survive a restart: %s", line)
+	}
+	if strings.Contains(line, documentTestKey) {
+		t.Error("the credential reached the log")
+	}
+}
+
+func TestConsoleSettingsDocumentRefusesADamagedFileByName(t *testing.T) {
+	for _, testCase := range []struct {
+		name    string
+		content string
+		mode    os.FileMode
+		absent  string
+	}{
+		{
+			name:    "half a JSON object",
+			content: `{"version":1,"apiKey":"` + documentTestKey + `"`,
+		},
+		{
+			name:    "a field of the wrong type",
+			content: `{"version":1,"apiKey":[` + documentTestKey + `]}`,
+		},
+		{
+			name:    "a field this host does not store",
+			content: `{"version":1,"secrets":"` + documentTestKey + `"}`,
+		},
+		{
+			name:    "a document from a newer host",
+			content: `{"version":99,"apiKey":"` + documentTestKey + `"}`,
+		},
+		{
+			name:    "an unversioned file",
+			content: `{"apiKey":"` + documentTestKey + `"}`,
+		},
+		{
+			name:    "a file other users can read",
+			content: `{"version":1,"apiKey":"` + documentTestKey + `"}`,
+			mode:    0o644,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), consoleSettingsFileName)
+			if err := os.WriteFile(path, []byte(testCase.content), 0o600); err != nil {
+				t.Fatalf("write the test document: %v", err)
+			}
+			if testCase.mode != 0 {
+				if err := os.Chmod(path, testCase.mode); err != nil {
+					t.Fatalf("set the test mode: %v", err)
+				}
+			}
+			_, found, err := loadConsoleSettingsFile(path)
+			if err == nil {
+				t.Fatalf("a damaged document was accepted (found = %v)", found)
+			}
+			if found {
+				t.Error("a refused document reported itself as loaded")
+			}
+			if !strings.Contains(err.Error(), path) {
+				t.Errorf("refusal = %q, want it to name the file the operator has to fix", err)
+			}
+			// The message describes the damage and never quotes the file: the
+			// bytes it is failing on are the credential.
+			if strings.Contains(err.Error(), documentTestKey) {
+				t.Errorf("refusal = %q, want it to name the damage rather than repeat the document", err)
+			}
+		})
+	}
+}
+
+func TestConsoleSettingsDocumentWriteFailureKeepsTheOldValue(t *testing.T) {
+	// The host starts with a document it can write, and then the document stops
+	// being writable: the path's parent becomes a plain file. A write that cannot
+	// reach the file has to be refused with the value it already had left standing,
+	// because a setting that lives only in this process is the disagreement between
+	// the Models page and the next restart that this document exists to remove.
+	directory := t.TempDir()
+	path := filepath.Join(directory, consoleSettingsFileName)
+	store, _ := newDocumentStores(t, path, documentSeed())
+	if err := store.replaceEndpoint(documentTestBaseURL, ""); err != nil {
+		t.Fatalf("replaceEndpoint: %v", err)
+	}
+	blocker := filepath.Join(t.TempDir(), "blocker")
+	if err := os.WriteFile(blocker, []byte("not a directory"), 0o600); err != nil {
+		t.Fatalf("write the blocking file: %v", err)
+	}
+	store.document = newConsoleSettingsWriter(filepath.Join(blocker, consoleSettingsFileName), store.documentFile)
+	before := store.view()
+
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	defer slog.SetDefault(previous)
+
+	err := store.replaceEndpoint("https://moved.test/v1", "")
+	if err == nil {
+		t.Fatal("a settings write to an unwritable document reported success")
+	}
+	after := store.view()
+	if after.BaseURL != before.BaseURL {
+		t.Errorf("baseUrl = %q after a failed write, want the value the document still holds (%q)", after.BaseURL, before.BaseURL)
+	}
+	if line := logs.String(); !strings.Contains(line, blocker) {
+		t.Errorf("the failed write was not logged with the file it could not write: %s", line)
+	}
+	if strings.Contains(logs.String(), documentTestKey) || strings.Contains(err.Error(), documentTestKey) {
+		t.Error("a failed write put the credential into an error or a log line")
+	}
+	// A revision advance whose document write failed leaves the field change
+	// standing: the number goes back to the one the file holds.
+	if err := store.setAPIKey(documentTestKey); err == nil {
+		t.Fatal("storing a credential with an unwritable document reported success")
+	}
+	if store.view().HasAPIKey {
+		t.Error("the credential was kept by a host whose write was refused")
+	}
+}
+
+func TestConsoleSettingsDocumentNamesTheFieldsItOverrides(t *testing.T) {
+	path := filepath.Join(t.TempDir(), consoleSettingsFileName)
+	store, _ := newDocumentStores(t, path, documentSeed())
+	if err := store.replaceEndpoint(documentTestBaseURL, "qwen-max"); err != nil {
+		t.Fatalf("replaceEndpoint: %v", err)
+	}
+	if err := store.setAPIKey(documentTestKey); err != nil {
+		t.Fatalf("setAPIKey: %v", err)
+	}
+
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	defer slog.SetDefault(previous)
+
+	// Restart with different flags: the document wins, and the host says which
+	// fields it overrode -- by name, never by value.
+	restarted, _ := newDocumentStores(t, path, serverSettings{
+		baseURL:  "https://a-different-flag.test/v1",
+		model:    "flag-model",
+		provider: provider.Anthropic,
+		apiKey:   "flag-supplied-key",
+	})
+	if got := restarted.view(); got.BaseURL != documentTestBaseURL || got.Model != "qwen-max" {
+		t.Fatalf("view after restart = %+v, want the document's endpoint and model", got)
+	}
+	line := logs.String()
+	for _, want := range []string{"baseUrl", "model", "provider", "api-key"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("the startup line did not name the overridden %q field: %s", want, line)
+		}
+	}
+	for _, value := range []string{"a-different-flag.test", "flag-supplied-key", documentTestKey} {
+		if strings.Contains(line, value) {
+			t.Errorf("the startup line carried the value %q rather than a field name: %s", value, line)
+		}
+	}
+}
+
+func TestConsoleSettingsDocumentFillingAGapIsNotAnOverride(t *testing.T) {
+	// A host started with no flags has nothing for the document to override, so
+	// the startup line must not claim it did: the document filled a hole.
+	path := filepath.Join(t.TempDir(), consoleSettingsFileName)
+	store, _ := newDocumentStores(t, path, documentSeed())
+	if err := store.replaceEndpoint(documentTestBaseURL, "qwen-max"); err != nil {
+		t.Fatalf("replaceEndpoint: %v", err)
+	}
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	defer slog.SetDefault(previous)
+
+	restarted, _ := newDocumentStores(t, path, serverSettings{})
+	if got := restarted.view().BaseURL; got != documentTestBaseURL {
+		t.Fatalf("baseUrl after restart = %q, want the document to supply what the flags did not", got)
+	}
+	line := logs.String()
+	if !strings.Contains(line, "loaded the console settings document") {
+		t.Fatalf("startup did not report the load: %s", line)
+	}
+	if strings.Contains(line, "overrides") {
+		t.Errorf("a host with no startup configuration was told its flags were overridden: %s", line)
+	}
+}
+
+func TestConsoleSettingsDocumentClearsStayCleared(t *testing.T) {
+	path := filepath.Join(t.TempDir(), consoleSettingsFileName)
+	store, _ := newDocumentStores(t, path, documentSeed())
+	if err := store.replaceEndpoint(documentTestBaseURL, "qwen-max"); err != nil {
+		t.Fatalf("replaceEndpoint: %v", err)
+	}
+	if err := store.replaceEndpoint("", ""); err != nil {
+		t.Fatalf("clearing the endpoint override: %v", err)
+	}
+	restarted, _ := newDocumentStores(t, path, documentSeed())
+	if got := restarted.view().BaseURL; got != "" {
+		t.Fatalf("baseUrl after restart = %q, want the cleared override to stay cleared rather than falling back to the seed", got)
+	}
+}
+
+func TestConsoleSettingsDocumentNeverWritesTheKeyAnywhereElse(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, consoleSettingsFileName)
+	store, _ := newDocumentStores(t, path, documentSeed())
+
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	defer slog.SetDefault(previous)
+
+	if err := store.setAPIKey(documentTestKey); err != nil {
+		t.Fatalf("setAPIKey: %v", err)
+	}
+	// The console's own adapter answers, and the reply shape carries no key.
+	adapter := consoleSettings{settings: store}
+	if profile := adapter.SettingsProfile(); profile.HasKey != true {
+		t.Fatalf("SettingsProfile().HasKey = %v, want the stored key reported as present", profile.HasKey)
+	}
+	encodedProfile, err := json.Marshal(profileSettingsView(adapter.SettingsProfile()))
+	if err != nil {
+		t.Fatalf("encode the profile: %v", err)
+	}
+	if strings.Contains(string(encodedProfile), documentTestKey) {
+		t.Errorf("the settings profile carries the key: %s", encodedProfile)
+	}
+	if response := storeGET(t, store); strings.Contains(response, documentTestKey) {
+		t.Errorf("the settings endpoint response carries the key: %s", response)
+	}
+	if describe := settingsDescribeValue(t, adapter); strings.Contains(describe, documentTestKey) {
+		t.Errorf("settings/describe carries the key: %s", describe)
+	}
+	if strings.Contains(logs.String(), documentTestKey) {
+		t.Errorf("a settings write put the key into the log: %s", logs.String())
+	}
+	// Every file the host wrote, in the whole directory.
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatalf("read the directory: %v", err)
+	}
+	for _, entry := range entries {
+		data, err := os.ReadFile(filepath.Join(directory, entry.Name()))
+		if err != nil {
+			t.Fatalf("read %s: %v", entry.Name(), err)
+		}
+		if entry.Name() != consoleSettingsFileName && strings.Contains(string(data), documentTestKey) {
+			t.Errorf("%s carries the credential; only the settings document may", entry.Name())
+		}
+	}
+}
+
+// profileSettingsView renders the profile the way the console sees it, so the test
+// asks about bytes rather than about a Go struct that happens to have no key field.
+func profileSettingsView(profile dshapi.SettingsProfile) any { return profile }
+
+// settingsDescribeValue drives the namespace's describe through the adapter the
+// console reaches it with.
+func settingsDescribeValue(t *testing.T, adapter consoleSettings) string {
+	t.Helper()
+	profile := adapter.SettingsProfile()
+	view := map[string]any{
+		"hasDocument": adapter.HasSettingsDocument(),
+		"profile":     profile,
+		"onboarding":  adapter.ConsoleSection("ui-onboarding"),
+	}
+	encoded, err := json.Marshal(view)
+	if err != nil {
+		t.Fatalf("encode the described view: %v", err)
+	}
+	return string(encoded)
+}
+
+// storeGET reads the plain settings endpoint the serve command also mounts.
+func storeGET(t *testing.T, store *settingsStore) string {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	store.serveHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/settings", nil))
+	return recorder.Body.String()
+}
+
+func TestConsoleSettingsDocumentCarriesRevisionsAndSections(t *testing.T) {
+	path := filepath.Join(t.TempDir(), consoleSettingsFileName)
+	store, profiles := newDocumentStores(t, path, documentSeed())
+	for range 3 {
+		store.AdvanceSettingsRevision(dshapi.PiAiNamespace)
+	}
+	if _, err := profiles.SetProviderProfile(dshapi.ProviderProfile{
+		Provider: "acme", API: dshapi.ProtocolAnthropicMessages, BaseURL: "https://acme.test",
+	}); err != nil {
+		t.Fatalf("SetProviderProfile: %v", err)
+	}
+	file, found, err := loadConsoleSettingsFile(path)
+	if err != nil || !found {
+		t.Fatalf("load the document: found=%v err=%v", found, err)
+	}
+	if got := file.Revisions[dshapi.PiAiNamespace]; got != 4 {
+		t.Errorf("document revision for %s = %d, want 4 (the initial revision plus three writes)", dshapi.PiAiNamespace, got)
+	}
+	if len(file.ProviderProfiles) != 1 || file.ProviderProfiles[0].Provider != "acme" {
+		t.Fatalf("document profiles = %+v, want the one declared route", file.ProviderProfiles)
+	}
+	// The document is JSON a operator can read, and it numbers itself.
+	if file.Version != consoleSettingsFileVersion {
+		t.Errorf("document version = %d, want %d", file.Version, consoleSettingsFileVersion)
+	}
+}
+
+func TestConsoleSettingsDocumentRemovesAProfileFromDisk(t *testing.T) {
+	path := filepath.Join(t.TempDir(), consoleSettingsFileName)
+	_, profiles := newDocumentStores(t, path, documentSeed())
+	for _, route := range []string{"acme", "other"} {
+		if _, err := profiles.SetProviderProfile(dshapi.ProviderProfile{
+			Provider: route, API: dshapi.ProtocolOpenAICompletions, BaseURL: "https://" + route + ".test/v1",
+			Models: []dshapi.ProviderModel{{ID: route + "-1"}},
+		}); err != nil {
+			t.Fatalf("declare %s: %v", route, err)
+		}
+	}
+	if err := profiles.RemoveProviderProfile("acme"); err != nil {
+		t.Fatalf("RemoveProviderProfile: %v", err)
+	}
+	restarted, restartedProfiles := newDocumentStores(t, path, documentSeed())
+	if got := restarted.SettingsRevision("llm-openai"); got != dshapi.SettingsInitialRevision {
+		t.Errorf("an untouched namespace reports revision %d, want the initial revision", got)
+	}
+	listed := restartedProfiles.ProviderProfiles()
+	if len(listed) != 1 || listed[0].Profile.Provider != "other" {
+		t.Fatalf("profiles after restart = %+v, want only the route that was not removed", listed)
+	}
+}
+
+func TestConsoleSettingsDocumentIsWrittenForTheLegacyEndpoint(t *testing.T) {
+	path := filepath.Join(t.TempDir(), consoleSettingsFileName)
+	store, _ := newDocumentStores(t, path, documentSeed())
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/settings", strings.NewReader(`{"model":"qwen-max","apiKey":"`+documentTestKey+`"}`))
+	request.RemoteAddr = "127.0.0.1:5555"
+	store.serveHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("POST /api/settings = %d: %s", recorder.Code, recorder.Body.String())
+	}
+	file, found, err := loadConsoleSettingsFile(path)
+	if err != nil || !found {
+		t.Fatalf("the plain settings endpoint did not write the document: found=%v err=%v", found, err)
+	}
+	if file.Model == nil || *file.Model != "qwen-max" {
+		t.Errorf("document model = %v, want the model that was posted", file.Model)
+	}
+	restarted, _ := newDocumentStores(t, path, documentSeed())
+	if !restarted.view().HasAPIKey {
+		t.Error("the credential posted to the plain endpoint did not survive the restart")
+	}
+}
+
+func TestConsoleSettingsDocumentLoadedBeforeTheFirstView(t *testing.T) {
+	path := filepath.Join(t.TempDir(), consoleSettingsFileName)
+	store, _ := newDocumentStores(t, path, documentSeed())
+	if err := store.replaceEndpoint(documentTestBaseURL, "qwen-max"); err != nil {
+		t.Fatalf("replaceEndpoint: %v", err)
+	}
+	if err := store.setAPIKey(documentTestKey); err != nil {
+		t.Fatalf("setAPIKey: %v", err)
+	}
+	// A host that starts from the document must answer its first catalog read from
+	// the document, not from the flags.
+	restarted, restartedProfiles := newDocumentStores(t, path, serverSettings{})
+	models := consoleModels{settings: restarted, profiles: restartedProfiles}
+	catalog := models.Catalog()
+	encoded := fmt.Sprintf("%+v", catalog)
+	if !strings.Contains(encoded, "qwen-max") {
+		t.Fatalf("the first model catalog after a restart = %s, want the stored model", encoded)
+	}
+}

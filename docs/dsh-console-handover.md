@@ -263,76 +263,105 @@ cannot call this tier done.
   one per committed change, and a stale `expectedRevision` is refused as
   `settings/conflict` with both revisions named (ADR 0087 amendment).
 
-## Takeover point: persist the console's settings and credential (decided 2026-09-19)
+## Shipped: the console's settings document (2026-09-19)
 
-Decided with the operator: **both the console-written settings and the credential
-persist**, in a file the operator's own configuration directory owns, so a restart
-no longer costs a re-typed API key. The conservative alternative -- settings on
-disk, key only through an environment variable -- was offered and declined.
+The chain the previous section decided is in, as **ADR 0102**. What the host does
+now, and what was decided along the way:
 
-What is true today: the settings live in the `serve` process (ADR 0094) and the
-workspace registry likewise (ADR 0101), so a restart loses the declared provider
-profiles, the endpoint, the model and the key; `settings/describe` reports
-`hasDocument: false`, and each namespace's revision starts again at its initial
-value.
+- **One file, in the host's own configuration directory**:
+  `<configlayer.UserConfigDir()>/console-settings.json` -- the directory the CLI's
+  user layer already reads from, moved by `ZENFORGE_CONFIG_DIR`, and named directly
+  by the new `serve --settings-file`. Not `os.UserConfigDir()`: a host with two
+  configuration homes has two places for an operator to look and one of them to
+  forget. It is never inside the served workspace, which is where a relative
+  `--settings-file` lands by default: `workspaceFiles/read` is confined to that root
+  (ADR 0089), so a document inside it is a credential a page could browse. With no
+  configuration directory at all the host stays process-local and says so once,
+  loudly, at startup.
+- **Settings and credential share the file**, so one atomic write covers both. The
+  split alternative was declined because a profile whose key has not arrived is a
+  state this host would have to invent a second commit for.
+- **`0600`, staged and renamed** (`0700` for a directory it has to create), flushed
+  before the close. A file whose mode grants access to group or others is *refused
+  at startup*, not quietly `chmod`ed: this host does not take control of a file it
+  did not create.
+- **A document that cannot be read stops the host**, naming the file and the kind of
+  damage -- truncated, wrong-typed, an unknown field, a version from a newer host.
+  The message never quotes the file, because the value the decoder is failing on may
+  be the credential, and the standard JSON error quotes values; a type error is
+  re-described here from its field name alone.
+- **The document is authoritative over the startup seed** and names the fields it
+  overrode at startup (`baseUrl`, `model`, `provider`, `api-key`), by name and never
+  by value -- and only the fields the seed actually carried, so a document that fills
+  a gap the flags left empty does not claim to have overridden a decision. Its four
+  settings fields are pointers, so "the console cleared this" and "nobody said
+  anything" stay different facts. `apiKeyEnv` -- the environment fallback -- is
+  startup configuration and is not copied into the file.
+- **`hasDocument` and the revisions come out of the file.** A store that versions its
+  own namespaces is asked instead of the handler counting per process
+  (`dshapi.SettingsRevisionStore`, implemented by the serve command's store), so a
+  console tab held open across a restart fences against the number the document
+  carries. The document is the commit point: a write that cannot reach the file puts
+  the store back and reports the refusal, so the running process and its document
+  never disagree.
+- **What is durable**: the endpoint, the model, the inline credential, the
+  console-owned namespaces (so the welcome notice stays dismissed, replacing ADR
+  0094's consequence), the declared provider profiles, and the per-namespace
+  revisions. **What is not**: the workspace registry (ADR 0101, deliberately outside
+  this chain -- a registered directory this host cannot run a session in is a
+  different question from a preference worth restoring) and a session's model
+  selection.
 
-Where the seam already is:
+Ledger: no row moved, because no method was added; the `credentials/set` and
+`settings/describe` descriptions now say what backs them.
 
-- `SettingsDocumentStore` (`internal/dshapi/settings.go`) is the face every write
-  funnels through: `SettingsProfile`, `SetSettingsEndpoint`, `SetSettingsModel`,
-  `SetSettingsKey`, `ClearSettingsKey`, `ConsoleSection`, `SetConsoleSection`.
-- `cli/serve.go` builds that store, the provider-profile store
-  (`cli/providerprofiles.go`) and the credential store, and passes them to
-  `dshmount.New`.
-- `settings/describe` is where `HasDocument`, `User` and `Revision` are reported
-  (`internal/dshapi/settings.go`).
-
-What the work has to decide, then do:
-
-1. **Location.** A host-owned directory, never the repository:
-   `os.UserConfigDir()` (on macOS `~/Library/Application Support/zenforge/`) or an
-   explicit flag such as `--settings-file`. Record the choice in the ADR.
-2. **One file or two.** The settings document and the credential may share one
-   `0600` file or be split; sharing lets one atomic write cover both.
-3. **Atomicity and permissions.** Temp file in the same directory, `0600`, then
-   rename. Assert the mode in a test (`os.Stat().Mode().Perm() == 0o600`), and
-   assert the file path is never the repository.
-4. **A corrupt or unreadable file.** Refuse at startup by name, or start empty and
-   say so on the wire -- never start empty silently, which is the same rule the
-   rest of this tier follows.
-5. **`hasDocument` and the revision.** A document that exists makes
-   `hasDocument: true`, and the revision must be **loaded from the file** rather
-   than reset, or a console tab open across a restart fences its next write
-   against a number that moved (ADR 0087 amendment).
-6. **What is never written anywhere else.** The key goes only into the `0600`
-   file: never a log line, an error string, an event, or `settings/describe`.
-   `secrets[].set` stays the only signal about it on the wire.
-7. **ADR, docs, tests.** A new ADR for the durable document; `docs/limitations.md`
-   entries replaced where "process-local" no longer holds; no ledger change, since
-   no method is added.
-
-The verification the fix above was proved with, to reuse on the persisted store
-(8787 is the operator's own host; the scratch preview ports are gone):
+Verification for the chain, to reuse:
 
 ```sh
+# The document exists, and its mode is the whole point.
+ls -l ~/.config/zenforge/console-settings.json
+# Restart the host and read the namespaces back: hasDocument is true, the revisions
+# are the numbers the file carries, and the endpoint, model, credential and declared
+# profiles are still there.
 curl -s -X POST http://127.0.0.1:8787/api/settings/describe -H 'content-type: application/json' \
   -d '{"type":"client-request","rpcId":"d1","method":"settings/describe","payload":{"args":{}}}'
-# Take that view's revision, then mutate with it as expectedRevision. The reply
-# must carry user.providers.<id>.models (what the console's editor reads back) and
-# a revision one higher; the superseded revision must then be refused as
-# settings/conflict. Restart the host and repeat: the profiles, the endpoint and
-# the credential must all still be there.
+# Take a revision, mutate with it as expectedRevision: the reply carries a revision
+# one higher, and the superseded number is then refused as settings/conflict.
 ```
+
+That sequence was run live against a scratch host, with `ZENFORGE_CONFIG_DIR` pointed
+at a throwaway directory so the experiment could not rewrite the operator's document:
+`--settings-file` off a scratch directory works the same way. A document is shared
+state now, and two hosts over one configuration directory replace each other's file.
+
+Tests: `go test ./cli/ -run TestConsoleSettingsDocument` -- the round trip across a
+restart, the mode with no staging leftover, the workspace refusal, the default path
+never inside the checkout, the loud process-local fallback when there is no
+configuration directory, six damaged documents refused by name with the credential
+absent from every message, a failed write keeping the old value standing, the startup
+line naming fields rather than values and staying quiet when it filled a gap rather
+than overrode a decision, a cleared override staying cleared, and the key appearing in
+exactly one file. And `go test ./internal/dshapi/ -run TestSettings`
+-- the store's `hasDocument` passed through both ways, and a store that versions its
+own namespaces asked instead of the handler counting.
+
+## Operator's one remaining step
+
+The host at `127.0.0.1:8787` runs the binary from *before* this chain, so it holds
+its key in memory only. Rebuilt and restarted, it needs the key typed **once more**;
+every start after that reads it back from the document. The one-time entry is the
+thing this chain exists to end, not a defect in it.
 
 ## Kickoff prompt for the next window
 
 > Read `docs/dsh-console-handover.md` end to end, then
-> `docs/dsh-console-coverage.md`. Continue the console-attachment objective: keep
-> the three layers separate (deep API -> harness core -> adapters, ADR 0099), land
-> every chain with an ADR + docs + tests + commit/push + green CI and docs, and
-> fill the ledger's gaps in its order. The next piece is decided and specified in
-> the last handover section: persist the console's settings and credential in a
-> `0600` host-owned file, with an ADR, tests, and the `docs/limitations.md`
-> updates. The operator's host runs on `127.0.0.1:8787` from this checkout; it
-> currently needs the API key re-entered once, because persistence is exactly what
-> is missing. Never `git add -A`.
+> `docs/dsh-console-coverage.md`. Continue the console-attachment objective: keep the
+> three layers separate (deep API -> harness core -> adapters, ADR 0099), land every
+> chain with an ADR + docs + tests + commit/push + green CI and docs, and fill the
+> ledger's gaps in its order. The settings document shipped (ADR 0102); the next item
+> is "Next up" 1 in the ledger -- re-testing the withheld `ui-directory-picker-browse`
+> plugin, which has to run on a scratch port because a plugin that fails activation is
+> a fatal boot page, and the operator's host on `127.0.0.1:8787` is the one that must
+> not be taken down by the experiment. Since the settings document is now shared state,
+> give a scratch host `ZENFORGE_CONFIG_DIR` or `--settings-file` under a throwaway
+> directory so it cannot rewrite the operator's document. Never `git add -A`.

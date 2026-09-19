@@ -56,6 +56,11 @@ func serveCommand(ctx context.Context, args []string, ioStreams IO) error {
 	addr := fs.String("addr", defaultServeAddr, "HTTP listen address; a non-loopback address requires --allow-remote")
 	allowRemote := fs.Bool("allow-remote", false, "allow binding a non-loopback address and remote settings changes")
 	runTimeout := fs.Duration("run-timeout", defaultServeRunTimeout, "bound on one served run")
+	// The settings document has a default the operator rarely needs to name: this
+	// host's own configuration directory. The flag is for the case where that is
+	// not where they want their credential kept, and -- like every other secret
+	// flag here -- it is taken verbatim.
+	settingsFile := fs.String("settings-file", "", "file the console's settings and credential persist to; defaults to console-settings.json in the host configuration directory")
 	// The secret falls back to the environment so it is not visible in argv,
 	// and an empty secret disables the signed webhook route rather than
 	// allowing an unauthenticated run trigger.
@@ -88,6 +93,7 @@ func serveCommand(ctx context.Context, args []string, ioStreams IO) error {
 		runTimeout:    *runTimeout,
 		webhookSecret: *webhookSecret,
 		allowRemote:   *allowRemote,
+		settingsFile:  *settingsFile,
 	})
 	if err != nil {
 		return err
@@ -133,6 +139,10 @@ type serveConfig struct {
 	runTimeout    time.Duration
 	webhookSecret string
 	allowRemote   bool
+	// settingsFile is the --settings-file decision: the path the console's
+	// settings document lives at, or empty for the host's own configuration
+	// directory (ADR 0102).
+	settingsFile string
 }
 
 // serveApp is the assembled server a command or a test can drive. It exists
@@ -178,16 +188,39 @@ func newServeApp(ctx context.Context, opts *options, ioStreams IO, config serveC
 	swappable := newSwappableModel()
 	opts.modelOverride = swappable
 
+	// The startup seed: what --base-url, --model, --api-key and the config layers
+	// produced. The settings document is compared against it so the host can name
+	// the fields it overrides.
+	seed := serverSettings{
+		baseURL:   opts.baseURL,
+		model:     opts.model,
+		provider:  opts.provider,
+		apiKey:    opts.apiKey,
+		apiKeyEnv: opts.apiKeyEnv,
+	}
 	settings := &settingsStore{
-		current: serverSettings{
-			baseURL:   opts.baseURL,
-			model:     opts.model,
-			provider:  opts.provider,
-			apiKey:    opts.apiKey,
-			apiKeyEnv: opts.apiKeyEnv,
-		},
-		model:       swappable,
+		current: seed,
+		seed:    seed,
+		model:   swappable,
+
 		allowRemote: config.allowRemote,
+	}
+	// The served directory, resolved before anything reads it: the settings
+	// document is refused inside it, and the console's workspace registry is
+	// built around it.
+	workspace := opts.workspace
+	if absolute, absErr := filepath.Abs(opts.workspace); absErr == nil {
+		workspace = absolute
+	}
+	profiles := newConsoleProviderProfiles(settings)
+	settings.profiles = profiles
+	// The console's settings document is read before the adapter is built, so the
+	// first run this host serves already uses the endpoint, the model and the
+	// credential the operator set in the browser last time (ADR 0102). A document
+	// that exists but cannot be read stops the host here, before a listener is
+	// opened, with the file named.
+	if _, err := newConsoleSettingsDocument(config.settingsFile, workspace, settings, profiles); err != nil {
+		return nil, err
 	}
 	// A missing key at startup is not fatal: the console exists so an
 	// operator can paste one. The build error is kept and reported when a run
@@ -210,11 +243,6 @@ func newServeApp(ctx context.Context, opts *options, ioStreams IO, config serveC
 	})
 	if err != nil {
 		return nil, err
-	}
-
-	workspace := opts.workspace
-	if absolute, absErr := filepath.Abs(opts.workspace); absErr == nil {
-		workspace = absolute
 	}
 
 	// The console groups sessions by workspace, and this host runs every
@@ -245,7 +273,6 @@ func newServeApp(ctx context.Context, opts *options, ioStreams IO, config serveC
 	// The settings store is the answer, so the picker reports the operator's
 	// own endpoint and model instead of an invented one; an unconfigured host
 	// returns an empty catalog and the console says so.
-	profiles := newConsoleProviderProfiles(settings)
 	models := consoleModels{settings: settings, profiles: profiles}
 	selections := newConsoleModelSelection(settings, models)
 	modelCatalog := models.Catalog
@@ -464,10 +491,12 @@ func (m *swappableModel) Stream(ctx context.Context, req model.Request) (<-chan 
 }
 
 // serverSettings is the in-memory model configuration. It is seeded from the
-// CLI, environment, and config layers at startup; a value set from the
-// console overrides the seed until the process restarts. The API key lives
-// only in this struct: it is never returned by the API, never logged, and
-// never written to disk.
+// CLI, environment, and config layers at startup and then from the settings
+// document, which overrides the seed for every field it names; a value set from
+// the console overrides both, and is written back into the document so the next
+// start reads it again. The API key lives in this struct and in that one `0600`
+// file: it is never returned by the API, never logged, and never written anywhere
+// else (ADR 0084, ADR 0102).
 type serverSettings struct {
 	baseURL  string
 	model    string
@@ -475,7 +504,9 @@ type serverSettings struct {
 	apiKey   string
 	// apiKeyEnv names the environment fallback the CLI was configured with,
 	// so hasApiKey can report a key the server would actually use without
-	// copying that key into memory.
+	// copying that key into memory. It is startup configuration, not a console
+	// setting, so the document does not carry it: a key the operator keeps in
+	// an environment variable stays there rather than being copied into a file.
 	apiKeyEnv string
 }
 
@@ -489,9 +520,183 @@ type settingsStore struct {
 	allowRemote bool
 	// consoleSections holds the settings namespaces the console owns: facts
 	// about the GUI rather than this host's configuration (ADR 0094). They live
-	// in this process with the rest of the console-written settings, which is
-	// what the document-less profile this host reports means.
+	// here with the rest of the console-written settings, and -- since this host
+	// now has a settings document -- they are written to it (ADR 0102).
 	consoleSections map[string]map[string]any
+	// revisions is each settings namespace's current revision. It lives here,
+	// beside the sections it numbers, so the number a console editor fenced
+	// against and the document it came from cannot disagree (ADR 0087, ADR 0102).
+	revisions map[string]int64
+	// document is the durable half. A nil writer leaves this host exactly what it
+	// was before ADR 0102: process-local settings that report hasDocument false.
+	document *consoleSettingsWriter
+	// seed is what the host was started with. It is kept only so the startup line
+	// can name the fields the settings document overrides, and no request path
+	// reads it.
+	seed serverSettings
+	// profiles is the declared-provider store whose profiles the document also
+	// carries. It is a face rather than the concrete store because the two are
+	// built together in newServeApp and each holds the other.
+	profiles profileSnapshot
+}
+
+// profileSnapshot is the part of the provider-profile store the settings document
+// needs: the declared profiles, in declaration order, with their serviceability
+// diagnostics.
+type profileSnapshot interface {
+	ProviderProfiles() []dshapi.ProviderProfileStatus
+}
+
+// persist writes the settings document after a committed change. Every mutator
+// calls it after it has committed and released its lock, never while holding one:
+// the writer pulls a fresh snapshot of the live state, and a snapshot taken under
+// the store's own lock would deadlock against the next one.
+func (s *settingsStore) persist() error { return s.document.save() }
+
+// documentFile renders the whole console-written state as the document: the live
+// settings, the namespaces the console owns, the revisions, and the declared
+// provider profiles this store was wired to (ADR 0102).
+func (s *settingsStore) documentFile() consoleSettingsFile {
+	file := consoleSettingsFile{}
+	if s == nil {
+		return file
+	}
+	s.mu.RLock()
+	route, modelName, baseURL, apiKey := s.current.provider, s.current.model, s.current.baseURL, s.current.apiKey
+	sections := make(map[string]map[string]any, len(s.consoleSections))
+	for namespace, section := range s.consoleSections {
+		stored := make(map[string]any, len(section))
+		for key, value := range section {
+			stored[key] = value
+		}
+		sections[namespace] = stored
+	}
+	revisions := make(map[string]int64, len(s.revisions))
+	for namespace, revision := range s.revisions {
+		revisions[namespace] = revision
+	}
+	s.mu.RUnlock()
+	file.Provider, file.Model, file.BaseURL, file.APIKey = &route, &modelName, &baseURL, &apiKey
+	if len(sections) > 0 {
+		file.ConsoleSections = sections
+	}
+	if len(revisions) > 0 {
+		file.Revisions = revisions
+	}
+	if s.profiles != nil {
+		file.ProviderProfiles = profileRecords(s.profiles.ProviderProfiles())
+	}
+	return file
+}
+
+// applyDocument copies a loaded document over the startup seed. A field the
+// document leaves out keeps the value the host was started with: the document
+// records what the console wrote, and an absent field is one it never spoke about.
+func (s *settingsStore) applyDocument(file consoleSettingsFile) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	if file.Provider != nil {
+		s.current.provider = *file.Provider
+	}
+	if file.Model != nil {
+		s.current.model = *file.Model
+	}
+	if file.BaseURL != nil {
+		s.current.baseURL = *file.BaseURL
+	}
+	if file.APIKey != nil {
+		s.current.apiKey = *file.APIKey
+	}
+	if len(file.ConsoleSections) > 0 {
+		if s.consoleSections == nil {
+			s.consoleSections = make(map[string]map[string]any, len(file.ConsoleSections))
+		}
+		for namespace, section := range file.ConsoleSections {
+			stored := make(map[string]any, len(section))
+			for key, value := range section {
+				stored[key] = value
+			}
+			s.consoleSections[namespace] = stored
+		}
+	}
+	if len(file.Revisions) > 0 {
+		if s.revisions == nil {
+			s.revisions = make(map[string]int64, len(file.Revisions))
+		}
+		for namespace, revision := range file.Revisions {
+			s.revisions[namespace] = revision
+		}
+	}
+	s.mu.Unlock()
+}
+
+// SettingsRevision reports one namespace's revision as this host's document has
+// it. An unwritten namespace starts at the initial revision, which is what an
+// editor's first read fences against.
+func (s *settingsStore) SettingsRevision(namespace string) int64 {
+	if s == nil {
+		return dshapi.SettingsInitialRevision
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if revision, ok := s.revisions[namespace]; ok {
+		return revision
+	}
+	return dshapi.SettingsInitialRevision
+}
+
+// AdvanceSettingsRevision records one committed change to a namespace and returns
+// the revision the change produced, then writes it through the document.
+//
+// The write cannot be part of the caller's decision: by the time the handler
+// advances a revision the change it numbers has already committed and persisted,
+// so a document that will not take the number is put back to the one it holds and
+// reported. The field write and the file then still agree, at a revision one
+// lower than this process answered with -- the conservative direction, since a
+// client fencing against a number the file does not have yet gets a conflict and
+// re-reads rather than overwriting something it never saw.
+func (s *settingsStore) AdvanceSettingsRevision(namespace string) int64 {
+	if s == nil {
+		return dshapi.SettingsInitialRevision
+	}
+	s.mu.Lock()
+	if s.revisions == nil {
+		s.revisions = make(map[string]int64, 4)
+	}
+	previous, had := s.revisions[namespace]
+	// An unwritten namespace stands at the initial revision, so the change this
+	// call numbers moves it to the next one -- the same rule the handler follows
+	// when a store does not version its own namespaces.
+	standing := dshapi.SettingsInitialRevision
+	if had {
+		standing = previous
+	}
+	revision := standing + 1
+	s.revisions[namespace] = revision
+	s.mu.Unlock()
+	if err := s.persist(); err != nil {
+		s.mu.Lock()
+		if had {
+			s.revisions[namespace] = previous
+		} else {
+			delete(s.revisions, namespace)
+		}
+		s.mu.Unlock()
+		slog.Warn("the settings revision could not be written to the settings document", "namespace", namespace, "error", err)
+	}
+	return revision
+}
+
+// HasSettingsDocument reports whether this host's console settings are backed by a
+// document it has read or written (ADR 0102). It is what `settings/describe`
+// answers as hasDocument.
+func (s *settingsStore) HasSettingsDocument() bool {
+	if s == nil {
+		return false
+	}
+	return s.document.hasDocument()
 }
 
 // ConsoleSection reports a console-owned namespace's stored section. The map is
@@ -509,18 +714,31 @@ func (s *settingsStore) ConsoleSection(namespace string) map[string]any {
 
 // SetConsoleSection records one. An empty section is stored as empty rather than
 // deleting the namespace, so a cleared field reads back the same way as one that
-// was never written.
+// was never written. The change is then written through the settings document: an
+// acknowledgement the console saved is now expected to outlive the host that saved
+// it (ADR 0102), and a document that refuses to take it puts the section back.
 func (s *settingsStore) SetConsoleSection(namespace string, section map[string]any) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.consoleSections == nil {
-		s.consoleSections = make(map[string]map[string]any)
-	}
 	stored := make(map[string]any, len(section))
 	for key, value := range section {
 		stored[key] = value
 	}
+	s.mu.Lock()
+	if s.consoleSections == nil {
+		s.consoleSections = make(map[string]map[string]any)
+	}
+	previous, had := s.consoleSections[namespace]
 	s.consoleSections[namespace] = stored
+	s.mu.Unlock()
+	if err := s.persist(); err != nil {
+		s.mu.Lock()
+		if had {
+			s.consoleSections[namespace] = previous
+		} else {
+			delete(s.consoleSections, namespace)
+		}
+		s.mu.Unlock()
+		return err
+	}
 	return nil
 }
 
@@ -560,13 +778,11 @@ func (s *settingsStore) setAPIKey(value string) error {
 // The clearing is committed first and the adapter rebuild records the error,
 // exactly as startup does for an operator who has not configured a key yet.
 func (s *settingsStore) clearAPIKey() error {
-	s.mu.Lock()
+	s.mu.RLock()
 	next := s.current
+	s.mu.RUnlock()
 	next.apiKey = ""
-	s.current = next
-	s.mu.Unlock()
-	s.rebuild()
-	return nil
+	return s.commitSettings(next)
 }
 
 // replaceAPIKey commits a new inline key after proving the adapter still
@@ -578,20 +794,37 @@ func (s *settingsStore) replaceAPIKey(key string) error {
 	next := s.current
 	s.mu.RUnlock()
 	next.apiKey = key
-	adapter, err := provider.FromEnv(provider.Config{
+	if _, err := provider.FromEnv(provider.Config{
 		Protocol:  next.provider,
 		Model:     next.model,
 		BaseURL:   next.baseURL,
 		APIKey:    next.apiKey,
 		APIKeyEnv: next.apiKeyEnv,
-	})
-	if err != nil {
+	}); err != nil {
 		return err
 	}
+	return s.commitSettings(next)
+}
+
+// commitSettings stores one candidate configuration, rebuilds the adapter from
+// it, and writes the settings document. A document that cannot be written puts
+// back what the store held and returns the failure: a change that is live but not
+// durable is the disagreement between the Models page and the next restart that
+// this document exists to remove, so a refused write leaves the process and its
+// file agreeing on the old value.
+func (s *settingsStore) commitSettings(next serverSettings) error {
 	s.mu.Lock()
+	previous := s.current
 	s.current = next
 	s.mu.Unlock()
-	s.model.set(adapter, nil)
+	s.rebuild()
+	if err := s.persist(); err != nil {
+		s.mu.Lock()
+		s.current = previous
+		s.mu.Unlock()
+		s.rebuild()
+		return err
+	}
 	return nil
 }
 
@@ -625,19 +858,17 @@ func (s *settingsStore) replaceEndpoint(baseURL, model string) error {
 	if err != nil {
 		return err
 	}
-	s.mu.Lock()
+	s.mu.RLock()
 	next := s.current
+	s.mu.RUnlock()
 	next.baseURL = normalized.BaseURL
 	if normalized.Model != "" {
 		next.model = normalized.Model
 	}
-	s.current = next
-	s.mu.Unlock()
 	// A rebuild that cannot build an adapter records the failure instead of
 	// returning it, exactly as startup does for an operator who has not
 	// configured a key yet.
-	s.rebuild()
-	return nil
+	return s.commitSettings(next)
 }
 
 // consoleExecutionModes lists the execution presets this host implements. The ids
@@ -763,6 +994,28 @@ func (c consoleSettings) SetConsoleSection(namespace string, section map[string]
 	return c.settings.SetConsoleSection(namespace, section)
 }
 
+// HasSettingsDocument, SettingsRevision and AdvanceSettingsRevision pass the
+// durable half through: the document the store owns is what the console's page
+// reads `hasDocument` from, and the revisions it numbers are the fences an editor
+// writes back against (ADR 0087, ADR 0102).
+func (c consoleSettings) HasSettingsDocument() bool { return c.settings.HasSettingsDocument() }
+
+func (c consoleSettings) SettingsRevision(namespace string) int64 {
+	return c.settings.SettingsRevision(namespace)
+}
+
+func (c consoleSettings) AdvanceSettingsRevision(namespace string) int64 {
+	return c.settings.AdvanceSettingsRevision(namespace)
+}
+
+// The settings adapter is pinned to both faces so a method added to either one of
+// the console's settings contracts fails the build here rather than answering
+// unimplemented at runtime.
+var (
+	_ dshapi.SettingsDocumentStore = consoleSettings{}
+	_ dshapi.SettingsRevisionStore = consoleSettings{}
+)
+
 // consoleCredentials adapts the settings store to the console's credentials
 // namespace (ADR 0084). The host has one model credential, so every reference
 // the panel names is answered from it and a stored value replaces it; the value
@@ -839,14 +1092,16 @@ func (s *settingsStore) rebuild() {
 
 // apply validates and commits a settings change. The candidate adapter is
 // built before anything is stored, so a request that names an unreachable or
-// incomplete configuration leaves the running server untouched.
+// incomplete configuration leaves the running server untouched, and a settings
+// document that cannot be written leaves it untouched as well (ADR 0102).
 func (s *settingsStore) apply(req settingsRequest) (settingsView, error) {
 	normalized, err := normalizeSettingsRequest(req)
 	if err != nil {
 		return settingsView{}, err
 	}
-	s.mu.Lock()
+	s.mu.RLock()
 	next := s.current
+	s.mu.RUnlock()
 	next.baseURL = normalized.BaseURL
 	if normalized.Model != "" {
 		next.model = normalized.Model
@@ -857,23 +1112,18 @@ func (s *settingsStore) apply(req settingsRequest) (settingsView, error) {
 	if normalized.APIKey != "" {
 		next.apiKey = normalized.APIKey
 	}
-	s.mu.Unlock()
-
-	adapter, err := provider.FromEnv(provider.Config{
+	if _, err := provider.FromEnv(provider.Config{
 		Protocol:  next.provider,
 		Model:     next.model,
 		BaseURL:   next.baseURL,
 		APIKey:    next.apiKey,
 		APIKeyEnv: next.apiKeyEnv,
-	})
-	if err != nil {
+	}); err != nil {
 		return settingsView{}, err
 	}
-
-	s.mu.Lock()
-	s.current = next
-	s.mu.Unlock()
-	s.model.set(adapter, nil)
+	if err := s.commitSettings(next); err != nil {
+		return settingsView{}, err
+	}
 	return s.view(), nil
 }
 

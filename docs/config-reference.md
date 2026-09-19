@@ -271,6 +271,14 @@ profiles instead of silently running with the base configuration.
 `--strict-config` rejects any field this version does not recognize and names
 the layer that set it.
 
+The layers above are all inputs. `zenforge serve` also *writes* one file beside
+them -- `console-settings.json` in the same directory as the user layer, or the
+path given to `--settings-file` -- which holds the endpoint, model, inline
+credential, declared provider profiles and settings revisions the console wrote
+(ADR 0102). It is not a layer: no other command reads it, it does not compose
+into the table above, and a field the document names outranks the seed these
+layers produce. It is written `0600`, because it holds the key.
+
 A profile is an ordinary config fragment::
 
 ```json

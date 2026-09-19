@@ -38,6 +38,7 @@ does not persist.
 | `--allow-remote` | off | Permit binding a non-loopback address. |
 | `--run-timeout` | server default | Bound on a run started from the console. |
 | `--webhook-secret` | unset | When set, the signed webhook endpoint (ADR 0070) is served as well. |
+| `--settings-file` | `<config dir>/console-settings.json` | The file the console's settings and credential persist to (ADR 0102). |
 
 The usual options apply too: `--config`, `--workspace`, `--model`,
 `--base-url`, `--api-key`, `--provider`, `--approve`, and the tool and sandbox
@@ -57,13 +58,24 @@ options. `zenforge serve --help` lists them.
 
 ## Keys entered in the page
 
-- A page-set key is held in memory for the lifetime of the server process. It is
-  never written to disk, never logged, and never returned by the API: the
-  settings endpoint reports only whether a key is set.
+- A page-set key is written to one place: `console-settings.json` in the host's
+  own configuration directory, created `0600` and renamed into place (ADR 0102).
+  It is never logged, never returned by the API, and never written anywhere else:
+  the settings endpoint reports only whether a key is set.
 - An empty key field means "keep the key you already have", so a model can be
   changed without re-typing a credential the page was never shown.
-- Command-line and environment values are the defaults; a page-set value
-  overrides one until the server restarts.
+- Command-line and environment values seed the host; the settings document
+  overrides them for every field it names, and the startup line says which fields
+  it overrode (by name, never by value). A key the operator keeps in an
+  environment variable is left there: the document stores the inline key, not the
+  name of a variable to read.
+- Restarting the host costs nothing: the endpoint, the model, the credential, the
+  declared provider profiles and the settings revisions are read back before the
+  first run is served.
+- A document this host cannot read stops it at startup, naming the file and the
+  damage rather than its contents. An unreadable settings file is never quietly
+  ignored: the Models page would otherwise come back empty and claim it was a
+  fresh host.
 - Settings changes are accepted only from a loopback client unless
   `--allow-remote` was passed.
 

@@ -16,8 +16,6 @@ later ADRs supersede earlier ones, never edit.
 
 | Number | Topic |
 | --- | --- |
-| Number | Topic |
-| --- | --- |
 | [0001](0001-event-log-and-checkpoint.md) | Event log and checkpoint stores |
 | [0002](0002-public-event-contract.md) | Public event contract |
 | [0003](0003-tool-runtime.md) | Tool runtime |
@@ -132,3 +130,4 @@ and what the adapter answers today is
 | [0098](0098-a-declared-profile-is-edited-field-by-field.md) | A declared profile is edited field by field |
 | [0100](0100-the-directory-picker-serves-the-browse-half-and-refuses-the-native-half.md) | The directory picker serves the browse half and refuses the native half |
 | [0101](0101-the-console-workspace-registry-is-process-local.md) | The console's workspace registry is process-local, and sessions run in the host's one directory |
+| [0102](0102-the-consoles-settings-and-credential-persist-in-a-host-owned-file.md) | The console's settings and credential persist in a host-owned file |

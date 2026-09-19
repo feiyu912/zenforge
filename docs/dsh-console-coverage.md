@@ -50,7 +50,7 @@ method list.
 | `commands/execute` | served | Run one slash command. |
 | `commands/list` | served | The workspace's slash commands. |
 | `credentials/describe` | served | Whether a credential reference is set — never its value. |
-| `credentials/set` | served | Store the one credential this host holds, in memory. |
+| `credentials/set` | served | Store the one credential this host holds, in its `0600` settings document. |
 | `credentials/unset` | served | Clear the stored credential. |
 | `directoryPicker/createDirectory` | served | Create one child directory under an existing parent. |
 | `directoryPicker/list` | served | One directory level with its ancestry, for the in-app browser. |
@@ -68,7 +68,7 @@ method list.
 | `session/rename` | served | Rename a session. |
 | `session/selectModel` | served | Choose the provider and model a session runs on. |
 | `settings/canOpenAgentPresetDirectory` | served | Whether a native editor can be opened here (it cannot). |
-| `settings/describe` | served | The settings namespaces, their schema and their values. |
+| `settings/describe` | served | The settings namespaces, their schema, their values, and whether a document holds them (ADR 0102). |
 | `settings/mutate` | served | Apply settings operations. |
 | `settings/replace` | served | Replace a settings value. |
 | `settings/update` | served | Update a settings value. |

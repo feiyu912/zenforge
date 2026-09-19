@@ -28,12 +28,15 @@ import (
 // node, so a profile without it renders no card at all.
 const settingsSchemaJSON = `{"uid":11,"refs":{"1":{"type":"string","meta":{"description":"Base URL of the OpenAI-compatible endpoint"}},"4":{"type":"string","meta":{"role":"secret","description":"API key for this endpoint"}},"6":{"type":"string","meta":{"description":"Default model id"}},"7":{"type":"object","meta":{"default":{}},"dict":{"baseURL":1,"apiKey":4,"model":6}},"8":{"type":"object","meta":{"default":{}},"dict":{"api":7}},"9":{"type":"dict","meta":{"default":{}},"inner":8,"sKey":10},"10":{"type":"string","meta":{}},"11":{"type":"object","meta":{"default":{}},"dict":{"providers":9}}}}`
 
-// settingsRevision is the revision a namespace starts at. It has no versioned
-// document to number -- the settings live in the running process -- so the value
-// is constant and a write returns it again. A client that sends back what it
-// read therefore never conflicts, and one that sends something else is refused
-// rather than silently overwriting a state it did not read.
-const settingsRevision = 1
+// SettingsInitialRevision is the revision a namespace starts at when nothing has
+// been written to it. A store that versions its own namespaces begins every one
+// here, and a host with no document counts its writes from here (ADR 0087). It is
+// exported because the durable store this tier is injected with has to start
+// unwritten namespaces at the same number the handler would have.
+const SettingsInitialRevision int64 = 1
+
+// settingsRevision is the local name the process-local counting path uses.
+const settingsRevision = SettingsInitialRevision
 
 // SettingsSecretView marks one schema-declared secret slot and whether a value
 // is configured. Upstream types.ts:20-23.
@@ -70,9 +73,11 @@ type SettingsNamespaceView struct {
 type SettingsDescribeValue struct {
 	// Writable reports whether this surface may change the settings.
 	Writable bool `json:"writable"`
-	// HasDocument reports whether a settings document exists on the host. This
-	// host holds its configuration in the running process, so false is the
-	// honest answer and it is why the page offers no "open the file" action.
+	// HasDocument reports whether a settings document exists on the host. It is
+	// the store's answer, not this package's: a host that holds its configuration
+	// only in the running process says false, and one that persists a `0600`
+	// document says true (ADR 0102). The console reads the flag to decide whether
+	// it may offer the file at all.
 	HasDocument bool `json:"hasDocument"`
 	// Namespaces holds one view per registered namespace.
 	Namespaces []SettingsNamespaceView `json:"namespaces"`
@@ -119,6 +124,28 @@ type SettingsDocumentStore interface {
 	ConsoleSection(namespace string) map[string]any
 	// SetConsoleSection records such a namespace's whole section.
 	SetConsoleSection(namespace string, section map[string]any) error
+	// HasSettingsDocument reports whether this host holds a settings document on
+	// disk. It is what `settings/describe` answers as `hasDocument`, and the
+	// console renders its "open the file" affordances from it: a host that keeps
+	// its configuration in the running process says false, and one that persists
+	// a document says true (ADR 0102).
+	HasSettingsDocument() bool
+}
+
+// SettingsRevisionStore is the optional face of a store that versions its own
+// namespaces. A revision is a property of the document, not of the request
+// stream: an editor fences its next write with the number it was handed, so a
+// host whose document survives a restart has to load the numbers from the
+// document rather than start counting again (the fencing rule of ADR 0087, and
+// the reason a durable document carries its revisions, ADR 0102). A store that
+// does not implement this face is versioned in the handler's memory, which is
+// what a host with no document honestly has.
+type SettingsRevisionStore interface {
+	// SettingsRevision reports the revision a namespace is at now.
+	SettingsRevision(namespace string) int64
+	// AdvanceSettingsRevision records one committed change to a namespace and
+	// returns the revision it produced.
+	AdvanceSettingsRevision(namespace string) int64
 }
 
 // SetSettingsDocument installs the store the settings methods answer from.
@@ -176,11 +203,15 @@ const (
 // optional, so an unacknowledged namespace validates as an empty section.
 var consoleOnboardingSchemaJSON = []byte(`{"uid":2,"refs":{"1":{"type":"string","meta":{"description":"Last welcome notice version this console acknowledged"}},"2":{"type":"object","meta":{"default":{}},"dict":{"welcomeNoticeVersion":1}}}}`)
 
-// settingsConsoleNamespace reports whether this host holds the namespace for the
 // settingsRevisionFor reports the revision of one namespace's user section as
-// this host has served it. A namespace this process has not written yet starts
-// at settingsRevision, which is what an editor's first read fences against.
+// this host has served it. A store that versions its own namespaces is asked --
+// that is where its document's revision lives (ADR 0102). Otherwise the count is
+// this process's: a namespace this host has not written yet starts at
+// settingsRevision, which is what an editor's first read fences against.
 func (h *Handler) settingsRevisionFor(namespace string) int64 {
+	if store, ok := h.settingsStore().(SettingsRevisionStore); ok {
+		return store.SettingsRevision(namespace)
+	}
 	h.settingsRevisionMu.Lock()
 	defer h.settingsRevisionMu.Unlock()
 	return h.settingsRevisionsFor(namespace)
@@ -202,8 +233,13 @@ func (h *Handler) settingsRevisionsFor(namespace string) int64 {
 
 // advanceSettingsRevision records a committed change to one namespace and
 // returns the revision the change produced. Every accepted write moves it, so an
-// editor that reads the view back learns that its write landed.
+// editor that reads the view back learns that its write landed. A store that
+// versions its own namespaces is told, rather than this process counting ahead of
+// the document the console will read after a restart.
 func (h *Handler) advanceSettingsRevision(namespace string) int64 {
+	if store, ok := h.settingsStore().(SettingsRevisionStore); ok {
+		return store.AdvanceSettingsRevision(namespace)
+	}
 	h.settingsRevisionMu.Lock()
 	defer h.settingsRevisionMu.Unlock()
 	revision := h.settingsRevisionsFor(namespace) + 1
@@ -221,7 +257,9 @@ func settingsViewWithRevision(value any, revision int64) any {
 	return value
 }
 
-// console rather than mapping it to its own configuration.
+// settingsConsoleNamespace reports whether the console rather than this host owns
+// a namespace: a namespace the console holds facts about itself, not one that
+// configures the model endpoint.
 func settingsConsoleNamespace(namespace string) bool {
 	return namespace == consoleOnboardingNamespace
 }
@@ -409,7 +447,11 @@ func (h *Handler) settingsDescribe(_ context.Context, args map[string]json.RawMe
 	if profiles := h.providerProfileStore(); profiles != nil {
 		namespaces = append(namespaces, settingsPiAiView(profiles.ProviderProfiles(), h.settingsRevisionFor(PiAiNamespace)))
 	}
-	return SettingsDescribeValue{Writable: true, HasDocument: false, Namespaces: namespaces}, nil
+	return SettingsDescribeValue{
+		Writable:    true,
+		HasDocument: store.HasSettingsDocument(),
+		Namespaces:  namespaces,
+	}, nil
 }
 
 // settingsMutate answers POST /api/settings/mutate, the write the Models page

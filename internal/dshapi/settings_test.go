@@ -19,9 +19,18 @@ type stubSettings struct {
 	fail      error
 	// sections holds the namespaces the console owns (ADR 0094).
 	sections map[string]map[string]any
+	// hasDocument is what the stub reports for the durable-document flag. A host
+	// whose settings live in a file says true (ADR 0102); the zero value keeps the
+	// process-local answer the older assertions were written against.
+	hasDocument bool
 }
 
 func (s *stubSettings) SettingsProfile() SettingsProfile { return s.profile }
+
+// HasSettingsDocument answers the flag settings/describe reports, so a test can
+// prove the handler passes the store's answer through rather than asserting one of
+// its own (ADR 0102).
+func (s *stubSettings) HasSettingsDocument() bool { return s.hasDocument }
 
 func (s *stubSettings) SetSettingsEndpoint(baseURL string) error {
 	if s.fail != nil {
@@ -613,5 +622,98 @@ func TestSettingsViewsCarryTheUserLayerAndAMovingRevision(t *testing.T) {
 		`{"ns":"llm-pi-ai","expectedRevision":2,"ops":[{"op":"set","path":["providers","qwen","baseURL"],"value":"https://third.example.test/v1"}]}`))
 	if envelope := decodeResponse(t, fresh); !envelope.Result.OK {
 		t.Fatalf("the write fenced at the revision it was handed was refused: %+v", envelope.Result.Error)
+	}
+}
+
+// documentStub is a settings face that versions its own namespaces and reports a
+// durable document, which is what a store backed by the host's settings file is
+// (ADR 0102). It exists to pin the two ways the handler must defer to such a store
+// rather than keeping its own answers.
+type documentStub struct {
+	stubSettings
+	revisions map[string]int64
+	advanced  []string
+}
+
+func (s *documentStub) HasSettingsDocument() bool { return true }
+
+func (s *documentStub) SettingsRevision(namespace string) int64 {
+	if revision, ok := s.revisions[namespace]; ok {
+		return revision
+	}
+	return SettingsInitialRevision
+}
+
+func (s *documentStub) AdvanceSettingsRevision(namespace string) int64 {
+	revision := s.SettingsRevision(namespace) + 1
+	if s.revisions == nil {
+		s.revisions = map[string]int64{}
+	}
+	s.revisions[namespace] = revision
+	s.advanced = append(s.advanced, namespace)
+	return revision
+}
+
+func TestSettingsDescribeReportsTheStoresDocument(t *testing.T) {
+	f := newFixture(t, Config{})
+	f.handler.SetSettingsDocument(&documentStub{
+		stubSettings: stubSettings{profile: SettingsProfile{Provider: "openai", Model: "qwen-plus", HasKey: true}},
+	})
+	var described SettingsDescribeValue
+	decodeValue(t, f.post(t, "/api/settings/describe", rpcBody(t, "d1", "settings/describe", "")), &described)
+	if !described.HasDocument {
+		t.Fatal("hasDocument = false, want the store's answer passed through (ADR 0102)")
+	}
+
+	// And the other way round: a store that holds nothing durable says so, which
+	// is the answer a page reads to decide whether it may offer a file at all.
+	local := newFixture(t, Config{})
+	local.handler.SetSettingsDocument(&stubSettings{profile: SettingsProfile{Provider: "openai"}})
+	var describedLocal SettingsDescribeValue
+	decodeValue(t, local.post(t, "/api/settings/describe", rpcBody(t, "d2", "settings/describe", "")), &describedLocal)
+	if describedLocal.HasDocument {
+		t.Fatal("hasDocument = true for a store with no document")
+	}
+}
+
+func TestSettingsRevisionsComeFromAStoreThatVersionsThem(t *testing.T) {
+	f := newFixture(t, Config{})
+	store := &documentStub{
+		stubSettings: stubSettings{profile: SettingsProfile{Provider: "openai", Model: "qwen-plus", HasKey: true}},
+		// The number a document loaded at startup carries: this host has served
+		// three writes to the namespace before this process began.
+		revisions: map[string]int64{"llm-openai": SettingsInitialRevision + 2},
+	}
+	f.handler.SetSettingsDocument(store)
+
+	var described SettingsDescribeValue
+	decodeValue(t, f.post(t, "/api/settings/describe", rpcBody(t, "r1", "settings/describe", "")), &described)
+	if got := namespaceIn(t, described, "llm-openai").Revision; got != SettingsInitialRevision+2 {
+		t.Fatalf("revision = %d, want the loaded document's number: a fence that resets on restart lets a stale editor overwrite (ADR 0087, ADR 0102)", got)
+	}
+	// The handler's own counting must have stayed untouched, or the store would be
+	// the second source of truth rather than the only one.
+	if len(f.handler.settingsRevisions) != 0 {
+		t.Fatalf("the handler kept its own revision map: %v", f.handler.settingsRevisions)
+	}
+
+	// The document's number fences the write, and the accepted write moves it.
+	written := fmt.Sprintf(`{"ns":"llm-openai","expectedRevision":%d,"ops":[{"op":"set","path":["providers","openai","api","model"],"value":"qwen-max"}]}`,
+		SettingsInitialRevision+2)
+	envelope := decodeResponse(t, f.post(t, "/api/settings/mutate", rpcBody(t, "r2", "settings/mutate", written)))
+	if !envelope.Result.OK {
+		t.Fatalf("the write fenced at the loaded revision was refused: %+v", envelope.Result.Error)
+	}
+	if got := store.SettingsRevision("llm-openai"); got != SettingsInitialRevision+3 {
+		t.Fatalf("the store's revision = %d, want the write to have moved it", got)
+	}
+	if len(store.advanced) != 1 || store.advanced[0] != "llm-openai" {
+		t.Fatalf("the store was told to advance %v, want exactly the namespace that was written", store.advanced)
+	}
+	stale := assertMethodFailure(t, f.post(t, "/api/settings/mutate", rpcBody(t, "r3", "settings/mutate",
+		fmt.Sprintf(`{"ns":"llm-openai","expectedRevision":%d,"ops":[{"op":"set","path":["providers","openai","api","model"],"value":"qwen-plus"}]}`,
+			SettingsInitialRevision+2))), codeSettingsConflict)
+	if stale.Result.Error.Details["revision"] != float64(SettingsInitialRevision+3) {
+		t.Fatalf("conflict details = %v, want the store's current revision named", stale.Result.Error.Details)
 	}
 }

@@ -193,13 +193,14 @@ what is experimental, and what remains adapter territory.
   with their pinned upstream revision, patch and recipe
   (`scripts/build-console.sh`), because the upstream build cannot be renamed at
   runtime (ADR 0079).
-- The **revision a settings namespace reports is process-local**: it counts the
-  writes this process has served and starts again at the initial revision after a
-  restart, so a console tab held open across a restart re-reads before it writes
-  rather than trusting the number it was holding.
-- The **welcome notice's acknowledgement is process-local**: it is stored with
-  the rest of the console-written settings, so it survives a page reload but not a
-  host restart, after which the notice appears again (ADR 0094).
+- The **console's settings document is not watched**: it is read at startup and
+  rewritten whole on each committed change, so an edit made to the file by hand
+  while the host runs is overwritten by the next write, and two `serve` processes
+  sharing one configuration directory replace each other's document rather than
+  merging them (ADR 0102).
+- The **welcome notice's acknowledgement is durable**: the console writes it into
+  the same `0600` document as the endpoint, the model and the credential, so it
+  survives a restart and the notice stays dismissed (ADR 0094, ADR 0102).
 - The console's browser-visible identity reads `zenforge` in its title, manifest,
   favicon name and brand copy (ADR 0092); prose and documentation keep the
   sentence-case `ZenForge` stylisation.
@@ -514,7 +515,11 @@ the run request) before an adapter can honor them.
 ## A registered workspace does not survive a restart
 
 Workspace registrations, their titles and the archived session set are
-process-local console state, like the settings the console writes (ADR 0094).
-The repository has no durable home for a console preference, so a restart starts
-the list from the host's own directory again. A session's transcript and its
+process-local console state. The console's *settings* are not: since ADR 0102 the
+endpoint, the model, the credential, the declared provider profiles and the
+namespaces the console owns are held in a `0600` document in the host's own
+configuration directory, and the registry was deliberately left out of that
+change -- a registered directory this host cannot run a session in (ADR 0101) is a
+different question from a preference worth restoring. So a restart starts the
+workspace list from the host's own directory again. A session's transcript and its
 workspace files are unaffected: those live in the run logs and on disk.

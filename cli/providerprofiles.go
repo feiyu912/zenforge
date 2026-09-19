@@ -19,6 +19,10 @@ import (
 // shows for repair, exactly as upstream's directory `error` field does.
 type consoleProviderProfiles struct {
 	settings *settingsStore
+	// document is the settings document these profiles are stored in. A nil
+	// writer leaves the declarations process-local, which is what a host with no
+	// durable home for them does (ADR 0102).
+	document *consoleSettingsWriter
 
 	mu       sync.RWMutex
 	order    []string
@@ -28,6 +32,32 @@ type consoleProviderProfiles struct {
 func newConsoleProviderProfiles(settings *settingsStore) *consoleProviderProfiles {
 	return &consoleProviderProfiles{settings: settings, profiles: map[string]dshapi.ProviderProfile{}}
 }
+
+// applyDocument loads the profiles the document carries. Declaration order is
+// kept, because the Models page lists routes in the order they were declared.
+func (s *consoleProviderProfiles) applyDocument(records []consoleProfileRecord) {
+	declared := declaredProfiles(records)
+	if len(declared) == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.profiles == nil {
+		s.profiles = map[string]dshapi.ProviderProfile{}
+	}
+	for _, profile := range declared {
+		if _, exists := s.profiles[profile.Provider]; exists {
+			continue
+		}
+		s.order = append(s.order, profile.Provider)
+		s.profiles[profile.Provider] = profile
+	}
+}
+
+// persist writes the settings document after a committed change. It is called
+// with no lock held: the document's snapshot reads this store back through
+// ProviderProfiles, which takes the lock itself.
+func (s *consoleProviderProfiles) persist() error { return s.document.save() }
 
 // ProviderProfiles lists the declared routes in declaration order, each with a
 // freshly computed diagnostic. Serviceability is deliberately not cached: the card
@@ -52,32 +82,60 @@ func (s *consoleProviderProfiles) ProviderProfiles() []dshapi.ProviderProfileSta
 // SetProviderProfile stores one profile and reports whether this host can serve
 // it. The serviceability check builds the real adapter, so "serviceable" here means
 // the same thing it means at run time rather than a shape that merely looks right.
+//
+// A profile this host cannot serve is still stored, with the reason: the console's
+// card writes the profile first and the credential it names second (ADR 0095).
+// The document is then written, and a document that will not take it puts the
+// declaration back, so the page never reads a profile a restart will not have.
 func (s *consoleProviderProfiles) SetProviderProfile(profile dshapi.ProviderProfile) (dshapi.ProviderProfileStatus, error) {
 	status := dshapi.ProviderProfileStatus{Profile: profile, Error: s.serviceability(profile)}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.profiles == nil {
 		s.profiles = map[string]dshapi.ProviderProfile{}
 	}
-	if _, exists := s.profiles[profile.Provider]; !exists {
+	previous, existed := s.profiles[profile.Provider]
+	if !existed {
 		s.order = append(s.order, profile.Provider)
 	}
 	s.profiles[profile.Provider] = profile
+	s.mu.Unlock()
+	if err := s.persist(); err != nil {
+		s.mu.Lock()
+		if existed {
+			s.profiles[profile.Provider] = previous
+		} else {
+			delete(s.profiles, profile.Provider)
+			s.order = s.order[:len(s.order)-1]
+		}
+		s.mu.Unlock()
+		return dshapi.ProviderProfileStatus{}, err
+	}
 	return status, nil
 }
 
-// RemoveProviderProfile forgets one route.
+// RemoveProviderProfile forgets one route, and forgets it in the document too.
 func (s *consoleProviderProfiles) RemoveProviderProfile(providerID string) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.profiles, providerID)
-	kept := s.order[:0]
+	previous, existed := s.profiles[providerID]
+	kept := make([]string, 0, len(s.order))
 	for _, existing := range s.order {
 		if existing != providerID {
 			kept = append(kept, existing)
 		}
 	}
+	order := s.order
 	s.order = kept
+	delete(s.profiles, providerID)
+	s.mu.Unlock()
+	if err := s.persist(); err != nil {
+		s.mu.Lock()
+		if existed {
+			s.profiles[providerID] = previous
+		}
+		s.order = order
+		s.mu.Unlock()
+		return err
+	}
 	return nil
 }
 
