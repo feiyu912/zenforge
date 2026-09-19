@@ -99,3 +99,4 @@ later ADRs supersede earlier ones, never edit.
 | [0083](0083-the-streams-are-mounted-with-the-console.md) | The streams are mounted with the console |
 | [0084](0084-one-credential-that-stays-write-only.md) | One credential, and it stays write-only |
 | [0085](0085-the-provider-directory-is-served-discovery-is-not.md) | The provider directory is served, discovery is not |
+| [0086](0086-a-session-outlives-its-runs.md) | A session outlives its runs |

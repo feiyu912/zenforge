@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/feiyu912/zenforge"
+	"github.com/feiyu912/zenforge/internal/dshsession"
 	"github.com/feiyu912/zenforge/server/harnesshttp"
 	"github.com/feiyu912/zenforge/sessiontitle"
 )
@@ -41,9 +42,38 @@ func (h *Handler) sessionList(ctx context.Context, args map[string]json.RawMessa
 	if err != nil {
 		return nil, fail(codeInternal, "list runs: "+err.Error(), nil)
 	}
-	items := make([]map[string]any, 0, len(infos))
+	// A session's later turns are listed as one conversation, reported from its
+	// newest turn: the console lists sessions, and one conversation appearing
+	// once per turn -- each with its own id -- would read as several sessions
+	// that happen to share a title.
+	known := make(map[string]struct{}, len(infos))
 	for _, info := range infos {
-		items = append(items, h.summaryFor(ctx, info))
+		known[info.RunID] = struct{}{}
+	}
+	newest := make(map[string]harnesshttp.RunInfo, len(infos))
+	order := make([]string, 0, len(infos))
+	for _, info := range infos {
+		sessionID := info.RunID
+		// Only a continuation whose base run is present is grouped; an adopted
+		// id that merely looks like one keeps its own entry.
+		if dshsession.RecognisesBase(info.RunID, known) {
+			sessionID, _ = dshsession.Base(info.RunID)
+		}
+		current, seen := newest[sessionID]
+		if !seen {
+			order = append(order, sessionID)
+			newest[sessionID] = info
+			continue
+		}
+		if info.UpdatedAt.After(current.UpdatedAt) {
+			newest[sessionID] = info
+		}
+	}
+	items := make([]map[string]any, 0, len(order)+1)
+	for _, sessionID := range order {
+		item := h.summaryFor(ctx, newest[sessionID])
+		item["sessionId"] = sessionID
+		items = append(items, item)
 	}
 	h.mu.Lock()
 	pending := make([]pendingSession, 0, len(h.pending))
@@ -224,6 +254,10 @@ func (h *Handler) sessionPrompt(ctx context.Context, args map[string]json.RawMes
 		return nil, failure
 	}
 
+	// A prompt may name a continuation run id rather than the session's first
+	// turn, and either names the same conversation.
+	sessionID = h.resolveSession(ctx, sessionID)
+
 	if h.takePending(sessionID) {
 		if _, err := h.manager.Start(ctx, zenforge.Task{RunID: sessionID, Input: text}); err != nil {
 			// The allocation survives a start that never happened, so the
@@ -234,35 +268,45 @@ func (h *Handler) sessionPrompt(ctx context.Context, args map[string]json.RawMes
 		return map[string]any{"accepted": true}, nil
 	}
 
-	info, err := h.manager.Get(sessionID)
-	if err != nil {
-		if errors.Is(err, harnesshttp.ErrRunNotFound) {
-			// A run the manager no longer tracks may still have a durable log
-			// (retention, or another process's run). That is a finished
-			// session this host cannot append a turn to, not an unknown one.
-			if latest, readErr := h.events.LatestSeq(ctx, sessionID); readErr == nil && latest > 0 {
-				return nil, fail(codeUnimplemented, finishedRunMessage(sessionID, "no longer active"),
-					map[string]any{"sessionId": sessionID})
+	runIDs := h.sessionRunIDs(ctx, sessionID)
+	if len(runIDs) == 0 {
+		// No turn exists: the id is unknown, which is a different answer from a
+		// conversation this host cannot continue.
+		return nil, fail(codeSessionNotFound, fmt.Sprintf("session %q not found", sessionID),
+			map[string]any{"sessionId": sessionID})
+	}
+	current := runIDs[len(runIDs)-1]
+	info, err := h.manager.Get(current)
+	switch {
+	case err == nil && runActive(info.Status):
+		if _, err := h.manager.Steer(current, strings.TrimSpace(requestID), text); err != nil {
+			// Get found the run, so Steer's not-found here means this manager
+			// cannot reach it: a shared registry lists other processes' runs but
+			// does not deliver turns to them.
+			if errors.Is(err, harnesshttp.ErrRunNotFound) {
+				return nil, fail(codeUnimplemented,
+					fmt.Sprintf("session %q is active but not owned by this process; a queued turn cannot be delivered to it", sessionID),
+					map[string]any{"sessionId": sessionID, "mode": mode})
 			}
-			return nil, fail(codeSessionNotFound, fmt.Sprintf("session %q not found", sessionID),
-				map[string]any{"sessionId": sessionID})
+			return nil, steerFailure(sessionID, mode, err)
 		}
+		return map[string]any{"accepted": true}, nil
+	case err != nil && !errors.Is(err, harnesshttp.ErrRunNotFound):
 		return nil, fail(codeInternal, "look up session: "+err.Error(), nil)
 	}
-	if !runActive(info.Status) {
-		return nil, fail(codeUnimplemented, finishedRunMessage(sessionID, string(info.Status)),
-			map[string]any{"sessionId": sessionID, "status": string(info.Status)})
+
+	// The session's newest turn is finished (or its run is no longer tracked by
+	// this process), so the prompt starts the next turn of the same
+	// conversation: a new run id from the chain, carrying the exchange so far.
+	turn := dshsession.NextTurn(runIDs)
+	continuationID := dshsession.ContinuationRunID(sessionID, turn)
+	task := zenforge.Task{
+		RunID:           continuationID,
+		Input:           text,
+		InitialMessages: h.conversationMessages(ctx, runIDs),
 	}
-	if _, err := h.manager.Steer(sessionID, strings.TrimSpace(requestID), text); err != nil {
-		// Get found the run, so Steer's not-found here means this manager
-		// cannot reach it: a shared registry lists other processes' runs but
-		// does not deliver turns to them.
-		if errors.Is(err, harnesshttp.ErrRunNotFound) {
-			return nil, fail(codeUnimplemented,
-				fmt.Sprintf("session %q is active but not owned by this process; a queued turn cannot be delivered to it", sessionID),
-				map[string]any{"sessionId": sessionID, "mode": mode})
-		}
-		return nil, steerFailure(sessionID, mode, err)
+	if _, err := h.manager.Start(ctx, task); err != nil {
+		return nil, startFailure(continuationID, err)
 	}
 	return map[string]any{"accepted": true}, nil
 }
@@ -428,6 +472,21 @@ func (h *Handler) appendTitle(ctx context.Context, runID, title string) (int64, 
 	return 0, fmt.Errorf("event log tail did not settle after %d attempts: %w", titleAppendAttempts, lastErr)
 }
 
+// currentRun resolves a session to the run serving its newest turn, stopping at
+// the first turn that does not exist. It is the same walk internal/dshstream
+// performs for follow, kept here so the RPC surface and the stream agree on
+// which run a session currently is.
+func (h *Handler) currentRun(ctx context.Context, sessionID string) string {
+	runID := sessionID
+	for turn := 2; ; turn++ {
+		next := dshsession.ContinuationRunID(sessionID, turn)
+		if !h.runExists(ctx, next) {
+			return runID
+		}
+		runID = next
+	}
+}
+
 // sessionPage answers POST /api/session/page with a backwards page of the
 // durable log. throughSeq is the inclusive cursor; beforeSeq, when present, is
 // the exclusive upper bound of the returned page, which is how the console
@@ -471,7 +530,18 @@ func (h *Handler) sessionPage(ctx context.Context, args map[string]json.RawMessa
 		maxMessages = maxPageMessages
 	}
 
-	events, err := h.events.Read(ctx, sessionID, 0, 0)
+	// Read the run serving the session's newest turn, which is the run follow
+	// streams: a page read from the first turn while follow streamed the second
+	// would show one conversation's history beside another's answer.
+	//
+	// This host does not yet merge a session's turns into one paged log. The
+	// wire cursor is a sequence number, and each run's log numbers its own
+	// events from one, so a merged page would need a synthetic coordinate and
+	// rewritten per-event ids. Until that exists, the page is the newest turn's
+	// log and an earlier turn's transcript is not reachable through it; ADR 0086
+	// records that as a known gap rather than hiding it.
+	runID := h.currentRun(ctx, sessionID)
+	events, err := h.events.Read(ctx, runID, 0, 0)
 	if err != nil {
 		return nil, fail(codeInternal, "read session log: "+err.Error(), nil)
 	}

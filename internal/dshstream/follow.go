@@ -47,8 +47,11 @@ func (h *Handler) runFollow(ctx context.Context, payload []byte, send func(any) 
 		return failure
 	}
 
-	info, infoErr := h.manager.Get(request.sessionID)
-	events, err := h.events.Read(ctx, request.sessionID, 0, 0)
+	// Follow the run serving this session's newest turn: a conversation that
+	// has moved past its first run must stream the run actually answering.
+	runID := h.currentRun(ctx, request.sessionID)
+	info, infoErr := h.manager.Get(runID)
+	events, err := h.events.Read(ctx, runID, 0, 0)
 	if err != nil {
 		return streamFail(codeInternal, "read session log: "+err.Error(), nil)
 	}
@@ -100,7 +103,7 @@ func (h *Handler) runFollow(ctx context.Context, payload []byte, send func(any) 
 	if afterSeq < 0 {
 		afterSeq = 0
 	}
-	live, liveErr, err := h.manager.Attach(ctx, request.sessionID, afterSeq)
+	live, liveErr, err := h.manager.Attach(ctx, runID, afterSeq)
 	if err != nil {
 		if errors.Is(err, harnesshttp.ErrRunNotFound) {
 			return streamFail(codeSessionNotFound, fmt.Sprintf("session %q not found", request.sessionID),

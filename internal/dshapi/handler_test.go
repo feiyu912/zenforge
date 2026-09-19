@@ -55,6 +55,10 @@ type stubAgent struct {
 	mu     sync.Mutex
 	runs   map[string]*stubRun
 	steers []string
+	// tasks records every task the manager started through this agent, in
+	// order, so a test can assert what a continuation run was actually handed
+	// (its run id, its input, and the messages it carries).
+	tasks []zenforge.Task
 }
 
 func newStubAgent(store eventlog.Store) *stubAgent {
@@ -69,6 +73,7 @@ func (a *stubAgent) Stream(ctx context.Context, task zenforge.Task) (<-chan zenf
 	run := &stubRun{ch: make(chan zenforge.Event, 8)}
 	a.mu.Lock()
 	a.runs[task.RunID] = run
+	a.tasks = append(a.tasks, task)
 	a.mu.Unlock()
 	a.append(task.RunID, zenforge.EventRunStarted, map[string]any{"input": task.Input})
 	run.emit(zenforge.NewEvent(zenforge.EventRunStarted, task.RunID, map[string]any{"input": task.Input}))
@@ -271,6 +276,29 @@ func waitForStatus(t *testing.T, manager *harnesshttp.RunManager, runID string, 
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatalf("run %q status = %q, want %q", runID, last.Status, want)
+}
+
+// task returns the task started for a run id, if this agent was handed one.
+func (a *stubAgent) task(runID string) (zenforge.Task, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, task := range a.tasks {
+		if task.RunID == runID {
+			return task, true
+		}
+	}
+	return zenforge.Task{}, false
+}
+
+// taskRunIDs lists the run ids this agent was asked to run, in order.
+func (a *stubAgent) taskRunIDs() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	ids := make([]string, 0, len(a.tasks))
+	for _, task := range a.tasks {
+		ids = append(ids, task.RunID)
+	}
+	return ids
 }
 
 // createSession creates a pending session and returns its id.

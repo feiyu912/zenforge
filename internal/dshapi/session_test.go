@@ -3,6 +3,7 @@ package dshapi
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/feiyu912/zenforge"
 	"github.com/feiyu912/zenforge/eventlog"
 	"github.com/feiyu912/zenforge/eventlog/memory"
+	"github.com/feiyu912/zenforge/model"
 	"github.com/feiyu912/zenforge/server/harnesshttp"
 )
 
@@ -110,11 +112,22 @@ func TestSessionCreateAdoptsExistingDurableSession(t *testing.T) {
 	if value.SessionID != "run-durable-1" {
 		t.Fatalf("sessionId = %q, want run-durable-1", value.SessionID)
 	}
-	// A durable log without a live run is a finished session, not a fresh one:
-	// adopting it must not claim the next prompt will start it cleanly.
+	// Adopting a durable session continues it: the prompt starts the next turn
+	// of that conversation rather than claiming the session is fresh or ending
+	// the conversation at its first run.
 	recorder = f.post(t, "/api/session/prompt", rpcBody(t, "rpc-prompt", "session/prompt",
 		`{"requestId":"req-1","sessionId":"run-durable-1","mode":"queue","content":[{"type":"text","text":"hi"}]}`))
-	assertMethodFailure(t, recorder, codeUnimplemented)
+	if envelope := decodeResponse(t, recorder); !envelope.Result.OK {
+		t.Fatalf("prompt failed: %s", recorder.Body.String())
+	}
+	task, ok := f.agent.task("run-durable-1~2")
+	if !ok {
+		t.Fatalf("no continuation run: started %v", f.agent.taskRunIDs())
+	}
+	want := []model.Message{{Role: "user", Content: "x"}}
+	if !reflect.DeepEqual(task.InitialMessages, want) {
+		t.Fatalf("initial messages = %+v, want the durable turn %+v", task.InitialMessages, want)
+	}
 }
 
 func TestSessionListIsNewestFirst(t *testing.T) {
@@ -293,18 +306,71 @@ func TestSessionPromptQueuesIntoActiveRun(t *testing.T) {
 	}
 }
 
-func TestSessionPromptOnFinishedRunIsUnimplemented(t *testing.T) {
+// A conversation outlives its first run: a prompt to a finished session starts
+// the next turn under the chain's run id, carrying the exchange so far so the
+// model answers in context instead of meeting a stranger (ADR 0086).
+func TestSessionPromptOnFinishedRunStartsTheNextTurn(t *testing.T) {
+	f := newFixture(t, Config{})
+	sessionID := f.startSession(t)
+	f.agent.append(sessionID, zenforge.EventRunDone, map[string]any{"output": "hi there"})
+	f.agent.finish(sessionID)
+	waitForStatus(t, f.manager, sessionID, harnesshttp.RunCompleted)
+
+	recorder := f.post(t, "/api/session/prompt", rpcBody(t, "rpc-prompt", "session/prompt",
+		fmt.Sprintf(`{"requestId":"req-3","sessionId":%s,"mode":"queue","content":[{"type":"text","text":"again"}]}`,
+			mustJSON(t, sessionID))))
+	if envelope := decodeResponse(t, recorder); !envelope.Result.OK {
+		t.Fatalf("prompt failed: %s", recorder.Body.String())
+	}
+	continuationID := sessionID + "~2"
+	task, ok := f.agent.task(continuationID)
+	if !ok {
+		t.Fatalf("no continuation run %q: started %v", continuationID, f.agent.taskRunIDs())
+	}
+	if task.Input != "again" {
+		t.Fatalf("input = %q, want the new turn's text", task.Input)
+	}
+	want := []model.Message{
+		{Role: "user", Content: "hello"},
+		{Role: "assistant", Content: "hi there"},
+	}
+	if !reflect.DeepEqual(task.InitialMessages, want) {
+		t.Fatalf("initial messages = %+v, want the exchange so far %+v", task.InitialMessages, want)
+	}
+}
+
+// A prompt may name a continuation run id -- an older listing, or a client that
+// followed one -- and it still names the same conversation.
+func TestSessionPromptOnAContinuationRunIDResolvesToItsSession(t *testing.T) {
 	f := newFixture(t, Config{})
 	sessionID := f.startSession(t)
 	f.agent.finish(sessionID)
 	waitForStatus(t, f.manager, sessionID, harnesshttp.RunCompleted)
+
+	continuationID := sessionID + "~2"
 	recorder := f.post(t, "/api/session/prompt", rpcBody(t, "rpc-prompt", "session/prompt",
-		fmt.Sprintf(`{"requestId":"req-3","sessionId":%s,"mode":"queue","content":[{"type":"text","text":"again"}]}`,
-			mustJSON(t, sessionID))))
-	envelope := assertMethodFailure(t, recorder, codeUnimplemented)
-	if !strings.Contains(envelope.Result.Error.Message, sessionID) {
-		t.Fatalf("message does not name the session: %s", envelope.Result.Error.Message)
+		fmt.Sprintf(`{"requestId":"req-3","sessionId":%s,"mode":"queue","content":[{"type":"text","text":"third"}]}`,
+			mustJSON(t, continuationID))))
+	if envelope := decodeResponse(t, recorder); !envelope.Result.OK {
+		t.Fatalf("prompt failed: %s", recorder.Body.String())
 	}
+	// The named id was itself a continuation, so the next turn continues the
+	// session rather than inventing a second chain under it.
+	if _, ok := f.agent.task(sessionID + "~2"); !ok {
+		t.Fatalf("session %q was not continued: started %v", sessionID, f.agent.taskRunIDs())
+	}
+	if _, ok := f.agent.task(continuationID + "~2"); ok {
+		t.Fatalf("a second chain was started under %q: %v", continuationID, f.agent.taskRunIDs())
+	}
+}
+
+// A prompt to an unknown session is still not-found: continuing a conversation
+// is not the same as inventing one.
+func TestSessionPromptOnAnUnknownSessionIsNotFound(t *testing.T) {
+	f := newFixture(t, Config{})
+	recorder := f.post(t, "/api/session/prompt", rpcBody(t, "rpc-prompt", "session/prompt",
+		`{"requestId":"req-3","sessionId":"run_never_seen","mode":"queue","content":[{"type":"text","text":"hi"}]}`))
+	assertMethodFailure(t, recorder, codeSessionNotFound)
 }
 
 func TestSessionCancelActiveRun(t *testing.T) {
@@ -532,5 +598,80 @@ func TestSessionPageRejectsBadArguments(t *testing.T) {
 			recorder := f.post(t, "/api/session/page", rpcBody(t, "rpc-page", "session/page", testCase.args))
 			assertMethodFailure(t, recorder, codeArgumentsInvalid)
 		})
+	}
+}
+
+// One conversation is one list entry. Listing every turn as its own session
+// would make a five-turn conversation look like five sessions sharing a title.
+func TestSessionListGroupsATurnsRunsUnderTheirSession(t *testing.T) {
+	f := newFixture(t, Config{})
+	sessionID := f.startSession(t)
+	f.agent.finish(sessionID)
+	waitForStatus(t, f.manager, sessionID, harnesshttp.RunCompleted)
+
+	second := f.post(t, "/api/session/prompt", rpcBody(t, "rpc-prompt", "session/prompt",
+		fmt.Sprintf(`{"requestId":"req-2","sessionId":%s,"mode":"queue","content":[{"type":"text","text":"again"}]}`,
+			mustJSON(t, sessionID))))
+	if envelope := decodeResponse(t, second); !envelope.Result.OK {
+		t.Fatalf("second prompt failed: %s", second.Body.String())
+	}
+
+	items := f.listItems(t)
+	if len(items) != 1 {
+		t.Fatalf("items = %+v, want one entry for the conversation", items)
+	}
+	if items[0].SessionID != sessionID {
+		t.Fatalf("sessionId = %q, want the session %q, not one of its turns", items[0].SessionID, sessionID)
+	}
+}
+
+// An adopted session id that only looks like a continuation is not merged into
+// the run it names: the grouping rule needs the base to exist, and this one
+// does not.
+func TestSessionListKeepsAForeignRunIDLookingLikeAContinuation(t *testing.T) {
+	f := newFixture(t, Config{})
+	// An operator (or another tool) adopted this id as a session id. Its own
+	// base run does not exist, so the grouping rule must leave it alone.
+	recorder := f.post(t, "/api/session/create",
+		rpcBody(t, "rpc-create", "session/create", `{"sessionId":"run_adopted~2"}`))
+	if envelope := decodeResponse(t, recorder); !envelope.Result.OK {
+		t.Fatalf("create failed: %s", recorder.Body.String())
+	}
+	recorder = f.post(t, "/api/session/prompt", rpcBody(t, "rpc-prompt", "session/prompt",
+		`{"requestId":"req-1","sessionId":"run_adopted~2","mode":"queue","content":[{"type":"text","text":"hi"}]}`))
+	if envelope := decodeResponse(t, recorder); !envelope.Result.OK {
+		t.Fatalf("prompt failed: %s", recorder.Body.String())
+	}
+	items := f.listItems(t)
+	if len(items) != 1 {
+		t.Fatalf("items = %+v, want the adopted run listed once", items)
+	}
+	if items[0].SessionID != "run_adopted~2" {
+		t.Fatalf("sessionId = %q, want the adopted id to keep its own identity", items[0].SessionID)
+	}
+}
+
+// History and the live stream must describe the same run: after a second turn,
+// the page for the session is the newest turn's log, not the first one's.
+func TestSessionPageServesTheNewestTurn(t *testing.T) {
+	f := newFixture(t, Config{})
+	sessionID := f.startSession(t)
+	f.agent.finish(sessionID)
+	waitForStatus(t, f.manager, sessionID, harnesshttp.RunCompleted)
+
+	prompt := f.post(t, "/api/session/prompt", rpcBody(t, "rpc-prompt", "session/prompt",
+		fmt.Sprintf(`{"requestId":"req-2","sessionId":%s,"mode":"queue","content":[{"type":"text","text":"the second question"}]}`,
+			mustJSON(t, sessionID))))
+	if envelope := decodeResponse(t, prompt); !envelope.Result.OK {
+		t.Fatalf("second prompt failed: %s", prompt.Body.String())
+	}
+
+	page := f.post(t, "/api/session/page", rpcBody(t, "rpc-page", "session/page",
+		fmt.Sprintf(`{"address":{"kind":"session","sessionId":%s},"throughSeq":-1}`, mustJSON(t, sessionID))))
+	if envelope := decodeResponse(t, page); !envelope.Result.OK {
+		t.Fatalf("page failed: %s", page.Body.String())
+	}
+	if !strings.Contains(page.Body.String(), "the second question") {
+		t.Fatalf("page does not serve the newest turn: %s", page.Body.String())
 	}
 }
