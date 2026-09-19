@@ -52,7 +52,7 @@ func (h *Handler) runControl(ctx context.Context, payload []byte, send func(any)
 	}
 	baseline := controlBaseline{
 		Jobs:        map[string][]sessionJob{},
-		Projections: h.projectionBaseline(),
+		Projections: h.projectionBaseline(ctx),
 	}
 	if err := send(controlBaselineFrame{Type: "baseline", Value: baseline}); err != nil {
 		if unsubscribe != nil {
@@ -114,7 +114,7 @@ func takePending(pending map[string]ModelSelectionUpdate) (ModelSelectionUpdate,
 // session with no selection is absent rather than null: an absent key means the
 // capability has no value at this cursor, which is what the client expects before
 // anyone chooses a model.
-func (h *Handler) projectionBaseline() map[string]any {
+func (h *Handler) projectionBaseline(ctx context.Context) map[string]any {
 	projections := map[string]any{}
 	if h.cfg.ModelSelections == nil {
 		return projections
@@ -123,6 +123,25 @@ func (h *Handler) projectionBaseline() map[string]any {
 		projections[sessionID] = projectionBaseline{
 			AsOfSeq: state.Seq,
 			Values:  map[string]any{modelSelectionProjectionKey: state.Projection},
+		}
+	}
+	// Every other session this host serves gets the key too, with no selection in
+	// it. The console seeds its per-session projection store from this baseline
+	// and treats an absent key as "capability absent": its selector then holds
+	// "Loading models…" with no groups forever, however well the catalog answered
+	// (api/session-controller/src/client/sessions/manager.ts replaceControlBaseline,
+	// ui-model-selection/src/client/directory.ts:146-160). An empty projection
+	// means no next and no last-used, so the selector falls back to the catalog's
+	// default, and the cut is 0 because nothing has been selected at any cursor.
+	if infos, err := h.manager.List(ctx); err == nil {
+		for _, info := range infos {
+			if _, recorded := projections[info.RunID]; recorded {
+				continue
+			}
+			projections[info.RunID] = projectionBaseline{
+				AsOfSeq: 0,
+				Values:  map[string]any{modelSelectionProjectionKey: ModelSelectionProjection{}},
+			}
 		}
 	}
 	return projections

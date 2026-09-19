@@ -29,9 +29,19 @@ const (
 func (h *Handler) sessionProjectionBaseline(sessionID string, cursor int64) projectionBaseline {
 	values := map[string]any{}
 	if h.cfg.ModelSelections != nil {
-		if state, ok := h.cfg.ModelSelections()[sessionID]; ok {
-			values[modelSelectionProjectionKey] = state.Projection
+		// The key is registered for every session this host serves, not only for
+		// sessions a model has already been chosen in. The console's selector reads
+		// the projection to decide whether the capability exists at all, and while
+		// the key is absent it holds its own "Loading models…" state with no groups
+		// (ui-model-selection/src/client/directory.ts:146-160) even though the
+		// catalog answered: an empty projection is the honest value for a session
+		// with no selection, meaning no next and no last-used, so the client falls
+		// back to the catalog's default model.
+		state, selected := h.cfg.ModelSelections()[sessionID]
+		if !selected {
+			state = ModelSelectionState{}
 		}
+		values[modelSelectionProjectionKey] = state.Projection
 	}
 	return projectionBaseline{AsOfSeq: cursor, Values: values}
 }

@@ -39,6 +39,16 @@ type ModelSelectionStore interface {
 	ApplyModelSelection(sessionID string) error
 }
 
+// sessionRegistrar is the optional half of the model-selection store a host
+// implements when it can announce a session the moment it exists. The control
+// stream needs that announcement to seed the console's per-session projection
+// store, and a store that cannot does not have to say anything: the baseline
+// still covers the sessions that existed when the stream opened.
+type sessionRegistrar interface {
+	// RegisterSession records that a session exists, with no selection in it yet.
+	RegisterSession(sessionID string)
+}
+
 // SetModelSelections installs the store session/selectModel answers through and
 // the prompt path applies. Nil leaves the method unserved, which is the honest
 // answer for a host that cannot rebuild a per-session adapter.

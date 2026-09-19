@@ -1,6 +1,7 @@
 package dshstream
 
 import (
+	"encoding/json"
 	"sync"
 	"testing"
 )
@@ -142,7 +143,13 @@ func TestSessionFollowSnapshotCarriesTheModelSelection(t *testing.T) {
 
 // A session with no selection carries no value: an absent key means the
 // capability has no value at this cursor, which is what the client expects.
-func TestSessionFollowSnapshotOmitsAnUnselectedProjection(t *testing.T) {
+// A session nobody has chosen a model in still carries the modelSelection key,
+// with an empty projection. The console's selector treats an absent key as
+// "capability absent" and holds "Loading models…" with no groups forever -- the
+// catalog having answered does not help
+// (ui-model-selection/src/client/directory.ts:146-160). An empty projection means
+// no next and no last-used, so the client falls back to the catalog's default.
+func TestSessionFollowSnapshotRegistersAnUnselectedProjection(t *testing.T) {
 	f, _ := selectionStreamFixture(t, "run-other")
 	runID := f.startRun(t, "hello")
 	conn := f.mustDial(t)
@@ -150,7 +157,17 @@ func TestSessionFollowSnapshotOmitsAnUnselectedProjection(t *testing.T) {
 	snapshot := readItem(t, conn, "follow")
 	projections := decodeValueObject(t, snapshot["projections"])
 	values := decodeValueObject(t, projections["values"])
-	if len(values) != 0 {
-		t.Fatalf("values = %v, want no projection for a session that selected nothing", values)
+	raw, ok := values["modelSelection"]
+	if !ok {
+		t.Fatalf("values = %v, want the modelSelection key registered for every session", values)
+	}
+	projection := map[string]any{}
+	if err := json.Unmarshal(raw, &projection); err != nil {
+		t.Fatalf("projection = %s, want an object: %v", raw, err)
+	}
+	// No selection yet: no next and no last-used. The client reads
+	// `projected.next ?? catalog.default`, and null coalesces to the default.
+	if projection["next"] != nil || projection["lastUsed"] != nil {
+		t.Fatalf("projection = %v, want null next and lastUsed for a session that selected nothing", projection)
 	}
 }

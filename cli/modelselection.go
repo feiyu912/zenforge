@@ -257,9 +257,14 @@ type consoleModelSelection struct {
 	nextID    int
 }
 
-// consoleSelectionRecord is one session's durable selection.
+// consoleSelectionRecord is one session's durable selection. A record exists for
+// every session the host has been told about, selected or not: the console's
+// selector needs the projection key present from the session's first moment, and
+// `selected` is what keeps "no choice yet" from being reported as an empty
+// provider and model.
 type consoleSelectionRecord struct {
 	selection dshstream.ModelSelection
+	selected  bool
 	lastUsed  *dshstream.ModelSelection
 	seq       int64
 }
@@ -286,6 +291,7 @@ func (s *consoleModelSelection) SelectModel(sessionID string, selection dshapi.M
 	s.mu.Lock()
 	record := s.records[sessionID]
 	record.selection = recorded
+	record.selected = true
 	record.seq = s.bumpLocked()
 	s.records[sessionID] = record
 	s.mu.Unlock()
@@ -322,6 +328,26 @@ func (s *consoleModelSelection) ApplyModelSelection(sessionID string) error {
 }
 
 // States reports every recorded selection for the stream's projection baselines.
+// RegisterSession records that a session exists, so the control baseline and the
+// live projection frames carry the modelSelection key for it from the moment it
+// is created. A session created after the control stream opened is otherwise
+// never seeded, and the console's selector then shows nothing to choose however
+// well the catalog answered (ADR 0102).
+func (s *consoleModelSelection) RegisterSession(sessionID string) {
+	if strings.TrimSpace(sessionID) == "" {
+		return
+	}
+	s.mu.Lock()
+	if _, known := s.records[sessionID]; known {
+		s.mu.Unlock()
+		return
+	}
+	record := consoleSelectionRecord{seq: s.bumpLocked()}
+	s.records[sessionID] = record
+	s.mu.Unlock()
+	s.notify(sessionID, record)
+}
+
 func (s *consoleModelSelection) States() map[string]dshstream.ModelSelectionState {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -377,6 +403,9 @@ func (s *consoleModelSelection) notify(sessionID string, record consoleSelection
 
 // consoleProjection is the client's view of one session's fold.
 func consoleProjection(record consoleSelectionRecord) dshstream.ModelSelectionProjection {
+	if !record.selected {
+		return dshstream.ModelSelectionProjection{LastUsed: record.lastUsed}
+	}
 	next := record.selection
 	return dshstream.ModelSelectionProjection{LastUsed: record.lastUsed, Next: &next}
 }

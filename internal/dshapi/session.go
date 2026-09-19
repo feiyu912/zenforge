@@ -204,6 +204,16 @@ func (h *Handler) sessionCreate(ctx context.Context, args map[string]json.RawMes
 				return nil, workspaceFailure(err)
 			}
 		}
+		// A session created after the control stream opened is announced to it, so
+		// the console's projection store is seeded with the modelSelection key for
+		// this session too. Without it the composer's model control holds
+		// "Loading models…" with no groups for every session created during the
+		// connection (ADR 0102).
+		if store := h.modelSelectionStore(); store != nil {
+			if registrar, ok := store.(sessionRegistrar); ok {
+				registrar.RegisterSession(sessionID)
+			}
+		}
 		return map[string]any{"sessionId": sessionID}, nil
 	}
 

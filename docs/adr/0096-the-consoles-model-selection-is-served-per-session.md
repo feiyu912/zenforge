@@ -171,3 +171,45 @@ control baseline reports
 and a later selection arrives as a live projection frame; a prompt then completes —
 `run.done` with output `hello from acme` — and the stand-in endpoint records
 `{"model": "acme-large", "authorization": "Bearer sk-local-acme"}`.
+## Amendment (2026-09-19): the key has to be registered before anyone chooses
+
+The projection design above is right, and it was still not enough for the state
+every operator starts in. The control baseline published `modelSelection` only for
+sessions the selection store already had a record for, and a record appeared only
+when `session/selectModel` recorded one. A session nobody had chosen a model in --
+every fresh session, and the draft the composer is bound to on first load --
+therefore carried no key at all.
+
+The console reads an absent key as "capability absent": `manager.ts`
+`replaceControlBaseline` seeds its per-session projection store from this
+baseline, and `ui-model-selection/src/client/directory.ts:146-160` holds
+`current: null, groups: [], status: 'loading'` while the key is missing. The
+composer showed "Loading models…" with an empty menu **even though the catalog had
+answered with every model**, which is why this hid behind the argument-shape work
+for so long: the catalog was never the problem.
+
+Three changes, all that the client's own read paths require:
+
+- The control baseline registers `modelSelection` for **every session the manager
+  lists**, unselected ones with an empty projection (`{lastUsed: null, next:
+  null}`) at cut 0. An empty projection means "no choice yet", so the selector
+  falls back to `projected.next ?? catalog.default` and shows the host's
+  configured model instead of nothing.
+- The selection store gains `RegisterSession`, and `session/create` calls it
+  through the optional `sessionRegistrar` interface. A session created after the
+  control stream opened gets a live projection frame the moment it exists, which
+  is what seeds its store: the baseline alone cannot, because it was sent before
+  the session was.
+- A record that exists but holds no choice reports `next: null` rather than an
+  empty provider and model, so "nothing selected" and "selected the empty string"
+  cannot be confused.
+
+The follow snapshot registers the key the same way. It is the control stream that
+seeds the console's store, but upstream's follow snapshot carries a projections
+block too (`history.ts:197-200`), and sending an incomplete one there would be a
+second, quieter way to say the capability is absent.
+
+Verified against a real browser, not by inspection: with the host on a scratch
+port and the console loaded in headless Chrome, the composer's control reads
+`Select model, current qwen-plus` (it read `Loading models…` before), and the
+`session/modelCatalog` response the page receives carries both provider groups.
