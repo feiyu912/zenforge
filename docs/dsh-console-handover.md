@@ -263,15 +263,76 @@ cannot call this tier done.
   one per committed change, and a stale `expectedRevision` is refused as
   `settings/conflict` with both revisions named (ADR 0087 amendment).
 
-## Takeover point: settings and credentials do not survive a restart
+## Takeover point: persist the console's settings and credential (decided 2026-09-19)
 
-Both the console-written settings (declared provider profiles, endpoint, model)
-and the credential live in the `serve` process (ADR 0094, ADR 0101) and are gone
-when it restarts; `settings/describe` still reports `hasDocument: false`. This is
-the next piece of work, and it is a decision before it is code: where the file
-lives (a host-owned directory, not the repository), whether an API key may be
-written to it at all (a `0600` file is the usual answer for a CLI; the
-alternative is to keep refusing secrets and require an environment variable), and
-what the honest read-back is when the file exists. The write path already funnels
-through `SettingsDocumentStore` (`internal/dshapi/settings.go`) and
-`cli/serve.go` builds the store, so the seam exists.
+Decided with the operator: **both the console-written settings and the credential
+persist**, in a file the operator's own configuration directory owns, so a restart
+no longer costs a re-typed API key. The conservative alternative -- settings on
+disk, key only through an environment variable -- was offered and declined.
+
+What is true today: the settings live in the `serve` process (ADR 0094) and the
+workspace registry likewise (ADR 0101), so a restart loses the declared provider
+profiles, the endpoint, the model and the key; `settings/describe` reports
+`hasDocument: false`, and each namespace's revision starts again at its initial
+value.
+
+Where the seam already is:
+
+- `SettingsDocumentStore` (`internal/dshapi/settings.go`) is the face every write
+  funnels through: `SettingsProfile`, `SetSettingsEndpoint`, `SetSettingsModel`,
+  `SetSettingsKey`, `ClearSettingsKey`, `ConsoleSection`, `SetConsoleSection`.
+- `cli/serve.go` builds that store, the provider-profile store
+  (`cli/providerprofiles.go`) and the credential store, and passes them to
+  `dshmount.New`.
+- `settings/describe` is where `HasDocument`, `User` and `Revision` are reported
+  (`internal/dshapi/settings.go`).
+
+What the work has to decide, then do:
+
+1. **Location.** A host-owned directory, never the repository:
+   `os.UserConfigDir()` (on macOS `~/Library/Application Support/zenforge/`) or an
+   explicit flag such as `--settings-file`. Record the choice in the ADR.
+2. **One file or two.** The settings document and the credential may share one
+   `0600` file or be split; sharing lets one atomic write cover both.
+3. **Atomicity and permissions.** Temp file in the same directory, `0600`, then
+   rename. Assert the mode in a test (`os.Stat().Mode().Perm() == 0o600`), and
+   assert the file path is never the repository.
+4. **A corrupt or unreadable file.** Refuse at startup by name, or start empty and
+   say so on the wire -- never start empty silently, which is the same rule the
+   rest of this tier follows.
+5. **`hasDocument` and the revision.** A document that exists makes
+   `hasDocument: true`, and the revision must be **loaded from the file** rather
+   than reset, or a console tab open across a restart fences its next write
+   against a number that moved (ADR 0087 amendment).
+6. **What is never written anywhere else.** The key goes only into the `0600`
+   file: never a log line, an error string, an event, or `settings/describe`.
+   `secrets[].set` stays the only signal about it on the wire.
+7. **ADR, docs, tests.** A new ADR for the durable document; `docs/limitations.md`
+   entries replaced where "process-local" no longer holds; no ledger change, since
+   no method is added.
+
+The verification the fix above was proved with, to reuse on the persisted store
+(8787 is the operator's own host; the scratch preview ports are gone):
+
+```sh
+curl -s -X POST http://127.0.0.1:8787/api/settings/describe -H 'content-type: application/json' \
+  -d '{"type":"client-request","rpcId":"d1","method":"settings/describe","payload":{"args":{}}}'
+# Take that view's revision, then mutate with it as expectedRevision. The reply
+# must carry user.providers.<id>.models (what the console's editor reads back) and
+# a revision one higher; the superseded revision must then be refused as
+# settings/conflict. Restart the host and repeat: the profiles, the endpoint and
+# the credential must all still be there.
+```
+
+## Kickoff prompt for the next window
+
+> Read `docs/dsh-console-handover.md` end to end, then
+> `docs/dsh-console-coverage.md`. Continue the console-attachment objective: keep
+> the three layers separate (deep API -> harness core -> adapters, ADR 0099), land
+> every chain with an ADR + docs + tests + commit/push + green CI and docs, and
+> fill the ledger's gaps in its order. The next piece is decided and specified in
+> the last handover section: persist the console's settings and credential in a
+> `0600` host-owned file, with an ADR, tests, and the `docs/limitations.md`
+> updates. The operator's host runs on `127.0.0.1:8787` from this checkout; it
+> currently needs the API key re-entered once, because persistence is exactly what
+> is missing. Never `git add -A`.
