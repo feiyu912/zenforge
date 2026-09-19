@@ -188,6 +188,22 @@ func TestWorkspaceFileRefusalsCarryUpstreamsCodes(t *testing.T) {
 	}
 }
 
+// A session the console created but has not prompted is an ordinary scope: the
+// sidebar is opened on a new session before its first turn.
+func TestWorkspaceFilesAcceptASessionThatHasNotStarted(t *testing.T) {
+	f := newFixture(t, Config{})
+	f.handler.SetWorkspaceFiles(&stubWorkspaceFiles{
+		listing: WorkspaceDirectoryListing{Path: ".", Entries: []WorkspaceDirectoryEntry{}},
+	})
+	scope := f.createSession(t)
+	var listing WorkspaceDirectoryListing
+	decodeValue(t, f.post(t, "/api/workspaceFiles/list",
+		rpcBody(t, "s1", "workspaceFiles/list", workspaceFileArgs(scope, `"path":"."`))), &listing)
+	if listing.Path != "." {
+		t.Fatalf("listing = %+v, want the created session accepted as a scope", listing)
+	}
+}
+
 func TestWorkspaceFilesRefuseAnUnknownScope(t *testing.T) {
 	f := newFixture(t, Config{})
 	f.handler.SetWorkspaceFiles(&stubWorkspaceFiles{})

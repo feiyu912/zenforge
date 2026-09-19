@@ -62,6 +62,12 @@ func (h *Handler) sessionKnown(ctx context.Context, sessionID string) bool {
 	if h.runExists(ctx, sessionID) || len(h.sessionRunIDs(ctx, sessionID)) > 0 {
 		return true
 	}
+	// A session session/create has already shown the console, whose first turn
+	// has not started, is the ordinary case for a file request: opening the
+	// sidebar of a new session happens before the first prompt, not after it.
+	if h.isPending(sessionID) {
+		return true
+	}
 	infos, err := h.manager.List(ctx)
 	if err != nil {
 		return false
