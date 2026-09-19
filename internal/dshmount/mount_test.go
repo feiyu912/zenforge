@@ -77,11 +77,11 @@ func TestRosterComposesAValidBootGraph(t *testing.T) {
 		t.Error("the graph has no bootstrap batch")
 	}
 
-	// The roster records three deliberately withheld staged bundles. Each must
-	// be absent from the graph and carry the evidence for its exclusion.
+	// The roster records the deliberately withheld staged bundles. Each must be
+	// absent from the graph and carry the evidence for its exclusion.
 	blocked := mux.Blocked()
-	if len(blocked) != 3 {
-		t.Fatalf("blocked entries = %+v, want the three documented exclusions", blocked)
+	if len(blocked) != 2 {
+		t.Fatalf("blocked entries = %+v, want the two documented exclusions", blocked)
 	}
 	byDir := map[string]BlockedEntry{}
 	for _, entry := range blocked {
@@ -94,14 +94,24 @@ func TestRosterComposesAValidBootGraph(t *testing.T) {
 	if !strings.Contains(cordis.Reason, "cordis-client-runner") {
 		t.Errorf("the ui-cordis exclusion does not cite the missing provider: %q", cordis.Reason)
 	}
-	for _, dir := range []string{"client/ui-directory-picker-browse", "client/ui-directory-picker-native"} {
-		entry, ok := byDir[dir]
-		if !ok {
-			t.Fatalf("blocked entries = %+v, want the %s exclusion", blocked, dir)
+	native, ok := byDir["client/ui-directory-picker-native"]
+	if !ok || native.ID != "@deepseek-ai/dsh-client-ui-directory-picker-native" {
+		t.Fatalf("blocked entries = %+v, want the native picker exclusion", blocked)
+	}
+	if !strings.Contains(native.Reason, "display") {
+		t.Errorf("the native picker exclusion does not cite the missing display: %q", native.Reason)
+	}
+	// The browse half of the same family is served instead: the host answers
+	// directoryPicker/list and directoryPicker/createDirectory (ADR 0100), so a
+	// console that renders the in-app browser has something to drive.
+	advertised := false
+	for _, entry := range graph.Entries {
+		if entry.ID == "@deepseek-ai/dsh-client-ui-directory-picker-browse" {
+			advertised = true
 		}
-		if !strings.Contains(entry.Reason, "activation") {
-			t.Errorf("the %s exclusion does not cite the activation failure: %q", dir, entry.Reason)
-		}
+	}
+	if !advertised {
+		t.Error("the browse directory picker is not advertised; the workspace picker would have no add action")
 	}
 	blockedIDs := map[string]struct{}{}
 	for _, entry := range blocked {

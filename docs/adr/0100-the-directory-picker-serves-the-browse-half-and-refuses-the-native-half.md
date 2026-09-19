@@ -55,13 +55,18 @@ name.**
 - The picker's host half exists and is measured: the console coverage ledger
   moves the two browse methods to *served* and `pick` to *refused*, and the
   ledger's check against the routing table keeps them there.
-- The console's workspace picker still shows no add action until
-  `ui-directory-picker-browse` is in the served graph. It sits in the roster's
-  `blocked` list because a running host once reported it — and only it — failing
-  activation, and the reason was never established; a plugin present in the graph
-  that cannot activate is a fatal boot page instead of the designed slot
-  fallback. Re-testing that activation on a scratch port is the next step, and
-  the ledger records it as such. This ADR covers the host half only.
+- The console's workspace picker had no add action while
+  `ui-directory-picker-browse` sat in the roster's `blocked` list, where a
+  running host had once reported it — and only it — failing activation for a
+  reason that was never established; a plugin present in the graph that cannot
+  activate is a fatal boot page instead of the designed slot fallback.
+  **Amendment (2026-09-19):** the activation was re-tested on a scratch port
+  with the plugin loaded, and the page boots with its directory-flow slot
+  occupied — the recorded failure did not reproduce. The plugin is now in the
+  served graph (`scripts/gen-dsh-roster.py`, `internal/dshmount/roster.json`)
+  and a test keeps it there, so the withheld member of the family is the native
+  picker alone. With the browser half live, the picker's remaining gap was the
+  host's workspace namespace, which ADR 0101 serves.
 - Browsing is the host filesystem, which is the point of a picker. The console's
   existing fence already keeps every request on loopback unless the operator
   passed `--allow-remote`, so what a picker exposes is exactly what that operator

@@ -74,15 +74,12 @@ UPSTREAM_REPOSITORY = "https://github.com/deepseek-ai/deepseek-harness"
 #    registered in its client test, tests/plugin.client.spec.ts:172), and
 #   scripts/build-console.sh DROP_PLUGINS does not stage that package.
 #
-# * client/ui-directory-picker-browse and client/ui-directory-picker-native are
-#   the two browser directory-picker panels. A running host (serve end to end)
-#   reported exactly one entry failing activation,
-#   @deepseek-ai/dsh-client-ui-directory-picker-browse, while every other entry
-#   activated; its requires are only shell seeds, so the failure is an
-#   activation/order dependency on the workspace picker slot rather than a
-#   missing file. A picker panel is inert in a browser without a native
-#   directory dialog, and removing the plugin is the protocol's designed
-#   degradation, so both members of the family are withheld.
+# * client/ui-directory-picker-native is the native half of the browser
+#   directory-picker family: it registers the same workspace directory-flow slot
+#   for an OS dialog that renders on the host's display, and no browser host
+#   here has one. Its browse sibling is *served* now (the host answers
+#   directoryPicker/list and directoryPicker/createDirectory, ADR 0100), so only
+#   the native member is withheld.
 #
 # The generator asserts each reason against the staged bytes below, so this
 # table cannot silently outlive a rebuilt artifact.
@@ -95,17 +92,10 @@ BLOCKED = {
         "scripts/build-console.sh does not stage; advertising this entry would leave it "
         "pending and make boot-client's activation audit reject the whole console"
     ),
-    "client/ui-directory-picker-browse": (
-        "a running host reported this entry (and only this entry) failing activation; its "
-        "requires are shell seeds, so the failure is an activation/order dependency on the "
-        "workspace directory-flow slot rather than a missing module. A browser picker panel "
-        "is inert here, and leaving a plugin out of the graph is DSH's designed degradation "
-        "for an unavailable surface"
-    ),
     "client/ui-directory-picker-native": (
-        "the native directory-picker sibling of ui-directory-picker-browse: it registers the "
-        "same workspace directory-flow slot for a native dialog no browser host here can "
-        "provide, so it is withheld with it rather than left to fail activation"
+        "the native half of the directory-picker family: it registers the workspace "
+        "directory-flow slot for an OS dialog that renders on the host's display, which no "
+        "browser host here has; the browse half is served instead (ADR 0100)"
     ),
 }
 # Evidence each excluded bundle must still show in its staged bytes.
