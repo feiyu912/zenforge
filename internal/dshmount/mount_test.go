@@ -610,3 +610,57 @@ func shellAssetRefs(shell string) []string {
 	}
 	return refs
 }
+
+// The console's Plugins tab reads the mount's own roster: every module the host
+// publishes, plus the upstream siblings it withholds so the listing is complete
+// rather than convenient.
+func TestPluginInventoryDescribesTheRoster(t *testing.T) {
+	manifest, err := parseRoster(rosterJSON)
+	if err != nil {
+		t.Fatalf("parseRoster: %v", err)
+	}
+	snapshot := pluginInventorySnapshot(manifest)()
+	if snapshot.ManagementAvailable {
+		t.Fatal("managementAvailable = true, want false: this host has no loader")
+	}
+	// Every module appears exactly once: the published ones from the entries
+	// table, the withheld ones from the blocked table (which the entries table
+	// also lists).
+	want := len(manifest.Entries)
+	if len(snapshot.Entries) != want {
+		t.Fatalf("entries = %d, want %d (one row per roster module)", len(snapshot.Entries), want)
+	}
+	enabled, withheld := 0, 0
+	for _, entry := range snapshot.Entries {
+		if entry.EntryID == "" || entry.ModuleName == "" {
+			t.Fatalf("entry = %+v, want both an entry id and a module name", entry)
+		}
+		if entry.FiberPhase != nil {
+			t.Fatalf("entry %s fiberPhase = %q, want null: the host does not observe the console", entry.EntryID, *entry.FiberPhase)
+		}
+		if entry.Enabled {
+			enabled++
+		} else {
+			withheld++
+		}
+	}
+	if enabled != len(manifest.Entries)-len(manifest.Blocked) || withheld != len(manifest.Blocked) {
+		t.Fatalf("enabled = %d withheld = %d, want %d and %d",
+			enabled, withheld, len(manifest.Entries)-len(manifest.Blocked), len(manifest.Blocked))
+	}
+	// The withheld native directory picker is the case the roster exists to
+	// record, so a listing that lost it would be the exact failure this test is
+	// here to catch.
+	found := false
+	for _, entry := range snapshot.Entries {
+		if strings.Contains(entry.EntryID, "ui-directory-picker-native") {
+			found = true
+			if entry.Enabled {
+				t.Fatal("the withheld native directory picker is reported enabled")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("the withheld native directory picker is missing from the inventory")
+	}
+}

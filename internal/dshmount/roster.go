@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"sort"
 
+	"github.com/feiyu912/zenforge/internal/dshapi"
 	"github.com/feiyu912/zenforge/internal/dshboot"
 )
 
@@ -91,6 +92,50 @@ type BlockedEntry struct {
 // graph revisions are the first 12 hex characters of a digest
 // (packages/client/modules/src/index.ts:199).
 const bundleRevisionLength = 12
+
+// pluginInventorySnapshot describes the console modules this host publishes, for
+// the console's own Plugins tab (ADR 0091).
+//
+// It answers from the roster rather than from the built entries because the
+// roster is the complete statement: it holds both the modules this host serves
+// and the upstream siblings it deliberately withholds, and a listing that showed
+// only the served half would look complete while hiding a decision an operator
+// may be looking for. Every entry reports fiberPhase null -- the host serves
+// static assets and cannot see the console's fibers -- and managementAvailable
+// false, because there is no loader behind any of it.
+func pluginInventorySnapshot(manifest *rosterManifest) dshapi.PluginInventorySource {
+	snapshot := dshapi.PluginInventorySnapshot{
+		ManagementAvailable: false,
+		Entries:             make([]dshapi.PluginInventoryEntry, 0, len(manifest.Entries)+len(manifest.Blocked)),
+	}
+	// A withheld module is listed in both `entries` and `blocked` -- the entries
+	// table is the upstream roster, the blocked table is this host's decision --
+	// so the withheld ones are collected first and skipped in the loop. Without
+	// that, the one module an operator most needs to see as withheld appears
+	// twice: once enabled and once not.
+	withheld := make(map[string]struct{}, len(manifest.Blocked))
+	for _, row := range manifest.Blocked {
+		withheld[row.Dir] = struct{}{}
+	}
+	for _, row := range manifest.Entries {
+		if _, isWithheld := withheld[row.Dir]; isWithheld {
+			continue
+		}
+		snapshot.Entries = append(snapshot.Entries, dshapi.PluginInventoryEntry{
+			EntryID:    row.Dir,
+			ModuleName: row.ID,
+			Enabled:    true,
+		})
+	}
+	for _, row := range manifest.Blocked {
+		snapshot.Entries = append(snapshot.Entries, dshapi.PluginInventoryEntry{
+			EntryID:    row.Dir,
+			ModuleName: row.ID,
+			Enabled:    false,
+		})
+	}
+	return func() dshapi.PluginInventorySnapshot { return snapshot }
+}
 
 // parseRoster validates the roster header and returns the decoded manifest.
 // plugins and raw are parameters rather than the embedded values so a test can

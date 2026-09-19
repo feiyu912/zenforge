@@ -231,6 +231,7 @@ nav:
       - 0088 The preset selectors answer with the host's own settings: adr/0088-the-preset-selectors-answer-with-the-hosts-own-settings.md
       - 0089 The console browses the workspace read-only: adr/0089-the-console-browses-the-workspace-read-only.md
       - 0090 The console's slash commands are the host's commands: adr/0090-the-consoles-slash-commands-are-the-hosts-commands.md
+      - 0091 The plugin inventory describes what this host publishes: adr/0091-the-plugin-inventory-describes-what-this-host-publishes.md
 
 extra:
   social:

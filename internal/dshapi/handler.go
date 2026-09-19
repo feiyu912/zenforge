@@ -85,6 +85,11 @@ type Handler struct {
 	// New.
 	commandsMu sync.RWMutex
 	commands   CommandSource
+
+	// plugins is the injected plugin inventory, installed by SetPluginInventory
+	// after New.
+	pluginsMu sync.RWMutex
+	plugins   PluginInventorySource
 }
 
 // pendingSession is a session id allocated by session/create that has not
@@ -189,6 +194,19 @@ func (h *Handler) method(endpoint string) (methodFunc, bool) {
 		return nil, false
 	}
 	switch namespace {
+	case "pluginInventory":
+		if name == "list" {
+			return h.pluginInventoryList, true
+		}
+	case "pluginManager":
+		// Every method in this namespace is a write this host cannot perform.
+		// The namespace is answered as a whole so a console that skipped the
+		// inventory still gets the reason named.
+		switch name {
+		case "listBundles", "listPlugins", "inspect", "installBundle", "removeBundle",
+			"setBundleEnabled", "setPluginEnabled", "cancelInstall":
+			return h.pluginManagerUnsupported, true
+		}
 	case "commands":
 		switch name {
 		case "list":

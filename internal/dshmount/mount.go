@@ -126,6 +126,10 @@ func New(manager *harnesshttp.RunManager, events eventlog.Store, cfg Config) (*M
 	if cfg.Commands != nil {
 		api.SetCommands(cfg.Commands)
 	}
+	// The inventory is the mount's own roster, so it is installed here rather
+	// than through Config: nothing outside this package can describe what the
+	// mount publishes, and the caller should not have to remember to.
+	api.SetPluginInventory(pluginInventorySnapshot(manifest))
 	return &Mux{
 		shell:         shellHandler(bundle.Inject(string(shell))),
 		assets:        dshconsole.Handler(),
