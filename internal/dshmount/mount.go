@@ -23,6 +23,7 @@ package dshmount
 
 import (
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -38,6 +39,13 @@ import (
 // console's RPCs obey the same rule as the settings endpoint.
 type Config struct {
 	AllowRemote bool
+	// ModelCatalog lets the host answer the console's model selector from its
+	// own configuration. Without it the method answers an honest unimplemented
+	// error rather than a model this host never configured.
+	ModelCatalog dshapi.ModelCatalogSource
+	// Logger receives the diagnostic line per endpoint the console asks for
+	// and this host does not serve. Nil stays silent.
+	Logger *slog.Logger
 }
 
 // Mux is the assembled console host. It is immutable after New, which is what
@@ -75,9 +83,12 @@ func New(manager *harnesshttp.RunManager, events eventlog.Store, cfg Config) (*M
 	if err != nil {
 		return nil, fmt.Errorf("dshmount: read the staged console shell: %w", err)
 	}
-	api, err := dshapi.New(manager, events, dshapi.Config{AllowRemote: cfg.AllowRemote})
+	api, err := dshapi.New(manager, events, dshapi.Config{AllowRemote: cfg.AllowRemote, Logger: cfg.Logger})
 	if err != nil {
 		return nil, fmt.Errorf("dshmount: build the console RPC handler: %w", err)
+	}
+	if cfg.ModelCatalog != nil {
+		api.SetModelCatalog(cfg.ModelCatalog)
 	}
 	return &Mux{
 		shell:         shellHandler(bundle.Inject(string(shell))),

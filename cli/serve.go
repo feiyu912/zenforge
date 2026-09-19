@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/feiyu912/zenforge/approval"
+	"github.com/feiyu912/zenforge/internal/dshapi"
 	"github.com/feiyu912/zenforge/internal/dshmount"
 	"github.com/feiyu912/zenforge/internal/dshstream"
 	"github.com/feiyu912/zenforge/model"
@@ -218,7 +220,35 @@ func newServeApp(ctx context.Context, opts *options, ioStreams IO, config serveC
 	// assets, module bundles, and unary RPCs share one origin, which is what the
 	// console requires (its RPC base is hard-wired to the page origin). Building
 	// it is where a roster that cannot boot fails, before a listener is opened.
-	console, err := dshmount.New(runtime.Manager, runtime.Events, dshmount.Config{AllowRemote: config.allowRemote})
+	// The console's model selector asks the host what it is configured with.
+	// The settings store is the answer, so the picker reports the operator's
+	// own endpoint and model instead of an invented one; an unconfigured host
+	// returns an empty catalog and the console says so.
+	modelCatalog := func() dshapi.ModelCatalog {
+		view := settings.view()
+		if view.Model == "" {
+			return dshapi.ModelCatalog{}
+		}
+		provider := view.Provider
+		if provider == "" {
+			provider = "openai"
+		}
+		return dshapi.ModelCatalog{
+			Default:           dshapi.ModelSelection{Provider: provider, Model: view.Model},
+			RoutableProviders: []string{provider},
+			Groups: []dshapi.ModelProviderGroup{{
+				ID:     provider,
+				Name:   provider,
+				Models: []dshapi.ModelCatalogModel{{ID: view.Model, Name: view.Model}},
+			}},
+			Failures: []dshapi.ModelCatalogFailure{},
+		}
+	}
+	console, err := dshmount.New(runtime.Manager, runtime.Events, dshmount.Config{
+		AllowRemote:  config.allowRemote,
+		ModelCatalog: modelCatalog,
+		Logger:       slog.Default(),
+	})
 	if err != nil {
 		return nil, err
 	}
