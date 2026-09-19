@@ -228,6 +228,7 @@ nav:
       - 0085 The provider directory is served, discovery is not: adr/0085-the-provider-directory-is-served-discovery-is-not.md
       - 0086 A session outlives its runs: adr/0086-a-session-outlives-its-runs.md
       - 0087 The settings panel is served with a real schema: adr/0087-the-settings-panel-is-served-with-a-real-schema.md
+      - 0088 The preset selectors answer with the host's own settings: adr/0088-the-preset-selectors-answer-with-the-hosts-own-settings.md
 
 extra:
   social:

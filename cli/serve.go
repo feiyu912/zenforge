@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/feiyu912/zenforge"
 	"github.com/feiyu912/zenforge/approval"
 	"github.com/feiyu912/zenforge/internal/dshapi"
 	"github.com/feiyu912/zenforge/internal/dshmount"
@@ -272,6 +273,7 @@ func newServeApp(ctx context.Context, opts *options, ioStreams IO, config serveC
 		Credentials:  consoleCredentials{settings: settings},
 		LlmDirectory: llmDirectory,
 		Settings:     consoleSettings{settings: settings},
+		Presets:      consolePresets(opts),
 	})
 	if err != nil {
 		return nil, err
@@ -580,6 +582,61 @@ func (s *settingsStore) replaceEndpoint(baseURL, model string) error {
 	// configured a key yet.
 	s.rebuild()
 	return nil
+}
+
+// consoleExecutionModes lists the execution presets this host implements. The ids
+// are the agent's own mode constants, so a renamed mode cannot drift away from
+// the roster the console reads.
+func consoleExecutionModes() []dshapi.ConsolePresetMode {
+	return []dshapi.ConsolePresetMode{
+		{
+			ID:   string(zenforge.ModeReact),
+			Name: string(zenforge.ModeReact),
+			Description: "The normal model/tool loop: the agent reasons, calls tools, " +
+				"and repeats until it answers.",
+		},
+		{
+			ID:   string(zenforge.ModeOneshot),
+			Name: string(zenforge.ModeOneshot),
+			Description: "Caps the model/tool loop at two rounds and then forces a " +
+				"no-tool final answer when needed.",
+		},
+		{
+			ID:          string(zenforge.ModePlanExecute),
+			Name:        string(zenforge.ModePlanExecute),
+			Description: "Plans first, then executes the plan.",
+		},
+	}
+}
+
+// consoleExecutionMode is the preset this host runs: an explicit --mode when one
+// was given, otherwise the planning preset when planning is on, otherwise the
+// plain model/tool loop. The console reports it as the roster's default because
+// this host uses it for every session it starts.
+func consoleExecutionMode(opts *options) string {
+	if mode := strings.TrimSpace(opts.mode); mode != "" {
+		return mode
+	}
+	if planningMode(opts.planning) == zenforge.PlanningPlanExecute {
+		return string(zenforge.ModePlanExecute)
+	}
+	return string(zenforge.ModeReact)
+}
+
+// consolePresets reports the host's execution presets and the sandbox and
+// approval settings it runs with, for the console's preset and permission
+// selectors (ADR 0088). It is a snapshot of startup flags: the console cannot
+// change either here, and the surfaces say so rather than offering a choice
+// that would be dropped.
+func consolePresets(opts *options) dshapi.PresetSource {
+	return func() dshapi.ConsolePresets {
+		return dshapi.ConsolePresets{
+			Sandbox:     opts.sandboxBackend,
+			Approval:    opts.approve,
+			DefaultMode: consoleExecutionMode(opts),
+			Modes:       consoleExecutionModes(),
+		}
+	}
 }
 
 // consoleSettings adapts the settings store to the console's settings namespace

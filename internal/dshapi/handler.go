@@ -71,6 +71,10 @@ type Handler struct {
 	// SetSettingsDocument after New.
 	settingsMu sync.RWMutex
 	settings   SettingsDocumentStore
+
+	// presets is the injected preset source, installed by SetPresets after New.
+	presetsMu sync.RWMutex
+	presets   PresetSource
 }
 
 // pendingSession is a session id allocated by session/create that has not
@@ -175,6 +179,21 @@ func (h *Handler) method(endpoint string) (methodFunc, bool) {
 		return nil, false
 	}
 	switch namespace {
+	case "permissionPresets":
+		if name == "catalog" {
+			return h.permissionPresetsCatalog, true
+		}
+	case "agentPresets":
+		switch name {
+		case "list":
+			return h.agentPresetsList, true
+		case "read":
+			return h.agentPresetsRead, true
+		case "copy", "deletePreset":
+			return h.agentPresetsReadOnly, true
+		case "select":
+			return h.agentPresetsSelectIsUnsupported, true
+		}
 	case "settings":
 		switch name {
 		case "describe":

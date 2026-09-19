@@ -57,6 +57,9 @@ type Config struct {
 	// Settings answers the console's settings namespace: the schema its pages
 	// render and the writes an operator makes through them.
 	Settings dshapi.SettingsDocumentStore
+	// Presets answers the console's preset and permission selectors with the
+	// execution presets and sandbox/approval settings this host runs with.
+	Presets dshapi.PresetSource
 }
 
 // Mux is the assembled console host. It is immutable after New, which is what
@@ -109,6 +112,9 @@ func New(manager *harnesshttp.RunManager, events eventlog.Store, cfg Config) (*M
 	}
 	if cfg.Settings != nil {
 		api.SetSettingsDocument(cfg.Settings)
+	}
+	if cfg.Presets != nil {
+		api.SetPresets(cfg.Presets)
 	}
 	return &Mux{
 		shell:         shellHandler(bundle.Inject(string(shell))),
