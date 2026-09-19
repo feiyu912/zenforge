@@ -553,9 +553,9 @@ type profileSnapshot interface {
 // the store's own lock would deadlock against the next one.
 func (s *settingsStore) persist() error { return s.document.save() }
 
-// documentFile renders the whole console-written state as the document: the live
-// settings, the namespaces the console owns, the revisions, and the declared
-// provider profiles this store was wired to (ADR 0102).
+// documentFile renders the console-written state as the document: the settings the
+// console moved off the seed, the namespaces the console owns, the revisions, and the
+// declared provider profiles this store was wired to (ADR 0102).
 func (s *settingsStore) documentFile() consoleSettingsFile {
 	file := consoleSettingsFile{}
 	if s == nil {
