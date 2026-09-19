@@ -2,6 +2,9 @@
 
 Status: accepted
 
+Superseded in part by ADR 0095: a route configuration declares is now held and
+reported with its `declared` flag and its diagnostic.
+
 ## Context
 
 The console's Models page loads its provider directory before it renders any
@@ -57,7 +60,9 @@ what is logged), which is its own decision and is not smuggled in here.
 
 Upstream's optional `declared` flag means "the adapter knows this route only
 because configuration declared it". Only the adapter can answer that, and this
-host did not write the adapters, so the field is omitted rather than guessed.
+host did not write the adapters, so the field is omitted rather than guessed. (A
+route the operator declares themselves is a different question, and ADR 0095
+answers it: that route is declared by construction, and the field says so.)
 
 ## Consequences
 

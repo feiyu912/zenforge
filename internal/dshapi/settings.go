@@ -352,6 +352,11 @@ func (h *Handler) settingsDescribe(_ context.Context, args map[string]json.RawMe
 	// The console-owned namespace is reported beside the host's own, because the
 	// console writes it through this same wire.
 	namespaces = append(namespaces, settingsConsoleView(store.ConsoleSection(consoleOnboardingNamespace)))
+	// The provider-profile namespace is reported only when a store holds it: its
+	// presence is what makes the console offer "Add a custom provider" at all.
+	if profiles := h.providerProfileStore(); profiles != nil {
+		namespaces = append(namespaces, settingsPiAiView(profiles.ProviderProfiles()))
+	}
 	return SettingsDescribeValue{Writable: true, HasDocument: false, Namespaces: namespaces}, nil
 }
 
@@ -384,7 +389,8 @@ func (h *Handler) settingsWrite(_ context.Context, args map[string]json.RawMessa
 	}
 	route, known := settingsNamespaceRoute(namespace)
 	consoleOwned := settingsConsoleNamespace(namespace)
-	if !known && !consoleOwned {
+	profilesOwned := namespace == PiAiNamespace && h.providerProfileStore() != nil
+	if !known && !consoleOwned && !profilesOwned {
 		return nil, fail(codeBadRequest,
 			fmt.Sprintf("settings %s: namespace %q is not served by this host", mode, namespace),
 			map[string]any{"argument": "ns"})
@@ -403,6 +409,9 @@ func (h *Handler) settingsWrite(_ context.Context, args map[string]json.RawMessa
 	}
 	if consoleOwned {
 		return settingsConsoleWrite(store, mode, args)
+	}
+	if profilesOwned {
+		return settingsPiAiWrite(h.providerProfileStore(), mode, args)
 	}
 	var edits []settingsFieldEdit
 	switch mode {

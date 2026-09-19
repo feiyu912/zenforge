@@ -128,6 +128,19 @@ what is experimental, and what remains adapter territory.
   reports that configuration through `session/modelCatalog`. The console's own
   settings panel can also write the endpoint, model and key (ADR 0087); the key
   is write-only and the write refuses what this host cannot hold.
+- **A custom provider can be declared, and the host says whether it can serve it**
+  (ADR 0095). The Models page's "Add a custom provider" entry point is served: the
+  `llm-pi-ai` namespace is reported with a schema whose protocols union names exactly
+  the two wire protocols this host builds (`openai-completions`,
+  `anthropic-messages`), a declared profile is validated by shape *and* by building
+  the adapter a run would build, and a route that cannot be served yet is stored with
+  its reason (for example a credential that is not set) and reported in the provider
+  directory as declared. Two limits belong here plainly: a declared profile lasts
+  until the process exits, like every other console-written setting (ADR 0094), and
+  **it is not yet selectable** -- `session/modelCatalog` does not list its models and
+  `session/selectModel` is unserved, so choosing a declared provider for a run is the
+  next batch. Interrogating a draft endpoint (`llm/discoverModels`) also stays an
+  unimplemented capability.
 - **Multi-turn works** (ADR 0086): a session's finished run continues as
   `<session>~<turn>`, so a second message is a new turn rather than a refusal.
 - The sidebar does not mutate live, background-job panels are empty, and

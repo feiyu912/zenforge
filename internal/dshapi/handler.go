@@ -90,6 +90,11 @@ type Handler struct {
 	// after New.
 	pluginsMu sync.RWMutex
 	plugins   PluginInventorySource
+
+	// profiles is the injected store for hand-declared provider profiles,
+	// installed by SetProviderProfiles after New.
+	profilesMu sync.RWMutex
+	profiles   ProviderProfileStore
 }
 
 // pendingSession is a session id allocated by session/create that has not

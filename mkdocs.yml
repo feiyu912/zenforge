@@ -235,6 +235,7 @@ nav:
       - 0092 The console shows the product's name in its command form: adr/0092-the-console-shows-the-products-name-in-its-command-form.md
       - 0093 The first-party console is deleted: adr/0093-the-first-party-console-is-deleted.md
       - 0094 The host holds the console's own settings namespaces: adr/0094-the-host-holds-the-consoles-own-settings-namespaces.md
+      - 0095 The host holds hand-declared provider profiles: adr/0095-the-host-holds-hand-declared-provider-profiles.md
 
 extra:
   social:

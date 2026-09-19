@@ -250,32 +250,40 @@ func newServeApp(ctx context.Context, opts *options, ioStreams IO, config serveC
 	// the directory failed and shows nothing. The live half is the route this
 	// host is configured to serve; the configurable half is every route the
 	// host's own adapter factory accepts.
+	profiles := newConsoleProviderProfiles(settings)
 	llmDirectory := func() dshapi.LlmDirectory {
 		liveProvider := strings.TrimSpace(settings.view().Provider)
 		if liveProvider == "" {
 			liveProvider = provider.OpenAI
+		}
+		configurable := []dshapi.LlmConfigurableProvider{
+			{Provider: provider.OpenAI, DisplayName: "OpenAI", SettingsNS: "llm-openai", SettingsPath: []string{}},
+			{Provider: provider.Anthropic, DisplayName: "Anthropic", SettingsNS: "llm-anthropic", SettingsPath: []string{}},
+		}
+		// Hand-declared routes come last, as upstream orders them, and carry the
+		// settings address in the pi-ai namespace that they were written to.
+		for _, status := range profiles.ProviderProfiles() {
+			configurable = append(configurable, consoleDeclaredProvider(status))
 		}
 		return dshapi.LlmDirectory{
 			Live: []dshapi.LlmProviderInfo{{
 				ID:   liveProvider,
 				Name: consoleProviderName(liveProvider),
 			}},
-			Configurable: []dshapi.LlmConfigurableProvider{
-				{Provider: provider.OpenAI, DisplayName: "OpenAI", SettingsNS: "llm-openai", SettingsPath: []string{}},
-				{Provider: provider.Anthropic, DisplayName: "Anthropic", SettingsNS: "llm-anthropic", SettingsPath: []string{}},
-			},
+			Configurable: configurable,
 		}
 	}
 	console, err := dshmount.New(runtime.Manager, runtime.Events, dshmount.Config{
-		AllowRemote:    config.allowRemote,
-		ModelCatalog:   modelCatalog,
-		Logger:         slog.Default(),
-		Credentials:    consoleCredentials{settings: settings},
-		LlmDirectory:   llmDirectory,
-		Settings:       consoleSettings{settings: settings},
-		Presets:        consolePresets(opts),
-		WorkspaceFiles: consoleFileFace(opts),
-		Commands:       consoleCommandCatalog(opts),
+		AllowRemote:      config.allowRemote,
+		ModelCatalog:     modelCatalog,
+		Logger:           slog.Default(),
+		Credentials:      consoleCredentials{settings: settings},
+		LlmDirectory:     llmDirectory,
+		Settings:         consoleSettings{settings: settings},
+		ProviderProfiles: profiles,
+		Presets:          consolePresets(opts),
+		WorkspaceFiles:   consoleFileFace(opts),
+		Commands:         consoleCommandCatalog(opts),
 	})
 	if err != nil {
 		return nil, err
@@ -773,6 +781,16 @@ func (s *settingsStore) view() settingsView {
 // hasAPIKey reports whether a key would be found: an inline key the operator
 // or page supplied, or the environment variable the CLI named. It never
 // reveals which.
+// configuredAPIKey reports the operator's own key. It exists for the provider
+// profile serviceability check, which must resolve a credential exactly the way a
+// run would -- and that check cannot go through settingsView, which deliberately
+// carries no key.
+func (s *settingsStore) configuredAPIKey() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.current.apiKey
+}
+
 func (s *settingsStore) hasAPIKey(current serverSettings) bool {
 	if strings.TrimSpace(current.apiKey) != "" {
 		return true

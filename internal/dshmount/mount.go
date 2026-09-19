@@ -64,6 +64,9 @@ type Config struct {
 	WorkspaceFiles dshapi.WorkspaceFiles
 	// Commands answers the composer's slash menu and a submitted command line.
 	Commands dshapi.CommandSource
+	// ProviderProfiles holds the provider profiles the console declares, and
+	// answers whether this host can serve each one.
+	ProviderProfiles dshapi.ProviderProfileStore
 }
 
 // Mux is the assembled console host. It is immutable after New, which is what
@@ -130,6 +133,9 @@ func New(manager *harnesshttp.RunManager, events eventlog.Store, cfg Config) (*M
 	// than through Config: nothing outside this package can describe what the
 	// mount publishes, and the caller should not have to remember to.
 	api.SetPluginInventory(pluginInventorySnapshot(manifest))
+	if cfg.ProviderProfiles != nil {
+		api.SetProviderProfiles(cfg.ProviderProfiles)
+	}
 	return &Mux{
 		shell:         shellHandler(bundle.Inject(string(shell))),
 		assets:        dshconsole.Handler(),
