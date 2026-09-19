@@ -75,6 +75,11 @@ type Handler struct {
 	// presets is the injected preset source, installed by SetPresets after New.
 	presetsMu sync.RWMutex
 	presets   PresetSource
+
+	// workspaceFiles is the injected read-only file face, installed by
+	// SetWorkspaceFiles after New.
+	workspaceMu    sync.RWMutex
+	workspaceFiles WorkspaceFiles
 }
 
 // pendingSession is a session id allocated by session/create that has not
@@ -179,6 +184,23 @@ func (h *Handler) method(endpoint string) (methodFunc, bool) {
 		return nil, false
 	}
 	switch namespace {
+	case "workspaceFiles":
+		switch name {
+		case "list":
+			return h.workspaceFilesList, true
+		case "stat":
+			return h.workspaceFilesStat, true
+		case "read":
+			return h.workspaceFilesRead, true
+		case "readAll":
+			return h.workspaceFilesReadAll, true
+		case "readBytes":
+			return h.workspaceFilesReadBytes, true
+		case "changes":
+			return h.workspaceFilesChanges, true
+		case "readRelated":
+			return h.workspaceFilesReadRelated, true
+		}
 	case "permissionPresets":
 		if name == "catalog" {
 			return h.permissionPresetsCatalog, true

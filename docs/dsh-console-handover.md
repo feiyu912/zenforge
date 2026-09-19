@@ -120,12 +120,15 @@ machine, and it also relaxes the settings API to non-loopback callers.
    running process. What is left here is persistence: there is still no settings
    document on disk (`hasDocument: false`), and only one profile per route is
    modelled. The historical note below still explains the mechanism.
-2. **The console's preset selectors are answered** as of ADR 0088
+2. **The console browses the workspace** as of ADR 0089
+   (`workspaceFiles/list|stat|read|readAll|readBytes`, with watching and relation
+   reads refused by name and paths confined to the served workspace root).
+3. **The console's preset selectors are answered** as of ADR 0088
    (`permissionPresets/catalog`, `agentPresets/list|read`, with authoring and
    selection refused by name). These were found by reading the host's own
    "endpoint is not served" log lines rather than by guessing, which is the
    instrument to keep using for the remaining namespaces.
-3. **The console's own model/settings panel** (historical note). Its edits go to a host-owned settings document
+4. **The console's own model/settings panel** (historical note). Its edits go to a host-owned settings document
    (`settings/document-updated`, `settings/conflict`), not to a credential form.
    The instrument is already in place: `serve` passes `slog.Default()` into the
    RPC handler (`dshmount.Config.Logger` -> `dshapi.Config.Logger`), so every

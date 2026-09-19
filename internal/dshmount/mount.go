@@ -60,6 +60,8 @@ type Config struct {
 	// Presets answers the console's preset and permission selectors with the
 	// execution presets and sandbox/approval settings this host runs with.
 	Presets dshapi.PresetSource
+	// WorkspaceFiles answers the console's file sidebar and document preview.
+	WorkspaceFiles dshapi.WorkspaceFiles
 }
 
 // Mux is the assembled console host. It is immutable after New, which is what
@@ -115,6 +117,9 @@ func New(manager *harnesshttp.RunManager, events eventlog.Store, cfg Config) (*M
 	}
 	if cfg.Presets != nil {
 		api.SetPresets(cfg.Presets)
+	}
+	if cfg.WorkspaceFiles != nil {
+		api.SetWorkspaceFiles(cfg.WorkspaceFiles)
 	}
 	return &Mux{
 		shell:         shellHandler(bundle.Inject(string(shell))),

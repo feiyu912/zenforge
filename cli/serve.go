@@ -267,13 +267,14 @@ func newServeApp(ctx context.Context, opts *options, ioStreams IO, config serveC
 		}
 	}
 	console, err := dshmount.New(runtime.Manager, runtime.Events, dshmount.Config{
-		AllowRemote:  config.allowRemote,
-		ModelCatalog: modelCatalog,
-		Logger:       slog.Default(),
-		Credentials:  consoleCredentials{settings: settings},
-		LlmDirectory: llmDirectory,
-		Settings:     consoleSettings{settings: settings},
-		Presets:      consolePresets(opts),
+		AllowRemote:    config.allowRemote,
+		ModelCatalog:   modelCatalog,
+		Logger:         slog.Default(),
+		Credentials:    consoleCredentials{settings: settings},
+		LlmDirectory:   llmDirectory,
+		Settings:       consoleSettings{settings: settings},
+		Presets:        consolePresets(opts),
+		WorkspaceFiles: consoleFileFace(opts),
 	})
 	if err != nil {
 		return nil, err
@@ -637,6 +638,20 @@ func consolePresets(opts *options) dshapi.PresetSource {
 			Modes:       consoleExecutionModes(),
 		}
 	}
+}
+
+// consoleFileFace builds the console's read-only workspace file face over the
+// directory this server serves (ADR 0089). A workspace that cannot be opened
+// leaves the face nil, so the namespace answers unimplemented with the dependency
+// named rather than the console showing a file tree that does not exist -- and
+// the reason is logged once, here, instead of on every request.
+func consoleFileFace(opts *options) dshapi.WorkspaceFiles {
+	face, err := newConsoleWorkspaceFiles(opts.workspace)
+	if err != nil {
+		slog.Warn("console file browsing is disabled: the workspace could not be opened", "workspace", opts.workspace, "error", err)
+		return nil
+	}
+	return face
 }
 
 // consoleSettings adapts the settings store to the console's settings namespace

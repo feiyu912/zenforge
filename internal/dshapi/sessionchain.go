@@ -51,6 +51,29 @@ func (h *Handler) runExists(ctx context.Context, runID string) bool {
 	return err == nil && latest > 0
 }
 
+// sessionKnown reports whether an id names a session this host serves: a live or
+// durable run, any turn of one, or a session the manager still lists.
+//
+// It is the check a request needs when it is scoped to a session but does not
+// need the session to have run yet -- opening the file sidebar of a session that
+// was just created is a normal thing to do, and refusing it because the first
+// turn has not started would be a refusal about the wrong thing.
+func (h *Handler) sessionKnown(ctx context.Context, sessionID string) bool {
+	if h.runExists(ctx, sessionID) || len(h.sessionRunIDs(ctx, sessionID)) > 0 {
+		return true
+	}
+	infos, err := h.manager.List(ctx)
+	if err != nil {
+		return false
+	}
+	for _, info := range infos {
+		if info.RunID == sessionID {
+			return true
+		}
+	}
+	return false
+}
+
 // resolveSession returns the session a prompt names, given the run ids that are
 // known to exist. A prompt may name a continuation run id -- an older listing,
 // or a client that followed one -- and that run still belongs to its session, so
