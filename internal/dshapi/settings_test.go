@@ -3,6 +3,7 @@ package dshapi
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -32,7 +33,7 @@ func (s *stubSettings) SettingsProfile() SettingsProfile { return s.profile }
 // its own (ADR 0102).
 func (s *stubSettings) HasSettingsDocument() bool { return s.hasDocument }
 
-func (s *stubSettings) SetSettingsEndpoint(baseURL string) error {
+func (s *stubSettings) SetSettingsEndpoint(route, baseURL string) error {
 	if s.fail != nil {
 		return s.fail
 	}
@@ -41,7 +42,7 @@ func (s *stubSettings) SetSettingsEndpoint(baseURL string) error {
 	return nil
 }
 
-func (s *stubSettings) SetSettingsModel(model string) error {
+func (s *stubSettings) SetSettingsModel(route, model string) error {
 	if s.fail != nil {
 		return s.fail
 	}
@@ -715,5 +716,64 @@ func TestSettingsRevisionsComeFromAStoreThatVersionsThem(t *testing.T) {
 			SettingsInitialRevision+2))), codeSettingsConflict)
 	if stale.Result.Error.Details["revision"] != float64(SettingsInitialRevision+3) {
 		t.Fatalf("conflict details = %v, want the store's current revision named", stale.Result.Error.Details)
+	}
+}
+
+// userLayerStub is a store that knows which fields the console wrote, the way the
+// serve command's document does (ADR 0103).
+type userLayerStub struct {
+	stubSettings
+	sections map[string]map[string]any
+}
+
+func (s *userLayerStub) SettingsUserSection(route string) (map[string]any, bool) {
+	section, ok := s.sections[route]
+	return section, ok
+}
+
+// TestSettingsDescribeReportsTheConsolesOwnWritesAsTheUserLayer is the assertion
+// ADR 0103 makes at the wire: the user layer is what the console saved, not what
+// the host was started with. A store that can tell the difference is believed, and
+// a route it says nothing about leaves the layer absent rather than restating the
+// resolved value -- otherwise an operator sees a setting they never saved and the
+// page offers to save it again.
+func TestSettingsDescribeReportsTheConsolesOwnWritesAsTheUserLayer(t *testing.T) {
+	profile := SettingsProfile{Provider: "openai", Model: "qwen-plus", BaseURL: "https://dashscope.test/v1", HasKey: true}
+	written := map[string]any{"providers": map[string]any{"openai": map[string]any{
+		"api": map[string]any{"model": "deepseek-v4.1-flash"},
+	}}}
+	f := newFixture(t, Config{})
+	f.handler.SetSettingsDocument(&userLayerStub{
+		stubSettings: stubSettings{profile: profile},
+		sections:     map[string]map[string]any{"openai": written},
+	})
+	var described SettingsDescribeValue
+	decodeValue(t, f.post(t, "/api/settings/describe", rpcBody(t, "u1", "settings/describe", "")), &described)
+
+	openai := namespaceIn(t, described, "llm-openai")
+	if got := userOf(t, openai); !reflect.DeepEqual(got, written) {
+		t.Fatalf("llm-openai user = %#v, want the section the console wrote (%#v)", got, written)
+	}
+	// The resolved value is still the live configuration, so the page can show
+	// what a run would use without pretending the operator saved it.
+	if got := fmt.Sprintf("%v", openai.Value); !strings.Contains(got, "qwen-plus") {
+		t.Fatalf("llm-openai value = %s, want the host's live model", got)
+	}
+
+	// A route the console never wrote has no user layer at all. An empty one would
+	// claim the operator saved an empty section.
+	anthropic := namespaceIn(t, described, "llm-anthropic")
+	if anthropic.User != nil {
+		t.Fatalf("llm-anthropic user = %#v, want it absent: the console wrote nothing there", anthropic.User)
+	}
+
+	// A store that cannot tell the two apart keeps the older behaviour, so an
+	// injected store that is not the document's is unchanged.
+	fallback := newFixture(t, Config{})
+	fallback.handler.SetSettingsDocument(&stubSettings{profile: profile})
+	var describedFallback SettingsDescribeValue
+	decodeValue(t, fallback.post(t, "/api/settings/describe", rpcBody(t, "u2", "settings/describe", "")), &describedFallback)
+	if got := fmt.Sprintf("%v", userOf(t, namespaceIn(t, describedFallback, "llm-openai"))); !strings.Contains(got, "qwen-plus") {
+		t.Fatalf("llm-openai user = %s, want the live configuration for a store with no user-layer face", got)
 	}
 }

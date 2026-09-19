@@ -177,8 +177,13 @@ what is experimental, and what remains adapter territory.
   the previous session's choice. The honest limits: two sessions running
   **concurrently** under different selections share whichever adapter was applied
   last, because the harness's task carries no model field and this host owns one
-  adapter; a selection lasts until the process exits; no model-selection event is
-  written to the session log; and no model exposes a reasoning-effort choice. A
+  adapter; no model-selection event is written to the session log; and no model
+  exposes a reasoning-effort choice. Since ADR 0103 a session's chosen model is
+  written to the settings document and restored on the next start, with two
+  bounds: only sessions whose model an operator actually chose are recorded, and
+  the 64 most recent choices are kept -- a session that chose nothing still gets
+  the operator's configured model, and the runtime last-used hint is not
+  persisted. A
   route whose credential is missing is still listed and selectable -- the catalog's
   `failures` names what is missing, and the run that follows refuses the prompt
   with that reason.
@@ -523,8 +528,9 @@ Workspace registrations, their titles and the archived session set are
 process-local console state. The console's *settings* are not: since ADR 0102 the
 endpoint, the model, the credential, the declared provider profiles and the
 namespaces the console owns are held in a `0600` document in the host's own
-configuration directory, and the registry was deliberately left out of that
-change -- a registered directory this host cannot run a session in (ADR 0101) is a
+configuration directory -- and since ADR 0103 the model each session chose is
+held there too, bounded to the 64 most recent choices -- and the registry was
+deliberately left out of that change -- a registered directory this host cannot run a session in (ADR 0101) is a
 different question from a preference worth restoring. So a restart starts the
 workspace list from the host's own directory again. A session's transcript and its
 workspace files are unaffected: those live in the run logs and on disk.

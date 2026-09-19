@@ -71,7 +71,13 @@ options. `zenforge serve --help` lists them.
   name of a variable to read.
 - Restarting the host costs nothing: the endpoint, the model, the credential, the
   declared provider profiles and the settings revisions are read back before the
-  first run is served.
+  first run is served, and so is the model each session chose in the composer
+  (most recent 64, ADR 0103).
+- The document records what the console wrote and nothing else. A value the host
+  was started with -- `--model`, `--base-url` -- is the configuration a run uses,
+  but the Models page does not report it as a saved setting, because an operator
+  who never opened a provider card should not be shown one they saved (ADR 0103).
+  A field it does record is reported back on the card it was written on.
 - A document this host cannot read stops it at startup, naming the file and the
   damage rather than its contents. An unreadable settings file is never quietly
   ignored: the Models page would otherwise come back empty and claim it was a

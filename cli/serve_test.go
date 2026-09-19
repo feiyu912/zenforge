@@ -317,7 +317,7 @@ func TestConsoleSettingsWriteTheEndpointBeforeTheKey(t *testing.T) {
 	store := newTestSettingsStore(t, false)
 	store.current.apiKey = ""
 	settings := consoleSettings{settings: store}
-	if err := settings.SetSettingsEndpoint("https://example.test/v1"); err != nil {
+	if err := settings.SetSettingsEndpoint(provider.OpenAI, "https://example.test/v1"); err != nil {
 		t.Fatalf("SetSettingsEndpoint without a key: %v", err)
 	}
 	if got := store.view().BaseURL; got != "https://example.test/v1" {
@@ -327,7 +327,7 @@ func TestConsoleSettingsWriteTheEndpointBeforeTheKey(t *testing.T) {
 		t.Fatal("hasApiKey = true, want no credential reported")
 	}
 	// The model write keeps the endpoint that was just written.
-	if err := settings.SetSettingsModel("qwen-max"); err != nil {
+	if err := settings.SetSettingsModel(provider.OpenAI, "qwen-max"); err != nil {
 		t.Fatalf("SetSettingsModel: %v", err)
 	}
 	view := store.view()
@@ -335,7 +335,7 @@ func TestConsoleSettingsWriteTheEndpointBeforeTheKey(t *testing.T) {
 		t.Fatalf("view = %+v, want the model changed and the endpoint kept", view)
 	}
 	// A malformed endpoint is still refused before anything is stored.
-	if err := settings.SetSettingsEndpoint("not-a-url"); err == nil {
+	if err := settings.SetSettingsEndpoint(provider.OpenAI, "not-a-url"); err == nil {
 		t.Fatal("SetSettingsEndpoint accepted a malformed endpoint")
 	}
 	if got := store.view().BaseURL; got != "https://example.test/v1" {

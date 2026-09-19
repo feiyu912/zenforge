@@ -66,9 +66,9 @@ method list.
 | `session/page` | served | A page of a session's events. |
 | `session/prompt` | served | Send a turn into a session. |
 | `session/rename` | served | Rename a session. |
-| `session/selectModel` | served | Choose the provider and model a session runs on. |
+| `session/selectModel` | served | Choose the provider and model a session runs on. The choice is restored on the next start (ADR 0103). |
 | `settings/canOpenAgentPresetDirectory` | served | Whether a native editor can be opened here (it cannot). |
-| `settings/describe` | served | The settings namespaces, their schema, their values, and whether a document holds them (ADR 0102). |
+| `settings/describe` | served | The settings namespaces, their schema, their resolved values, the section the console itself wrote, and whether a document holds them (ADR 0102, ADR 0103). |
 | `settings/mutate` | served | Apply settings operations. |
 | `settings/replace` | served | Replace a settings value. |
 | `settings/update` | served | Update a settings value. |

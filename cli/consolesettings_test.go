@@ -27,10 +27,27 @@ const (
 	documentTestKey     = "sk-document-sentinel-9d2c"
 )
 
+// documentHarness is the set of stores a settings document is wired around. The
+// wiring order matters and matches newServeApp: the model-selection store exists
+// before the document is read, because the document carries the model each session
+// chose and the restart restores it through that store (ADR 0103).
+type documentHarness struct {
+	store      *settingsStore
+	profiles   *consoleProviderProfiles
+	models     consoleModels
+	selections *consoleModelSelection
+}
+
 // newDocumentStores wires the stores around a settings document the way
 // newServeApp does, so a test that calls it twice with the same path is a host
 // before a restart and the same host after one.
 func newDocumentStores(t *testing.T, path string, seed serverSettings) (*settingsStore, *consoleProviderProfiles) {
+	t.Helper()
+	harness := newDocumentHarness(t, path, seed)
+	return harness.store, harness.profiles
+}
+
+func newDocumentHarness(t *testing.T, path string, seed serverSettings) documentHarness {
 	t.Helper()
 	store := &settingsStore{
 		current:     seed,
@@ -40,11 +57,14 @@ func newDocumentStores(t *testing.T, path string, seed serverSettings) (*setting
 	}
 	profiles := newConsoleProviderProfiles(store)
 	store.profiles = profiles
+	models := consoleModels{settings: store, profiles: profiles}
+	selections := newConsoleModelSelection(store, models)
+	store.selections = selections
 	if _, err := newConsoleSettingsDocument(path, "", store, profiles); err != nil {
 		t.Fatalf("wire the settings document at %s: %v", path, err)
 	}
 	store.rebuild()
-	return store, profiles
+	return documentHarness{store: store, profiles: profiles, models: models, selections: selections}
 }
 
 func documentSeed() serverSettings {
@@ -62,7 +82,7 @@ func TestConsoleSettingsDocumentSurvivesARestart(t *testing.T) {
 	if store.HasSettingsDocument() {
 		t.Fatal("hasDocument = true before anything was written; the host creates the file on the first write")
 	}
-	if err := store.replaceEndpoint(documentTestBaseURL, "qwen-max"); err != nil {
+	if err := store.replaceEndpoint(provider.OpenAI, documentTestBaseURL, "qwen-max"); err != nil {
 		t.Fatalf("replaceEndpoint: %v", err)
 	}
 	if err := store.setAPIKey(documentTestKey); err != nil {
@@ -317,7 +337,7 @@ func TestConsoleSettingsDocumentWriteFailureKeepsTheOldValue(t *testing.T) {
 	directory := t.TempDir()
 	path := filepath.Join(directory, consoleSettingsFileName)
 	store, _ := newDocumentStores(t, path, documentSeed())
-	if err := store.replaceEndpoint(documentTestBaseURL, ""); err != nil {
+	if err := store.replaceEndpoint(provider.OpenAI, documentTestBaseURL, ""); err != nil {
 		t.Fatalf("replaceEndpoint: %v", err)
 	}
 	blocker := filepath.Join(t.TempDir(), "blocker")
@@ -332,7 +352,7 @@ func TestConsoleSettingsDocumentWriteFailureKeepsTheOldValue(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
 	defer slog.SetDefault(previous)
 
-	err := store.replaceEndpoint("https://moved.test/v1", "")
+	err := store.replaceEndpoint(provider.OpenAI, "https://moved.test/v1", "")
 	if err == nil {
 		t.Fatal("a settings write to an unwritable document reported success")
 	}
@@ -359,7 +379,7 @@ func TestConsoleSettingsDocumentWriteFailureKeepsTheOldValue(t *testing.T) {
 func TestConsoleSettingsDocumentNamesTheFieldsItOverrides(t *testing.T) {
 	path := filepath.Join(t.TempDir(), consoleSettingsFileName)
 	store, _ := newDocumentStores(t, path, documentSeed())
-	if err := store.replaceEndpoint(documentTestBaseURL, "qwen-max"); err != nil {
+	if err := store.replaceEndpoint(provider.OpenAI, documentTestBaseURL, "qwen-max"); err != nil {
 		t.Fatalf("replaceEndpoint: %v", err)
 	}
 	if err := store.setAPIKey(documentTestKey); err != nil {
@@ -418,7 +438,7 @@ func TestConsoleSettingsDocumentLeavesAFieldItNeverMovedAlone(t *testing.T) {
 		apiKey:   "flag-supplied-key",
 	}
 	store, _ := newDocumentStores(t, path, seeded)
-	if err := store.replaceEndpoint(documentTestBaseURL, "qwen-max"); err != nil {
+	if err := store.replaceEndpoint(provider.OpenAI, documentTestBaseURL, "qwen-max"); err != nil {
 		t.Fatalf("replaceEndpoint: %v", err)
 	}
 	raw, err := os.ReadFile(path)
@@ -442,7 +462,7 @@ func TestConsoleSettingsDocumentFillingAGapIsNotAnOverride(t *testing.T) {
 	// the startup line must not claim it did: the document filled a hole.
 	path := filepath.Join(t.TempDir(), consoleSettingsFileName)
 	store, _ := newDocumentStores(t, path, documentSeed())
-	if err := store.replaceEndpoint(documentTestBaseURL, "qwen-max"); err != nil {
+	if err := store.replaceEndpoint(provider.OpenAI, documentTestBaseURL, "qwen-max"); err != nil {
 		t.Fatalf("replaceEndpoint: %v", err)
 	}
 	var logs bytes.Buffer
@@ -466,10 +486,10 @@ func TestConsoleSettingsDocumentFillingAGapIsNotAnOverride(t *testing.T) {
 func TestConsoleSettingsDocumentClearsStayCleared(t *testing.T) {
 	path := filepath.Join(t.TempDir(), consoleSettingsFileName)
 	store, _ := newDocumentStores(t, path, documentSeed())
-	if err := store.replaceEndpoint(documentTestBaseURL, "qwen-max"); err != nil {
+	if err := store.replaceEndpoint(provider.OpenAI, documentTestBaseURL, "qwen-max"); err != nil {
 		t.Fatalf("replaceEndpoint: %v", err)
 	}
-	if err := store.replaceEndpoint("", ""); err != nil {
+	if err := store.replaceEndpoint(provider.OpenAI, "", ""); err != nil {
 		t.Fatalf("clearing the endpoint override: %v", err)
 	}
 	restarted, _ := newDocumentStores(t, path, documentSeed())
@@ -634,7 +654,7 @@ func TestConsoleSettingsDocumentIsWrittenForTheLegacyEndpoint(t *testing.T) {
 func TestConsoleSettingsDocumentLoadedBeforeTheFirstView(t *testing.T) {
 	path := filepath.Join(t.TempDir(), consoleSettingsFileName)
 	store, _ := newDocumentStores(t, path, documentSeed())
-	if err := store.replaceEndpoint(documentTestBaseURL, "qwen-max"); err != nil {
+	if err := store.replaceEndpoint(provider.OpenAI, documentTestBaseURL, "qwen-max"); err != nil {
 		t.Fatalf("replaceEndpoint: %v", err)
 	}
 	if err := store.setAPIKey(documentTestKey); err != nil {
@@ -648,5 +668,185 @@ func TestConsoleSettingsDocumentLoadedBeforeTheFirstView(t *testing.T) {
 	encoded := fmt.Sprintf("%+v", catalog)
 	if !strings.Contains(encoded, "qwen-max") {
 		t.Fatalf("the first model catalog after a restart = %s, want the stored model", encoded)
+	}
+}
+
+// TestConsoleUserLayerReportsOnlyWhatTheConsoleWrote is the assertion ADR 0103
+// makes about the provider namespace: a flag is not a saved setting. A host
+// started with an endpoint and a model reports neither as the page's user layer,
+// because an operator who never opened the page must not be shown one they saved
+// -- and must not be offered a configuration to save over.
+func TestConsoleUserLayerReportsOnlyWhatTheConsoleWrote(t *testing.T) {
+	path := filepath.Join(t.TempDir(), consoleSettingsFileName)
+	store, _ := newDocumentStores(t, path, documentSeed())
+
+	if section, found := store.SettingsUserSection(provider.OpenAI); found {
+		t.Fatalf("the user layer reported %v before any console write; the flags this host was started with are not saved settings", section)
+	}
+	// The endpoint and the model are still what a run would use: the resolved view
+	// is the live configuration, and only the user layer is narrower than it.
+	view := store.view()
+	if view.BaseURL != documentSeed().baseURL || view.Model != documentSeed().model {
+		t.Fatalf("resolved view = %+v, want the seed configuration untouched", view)
+	}
+
+	// Writing only the model reports only the model. If this marked the endpoint as
+	// well, the page would show a saved endpoint the operator never entered.
+	if err := store.replaceModel(provider.OpenAI, "qwen-max"); err != nil {
+		t.Fatalf("replaceModel: %v", err)
+	}
+	section, found := store.SettingsUserSection(provider.OpenAI)
+	if !found {
+		t.Fatal("the user layer is absent after the console wrote the model")
+	}
+	encoded := fmt.Sprintf("%+v", section)
+	if !strings.Contains(encoded, "qwen-max") {
+		t.Fatalf("user layer = %s, want the model the console wrote", encoded)
+	}
+	if strings.Contains(encoded, documentSeed().baseURL) {
+		t.Fatalf("user layer = %s, want no endpoint: the console never wrote one", encoded)
+	}
+	file := readDocumentFile(t, path)
+	if file.BaseURL != nil {
+		t.Errorf("document baseUrl = %q, want it absent: nothing wrote it", *file.BaseURL)
+	}
+	if file.Model == nil || *file.Model != "qwen-max" {
+		t.Errorf("document model = %v, want the model the console wrote", file.Model)
+	}
+
+	// A field the console did write stays reported and recorded across a restart,
+	// even when it happens to equal the flag it was started with.
+	if err := store.replaceEndpoint(provider.OpenAI, documentSeed().baseURL, documentSeed().model); err != nil {
+		t.Fatalf("replaceEndpoint: %v", err)
+	}
+	file = readDocumentFile(t, path)
+	if file.BaseURL == nil || *file.BaseURL != documentSeed().baseURL {
+		t.Errorf("document baseUrl = %v, want it recorded: the console wrote the value the flag happened to carry", file.BaseURL)
+	}
+	if file.Model == nil || *file.Model != documentSeed().model {
+		t.Errorf("document model = %v, want it recorded for the same reason", file.Model)
+	}
+	restarted, _ := newDocumentStores(t, path, serverSettings{})
+	section, found = restarted.SettingsUserSection(provider.OpenAI)
+	if !found {
+		t.Fatal("the user layer is absent after a restart, want the console's own write restored")
+	}
+	encoded = fmt.Sprintf("%+v", section)
+	if !strings.Contains(encoded, documentSeed().baseURL) || !strings.Contains(encoded, documentSeed().model) {
+		t.Fatalf("user layer after a restart = %s, want the console's endpoint and model", encoded)
+	}
+}
+
+// TestConsoleModelSelectionSurvivesARestart is the other half of ADR 0103: the
+// model an operator picks in the composer is console-written state like the
+// endpoint, so a restart restores it for that session instead of falling back to
+// whatever the host was launched with.
+func TestConsoleModelSelectionSurvivesARestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), consoleSettingsFileName)
+	first := newDocumentHarness(t, path, documentSeed())
+	profile := dshapi.ProviderProfile{
+		Provider: "acme",
+		API:      dshapi.ProtocolOpenAICompletions,
+		BaseURL:  "https://acme.test/v1",
+		Models:   []dshapi.ProviderModel{{ID: "acme-1"}},
+	}
+	if _, err := first.profiles.SetProviderProfile(profile); err != nil {
+		t.Fatalf("declare the profile: %v", err)
+	}
+	chosen := dshapi.ModelSelection{Provider: "acme", Model: "acme-1"}
+	if _, err := first.selections.SelectModel("session-1", chosen); err != nil {
+		t.Fatalf("SelectModel: %v", err)
+	}
+	file := readDocumentFile(t, path)
+	stored, ok := file.ModelSelections["session-1"]
+	if !ok {
+		t.Fatalf("document modelSelections = %v, want the session the operator chose for", file.ModelSelections)
+	}
+	if stored.Provider != "acme" || stored.Model != "acme-1" {
+		t.Fatalf("stored selection = %+v, want acme/acme-1", stored)
+	}
+
+	restarted := newDocumentHarness(t, path, documentSeed())
+	state, ok := restarted.selections.States()["session-1"]
+	if !ok || state.Projection.Next == nil {
+		t.Fatalf("selection after the restart = %+v, want the chosen model projected for the session", state)
+	}
+	if state.Projection.Next.Provider != "acme" || state.Projection.Next.Model != "acme-1" {
+		t.Fatalf("selection after the restart = %+v, want acme/acme-1", *state.Projection.Next)
+	}
+	// A session nobody chose for is absent rather than recorded as an empty
+	// choice: a restart restores exactly the selections that were made.
+	restarted.selections.RegisterSession("session-2")
+	if _, recorded := readDocumentFile(t, path).ModelSelections["session-2"]; recorded {
+		t.Error("a session with no chosen model was written to the document")
+	}
+}
+
+// TestConsoleModelSelectionRefusedWhenTheDocumentWillNotTakeIt keeps the rule the
+// settings document exists for: a choice that is live but not durable is the
+// disagreement ADR 0102 removes, so a document that cannot be written puts the
+// record back and the caller is told.
+func TestConsoleModelSelectionRefusedWhenTheDocumentWillNotTakeIt(t *testing.T) {
+	path := filepath.Join(t.TempDir(), consoleSettingsFileName)
+	harness := newDocumentHarness(t, path, documentSeed())
+	// A directory where the document goes: the writer cannot rename a file over it.
+	if err := os.Mkdir(path, consoleSettingsDirMode); err != nil {
+		t.Fatalf("make the path unwritable: %v", err)
+	}
+	if _, err := harness.selections.SelectModel("session-1", dshapi.ModelSelection{Provider: provider.OpenAI, Model: documentSeed().model}); err == nil {
+		t.Fatal("SelectModel succeeded while the settings document could not be written")
+	}
+	state := harness.selections.States()["session-1"]
+	if state.Projection.Next != nil {
+		t.Fatalf("selection = %+v, want it rolled back after the document refused it", *state.Projection.Next)
+	}
+}
+
+// readDocumentFile loads the document a test just wrote through the same reader a
+// restart uses, so a test asserts what the host will actually read back.
+func readDocumentFile(t *testing.T, path string) consoleSettingsFile {
+	t.Helper()
+	file, found, err := loadConsoleSettingsFile(path)
+	if err != nil {
+		t.Fatalf("load the document at %s: %v", path, err)
+	}
+	if !found {
+		t.Fatalf("the document at %s does not exist", path)
+	}
+	return file
+}
+
+// TestConsoleUserLayerBelongsToTheCardItWasWrittenOn pins the other half of the
+// user layer: a field belongs to the provider namespace the console wrote it
+// through. Without the route, a value saved on one provider's card would be
+// reported on whichever card the host happens to be configured with -- the same
+// class of lie ADR 0103 removes.
+func TestConsoleUserLayerBelongsToTheCardItWasWrittenOn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), consoleSettingsFileName)
+	store, _ := newDocumentStores(t, path, documentSeed())
+	if err := store.replaceModel(provider.Anthropic, "claude-x"); err != nil {
+		t.Fatalf("replaceModel: %v", err)
+	}
+	section, found := store.SettingsUserSection(provider.Anthropic)
+	if !found {
+		t.Fatal("the anthropic card has no user layer after the console wrote its model")
+	}
+	if encoded := fmt.Sprintf("%+v", section); !strings.Contains(encoded, "claude-x") {
+		t.Fatalf("anthropic user layer = %s, want the model written there", encoded)
+	}
+	if section, found := store.SettingsUserSection(provider.OpenAI); found {
+		t.Fatalf("the openai card reports %v, want nothing: the console wrote the anthropic card", section)
+	}
+
+	// The card is part of what was saved, so it survives the restart with the
+	// value.
+	restarted, _ := newDocumentStores(t, path, documentSeed())
+	if section, found := restarted.SettingsUserSection(provider.Anthropic); !found {
+		t.Fatal("the anthropic card lost its user layer across a restart")
+	} else if encoded := fmt.Sprintf("%+v", section); !strings.Contains(encoded, "claude-x") {
+		t.Fatalf("anthropic user layer after a restart = %s, want the saved model", encoded)
+	}
+	if _, found := restarted.SettingsUserSection(provider.OpenAI); found {
+		t.Fatal("the openai card reports a user layer after a restart, want it still absent")
 	}
 }

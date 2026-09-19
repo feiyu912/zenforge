@@ -55,8 +55,11 @@ type SettingsNamespaceView struct {
 	// Value is the redacted resolved value: schema defaults, composition base and
 	// user layer merged, with every secret slot removed.
 	Value any `json:"value"`
-	// Base and User are optional upstream; this host stores no document, so it
-	// reports neither rather than an empty layer that would claim one exists.
+	// Base and User are optional upstream. User is the section the console wrote
+	// for this namespace and is left out when nothing was written, because an
+	// empty layer would claim the operator saved something (ADR 0103). A store
+	// that cannot tell a flag from a saved value reports the live configuration
+	// here instead, which is what this view did before the face existed.
 	Base any `json:"base,omitempty"`
 	User any `json:"user,omitempty"`
 	// Applies reports when the owner applies a change. This host rebuilds its
@@ -111,10 +114,12 @@ type SettingsProfile struct {
 type SettingsDocumentStore interface {
 	// SettingsProfile reports the host's configuration.
 	SettingsProfile() SettingsProfile
-	// SetSettingsEndpoint records the endpoint override.
-	SetSettingsEndpoint(baseURL string) error
-	// SetSettingsModel records the default model id.
-	SetSettingsModel(model string) error
+	// SetSettingsEndpoint records the endpoint override the console wrote through
+	// one provider namespace.
+	SetSettingsEndpoint(route, baseURL string) error
+	// SetSettingsModel records the default model id the console wrote through one
+	// provider namespace.
+	SetSettingsModel(route, model string) error
 	// SetSettingsKey records the credential.
 	SetSettingsKey(value string) error
 	// ClearSettingsKey forgets the stored credential.
@@ -146,6 +151,21 @@ type SettingsRevisionStore interface {
 	// AdvanceSettingsRevision records one committed change to a namespace and
 	// returns the revision it produced.
 	AdvanceSettingsRevision(namespace string) int64
+}
+
+// SettingsUserLayer is the optional face of a store that knows which settings
+// fields the console itself wrote, as opposed to which ones the host was started
+// with. The two are not the same thing, and a view that conflates them shows an
+// operator a saved value they never entered: a host started with `--model` and
+// `--base-url` would report those flags as the Models page's user layer, and the
+// page then offers to save a configuration nobody saved (ADR 0103). A store that
+// does not implement this face keeps the older behaviour of reporting the live
+// configuration as the user layer.
+type SettingsUserLayer interface {
+	// SettingsUserSection reports the section the console wrote for one route.
+	// The second result is false when the console has written nothing for it,
+	// which is what lets the view leave the user layer absent rather than empty.
+	SettingsUserSection(route string) (map[string]any, bool)
 }
 
 // SetSettingsDocument installs the store the settings methods answer from.
@@ -398,7 +418,13 @@ func settingsConsolePathRefused(path []string) *methodError {
 }
 
 // settingsViewFor builds one namespace view from the host's profile.
-func settingsViewFor(route string, profile SettingsProfile, revision int64) SettingsNamespaceView {
+// settingsViewFor builds one provider namespace's view: the host's live
+// configuration as the resolved value, and the section the console wrote as the
+// user layer. The two are deliberately separate. The resolved value is what a run
+// would use, including a flag the host was started with; the user layer is what
+// an operator saved in this page, and it is absent when they have saved nothing
+// (ADR 0103).
+func settingsViewFor(route string, profile SettingsProfile, revision int64, user map[string]any, hasUser bool) SettingsNamespaceView {
 	providers := map[string]any{}
 	if profile.Provider == route {
 		api := map[string]any{}
@@ -410,18 +436,48 @@ func settingsViewFor(route string, profile SettingsProfile, revision int64) Sett
 		}
 		providers[route] = map[string]any{"api": api}
 	}
-	return SettingsNamespaceView{
-		NS:     settingsNamespaceFor(route),
-		Schema: json.RawMessage(settingsSchemaJSON),
-		Value:  map[string]any{"providers": providers},
-		// Every field in this view came from the operator (a flag or a console
-		// write); this host keeps no defaults and no composition base behind it,
-		// so the user layer is the same section.
-		User:     map[string]any{"providers": providers},
+	view := SettingsNamespaceView{
+		NS:       settingsNamespaceFor(route),
+		Schema:   json.RawMessage(settingsSchemaJSON),
+		Value:    map[string]any{"providers": providers},
 		Applies:  "live",
 		Secrets:  []SettingsSecretView{{Path: []string{"providers", route, "api", "apiKey"}, Set: profile.HasKey}},
 		Revision: revision,
 	}
+	if hasUser {
+		view.User = user
+	}
+	return view
+}
+
+// settingsProviderUser reports the user layer one provider namespace gets. A store
+// that knows which fields the console wrote answers for itself -- that is the face
+// a durable document implements, and the only way to tell a saved value from a
+// flag. A store that does not is reported the way this view always did, with the
+// live configuration standing in for the user layer, so an injected store that is
+// not the serve command's is unchanged.
+func settingsProviderUser(store SettingsDocumentStore, route string, profile SettingsProfile) (map[string]any, bool) {
+	if layer, ok := store.(SettingsUserLayer); ok {
+		return layer.SettingsUserSection(route)
+	}
+	return settingsLiveUserSection(route, profile), true
+}
+
+// settingsLiveUserSection renders the live configuration as a user section, which
+// is what this host reported before it could tell the difference.
+func settingsLiveUserSection(route string, profile SettingsProfile) map[string]any {
+	providers := map[string]any{}
+	if profile.Provider == route {
+		api := map[string]any{}
+		if profile.BaseURL != "" {
+			api["baseURL"] = profile.BaseURL
+		}
+		if profile.Model != "" {
+			api["model"] = profile.Model
+		}
+		providers[route] = map[string]any{"api": api}
+	}
+	return map[string]any{"providers": providers}
 }
 
 // settingsDescribe answers POST /api/settings/describe: every namespace's
@@ -437,7 +493,9 @@ func (h *Handler) settingsDescribe(_ context.Context, args map[string]json.RawMe
 	profile := store.SettingsProfile()
 	namespaces := make([]SettingsNamespaceView, 0, len(consoleProviderRoutes))
 	for _, route := range consoleProviderRoutes {
-		namespaces = append(namespaces, settingsViewFor(route, profile, h.settingsRevisionFor(settingsNamespaceFor(route))))
+		namespace := settingsNamespaceFor(route)
+		user, hasUser := settingsProviderUser(store, route, profile)
+		namespaces = append(namespaces, settingsViewFor(route, profile, h.settingsRevisionFor(namespace), user, hasUser))
 	}
 	// The console-owned namespace is reported beside the host's own, because the
 	// console writes it through this same wire.
@@ -569,7 +627,7 @@ func (h *Handler) settingsWrite(_ context.Context, args map[string]json.RawMessa
 
 	applied := false
 	for _, edit := range edits {
-		if failure := applySettingsEdit(store, edit); failure != nil {
+		if failure := applySettingsEdit(store, route, edit); failure != nil {
 			// An earlier edit already landed, so the namespace moved even though
 			// this write is refused: the revision has to say so, or the next
 			// editor would fence against a version that no longer describes the
@@ -582,7 +640,8 @@ func (h *Handler) settingsWrite(_ context.Context, args map[string]json.RawMessa
 		applied = true
 	}
 	profile := store.SettingsProfile()
-	return settingsViewWithRevision(settingsViewFor(route, profile, revision), h.advanceSettingsRevision(namespace)), nil
+	user, hasUser := settingsProviderUser(store, route, profile)
+	return settingsViewWithRevision(settingsViewFor(route, profile, revision, user, hasUser), h.advanceSettingsRevision(namespace)), nil
 }
 
 // settingsFieldEdit is one field write this host understands.
@@ -697,15 +756,18 @@ func settingsPathRefused(route string, path []string) *methodError {
 		map[string]any{"path": path})
 }
 
-// applySettingsEdit performs one field write against the store.
-func applySettingsEdit(store SettingsDocumentStore, edit settingsFieldEdit) *methodError {
+// applySettingsEdit performs one field write against the store. The route is the
+// namespace's provider, and the store needs it: a field the console wrote belongs
+// to the provider card it was written from, and that is the card the page must
+// show it back on (ADR 0103).
+func applySettingsEdit(store SettingsDocumentStore, route string, edit settingsFieldEdit) *methodError {
 	var err error
 	switch edit.field {
 	case "baseURL":
 		if edit.clear {
-			err = store.SetSettingsEndpoint("")
+			err = store.SetSettingsEndpoint(route, "")
 		} else {
-			err = store.SetSettingsEndpoint(edit.value)
+			err = store.SetSettingsEndpoint(route, edit.value)
 		}
 	case "model":
 		if edit.clear {
@@ -713,7 +775,7 @@ func applySettingsEdit(store SettingsDocumentStore, edit settingsFieldEdit) *met
 				"settings write: this host always has a model; clearing it is not supported",
 				map[string]any{"field": "model"})
 		}
-		err = store.SetSettingsModel(edit.value)
+		err = store.SetSettingsModel(route, edit.value)
 	case "apiKey":
 		if edit.clear || edit.value == "" {
 			err = store.ClearSettingsKey()

@@ -230,6 +230,13 @@ func consoleGroupOffers(groups []dshapi.ModelProviderGroup, route, modelName str
 	return false
 }
 
+// consoleSelectionLimit bounds how many chosen models the settings document
+// carries. A selection is a per-session convenience, not a transcript -- the run
+// log holds the conversation -- and an unbounded map keyed by session would grow
+// the settings file with every session the host has ever served. The most recent
+// choices are the ones a restart can still restore.
+const consoleSelectionLimit = 64
+
 // consoleModelSelection records each session's chosen model and makes it real: it
 // resolves the selection against the catalog and installs that adapter before the
 // session's next run.
@@ -289,14 +296,120 @@ func (s *consoleModelSelection) SelectModel(sessionID string, selection dshapi.M
 	}
 	recorded := dshstream.ModelSelection{Provider: selection.Provider, Model: selection.Model}
 	s.mu.Lock()
-	record := s.records[sessionID]
+	previous, existed := s.records[sessionID]
+	record := previous
 	record.selection = recorded
 	record.selected = true
 	record.seq = s.bumpLocked()
 	s.records[sessionID] = record
 	s.mu.Unlock()
 	s.notify(sessionID, record)
+	// The choice is console-written state, so it goes into the settings document
+	// with the rest of it: an operator who picked a model and restarted should find
+	// it still there (ADR 0103). A document that will not take it puts the record
+	// back, because a choice that is live but not durable is the disagreement the
+	// document exists to remove.
+	if err := s.persistSelection(); err != nil {
+		s.mu.Lock()
+		if existed {
+			s.records[sessionID] = previous
+		} else {
+			delete(s.records, sessionID)
+		}
+		s.mu.Unlock()
+		s.notify(sessionID, previous)
+		return dshapi.ModelSelection{}, err
+	}
 	return selection, nil
+}
+
+// persistSelection writes the settings document after a recorded choice. The
+// caller must have released this store's lock: the document's snapshot reads this
+// store's records, and taking that read while holding the lock would deadlock.
+func (s *consoleModelSelection) persistSelection() error {
+	if s == nil || s.settings == nil {
+		return nil
+	}
+	return s.settings.persist()
+}
+
+// SelectionRecords renders the sessions whose model an operator chose, newest
+// first. This is the part of this store the settings document carries, and it is
+// bounded: the document is one small file, and a map keyed by every session the
+// host has ever served would grow it without limit. The runtime last-used hint is
+// not carried, because it changes on every run and would rewrite the file for a
+// label.
+func (s *consoleModelSelection) SelectionRecords() map[string]consoleSelectionRecordFile {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	type chosenSession struct {
+		sessionID string
+		seq       int64
+	}
+	chosen := make([]chosenSession, 0, len(s.records))
+	for sessionID, record := range s.records {
+		if !record.selected || strings.TrimSpace(record.selection.Model) == "" {
+			continue
+		}
+		chosen = append(chosen, chosenSession{sessionID: sessionID, seq: record.seq})
+	}
+	slices.SortFunc(chosen, func(a, b chosenSession) int {
+		switch {
+		case a.seq > b.seq:
+			return -1
+		case a.seq < b.seq:
+			return 1
+		default:
+			return 0
+		}
+	})
+	if len(chosen) > consoleSelectionLimit {
+		chosen = chosen[:consoleSelectionLimit]
+	}
+	records := make(map[string]consoleSelectionRecordFile, len(chosen))
+	for _, item := range chosen {
+		record := s.records[item.sessionID]
+		records[item.sessionID] = consoleSelectionRecordFile{
+			Provider: record.selection.Provider,
+			Model:    record.selection.Model,
+		}
+	}
+	return records
+}
+
+// AdoptSelectionRecords restores the choices a loaded document carried. Sessions
+// are adopted in a stable order so the sequence numbers, and with them which
+// choices survive the bound, do not depend on map iteration.
+func (s *consoleModelSelection) AdoptSelectionRecords(records map[string]consoleSelectionRecordFile) {
+	if s == nil || len(records) == 0 {
+		return
+	}
+	sessionIDs := make([]string, 0, len(records))
+	for sessionID := range records {
+		sessionIDs = append(sessionIDs, sessionID)
+	}
+	slices.Sort(sessionIDs)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, sessionID := range sessionIDs {
+		stored := records[sessionID]
+		provider := strings.TrimSpace(stored.Provider)
+		modelName := strings.TrimSpace(stored.Model)
+		if modelName == "" {
+			continue
+		}
+		record := s.records[sessionID]
+		if record.selected && record.selection.Provider == provider && record.selection.Model == modelName {
+			continue
+		}
+		record.selection = dshstream.ModelSelection{Provider: provider, Model: modelName}
+		record.selected = true
+		record.seq = s.bumpLocked()
+		s.records[sessionID] = record
+	}
 }
 
 // ApplyModelSelection installs the adapter this session's run should use. A

@@ -68,9 +68,11 @@ const (
 // number that resets on restart is not a fence number.
 type consoleSettingsFile struct {
 	Version int `json:"version"`
-	// Provider, Model, BaseURL and APIKey are the host's live model
-	// configuration. APIKey is the only secret this document holds and the only
-	// place this host writes it.
+	// Provider, Model, BaseURL and APIKey are the console-written model
+	// configuration. A field is present only when the console wrote it -- a value
+	// the host was merely started with is the seed and stays out, or the file
+	// would claim the operator saved a flag (ADR 0103). APIKey is the only secret
+	// this document holds and the only place this host writes it.
 	Provider *string `json:"provider,omitempty"`
 	Model    *string `json:"model,omitempty"`
 	BaseURL  *string `json:"baseUrl,omitempty"`
@@ -82,6 +84,27 @@ type consoleSettingsFile struct {
 	// ProviderProfiles holds the hand-declared routes in declaration order
 	// (ADR 0095).
 	ProviderProfiles []consoleProfileRecord `json:"providerProfiles,omitempty"`
+	// ConsoleRoutes records the provider namespace each console-written settings
+	// field above was written through, keyed by field name. A value the console
+	// saved belongs to the card it was saved on, so the page shows it back on that
+	// card and not on another; a document written before this existed carries no
+	// routes, and its fields are attributed to the provider the host is configured
+	// with (ADR 0103).
+	ConsoleRoutes map[string]string `json:"consoleRoutes,omitempty"`
+	// ModelSelections holds the model each session's operator chose, keyed by
+	// session id. A session that never chose one is absent rather than recorded
+	// as an empty choice, so a restart restores exactly the selections that were
+	// made and nothing else (ADR 0103).
+	ModelSelections map[string]consoleSelectionRecordFile `json:"modelSelections,omitempty"`
+}
+
+// consoleSelectionRecordFile is one session's chosen model as the document stores
+// it. The provider and model are what the composer shows and what the next run
+// installs; the runtime last-used hint is not here, because it changes on every
+// run and would rewrite the document for a label.
+type consoleSelectionRecordFile struct {
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
 }
 
 // consoleProfileRecord is one declared provider profile as the document stores it.

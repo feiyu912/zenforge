@@ -214,6 +214,14 @@ func newServeApp(ctx context.Context, opts *options, ioStreams IO, config serveC
 	}
 	profiles := newConsoleProviderProfiles(settings)
 	settings.profiles = profiles
+	// The model-selection store is built before the document is read, because the
+	// document carries the model each session chose and a restart restores it
+	// through this store (ADR 0103). It is wired to the settings store both ways:
+	// the document's snapshot asks it for the records, and a recorded choice asks
+	// the settings store to write the document.
+	models := consoleModels{settings: settings, profiles: profiles}
+	selections := newConsoleModelSelection(settings, models)
+	settings.selections = selections
 	// The console's settings document is read before the adapter is built, so the
 	// first run this host serves already uses the endpoint, the model and the
 	// credential the operator set in the browser last time (ADR 0102). A document
@@ -273,8 +281,6 @@ func newServeApp(ctx context.Context, opts *options, ioStreams IO, config serveC
 	// The settings store is the answer, so the picker reports the operator's
 	// own endpoint and model instead of an invented one; an unconfigured host
 	// returns an empty catalog and the console says so.
-	models := consoleModels{settings: settings, profiles: profiles}
-	selections := newConsoleModelSelection(settings, models)
 	modelCatalog := models.Catalog
 	// The Models page loads its provider directory before it renders any card,
 	// so a missing answer is not a missing nicety: the page reports that loading
@@ -534,10 +540,37 @@ type settingsStore struct {
 	// can name the fields the settings document overrides, and no request path
 	// reads it.
 	seed serverSettings
+	// spoken records which settings fields the console itself wrote, as opposed to
+	// which ones the host was started with. It is the difference between the user
+	// layer and the resolved value: a flag is not a saved setting, and a page that
+	// shows one as the other offers to save a configuration nobody saved. A field
+	// the console wrote is written to the document and reported as `user` even
+	// when it happens to equal the flag (ADR 0103).
+	spoken map[string]bool
+	// spokenRoutes records the provider namespace each console-written field was
+	// written through. A field belongs to the card it was written from, so this is
+	// what keeps a value the operator saved on one provider from appearing on
+	// another. A field with no recorded route -- one written before this host kept
+	// routes, or by a caller with no namespace -- is attributed to the configured
+	// provider instead.
+	spokenRoutes map[string]string
 	// profiles is the declared-provider store whose profiles the document also
 	// carries. It is a face rather than the concrete store because the two are
 	// built together in newServeApp and each holds the other.
 	profiles profileSnapshot
+	// selections is the per-session model-selection store, which the document also
+	// carries: the model an operator picks in the composer is console-written
+	// state like the endpoint, and it comes back with the rest of the document
+	// (ADR 0103). Nil means this host keeps selections in the process only.
+	selections selectionSnapshot
+}
+
+// selectionSnapshot is the part of the model-selection store the settings
+// document needs: the sessions whose model an operator chose, and a way to adopt
+// the ones a loaded document carries.
+type selectionSnapshot interface {
+	SelectionRecords() map[string]consoleSelectionRecordFile
+	AdoptSelectionRecords(map[string]consoleSelectionRecordFile)
 }
 
 // profileSnapshot is the part of the provider-profile store the settings document
@@ -554,15 +587,24 @@ type profileSnapshot interface {
 func (s *settingsStore) persist() error { return s.document.save() }
 
 // documentFile renders the console-written state as the document: the settings the
-// console moved off the seed, the namespaces the console owns, the revisions, and the
-// declared provider profiles this store was wired to (ADR 0102).
+// console itself wrote, the namespaces the console owns, the revisions, the
+// declared provider profiles this store was wired to, and the model each session
+// chose (ADR 0102, ADR 0103).
 func (s *settingsStore) documentFile() consoleSettingsFile {
 	file := consoleSettingsFile{}
 	if s == nil {
 		return file
 	}
 	s.mu.RLock()
-	current, seed := s.current, s.seed
+	current := s.current
+	spoken := make(map[string]bool, len(s.spoken))
+	for field, written := range s.spoken {
+		spoken[field] = written
+	}
+	routes := make(map[string]string, len(s.spokenRoutes))
+	for field, written := range s.spokenRoutes {
+		routes[field] = written
+	}
 	sections := make(map[string]map[string]any, len(s.consoleSections))
 	for namespace, section := range s.consoleSections {
 		stored := make(map[string]any, len(section))
@@ -576,10 +618,13 @@ func (s *settingsStore) documentFile() consoleSettingsFile {
 		revisions[namespace] = revision
 	}
 	s.mu.RUnlock()
-	file.Provider = settingsField(current.provider, seed.provider)
-	file.Model = settingsField(current.model, seed.model)
-	file.BaseURL = settingsField(current.baseURL, seed.baseURL)
-	file.APIKey = settingsField(current.apiKey, seed.apiKey)
+	file.Provider = settingsSpokenField(current.provider, spoken["provider"])
+	file.Model = settingsSpokenField(current.model, spoken["model"])
+	file.BaseURL = settingsSpokenField(current.baseURL, spoken["baseUrl"])
+	file.APIKey = settingsSpokenField(current.apiKey, spoken["apiKey"])
+	if len(routes) > 0 {
+		file.ConsoleRoutes = routes
+	}
 	if len(sections) > 0 {
 		file.ConsoleSections = sections
 	}
@@ -589,42 +634,129 @@ func (s *settingsStore) documentFile() consoleSettingsFile {
 	if s.profiles != nil {
 		file.ProviderProfiles = profileRecords(s.profiles.ProviderProfiles())
 	}
+	if s.selections != nil {
+		file.ModelSelections = s.selections.SelectionRecords()
+	}
 	return file
 }
 
-// settingsField names a document field only where the live state moved off the
-// startup seed. Equal means the console never spoke about the field, so the
-// document leaves it out and the seed keeps answering it -- which is what stops a
-// host started with --api-key from being told, by a write that only ever touched
-// the model, that its credential had been cleared. Not equal means the console
-// wrote or cleared the field, and that is a fact worth persisting even when the
-// answer it recorded is the empty string.
-func settingsField(current, seeded string) *string {
-	if current == seeded {
+// settingsSpokenField names a document field only where the console wrote it. A
+// field nobody wrote is left out, so the seed keeps answering it -- which is what
+// stops a host started with --api-key from being told, by a write that only ever
+// touched the model, that its credential had been cleared. A field the console did
+// write is named even when it equals the flag it was started with: the operator
+// saved it, and a document that dropped it would lose the setting the moment they
+// stopped passing the flag (ADR 0103).
+func settingsSpokenField(current string, spoken bool) *string {
+	if !spoken {
 		return nil
 	}
 	return &current
 }
 
+// markSpoken records that the console itself wrote each named field, through the
+// route it wrote them from. Fields the host was merely started with are never
+// marked, which is what keeps a flag out of the user layer and out of the document.
+func (s *settingsStore) markSpoken(route string, fields ...string) {
+	if s == nil || len(fields) == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.spoken == nil {
+		s.spoken = make(map[string]bool, len(fields))
+	}
+	if s.spokenRoutes == nil {
+		s.spokenRoutes = make(map[string]string, len(fields))
+	}
+	for _, field := range fields {
+		s.spoken[field] = true
+		if route != "" {
+			s.spokenRoutes[field] = route
+		}
+	}
+}
+
+// SettingsUserSection reports the section the console wrote for one route, so a
+// namespace view can report what an operator saved here instead of restating the
+// configuration the host was started with (ADR 0103).
+func (s *settingsStore) SettingsUserSection(route string) (map[string]any, bool) {
+	if s == nil {
+		return nil, false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	api := map[string]any{}
+	if s.spoken["baseUrl"] && s.fieldBelongsToRoute("baseUrl", route) {
+		api["baseURL"] = s.current.baseURL
+	}
+	if s.spoken["model"] && s.fieldBelongsToRoute("model", route) {
+		api["model"] = s.current.model
+	}
+	if len(api) == 0 {
+		return nil, false
+	}
+	return map[string]any{"providers": map[string]any{route: map[string]any{"api": api}}}, true
+}
+
+// fieldBelongsToRoute reports whether a console-written field was written through
+// one route. The caller holds the read lock. A field with no recorded route is
+// attributed to the provider this host is configured with, which is where a
+// document written before routes were recorded -- or a write made with no
+// namespace -- belongs.
+func (s *settingsStore) fieldBelongsToRoute(field, route string) bool {
+	written, ok := s.spokenRoutes[field]
+	if !ok {
+		configured := s.current.provider
+		if configured == "" {
+			configured = provider.OpenAI
+		}
+		return configured == route
+	}
+	return written == route
+}
+
 // applyDocument copies a loaded document over the startup seed. A field the
 // document leaves out keeps the value the host was started with: the document
 // records what the console wrote, and an absent field is one it never spoke about.
+// A field it does name is marked spoken, because it was the console's statement
+// when it was written and stays one for every later write of the document
+// (ADR 0103).
 func (s *settingsStore) applyDocument(file consoleSettingsFile) {
 	if s == nil {
 		return
 	}
 	s.mu.Lock()
+	spoken := map[string]bool{}
 	if file.Provider != nil {
 		s.current.provider = *file.Provider
+		spoken["provider"] = true
 	}
 	if file.Model != nil {
 		s.current.model = *file.Model
+		spoken["model"] = true
 	}
 	if file.BaseURL != nil {
 		s.current.baseURL = *file.BaseURL
+		spoken["baseUrl"] = true
 	}
 	if file.APIKey != nil {
 		s.current.apiKey = *file.APIKey
+		spoken["apiKey"] = true
+	}
+	if s.spoken == nil {
+		s.spoken = map[string]bool{}
+	}
+	if s.spokenRoutes == nil {
+		s.spokenRoutes = map[string]string{}
+	}
+	for field := range spoken {
+		s.spoken[field] = true
+	}
+	// A route the document recorded is restored with the field: the card a value
+	// was saved on is part of what was saved.
+	for field, route := range file.ConsoleRoutes {
+		s.spokenRoutes[field] = route
 	}
 	if len(file.ConsoleSections) > 0 {
 		if s.consoleSections == nil {
@@ -647,6 +779,12 @@ func (s *settingsStore) applyDocument(file consoleSettingsFile) {
 		}
 	}
 	s.mu.Unlock()
+	// The selections are the other store's state, so they are adopted after this
+	// store's lock is released: the two are wired to each other and neither takes
+	// the other's lock while holding its own.
+	if s.selections != nil && len(file.ModelSelections) > 0 {
+		s.selections.AdoptSelectionRecords(file.ModelSelections)
+	}
 }
 
 // SettingsRevision reports one namespace's revision as this host's document has
@@ -795,6 +933,9 @@ func (s *settingsStore) setAPIKey(value string) error {
 // The clearing is committed first and the adapter rebuild records the error,
 // exactly as startup does for an operator who has not configured a key yet.
 func (s *settingsStore) clearAPIKey() error {
+	// The credential is not part of the provider cards' user layer -- it travels
+	// as a secret -- so it is marked with no route.
+	s.markSpoken("", "apiKey")
 	s.mu.RLock()
 	next := s.current
 	s.mu.RUnlock()
@@ -820,6 +961,9 @@ func (s *settingsStore) replaceAPIKey(key string) error {
 	}); err != nil {
 		return err
 	}
+	// Marked only once the key is known to build, so a refused key does not leave
+	// the document claiming the console wrote a credential it never accepted.
+	s.markSpoken("", "apiKey")
 	return s.commitSettings(next)
 }
 
@@ -870,7 +1014,7 @@ func consoleProviderName(route string) string {
 // refusing the endpoint for the absence of the key would make the panel's own
 // order impossible. A malformed endpoint is still refused before anything is
 // stored.
-func (s *settingsStore) replaceEndpoint(baseURL, model string) error {
+func (s *settingsStore) replaceEndpoint(route, baseURL, model string) error {
 	normalized, err := normalizeSettingsRequest(settingsRequest{BaseURL: baseURL, Model: model})
 	if err != nil {
 		return err
@@ -879,12 +1023,38 @@ func (s *settingsStore) replaceEndpoint(baseURL, model string) error {
 	next := s.current
 	s.mu.RUnlock()
 	next.baseURL = normalized.BaseURL
+	fields := []string{"baseUrl"}
 	if normalized.Model != "" {
 		next.model = normalized.Model
+		fields = append(fields, "model")
 	}
+	// The console wrote these fields from one provider card, so they are recorded
+	// and reported as that card's user layer from here on (ADR 0103).
+	s.markSpoken(route, fields...)
 	// A rebuild that cannot build an adapter records the failure instead of
 	// returning it, exactly as startup does for an operator who has not
 	// configured a key yet.
+	return s.commitSettings(next)
+}
+
+// replaceModel commits a new default model while leaving the endpoint, the
+// provider and the credential alone. It is separate from replaceEndpoint because
+// the console's model field is its own write: marking the endpoint as written
+// because a model changed would report a saved endpoint the operator never
+// entered (ADR 0103).
+func (s *settingsStore) replaceModel(route, model string) error {
+	normalized, err := normalizeSettingsRequest(settingsRequest{Model: model})
+	if err != nil {
+		return err
+	}
+	if normalized.Model == "" {
+		return nil
+	}
+	s.mu.RLock()
+	next := s.current
+	s.mu.RUnlock()
+	next.model = normalized.Model
+	s.markSpoken(route, "model")
 	return s.commitSettings(next)
 }
 
@@ -988,17 +1158,28 @@ func (c consoleSettings) SettingsProfile() dshapi.SettingsProfile {
 	}
 }
 
-func (c consoleSettings) SetSettingsEndpoint(baseURL string) error {
-	return c.settings.replaceEndpoint(baseURL, "")
+// SetSettingsEndpoint, SetSettingsModel, SetSettingsKey and ClearSettingsKey are
+// the console's field writes. Each mutator marks the field it wrote as the
+// console's, which is what puts it in the document and in the page's user layer
+// (ADR 0103); these wrappers only name which field the request addressed.
+func (c consoleSettings) SetSettingsEndpoint(route, baseURL string) error {
+	return c.settings.replaceEndpoint(route, baseURL, "")
 }
 
-func (c consoleSettings) SetSettingsModel(model string) error {
-	return c.settings.replaceEndpoint(c.settings.view().BaseURL, model)
+func (c consoleSettings) SetSettingsModel(route, model string) error {
+	return c.settings.replaceModel(route, model)
 }
 
 func (c consoleSettings) SetSettingsKey(value string) error { return c.settings.setAPIKey(value) }
 
 func (c consoleSettings) ClearSettingsKey() error { return c.settings.clearAPIKey() }
+
+// SettingsUserSection passes the console-written layer through, so the page's
+// provider cards show what an operator saved here and not the flags this host was
+// started with (ADR 0103).
+func (c consoleSettings) SettingsUserSection(route string) (map[string]any, bool) {
+	return c.settings.SettingsUserSection(route)
+}
 
 // ConsoleSection and SetConsoleSection pass the console-owned namespaces
 // straight through: the store holds them, this host's configuration does not
@@ -1031,6 +1212,7 @@ func (c consoleSettings) AdvanceSettingsRevision(namespace string) int64 {
 var (
 	_ dshapi.SettingsDocumentStore = consoleSettings{}
 	_ dshapi.SettingsRevisionStore = consoleSettings{}
+	_ dshapi.SettingsUserLayer     = consoleSettings{}
 )
 
 // consoleCredentials adapts the settings store to the console's credentials
@@ -1138,6 +1320,20 @@ func (s *settingsStore) apply(req settingsRequest) (settingsView, error) {
 	}); err != nil {
 		return settingsView{}, err
 	}
+	// The panel this endpoint serves writes the whole form, so every field the
+	// request named is the console's: baseUrl is always assigned (an empty value
+	// clears the override), the rest only when they were sent (ADR 0103).
+	spoken := []string{"baseUrl"}
+	if normalized.Model != "" {
+		spoken = append(spoken, "model")
+	}
+	if normalized.Provider != "" {
+		spoken = append(spoken, "provider")
+	}
+	if normalized.APIKey != "" {
+		spoken = append(spoken, "apiKey")
+	}
+	s.markSpoken(next.provider, spoken...)
 	if err := s.commitSettings(next); err != nil {
 		return settingsView{}, err
 	}

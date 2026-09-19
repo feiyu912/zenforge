@@ -290,15 +290,17 @@ now, and what was decided along the way:
   The message never quotes the file, because the value the decoder is failing on may
   be the credential, and the standard JSON error quotes values; a type error is
   re-described here from its field name alone.
-- **The document names a field only where the console moved it.** The store holds the
+- **The document names a field only where the console wrote it.** The store holds the
   whole configuration and writes a snapshot, so naming every field would let a write
   that touched only the model record the credential as the empty string -- and the next
   start would read that as a cleared key and wipe one the operator supplies with
-  `--api-key`. A field that differs from the startup seed is written (including a real
-  clear, which differs); a field nobody spoke about is left out and the seed keeps
-  answering it. The document outranks the seed for every field it does name, and the
-  host logs those field names -- `baseUrl`, `model`, `provider`, `api-key` -- never their
-  values. `apiKeyEnv` is startup configuration and is never copied into the file.
+  `--api-key`. A field a console request wrote is written; a field nobody spoke about is
+  left out and the seed keeps answering it. The document outranks the seed for every
+  field it does name, and the host logs those field names -- `baseUrl`, `model`,
+  `provider`, `api-key` -- never their values. `apiKeyEnv` is startup configuration and
+  is never copied into the file. ADR 0102 first phrased "wrote" as "differs from the
+  seed", which dropped a value an operator typed that happened to match a flag; ADR 0103
+  replaced the comparison with the write itself.
 - **`hasDocument` and the revisions come out of the file.** A store that versions its
   own namespaces is asked instead of the handler counting per process
   (`dshapi.SettingsRevisionStore`, implemented by the serve command's store), so a
@@ -309,10 +311,11 @@ now, and what was decided along the way:
 - **What is durable**: the endpoint, the model, the inline credential, the
   console-owned namespaces (so the welcome notice stays dismissed, replacing ADR
   0094's consequence), the declared provider profiles, and the per-namespace
-  revisions. **What is not**: the workspace registry (ADR 0101, deliberately outside
-  this chain -- a registered directory this host cannot run a session in is a
-  different question from a preference worth restoring) and a session's model
-  selection.
+  revisions. Also durable since ADR 0103: the model each session chose. **What is
+  not**: the workspace registry (ADR 0101, deliberately outside this chain -- a
+  registered directory this host cannot run a session in is a different question
+  from a preference worth restoring), the runtime last-used model hint, and any
+  chosen model beyond the 64 most recent.
 
 Ledger: no row moved, because no method was added; the `credentials/set` and
 `settings/describe` descriptions now say what backs them.
@@ -348,17 +351,54 @@ one file. And `go test ./internal/dshapi/ -run TestSettings`
 -- the store's `hasDocument` passed through both ways, and a store that versions its
 own namespaces asked instead of the handler counting.
 
+## Shipped: the user layer is the console's own writes (2026-09-19)
+
+The first host to run ADR 0102 reported three things wrong with it, and this chain
+(**ADR 0103**) fixed all three:
+
+- **The Models page showed a saved configuration nobody saved.** `settings/describe`
+  built every provider namespace's `user` layer out of the live settings, so the flags
+  `serve` was launched with -- `--model qwen-plus --base-url ...dashscope...` -- came
+  back as an OpenAI card the operator had never filled in. The store now answers through
+  an optional face (`dshapi.SettingsUserLayer`) with the fields the console itself wrote,
+  and reports no layer at all when nothing was written. The resolved `value` still
+  reports the live configuration, flags included: that is what a run uses.
+- **The document did not record the endpoint and model that were saved.** The ADR 0102
+  rule recorded a field only where the live value differed from the startup seed, so
+  typing the value a flag already carried wrote nothing. The rule is now the write
+  itself: the mutator that commits a field marks it as the console's
+  (`settingsStore.markSpoken`), the document records it, and a loaded document marks its
+  own fields so they stay recorded across the next write. The `--api-key` protection is
+  unchanged and is now structural: a field no request wrote is never named.
+- **A model picked in the composer did not survive a restart.** The per-session choice
+  was process-local. It now lives in the same document (`modelSelections`), is adopted
+  before the document is read, and follows the commit rule: a document that will not take
+  it puts the record back and reports the failure. Only sessions whose model was actually
+  chosen are recorded, and only the 64 most recent; the last-used hint is not persisted,
+  because it changes on every run.
+
+A field also belongs to the card it was written through: the route travels with the write
+(`SetSettingsEndpoint(route, ...)`, `SetSettingsModel(route, ...)`), the document carries
+it (`consoleRoutes`), and the user layer reports it on that route only. Otherwise a value
+saved on the Anthropic card would appear on whichever card the host is configured with --
+the same lie in a new costume. The added fields are optional in the version-1 document, so
+the file the operator's host already has still loads.
+
+Tests: `go test ./cli/ -run TestConsoleUserLayer` and
+`go test ./cli/ -run TestConsoleModelSelection`, plus the ADR 0102 suite under the new
+naming rule, plus `go test ./internal/dshapi/ -run TestSettings` for the user-layer face.
+
 ## Operator's one remaining step
 
-The host at `127.0.0.1:8787` was rebuilt and restarted on this chain with its original
-flags (`serve --base-url https://dashscope.aliyuncs.com/compatible-mode/v1 --model
-qwen-plus --workspace <checkout>`), and the verification write put its document in
-place at `~/.config/zenforge/console-settings.json`. One thing remains: **the key, typed
-once into the Models page**. The old process held it in memory and the wire has no way
-to read it back -- that is ADR 0084 working, not a gap -- so the first host started
-before this chain cannot hand its credential to the second. Every start after that entry
-reads it back from the document. The one-time entry is the thing this chain exists to
-end, not a defect in it.
+The host at `127.0.0.1:8787` has to be **restarted onto this checkout** for ADR 0103 to
+take effect: the running binary predates it. Restarting costs nothing now -- the document
+at `~/.config/zenforge/console-settings.json` holds the credential, the declared `qwen`
+profile, the revision numbers and the welcome-notice acknowledgement -- with one
+exception: a model picked in the composer **before** this chain is not in that file,
+because the binary that recorded it did not write selections. Pick it once more after the
+restart and it stays. The OpenAI card will also come back empty rather than showing the
+`--model qwen-plus` flag as a saved setting; that is the fix, not a loss: the resolved
+configuration still serves `qwen-plus`, and the card shows only what is written on it.
 
 ## Kickoff prompt for the next window
 
@@ -366,10 +406,11 @@ end, not a defect in it.
 > `docs/dsh-console-coverage.md`. Continue the console-attachment objective: keep the
 > three layers separate (deep API -> harness core -> adapters, ADR 0099), land every
 > chain with an ADR + docs + tests + commit/push + green CI and docs, and fill the
-> ledger's gaps in its order. The settings document shipped (ADR 0102); the next item
-> is "Next up" 1 in the ledger -- re-testing the withheld `ui-directory-picker-browse`
-> plugin, which has to run on a scratch port because a plugin that fails activation is
-> a fatal boot page, and the operator's host on `127.0.0.1:8787` is the one that must
-> not be taken down by the experiment. Since the settings document is now shared state,
-> give a scratch host `ZENFORGE_CONFIG_DIR` or `--settings-file` under a throwaway
-> directory so it cannot rewrite the operator's document. Never `git add -A`.
+> ledger's gaps in its order. The settings document shipped (ADR 0102) and so did the
+> user-layer/model-selection fix (ADR 0103); the next item is "Next up" 1 in the ledger
+> -- re-testing the withheld `ui-directory-picker-browse` plugin, which has to run on a
+> scratch port because a plugin that fails activation is a fatal boot page, and the
+> operator's host on `127.0.0.1:8787` is the one that must not be taken down by the
+> experiment. Since the settings document is now shared state, give a scratch host
+> `ZENFORGE_CONFIG_DIR` or `--settings-file` under a throwaway directory so it cannot
+> rewrite the operator's document. Never `git add -A`.
