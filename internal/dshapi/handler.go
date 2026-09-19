@@ -66,6 +66,11 @@ type Handler struct {
 	// SetLlmDirectory after New.
 	llmDirectoryMu sync.RWMutex
 	llmDirectory   LlmDirectorySource
+
+	// settings is the injected settings document face, installed by
+	// SetSettingsDocument after New.
+	settingsMu sync.RWMutex
+	settings   SettingsDocumentStore
 }
 
 // pendingSession is a session id allocated by session/create that has not
@@ -170,6 +175,24 @@ func (h *Handler) method(endpoint string) (methodFunc, bool) {
 		return nil, false
 	}
 	switch namespace {
+	case "settings":
+		switch name {
+		case "describe":
+			return h.settingsDescribe, true
+		case "update":
+			return h.settingsUpdate, true
+		case "replace":
+			return h.settingsReplace, true
+		case "mutate":
+			return h.settingsMutate, true
+		case "canOpenAgentPresetDirectory":
+			return h.settingsCanOpenAgentPresetDirectory, true
+		case "openSettingsDocument", "openAgentPresetDirectory":
+			// These open a file or directory in a native editor on the host.
+			// This host has none, so the answer names the gap instead of
+			// leaving an operator waiting for a window that will never appear.
+			return h.settingsNativeOpenUnsupported, true
+		}
 	case "llm":
 		switch name {
 		case "listProviders":

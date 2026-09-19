@@ -271,6 +271,7 @@ func newServeApp(ctx context.Context, opts *options, ioStreams IO, config serveC
 		Logger:       slog.Default(),
 		Credentials:  consoleCredentials{settings: settings},
 		LlmDirectory: llmDirectory,
+		Settings:     consoleSettings{settings: settings},
 	})
 	if err != nil {
 		return nil, err
@@ -549,6 +550,44 @@ func consoleProviderName(route string) string {
 		return route
 	}
 }
+
+// replaceEndpoint commits a new endpoint and model while keeping the provider and
+// the credential. It routes through apply so the same validation decides: a
+// base URL the provider cannot build leaves the running server untouched.
+func (s *settingsStore) replaceEndpoint(baseURL, model string) error {
+	_, err := s.apply(settingsRequest{BaseURL: baseURL, Model: model})
+	return err
+}
+
+// consoleSettings adapts the settings store to the console's settings namespace
+// (ADR 0087): one provider profile whose endpoint, model and credential the
+// Models page can write. The credential is never part of a reported value, only
+// of the secret slot that says whether one is configured.
+type consoleSettings struct {
+	settings *settingsStore
+}
+
+func (c consoleSettings) SettingsProfile() dshapi.SettingsProfile {
+	view := c.settings.view()
+	return dshapi.SettingsProfile{
+		Provider: view.Provider,
+		Model:    view.Model,
+		BaseURL:  view.BaseURL,
+		HasKey:   view.HasAPIKey,
+	}
+}
+
+func (c consoleSettings) SetSettingsEndpoint(baseURL string) error {
+	return c.settings.replaceEndpoint(baseURL, "")
+}
+
+func (c consoleSettings) SetSettingsModel(model string) error {
+	return c.settings.replaceEndpoint(c.settings.view().BaseURL, model)
+}
+
+func (c consoleSettings) SetSettingsKey(value string) error { return c.settings.setAPIKey(value) }
+
+func (c consoleSettings) ClearSettingsKey() error { return c.settings.clearAPIKey() }
 
 // consoleCredentials adapts the settings store to the console's credentials
 // namespace (ADR 0084). The host has one model credential, so every reference

@@ -114,8 +114,13 @@ machine, and it also relaxes the settings API to non-loopback callers.
 
 ### What remains, with the takeover point for each
 
-1. **The console's own model/settings panel** (so a model can be "defined" in the
-   browser). Its edits go to a host-owned settings document
+1. **The console's model/settings panel is served** as of ADR 0087: `settings`
+   (`describe`, `update`, `replace`, `mutate`, the native-open probes) answers
+   with a real schemastery envelope and applies endpoint/model/key writes to the
+   running process. What is left here is persistence: there is still no settings
+   document on disk (`hasDocument: false`), and only one profile per route is
+   modelled. The historical note below still explains the mechanism.
+2. **The console's own model/settings panel** (historical note). Its edits go to a host-owned settings document
    (`settings/document-updated`, `settings/conflict`), not to a credential form.
    The instrument is already in place: `serve` passes `slog.Default()` into the
    RPC handler (`dshmount.Config.Logger` -> `dshapi.Config.Logger`), so every

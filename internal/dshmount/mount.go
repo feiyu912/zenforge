@@ -54,6 +54,9 @@ type Config struct {
 	// the Models page reports that loading the directory failed and renders no
 	// cards at all.
 	LlmDirectory dshapi.LlmDirectorySource
+	// Settings answers the console's settings namespace: the schema its pages
+	// render and the writes an operator makes through them.
+	Settings dshapi.SettingsDocumentStore
 }
 
 // Mux is the assembled console host. It is immutable after New, which is what
@@ -103,6 +106,9 @@ func New(manager *harnesshttp.RunManager, events eventlog.Store, cfg Config) (*M
 	}
 	if cfg.LlmDirectory != nil {
 		api.SetLlmDirectory(cfg.LlmDirectory)
+	}
+	if cfg.Settings != nil {
+		api.SetSettingsDocument(cfg.Settings)
 	}
 	return &Mux{
 		shell:         shellHandler(bundle.Inject(string(shell))),

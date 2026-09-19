@@ -19,6 +19,12 @@ import (
 // configuration -- so a provider appears alongside its live or dormant state
 // (packages/llm/llm/lib/types/types.d.ts:194-217).
 
+// consoleProviderRoutes is every provider route this host's adapter factory can
+// build. The provider directory, the settings namespaces and the model catalog
+// all answer from this one list, so a route cannot be advertised by one surface
+// and refused by another.
+var consoleProviderRoutes = []string{"openai", "anthropic"}
+
 // LlmProviderInfo is display metadata for one registered provider route.
 // Upstream types.d.ts:194-200.
 type LlmProviderInfo struct {
