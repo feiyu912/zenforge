@@ -127,7 +127,11 @@ what is experimental, and what remains adapter territory.
   `--model`, `--api-key`, or the environment) and the console's model picker
   reports that configuration through `session/modelCatalog`. The console's own
   settings panel can also write the endpoint, model and key (ADR 0087); the key
-  is write-only and the write refuses what this host cannot hold.
+  is write-only and the write refuses what this host cannot hold. What the panel
+  writes is durable: one `0600` document in the host's own configuration
+  directory holds the endpoint, the model, the key, the declared profiles and the
+  settings revisions, and it outranks the startup flags for every field it names
+  (ADR 0102).
 - **A custom provider can be declared, and the host says whether it can serve it**
   (ADR 0095). The Models page's "Add a custom provider" entry point is served: the
   `llm-pi-ai` namespace is reported with a schema whose protocols union names exactly
@@ -135,8 +139,9 @@ what is experimental, and what remains adapter territory.
   `anthropic-messages`), a declared profile is validated by shape *and* by building
   the adapter a run would build, and a route that cannot be served yet is stored with
   its reason (for example a credential that is not set) and reported in the provider
-  directory as declared. A declared profile lasts until the process exits, like
-  every other console-written setting (ADR 0094), and it **is selectable and
+  directory as declared. A declared profile is written to the host's settings
+  document and read back at the next start, like every other console-written
+  setting (ADR 0094, ADR 0102); it **is selectable and
   runnable** (ADR 0096); a draft endpoint can be interrogated for its model list,
   which is what the editor's fetch button does (ADR 0097); and it can be
   **corrected after it exists** -- the editor's per-field saves merge into the
