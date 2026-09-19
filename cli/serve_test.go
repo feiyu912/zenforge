@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -250,5 +251,60 @@ func TestServeMountsTheDSHConsoleAtTheRootAndNothingElse(t *testing.T) {
 	mux.ServeHTTP(settings, httptest.NewRequest(http.MethodGet, "/api/settings", nil))
 	if settings.Code != http.StatusOK {
 		t.Fatalf("GET /api/settings = %d, want 200", settings.Code)
+	}
+}
+
+// The console's Models page writes a key through the credentials namespace, so
+// the adapter must land on the settings store without disturbing anything else
+// the operator configured. The regression this pins is specific: apply assigns
+// the base URL unconditionally, so routing a credential write through it would
+// silently clear --base-url and send later runs to the provider default.
+func TestConsoleCredentialsStoreAKeyWithoutClearingTheEndpoint(t *testing.T) {
+	store := newTestSettingsStore(t, false)
+	credentials := consoleCredentials{settings: store}
+	if !credentials.CredentialConfigured() {
+		t.Fatal("CredentialConfigured = false, want the fixture's key reported")
+	}
+	if err := credentials.StoreCredential("sk-second-value"); err != nil {
+		t.Fatalf("StoreCredential: %v", err)
+	}
+	view := store.view()
+	if view.BaseURL != testSettingsBaseURL {
+		t.Fatalf("baseUrl = %q, want %q: storing a key must not clear the endpoint", view.BaseURL, testSettingsBaseURL)
+	}
+	if view.Model != "qwen-plus" {
+		t.Fatalf("model = %q, want the configured model kept", view.Model)
+	}
+	if !view.HasAPIKey {
+		t.Fatal("hasApiKey = false, want the stored key reported")
+	}
+	if encoded := fmt.Sprintf("%+v", view); strings.Contains(encoded, "sk-second-value") {
+		t.Fatalf("the view carries the key: %s", encoded)
+	}
+	if err := credentials.RemoveCredential(); err != nil {
+		t.Fatalf("RemoveCredential: %v", err)
+	}
+	if store.view().HasAPIKey {
+		t.Fatal("hasApiKey = true after removal, want the inline key forgotten")
+	}
+}
+
+// Removing the stored key must not claim the host has no credential when the
+// process was started with an environment-supplied one: the console's badge
+// would then contradict what the run path actually uses.
+func TestConsoleCredentialsRespectAnEnvironmentSuppliedKey(t *testing.T) {
+	t.Setenv("ZENFORGE_TEST_CONSOLE_KEY", "env-key-value")
+	store := newTestSettingsStore(t, false)
+	store.current.apiKey = ""
+	store.current.apiKeyEnv = "ZENFORGE_TEST_CONSOLE_KEY"
+	credentials := consoleCredentials{settings: store}
+	if !credentials.CredentialConfigured() {
+		t.Fatal("CredentialConfigured = false, want the environment-supplied key reported")
+	}
+	if err := credentials.RemoveCredential(); err != nil {
+		t.Fatalf("RemoveCredential: %v", err)
+	}
+	if !store.view().HasAPIKey {
+		t.Fatal("hasApiKey = false, want the environment-supplied key still reported")
 	}
 }

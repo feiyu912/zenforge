@@ -55,6 +55,12 @@ type Handler struct {
 	// change swap it while requests are in flight.
 	modelCatalogMu sync.RWMutex
 	modelCatalog   ModelCatalogSource
+
+	// credentials is the injected credential face, installed by SetCredentials
+	// after New for the same reason: the settings store lives in the serve
+	// command, and importing it here would cycle.
+	credentialsMu sync.RWMutex
+	credentials   CredentialStore
 }
 
 // pendingSession is a session id allocated by session/create that has not
@@ -159,6 +165,15 @@ func (h *Handler) method(endpoint string) (methodFunc, bool) {
 		return nil, false
 	}
 	switch namespace {
+	case "credentials":
+		switch name {
+		case "describe":
+			return h.credentialsDescribe, true
+		case "set":
+			return h.credentialsSet, true
+		case "unset":
+			return h.credentialsUnset, true
+		}
 	case "session":
 		switch name {
 		case "list":

@@ -147,3 +147,39 @@ machine, and it also relaxes the settings API to non-loopback callers.
 - Long `go test` runs repeatedly produced no output and timed out on this
   machine while short runs passed; CI was the reliable arbiter. Prefer targeted
   `-run`/single-package runs locally and let CI run the suite.
+
+## Multi-turn: the seam exists, the mapping is the work (researched)
+
+A session maps to one run today, so a prompt to a finished run answers
+`unimplemented`. The research that decides how to fix it:
+
+- **`RunManager.Resume(ctx, runID)` takes no new input.** It continues a run that
+  has durable events and is not terminal; the `Agent` interface's `Resume` is the
+  same shape (`Stream(ctx, task)` is how new work starts). So "resume the run with
+  another user turn" is **not** the mechanism and should not be forced into it.
+- **`zenforge.Task` already carries `InitialMessages []model.Message`.** A new run
+  can therefore be started with the conversation so far prepended, which is the
+  honest way to make turn two a continuation rather than a fresh unrelated run.
+- The conversation is reconstructable from the durable log: `run.started` carries
+  the user input (`input`), and the assistant's text arrives as `model.delta`
+  chunks and/or in `model.done`. Pin the exact field names against `events.go`
+  before relying on them.
+
+So the shape is a host-side **session -> runs** mapping:
+
+1. a session id stays stable; its first turn is the run whose id equals the
+   session id (today's behaviour), later turns start new runs recorded under that
+   session;
+2. `session/prompt` on a session whose current run is active steers it (today's
+   behaviour); on a terminal one it starts a new run with `Input` = the new text
+   and `InitialMessages` reconstructed from that session's earlier runs;
+3. `session/list` must list **sessions**, not runs, with the current run's state
+   and the title from the log; `session/page` and `session/follow` must merge a
+   session's runs in order, so history reads as one conversation;
+4. ADR 0083's deviation (a follow stream ends when its run ends) becomes
+   defensible once a session outlives its runs, because the console re-opens the
+   stream after the next prompt -- but re-check it against the client's retry
+   behaviour when this lands.
+
+Nothing above requires a harness change; it is mapping plus message
+reconstruction, and it belongs beside the session methods in `internal/dshapi`.

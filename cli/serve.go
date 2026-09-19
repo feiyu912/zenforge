@@ -248,6 +248,7 @@ func newServeApp(ctx context.Context, opts *options, ioStreams IO, config serveC
 		AllowRemote:  config.allowRemote,
 		ModelCatalog: modelCatalog,
 		Logger:       slog.Default(),
+		Credentials:  consoleCredentials{settings: settings},
 	})
 	if err != nil {
 		return nil, err
@@ -461,6 +462,71 @@ type settingsRequest struct {
 	Provider string `json:"provider"`
 	APIKey   string `json:"apiKey"`
 }
+
+// setAPIKey records an inline key and rebuilds the adapter from it. It does not
+// reuse apply: apply assigns the base URL unconditionally, so a request that
+// named only a key would clear the operator's --base-url override.
+func (s *settingsStore) setAPIKey(value string) error {
+	return s.replaceAPIKey(strings.TrimSpace(value))
+}
+
+// clearAPIKey forgets the inline key. An environment-supplied key is left
+// alone, so the next hasAPIKey call still reports the credential honestly.
+//
+// It does not go through replaceAPIKey: that path refuses a configuration the
+// provider cannot build, and a host with no key is a configuration this server
+// deliberately starts in, so the run path reports the provider's own failure.
+// The clearing is committed first and the adapter rebuild records the error,
+// exactly as startup does for an operator who has not configured a key yet.
+func (s *settingsStore) clearAPIKey() error {
+	s.mu.Lock()
+	next := s.current
+	next.apiKey = ""
+	s.current = next
+	s.mu.Unlock()
+	s.rebuild()
+	return nil
+}
+
+// replaceAPIKey commits a new inline key after proving the adapter still
+// builds. The candidate adapter is constructed before anything is stored, so a
+// key the provider rejects leaves the running server untouched -- the same
+// ordering apply uses.
+func (s *settingsStore) replaceAPIKey(key string) error {
+	s.mu.RLock()
+	next := s.current
+	s.mu.RUnlock()
+	next.apiKey = key
+	adapter, err := provider.FromEnv(provider.Config{
+		Protocol:  next.provider,
+		Model:     next.model,
+		BaseURL:   next.baseURL,
+		APIKey:    next.apiKey,
+		APIKeyEnv: next.apiKeyEnv,
+	})
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.current = next
+	s.mu.Unlock()
+	s.model.set(adapter, nil)
+	return nil
+}
+
+// consoleCredentials adapts the settings store to the console's credentials
+// namespace (ADR 0084). The host has one model credential, so every reference
+// the panel names is answered from it and a stored value replaces it; the value
+// is never returned, only whether one would be found.
+type consoleCredentials struct {
+	settings *settingsStore
+}
+
+func (c consoleCredentials) CredentialConfigured() bool { return c.settings.view().HasAPIKey }
+
+func (c consoleCredentials) StoreCredential(value string) error { return c.settings.setAPIKey(value) }
+
+func (c consoleCredentials) RemoveCredential() error { return c.settings.clearAPIKey() }
 
 func (s *settingsStore) view() settingsView {
 	s.mu.RLock()

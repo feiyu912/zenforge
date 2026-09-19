@@ -46,6 +46,10 @@ type Config struct {
 	// Logger receives the diagnostic line per endpoint the console asks for
 	// and this host does not serve. Nil stays silent.
 	Logger *slog.Logger
+	// Credentials lets the console's Models page read credential state and
+	// store the value an operator types. Without it those methods answer an
+	// honest unimplemented error (ADR 0084).
+	Credentials dshapi.CredentialStore
 }
 
 // Mux is the assembled console host. It is immutable after New, which is what
@@ -89,6 +93,9 @@ func New(manager *harnesshttp.RunManager, events eventlog.Store, cfg Config) (*M
 	}
 	if cfg.ModelCatalog != nil {
 		api.SetModelCatalog(cfg.ModelCatalog)
+	}
+	if cfg.Credentials != nil {
+		api.SetCredentials(cfg.Credentials)
 	}
 	return &Mux{
 		shell:         shellHandler(bundle.Inject(string(shell))),
