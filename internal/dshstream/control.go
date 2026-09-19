@@ -28,32 +28,42 @@ func (h *Handler) runControl(ctx context.Context, payload []byte, send func(any)
 			"the session/control stream takes no arguments",
 			map[string]any{"endpoint": "session/control"})
 	}
-	baseline := controlBaseline{
-		Jobs:        map[string][]sessionJob{},
-		Projections: h.projectionBaseline(),
-	}
-	if err := send(controlBaselineFrame{Type: "baseline", Value: baseline}); err != nil {
-		return err
-	}
-	if h.cfg.ModelSelectionUpdates == nil {
-		<-ctx.Done()
-		return ctx.Err()
-	}
 	// A selection change arrives on the goroutine answering session/selectModel,
 	// so the hand-off never blocks that call and never stalls on a slow socket:
 	// updates coalesce per session, because only the latest value of a projection
 	// matters and a client that missed one sees the next baseline.
 	pending := map[string]ModelSelectionUpdate{}
 	signal := make(chan struct{}, 1)
-	unsubscribe := h.cfg.ModelSelectionUpdates(func(update ModelSelectionUpdate) {
-		h.mu.Lock()
-		pending[update.SessionID] = update
-		h.mu.Unlock()
-		select {
-		case signal <- struct{}{}:
-		default:
+	// Subscribe before reading the baseline. A change that lands while the
+	// baseline is being assembled is then delivered as a frame instead of falling
+	// into the gap between the two, and a value that appears in both is harmless:
+	// the client applies the latest one and the sequence orders them.
+	var unsubscribe func()
+	if h.cfg.ModelSelectionUpdates != nil {
+		unsubscribe = h.cfg.ModelSelectionUpdates(func(update ModelSelectionUpdate) {
+			h.mu.Lock()
+			pending[update.SessionID] = update
+			h.mu.Unlock()
+			select {
+			case signal <- struct{}{}:
+			default:
+			}
+		})
+	}
+	baseline := controlBaseline{
+		Jobs:        map[string][]sessionJob{},
+		Projections: h.projectionBaseline(),
+	}
+	if err := send(controlBaselineFrame{Type: "baseline", Value: baseline}); err != nil {
+		if unsubscribe != nil {
+			unsubscribe()
 		}
-	})
+		return err
+	}
+	if unsubscribe == nil {
+		<-ctx.Done()
+		return ctx.Err()
+	}
 	defer unsubscribe()
 	for {
 		select {

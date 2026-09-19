@@ -1,27 +1,46 @@
 package dshstream
 
 import (
+	"sync"
 	"testing"
 )
 
 // selectionSource is a stub model-selection source: one session's projection,
 // and an observer list the test can drive.
 type selectionSource struct {
+	mu        sync.Mutex
 	states    map[string]ModelSelectionState
 	observers []func(ModelSelectionUpdate)
 }
 
 func (s *selectionSource) States() map[string]ModelSelectionState {
-	return s.states
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	states := make(map[string]ModelSelectionState, len(s.states))
+	for sessionID, state := range s.states {
+		states[sessionID] = state
+	}
+	return states
 }
 
 func (s *selectionSource) Updates(observe func(ModelSelectionUpdate)) func() {
+	s.mu.Lock()
 	s.observers = append(s.observers, observe)
+	s.mu.Unlock()
 	return func() {}
 }
 
+func (s *selectionSource) set(sessionID string, state ModelSelectionState) {
+	s.mu.Lock()
+	s.states[sessionID] = state
+	s.mu.Unlock()
+}
+
 func (s *selectionSource) publish(update ModelSelectionUpdate) {
-	for _, observe := range s.observers {
+	s.mu.Lock()
+	observers := append([]func(ModelSelectionUpdate){}, s.observers...)
+	s.mu.Unlock()
+	for _, observe := range observers {
 		observe(update)
 	}
 }
@@ -33,10 +52,10 @@ func selectionStreamFixture(t *testing.T, sessionID string) (*fixture, *selectio
 		ModelSelections:       source.States,
 		ModelSelectionUpdates: source.Updates,
 	})
-	source.states[sessionID] = ModelSelectionState{
+	source.set(sessionID, ModelSelectionState{
 		Projection: ModelSelectionProjection{Next: &ModelSelection{Provider: "acme", Model: "acme-large"}},
 		Seq:        1,
-	}
+	})
 	return f, source
 }
 
@@ -100,10 +119,10 @@ func TestSessionFollowSnapshotCarriesTheModelSelection(t *testing.T) {
 	f, source := selectionStreamFixture(t, "run-followed")
 	runID := f.startRun(t, "hello")
 	// The projection is keyed by the run the console follows.
-	source.states[runID] = ModelSelectionState{
+	source.set(runID, ModelSelectionState{
 		Projection: ModelSelectionProjection{Next: &ModelSelection{Provider: "acme", Model: "acme-large"}},
 		Seq:        3,
-	}
+	})
 	conn := f.mustDial(t)
 	openStream(t, conn, "follow", "session/follow", followArgs(t, runID, true))
 	snapshot := readItem(t, conn, "follow")
