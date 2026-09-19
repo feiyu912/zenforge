@@ -138,6 +138,7 @@ nav:
       - HTTP server: server-http-guide.md
       - SSE server: server-sse-guide.md
       - Web console: web-console.md
+      - Web console coverage: dsh-console-coverage.md
   - Examples: examples.md
   - ADRs:
       - Overview: adr/index.md
@@ -239,6 +240,7 @@ nav:
       - 0096 The console's model selection is served, per session: adr/0096-the-consoles-model-selection-is-served-per-session.md
       - 0097 The console's model discovery interrogates the draft endpoint: adr/0097-the-consoles-model-discovery-interrogates-the-draft-endpoint.md
       - 0098 A declared profile is edited field by field: adr/0098-a-declared-profile-is-edited-field-by-field.md
+      - 0099 The framework core and the console adapter are separate layers: adr/0099-the-framework-core-and-the-console-adapter-are-separate-layers.md
 
 extra:
   social:

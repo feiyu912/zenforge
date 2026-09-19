@@ -6,6 +6,13 @@ is served by the same process and the same origin as the API: there is no second
 server to start, no CORS to configure, and no build step — the interface is
 embedded in the binary.
 
+The page is the DSH console's own client interface, vendored unchanged, and it
+is a *consumer* of this host: each control is backed by a remote method the
+host answers. This host answers a subset of them, and refuses others by name
+rather than answering something empty that would read as success. Which ones —
+and what each missing panel needs — is the
+[console coverage ledger](dsh-console-coverage.md).
+
 ## Quickstart with an OpenAI-compatible endpoint
 
 ```bash

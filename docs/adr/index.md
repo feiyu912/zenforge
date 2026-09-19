@@ -8,10 +8,14 @@ later ADRs supersede earlier ones, never edit.
 !!! note "Reading order"
     The ADRs are numbered chronologically. Read in order to see how the
     framework's design solidified, or jump to a specific topic using the
-    table of contents on the left.
+    table of contents on the left. The optional DSH console adapter's own
+    series is grouped below the main index, so the framework's decisions stay
+    the main line of the record.
 
 ## Index
 
+| Number | Topic |
+| --- | --- |
 | Number | Topic |
 | --- | --- |
 | [0001](0001-event-log-and-checkpoint.md) | Event log and checkpoint stores |
@@ -91,9 +95,23 @@ later ADRs supersede earlier ones, never edit.
 | [0075](0075-an-approval-can-be-a-question.md) | An approval can be a question |
 | [0076](0076-a-resource-can-be-watched.md) | A resource can be watched |
 | [0077](0077-the-client-can-lend-its-model.md) | The client can lend its model |
+| [0080](0080-the-module-graph-is-validated.md) | The module graph is validated |
+| [0099](0099-the-framework-core-and-the-console-adapter-are-separate-layers.md) | The framework core and the console adapter are separate layers |
+
+## Console adapter (the DSH host)
+
+These record how the optional DSH console host was built — the envelope
+protocol, the streams, the settings namespaces it holds, the provider
+directory and model selection it serves. They are one adapter's history; the
+framework's own decisions are the table above. The tier and its dependency
+rule are [ADR 0099](0099-the-framework-core-and-the-console-adapter-are-separate-layers.md),
+and what the adapter answers today is
+[the console coverage ledger](../dsh-console-coverage.md).
+
+| Number | Topic |
+| --- | --- |
 | [0078](0078-a-console-on-localhost.md) | A console on localhost |
 | [0079](0079-a-console-under-our-own-name.md) | A console under our own name |
-| [0080](0080-the-module-graph-is-validated.md) | The module graph is validated |
 | [0081](0081-the-console-answers-in-envelopes.md) | The console answers in envelopes |
 | [0082](0082-the-host-names-what-it-cannot-answer.md) | The host names the model and records what it cannot answer |
 | [0083](0083-the-streams-are-mounted-with-the-console.md) | The streams are mounted with the console |

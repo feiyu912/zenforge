@@ -4,6 +4,15 @@ Internal planning artifact; excluded from the published site (see `exclude_docs`
 in `mkdocs.yml`). It records where the "attach the upstream console" work stands
 so a fresh session can continue without re-deriving anything.
 
+**Current capability state lives in
+[the console coverage ledger](dsh-console-coverage.md)**, not in the prose
+below: every remote method the console client declares, marked served, refused
+by name, stream, or unserved, kept honest by
+`internal/dshapi/console_coverage_test.go`. This tier's boundary — it may
+consume the framework, never the reverse — is
+[ADR 0099](adr/0099-the-framework-core-and-the-console-adapter-are-separate-layers.md),
+pinned by `docs/console_boundary_test.go`.
+
 ## Decision and evidence
 
 - **ADR 0079**: the console is a **rebranded build** of the upstream MIT sources,

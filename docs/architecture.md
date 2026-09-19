@@ -1,11 +1,23 @@
 # Architecture
 
-ZenForge should have two layers:
+ZenForge should have three layers:
 
 ```text
 deep API      easy default agent for most users
 harness core  replaceable runtime pieces for advanced users
+adapters      optional bridges a particular product or UI needs
 ```
+
+The first two layers are the framework. The third is consumed *by* them and
+never the other way round: an adapter may import the core, and the core must
+not import an adapter or use one's vocabulary. The DSH console host is one such
+adapter, and it lives entirely in `internal/dshapi`, `internal/dshboot`,
+`internal/dshmount`, `internal/dshsession`, `internal/dshstream`, `cli/`, and
+the vendored console artifacts under `webui/dsh/` — none of which a framework
+user has to build, import, or know about. The rule is recorded in
+[ADR 0099](adr/0099-the-framework-core-and-the-console-adapter-are-separate-layers.md)
+and enforced by `console_boundary_test.go`; what that adapter answers today is
+[the console coverage ledger](dsh-console-coverage.md).
 
 ## Current Package Layout
 
@@ -85,6 +97,18 @@ adapters/
   memory/
   sandbox/
   zenmind/
+
+internal/            console adapter tier (optional, not framework API)
+  dshapi/            the console's method surface, in envelopes
+  dshboot/           boot payload and the console's runtime config
+  dshmount/          HTTP and WebSocket mounting
+  dshsession/        session wiring for the console
+  dshstream/         $events, session/control, session/follow
+
+cli/
+  serve.go           `zenforge serve` = a DSH console host over the HTTP harness
+webui/
+  dsh/               the console's vendored browser artifacts
 ```
 
 ## Runtime Flow
