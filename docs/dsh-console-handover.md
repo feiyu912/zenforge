@@ -231,3 +231,47 @@ So the shape is a host-side **session -> runs** mapping:
 
 Nothing above requires a harness change; it is mapping plus message
 reconstruction, and it belongs beside the session methods in `internal/dshapi`.
+
+## Wire shapes that hid behind working controls (2026-09-19)
+
+Two host bugs in this attachment were invisible to the coverage ledger, because
+the method *was* routed and the call *did* answer -- with the wrong reading of its
+own arguments. Both are fixed; the shape of the mistake is why the ledger alone
+cannot call this tier done.
+
+- **The named `request` parameter** (`5bfe507`). The generated remote map names 21
+  methods' single parameter literally `request` (`session/create`,
+  `session/prompt`, `session/page`, `session/cancel`, `session/rename`,
+  `session/selectModel`, the whole `workspace/*` namespace) and `session/list`'s
+  `_request`. The client therefore sends `{"request": {...}}`, and every handler
+  that read its fields directly saw an empty args map. `session/create` silently
+  dropped its `workspaceId`: the console thought it had grouped a session while
+  the host created one with no workspace, which left the session list, the model
+  picker and the transcript empty while each individual call looked answered. The
+  dispatcher now splices the object into its args
+  (`internal/dshapi/requestargs.go`) and `session/create` refuses fields it does
+  not read, so a typo can no longer pass for a field. Tests drive shapes captured
+  from live traffic, not from the type declarations.
+- **The settings user layer and revision** (`a65ff78`). `SettingsNamespaceView`
+  carries `user` (the raw section the operator wrote) and a `revision` an editor
+  fences its next write with; upstream's own provider editor reads both
+  (`ui-settings-models/src/client/ProviderEditor.tsx:97,168,282,284`, and
+  `operations.ts:100` maps `settings/conflict`). This host reported neither: the
+  layer was always absent, so a custom provider's fields came back blank the
+  moment they were saved, and the constant revision could not distinguish an
+  accepted write from a lost one. Views now report `user`, the revision moves by
+  one per committed change, and a stale `expectedRevision` is refused as
+  `settings/conflict` with both revisions named (ADR 0087 amendment).
+
+## Takeover point: settings and credentials do not survive a restart
+
+Both the console-written settings (declared provider profiles, endpoint, model)
+and the credential live in the `serve` process (ADR 0094, ADR 0101) and are gone
+when it restarts; `settings/describe` still reports `hasDocument: false`. This is
+the next piece of work, and it is a decision before it is code: where the file
+lives (a host-owned directory, not the repository), whether an API key may be
+written to it at all (a `0600` file is the usual answer for a CLI; the
+alternative is to keep refusing secrets and require an environment variable), and
+what the honest read-back is when the file exists. The write path already funnels
+through `SettingsDocumentStore` (`internal/dshapi/settings.go`) and
+`cli/serve.go` builds the store, so the seam exists.
