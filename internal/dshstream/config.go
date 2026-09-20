@@ -1,6 +1,8 @@
 package dshstream
 
 import (
+	"github.com/feiyu912/zenforge/internal/dshwire"
+
 	"os"
 	"time"
 )
@@ -52,6 +54,12 @@ type Config struct {
 	// reports that no session is a draft, which keeps a session this host never
 	// created a not-found.
 	DraftSessions func(sessionID string) bool
+
+	// ModelDefault, when set, names the provider and model this host serves by
+	// default. A projected transcript stamps it on assistant messages as their
+	// provenance for a session that chose no model of its own. Nil leaves the
+	// label unset.
+	ModelDefault func() dshwire.Identity
 
 	// ApprovalPollInterval is how often the $events stream re-reads
 	// approval.Inbox for pending requests. The repository has no global

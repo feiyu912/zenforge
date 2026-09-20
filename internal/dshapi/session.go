@@ -11,6 +11,7 @@ import (
 
 	"github.com/feiyu912/zenforge"
 	"github.com/feiyu912/zenforge/internal/dshsession"
+	"github.com/feiyu912/zenforge/internal/dshwire"
 	"github.com/feiyu912/zenforge/server/harnesshttp"
 	"github.com/feiyu912/zenforge/sessiontitle"
 )
@@ -631,24 +632,28 @@ func (h *Handler) sessionPage(ctx context.Context, args map[string]json.RawMessa
 	if hasBefore && beforeSeq < upper {
 		upper = beforeSeq
 	}
-	selected := make([]zenforge.Event, 0, maxMessages)
+	selected := make([]int, 0, maxMessages)
 	for index := len(events) - 1; index >= 0; index-- {
-		event := events[index]
-		if event.Seq >= upper {
+		if events[index].Seq >= upper {
 			continue
 		}
 		if int64(len(selected)) >= maxMessages {
 			break
 		}
-		selected = append(selected, event)
+		selected = append(selected, index)
 	}
+	// The projection is built over the whole log even though only a window is
+	// served: an assistant message is the settlement of the deltas that preceded
+	// it, so a window that starts mid-step still needs the step's accumulated
+	// content. The window then selects the projected records.
+	projection := dshwire.Project(events, h.wireIdentity(sessionID))
 	records := make([]map[string]any, 0, len(selected))
 	for index := len(selected) - 1; index >= 0; index-- {
-		records = append(records, map[string]any{"type": "event", "event": wireEvent(selected[index])})
+		records = append(records, map[string]any{"type": "event", "event": projection.Events[selected[index]]})
 	}
 	hasMore := false
 	if len(selected) > 0 {
-		hasMore = selected[len(selected)-1].Seq > events[0].Seq
+		hasMore = selected[len(selected)-1] > 0
 	}
 	return map[string]any{"records": records, "hasMore": hasMore}, nil
 }
@@ -697,22 +702,24 @@ func decodePageAddress(args map[string]json.RawMessage) (string, *methodError) {
 	return sessionID, nil
 }
 
-// wireEvent maps one durable zenforge event to the console's SessionWireEvent
-// envelope. Every event is an append on the surface, the payload stays as the
-// event's own JSON, and unknown event names are legal — the client renders
-// them opaquely rather than failing.
-func wireEvent(event zenforge.Event) map[string]any {
-	data := map[string]any(event.Payload)
-	if data == nil {
-		data = map[string]any{}
+// wireIdentity names the provider and model the projected transcript attributes
+// a session's assistant messages to. A session that chose a model shows the
+// chosen one; a session that chose nothing runs on the host's configured model,
+// which is what ModelDefault reports. The identity is provenance on the wire --
+// the run itself is served by the adapter the selection path already applied --
+// so an empty answer is legal and simply leaves the label unset.
+func (h *Handler) wireIdentity(sessionID string) dshwire.Identity {
+	if store := h.modelSelectionStore(); store != nil {
+		if identity, ok := store.(sessionModelIdentity); ok {
+			if provider, model, known := identity.SessionModelIdentity(sessionID); known {
+				return dshwire.Identity{Provider: provider, Model: model}
+			}
+		}
 	}
-	return map[string]any{
-		"type":      string(event.Type),
-		"seq":       event.Seq,
-		"time":      event.Timestamp,
-		"data":      data,
-		"surfaceOp": "append",
+	if h.modelDefault != nil {
+		return h.modelDefault()
 	}
+	return dshwire.Identity{}
 }
 
 // runActive reports whether a run status is a live run for the console's

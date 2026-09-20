@@ -497,6 +497,7 @@ type pageRecord struct {
 		Time      int64          `json:"time"`
 		Data      map[string]any `json:"data"`
 		SurfaceOp string         `json:"surfaceOp"`
+		Ignorable bool           `json:"ignorable"`
 	} `json:"event"`
 }
 
@@ -533,8 +534,16 @@ func TestSessionPageReturnsRecordsAndHasMore(t *testing.T) {
 	if !value.HasMore {
 		t.Fatal("hasMore = false, want true with an earlier event available")
 	}
-	if value.Records[0].Type != "event" || value.Records[0].Event.SurfaceOp != "append" {
-		t.Fatalf("record = %+v, want an append event entry", value.Records[0])
+	if value.Records[0].Type != "event" || value.Records[0].Event.Type != "step/start" {
+		t.Fatalf("record = %+v, want the step opened as the console's step/start", value.Records[0])
+	}
+	// Only the four message-producing types may carry surfaceOp; a step boundary
+	// that carried it is what the page reported as "Failed to load history".
+	if value.Records[0].Event.SurfaceOp != "" {
+		t.Fatalf("step/start carries surfaceOp %q", value.Records[0].Event.SurfaceOp)
+	}
+	if !value.Records[0].Event.Ignorable && value.Records[0].Event.Type != "step/start" {
+		t.Fatalf("record = %+v, want a console event", value.Records[0])
 	}
 	if value.Records[0].Event.Time <= 0 {
 		t.Fatalf("time = %d, want a millisecond timestamp", value.Records[0].Event.Time)
@@ -548,6 +557,11 @@ func TestSessionPageReturnsRecordsAndHasMore(t *testing.T) {
 	}
 	if value.Records[0].Event.Seq != 1 || value.Records[1].Event.Seq != 2 {
 		t.Fatalf("earlier seqs = [%d %d], want [1 2]", value.Records[0].Event.Seq, value.Records[1].Event.Seq)
+	}
+	// The run's opening event is the prompt: the console renders it as the
+	// user's message, and that one is a surface append.
+	if value.Records[0].Event.Type != "user/message" || value.Records[0].Event.SurfaceOp != "append" {
+		t.Fatalf("record = %+v, want the prompt as an append user/message", value.Records[0])
 	}
 	if value.HasMore {
 		t.Fatal("hasMore = true, want false at the start of the log")

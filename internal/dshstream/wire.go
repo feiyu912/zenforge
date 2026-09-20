@@ -3,7 +3,7 @@ package dshstream
 import (
 	"encoding/json"
 
-	"github.com/feiyu912/zenforge"
+	"github.com/feiyu912/zenforge/internal/dshwire"
 )
 
 // Route paths. These are the exact upstream constants
@@ -202,36 +202,8 @@ type assistantBaseline struct {
 // {type:"event", event} envelope used by both the snapshot records and the
 // live event items.
 type eventRecord struct {
-	Type  string    `json:"type"`
-	Event wireEvent `json:"event"`
-}
-
-// wireEvent is SessionWireEvent. Every event is an append on the surface, the
-// payload stays the event's own JSON, and unknown event names are legal — the
-// client renders them opaquely rather than failing. It is byte-identical to
-// internal/dshapi's unexported wireEvent so session/follow and session/page
-// agree on the shape; dshapi is another task's package, so the small function
-// is duplicated rather than exported.
-type wireEvent struct {
-	Type      string         `json:"type"`
-	Seq       int64          `json:"seq"`
-	Time      int64          `json:"time"`
-	Data      map[string]any `json:"data"`
-	SurfaceOp string         `json:"surfaceOp"`
-}
-
-func newWireEvent(event zenforge.Event) wireEvent {
-	data := map[string]any(event.Payload)
-	if data == nil {
-		data = map[string]any{}
-	}
-	return wireEvent{
-		Type:      string(event.Type),
-		Seq:       event.Seq,
-		Time:      event.Timestamp,
-		Data:      data,
-		SurfaceOp: "append",
-	}
+	Type  string        `json:"type"`
+	Event dshwire.Event `json:"event"`
 }
 
 // marshalFrame encodes one frame for the socket. It exists so every frame goes

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/feiyu912/zenforge"
+	"github.com/feiyu912/zenforge/internal/dshwire"
 	"github.com/feiyu912/zenforge/server/harnesshttp"
 )
 
@@ -106,20 +107,23 @@ func (h *Handler) runFollow(ctx context.Context, payload []byte, send func(any) 
 	if len(events) > 0 {
 		cursor = events[len(events)-1].Seq
 	}
-	window := events
-	if len(events) > request.maxMessages {
-		window = events[len(events)-request.maxMessages:]
-	}
+	// The projection covers the whole log even though only a window is sent: an
+	// assistant message is the settlement of the deltas before it, so a window
+	// that opens mid-step still needs the step's accumulated content. The same
+	// projection is then continued live, which is why it is built here rather
+	// than inside the record loop.
+	projection := dshwire.Project(events, h.wireIdentity(request.sessionID))
+	window, hasMore := projection.Window(request.maxMessages)
 	records := make([]eventRecord, 0, len(window))
 	for _, event := range window {
-		records = append(records, eventRecord{Type: "event", Event: newWireEvent(event)})
+		records = append(records, eventRecord{Type: "event", Event: event})
 	}
 	snapshot := snapshotFrame{
 		Type:            "snapshot",
 		Header:          followHeader(request.sessionID, info, infoErr, events),
 		Cursor:          cursor,
 		Records:         records,
-		HasMore:         len(window) < len(events),
+		HasMore:         hasMore,
 		Projections:     h.sessionProjectionBaseline(request.sessionID, cursor),
 		AssistantStream: nil,
 	}
@@ -168,11 +172,39 @@ func (h *Handler) runFollow(ctx context.Context, payload []byte, send func(any) 
 			if !ok {
 				return nil
 			}
-			if err := send(eventRecord{Type: "event", Event: newWireEvent(event)}); err != nil {
+			// Continue the snapshot's projection rather than starting a new one:
+			// the step being streamed is the same step, and its settlement must
+			// carry the deltas the snapshot already counted.
+			projection.Append(event)
+			projected := projection.Events[len(projection.Events)-1]
+			if err := send(eventRecord{Type: "event", Event: projected}); err != nil {
 				return err
 			}
 		}
 	}
+}
+
+// wireIdentity names the provider and model the projected transcript attributes a
+// session's assistant messages to: the session's own choice when it made one,
+// otherwise the host's configured default. It is provenance on the wire -- the
+// run is served by whatever adapter the selection path applied -- so an empty
+// answer leaves the label unset rather than inventing a route.
+func (h *Handler) wireIdentity(sessionID string) dshwire.Identity {
+	if h.cfg.ModelSelections != nil {
+		if state, known := h.cfg.ModelSelections()[sessionID]; known {
+			selection := state.Projection.Next
+			if selection == nil {
+				selection = state.Projection.LastUsed
+			}
+			if selection != nil && (selection.Provider != "" || selection.Model != "") {
+				return dshwire.Identity{Provider: selection.Provider, Model: selection.Model}
+			}
+		}
+	}
+	if h.cfg.ModelDefault != nil {
+		return h.cfg.ModelDefault()
+	}
+	return dshwire.Identity{}
 }
 
 // isDraftSession reports whether the RPC handler created this session without a

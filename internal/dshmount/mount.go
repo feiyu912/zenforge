@@ -30,6 +30,7 @@ import (
 	"github.com/feiyu912/zenforge/eventlog"
 	"github.com/feiyu912/zenforge/internal/dshapi"
 	"github.com/feiyu912/zenforge/internal/dshboot"
+	"github.com/feiyu912/zenforge/internal/dshwire"
 	"github.com/feiyu912/zenforge/server/harnesshttp"
 	dshconsole "github.com/feiyu912/zenforge/webui/dsh"
 )
@@ -46,6 +47,10 @@ type Config struct {
 	// Logger receives the diagnostic line per endpoint the console asks for
 	// and this host does not serve. Nil stays silent.
 	Logger *slog.Logger
+	// ModelDefault names the provider and model this host serves by default. A
+	// projected transcript stamps it on assistant messages as their provenance
+	// for a session that chose no model of its own. Nil leaves the label unset.
+	ModelDefault func() dshwire.Identity
 	// Credentials lets the console's Models page read credential state and
 	// store the value an operator types. Without it those methods answer an
 	// honest unimplemented error (ADR 0084).
@@ -112,7 +117,11 @@ func New(manager *harnesshttp.RunManager, events eventlog.Store, cfg Config) (*M
 	if err != nil {
 		return nil, fmt.Errorf("dshmount: read the staged console shell: %w", err)
 	}
-	api, err := dshapi.New(manager, events, dshapi.Config{AllowRemote: cfg.AllowRemote, Logger: cfg.Logger})
+	api, err := dshapi.New(manager, events, dshapi.Config{
+		AllowRemote:  cfg.AllowRemote,
+		Logger:       cfg.Logger,
+		ModelDefault: cfg.ModelDefault,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("dshmount: build the console RPC handler: %w", err)
 	}

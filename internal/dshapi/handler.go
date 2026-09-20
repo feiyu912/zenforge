@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/feiyu912/zenforge/eventlog"
+	"github.com/feiyu912/zenforge/internal/dshwire"
 	"github.com/feiyu912/zenforge/server/harnesshttp"
 )
 
@@ -36,6 +37,13 @@ type Config struct {
 	// slog.Default, so an unconfigured handler and every existing test print
 	// nothing.
 	Logger *slog.Logger
+
+	// ModelDefault, when set, names the provider and model this host serves by
+	// default. A projected transcript stamps it on assistant messages as their
+	// provenance -- the "which model answered" label -- for a session that chose
+	// no model of its own. Nil leaves the label unset, which is more honest than
+	// inventing a route.
+	ModelDefault func() dshwire.Identity
 }
 
 // Handler answers the console's unary RPCs over the run manager and the
@@ -106,6 +114,11 @@ type Handler struct {
 	profilesMu sync.RWMutex
 	profiles   ProviderProfileStore
 
+	// modelDefault, when set, names the provider and model this host serves by
+	// default, which is the provenance a projected transcript carries for a
+	// session that chose no model of its own.
+	modelDefault func() dshwire.Identity
+
 	// modelSelections is the injected store for per-session model selections,
 	// installed by SetModelSelections after New.
 	modelSelectionsMu sync.RWMutex
@@ -142,10 +155,11 @@ func New(manager *harnesshttp.RunManager, events eventlog.Store, cfg Config) (*H
 		return nil, fmt.Errorf("event store is required")
 	}
 	return &Handler{
-		manager: manager,
-		events:  events,
-		cfg:     cfg,
-		pending: make(map[string]pendingSession),
+		manager:      manager,
+		events:       events,
+		cfg:          cfg,
+		modelDefault: cfg.ModelDefault,
+		pending:      make(map[string]pendingSession),
 	}, nil
 }
 

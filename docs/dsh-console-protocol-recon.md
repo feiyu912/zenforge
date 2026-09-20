@@ -466,7 +466,8 @@ Stream items (`SessionFollowFrame`, `types.ts:516-527`):
 
 // 2. durable events, in seq order
 { "type": "event", "event": { "type": "assistant/message", "seq": 43, "time": 1712345678999,
-                              "data": { … }, "surfaceOp": "append" } }
+                              "data": { … }, "surfaceOp": "append" } }   // surfaceOp only on the four
+                                             // surface-eligible types (ADR 0105)
 
 // 3. cursorless process-local token stream (when assistantStream: true)
 { "type": "assistant-stream", "frame": { "type":"chunk", "attemptId":"…", "revision":1,
@@ -846,6 +847,13 @@ byte-for-byte. Verify with a headless browser check that `#root` gets the React 
 - Ping/pong heartbeat (2 s) or skip enforcement.
 
 **Risk (highest):** the `session/follow` snapshot/`surfaceOp`/`assistant-stream` semantics.
+**Corrected 2026-09-20 (ADR 0105):** the "simplest legal encoding" below was wrong, and
+the console said so on the first non-empty history it read —
+`session event "run.started" is not surface-eligible and cannot carry surfaceOp`.
+`surfaceOp` is legal on exactly the four surface-eligible types (`system/message`,
+`user/message`, `assistant/message`, `tool/result`; `SURFACE_EVENT_TYPES` in
+`session-controller/client.js`), and an unknown event name needs the envelope's
+`ignorable: true` marker. The paragraph is kept as the measurement it was.
 The Go host can adopt the simplest legal encoding: every durable event appended with
 `surfaceOp:"append"`, monotone `seq`, `data` = the zenforge event payload flattened to JSON,
 custom event `type` names allowed (`validateSessionEventData` only constrains `request/header` and

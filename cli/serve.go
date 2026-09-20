@@ -22,6 +22,7 @@ import (
 	"github.com/feiyu912/zenforge/internal/dshapi"
 	"github.com/feiyu912/zenforge/internal/dshmount"
 	"github.com/feiyu912/zenforge/internal/dshstream"
+	"github.com/feiyu912/zenforge/internal/dshwire"
 	"github.com/feiyu912/zenforge/model"
 	"github.com/feiyu912/zenforge/model/provider"
 	"github.com/feiyu912/zenforge/server/harnesshttp"
@@ -309,9 +310,23 @@ func newServeApp(ctx context.Context, opts *options, ioStreams IO, config serveC
 			Configurable: configurable,
 		}
 	}
+	// A projected transcript labels each assistant message with the model that
+	// answered. The session's own choice wins where there is one (the console's
+	// selection store reports it); this is the fallback: the route and model the
+	// host was configured to serve, which is exactly what a session that chose
+	// nothing runs on.
+	modelDefault := func() dshwire.Identity {
+		view := settings.view()
+		route := strings.TrimSpace(view.Provider)
+		if route == "" {
+			route = provider.OpenAI
+		}
+		return dshwire.Identity{Provider: route, Model: strings.TrimSpace(view.Model)}
+	}
 	console, err := dshmount.New(runtime.Manager, runtime.Events, dshmount.Config{
 		AllowRemote:      config.allowRemote,
 		ModelCatalog:     modelCatalog,
+		ModelDefault:     modelDefault,
 		Logger:           slog.Default(),
 		Credentials:      consoleCredentials{settings: settings},
 		LlmDirectory:     llmDirectory,
@@ -342,6 +357,10 @@ func newServeApp(ctx context.Context, opts *options, ioStreams IO, config serveC
 		// that knows which sessions those drafts are, so the follow stream asks it
 		// rather than refusing a session this host created (ADR 0104).
 		DraftSessions: console.IsDraftSession,
+		// The same provenance label session/page writes, resolved the same way
+		// (the session's choice first) so the transcript reads the same live and
+		// after a reload.
+		ModelDefault: modelDefault,
 	})
 	if err != nil {
 		return nil, err

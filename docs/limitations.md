@@ -178,7 +178,16 @@ what is experimental, and what remains adapter territory.
   **concurrently** under different selections share whichever adapter was applied
   last, because the harness's task carries no model field and this host owns one
   adapter; no model-selection event is written to the session log; and no model
-  exposes a reasoning-effort choice. A session that has been created but has not
+  exposes a reasoning-effort choice.
+  The console *reads* the log through a projection (ADR 0105), not verbatim: the
+  host's own events are mapped onto the console's session vocabulary, and an
+  event with no console meaning travels as an explicitly ignorable record. What
+  the projection does not yet carry: the console's compact timed `stream` inside
+  an assistant message (the text is settled into content blocks, and the
+  trajectory view's byte-exact chunk list is empty), live token streaming (the
+  answer appears when the step settles rather than token by token), and a
+  structured provider failure identity on a tool result (a failed tool states
+  `isError` on its block with no console-side name/code envelope). A session that has been created but has not
   started a turn -- the draft the console opens before its first prompt -- is
   process-local too: it is served as an empty history (ADR 0104), and a restart
   forgets it because it has no transcript to keep. Since ADR 0103 a session's chosen model is

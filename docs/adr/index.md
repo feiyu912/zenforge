@@ -133,3 +133,4 @@ and what the adapter answers today is
 | [0102](0102-the-consoles-settings-and-credential-persist-in-a-host-owned-file.md) | The console's settings and credential persist in a host-owned file |
 | [0103](0103-the-user-layer-is-what-the-console-wrote-and-a-chosen-model-persists.md) | The user layer is what the console wrote, and a chosen model persists |
 | [0104](0104-a-session-exists-before-its-first-turn.md) | A session exists before its first turn, and a registered session has not chosen |
+| [0105](0105-the-durable-log-is-projected-into-the-consoles-vocabulary.md) | The durable log is projected into the console's session vocabulary |

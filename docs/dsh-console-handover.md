@@ -426,6 +426,44 @@ carrying a **copy** of the operator's document under a throwaway `ZENFORGE_CONFI
 the model's own answer in the log (`"Hello! I'm ready to assist..."`). The copy was
 deleted with the scratch process.
 
+## Shipped: the log is projected into the console's vocabulary (2026-09-20)
+
+The host ADR 0104 had just restarted still could not hold a conversation: the prompt was
+accepted, and the page then reported `Failed to load history: session event "run.started"
+is not surface-eligible and cannot carry surfaceOp (gateway/internal)`. Two wire facts
+were wrong, and the second had been wrong since the follow stream was written.
+
+- **`surfaceOp` is legal on exactly four types** (`system/message`, `user/message`,
+  `assistant/message`, `tool/result`). Both read paths wrote `"surfaceOp":"append"` onto
+  every record, on the protocol recon's theory that "every durable event is an append on
+  the surface" was the simplest legal encoding. The console's own reader throws on any
+  other type that carries it, which is the message above. Every other record now omits the
+  field.
+- **An unknown event name needs the `ignorable: true` marker.** The console refuses to
+  interpret a log containing a type outside its generated catalog unless the event says
+  omitting it is deliberate. zenforge's names are all outside that catalog, so the
+  passthrough arm marks them.
+- **The console's transcript is built from its own vocabulary.** Legality alone loads an
+  empty conversation, so the log is now *projected* (ADR 0105): `run.started`'s input
+  becomes a `user/message`, each step's streamed deltas settle into one
+  `assistant/message` with the host's own provenance and token usage, `tool.call` and
+  `tool.result` become `tool/call` and `tool/result`, the step and run boundaries become
+  `step/start`/`step/end`/`turn/end`, and every other event travels as an ignorable record
+  with its own name and payload. One durable event in, one wire event out, wire `seq` =
+  durable `seq`, so the cursor, `throughSeq` paging and the live `afterSeq` keep speaking
+  the log's own sequence.
+
+`internal/dshwire` holds the projection; the two packages' duplicated `wireEvent` writers
+are gone. `internal/dshwire/boundary_test.go` re-extracts the console's known-type list
+and surface set from the vendored client bundle and fails when either drifts, and
+re-implements the client's envelope rules over a projected turn.
+
+Verified live on a scratch host carrying a copy of the operator's document against the
+real provider: `user/message` at seq 1 with `surfaceOp: "append"`, the step's
+`assistant/message` with the model's own text ("Hi there, friend!"), its provenance
+(`openai` / `qwen-plus`) and usage, a `tool/call` with its `tool/result`, a `turn/end`,
+and every other record `ignorable: true`. The copy was deleted with the scratch process.
+
 ## Operator's one remaining step
 
 The host at `127.0.0.1:8787` is restarted onto this checkout, and the document at
@@ -452,7 +490,9 @@ serves `qwen-plus`, and the card shows only what is written on it.
 > chain with an ADR + docs + tests + commit/push + green CI and docs, and fill the
 > ledger's gaps in its order. The settings document shipped (ADR 0102), so did the
 > user-layer/model-selection fix (ADR 0103), and so did the first-turn fix that made a
-> conversation possible at all (ADR 0104); the next item is "Next up" 1 in the ledger
+> conversation possible at all (ADR 0104), and the log is now projected into the
+> console's session vocabulary so the transcript renders (ADR 0105); the next item is
+> "Next up" 1 in the ledger
 > -- re-testing the withheld `ui-directory-picker-browse` plugin, which has to run on a
 > scratch port because a plugin that fails activation is a fatal boot page, and the
 > operator's host on `127.0.0.1:8787` is the one that must not be taken down by the

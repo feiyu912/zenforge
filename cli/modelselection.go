@@ -422,6 +422,21 @@ func (s *consoleModelSelection) AdoptSelectionRecords(records map[string]console
 // choice is exactly the session that must keep the configured adapter. Reading
 // the presence as a choice made every fresh session's first prompt fail with
 // "provider \"\" is not one this host can route to".
+// SessionModelIdentity reports what a session will run on. It is the optional
+// half of the selection store dshapi asks for when it labels a projected
+// transcript: a session that chose a model reports it, and a session that chose
+// nothing reports nothing so the caller falls back to the host's configured
+// default rather than inventing a route.
+func (s *consoleModelSelection) SessionModelIdentity(sessionID string) (string, string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, known := s.records[sessionID]
+	if !known || !record.selected {
+		return "", "", false
+	}
+	return record.selection.Provider, record.selection.Model, true
+}
+
 func (s *consoleModelSelection) ApplyModelSelection(sessionID string) error {
 	s.mu.Lock()
 	record, known := s.records[sessionID]

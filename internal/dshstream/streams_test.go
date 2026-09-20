@@ -155,26 +155,40 @@ func TestSessionFollowSnapshotThenEventsThenEndOnFinish(t *testing.T) {
 	for _, record := range records {
 		names[recordEventType(t, record)] = true
 	}
-	if !names[string(zenforge.EventRunStarted)] || !names[string(zenforge.EventStepStarted)] {
-		t.Fatalf("snapshot event names = %v, want run.started and step.started", names)
+	// The snapshot is served in the console's vocabulary: the run's prompt is a
+	// user message and the step is a step/start, which is what makes a transcript
+	// appear. The host's own event names are not what the console renders.
+	if !names["user/message"] || !names["step/start"] {
+		t.Fatalf("snapshot event names = %v, want user/message and step/start", names)
+	}
+	if names[string(zenforge.EventRunStarted)] {
+		t.Fatalf("snapshot event names = %v, want the prompt projected rather than passed through", names)
 	}
 
-	// A live append after the snapshot arrives as an ordinary event frame.
+	// A live append after the snapshot arrives as an ordinary event frame, in the
+	// console's vocabulary and with the snapshot's own numbering continued.
 	f.agent.emit(runID, zenforge.EventStepDone, map[string]any{"step": 1})
 	live := readItem(t, conn, "follow")
-	if got := recordEventType(t, live); got != string(zenforge.EventStepDone) {
-		t.Fatalf("live event type = %q, want step.done", got)
+	if got := recordEventType(t, live); got != "step/end" {
+		t.Fatalf("live event type = %q, want step/end", got)
 	}
 	event := decodeValueObject(t, live["event"])
 	if seq := intField(t, event, "seq"); seq != cursor+1 {
 		t.Fatalf("live seq = %d, want %d", seq, cursor+1)
 	}
-	assertField(t, event, "surfaceOp", "append")
+	// A step boundary is not a surface event, so it must not carry the marker;
+	// the client refuses a non-eligible type that does.
+	if kind := valueType(t, live); kind != "event" {
+		t.Fatalf("live frame type = %q, want event", kind)
+	}
+	if raw, present := event["surfaceOp"]; present && string(raw) != "null" {
+		t.Fatalf("step/end carries surfaceOp %s", raw)
+	}
 
 	f.agent.finish(runID)
 	for {
 		value := readItem(t, conn, "follow")
-		if recordEventType(t, value) == string(zenforge.EventRunDone) {
+		if recordEventType(t, value) == "turn/end" {
 			break
 		}
 	}
@@ -198,7 +212,8 @@ func TestSessionFollowEndsOnCancelledRun(t *testing.T) {
 	}
 	for {
 		value := readItem(t, conn, "follow")
-		if recordEventType(t, value) == string(zenforge.EventRunCancelled) {
+		// A cancelled run closes the console turn as an aborted turn/end.
+		if recordEventType(t, value) == "turn/end" {
 			break
 		}
 	}
@@ -345,7 +360,7 @@ func TestSessionFollowServesADraftSessionAndItsFirstTurn(t *testing.T) {
 		value := readItem(t, conn, "follow")
 		seen[recordEventType(t, value)] = true
 	}
-	if !seen[string(zenforge.EventRunStarted)] {
-		t.Fatalf("first frames = %v, want the draft's run.started", seen)
+	if !seen["user/message"] {
+		t.Fatalf("first frames = %v, want the draft's first prompt as a user/message", seen)
 	}
 }

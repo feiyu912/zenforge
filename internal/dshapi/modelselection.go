@@ -49,6 +49,17 @@ type sessionRegistrar interface {
 	RegisterSession(sessionID string)
 }
 
+// sessionModelIdentity is the optional half of the model-selection store that
+// names what a session currently runs on. It is optional because a store that can
+// apply a selection does not have to be able to read one back, and the only
+// consumer is the provenance stamped on a projected transcript.
+type sessionModelIdentity interface {
+	// SessionModelIdentity reports the provider and model a session will run on.
+	// ok is false for a session with no recorded choice, which the caller answers
+	// with the host's configured default.
+	SessionModelIdentity(sessionID string) (provider, model string, ok bool)
+}
+
 // SetModelSelections installs the store session/selectModel answers through and
 // the prompt path applies. Nil leaves the method unserved, which is the honest
 // answer for a host that cannot rebuild a per-session adapter.
