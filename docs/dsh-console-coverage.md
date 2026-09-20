@@ -61,7 +61,7 @@ method list.
 | `pluginInventory/list` | served | The console bundles and plugins this host ships. |
 | `session/cancel` | served | Stop a run. |
 | `session/create` | served | Create a session. It exists before its first turn: its history is empty, not missing (ADR 0104). |
-| `session/list` | served | List sessions. |
+| `session/list` | served | List sessions. A planning session is listed by the operator's own task; the plan-execute preset's appended instruction never reaches the title (ADR 0106). |
 | `session/modelCatalog` | served | The models the page may offer, grouped per provider. |
 | `session/page` | served | A page of a session's events, projected into the console's vocabulary. A created session with no turns answers an empty page (ADR 0104, ADR 0105). |
 | `session/prompt` | served | Send a turn into a session. |

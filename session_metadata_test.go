@@ -197,3 +197,39 @@ func collectedMessages(t *testing.T, agent *Agent, collected []Event) []string {
 	}
 	return out
 }
+
+func TestAgentPlanExecuteTitleNamesTheOperatorsTask(t *testing.T) {
+	ctx := context.Background()
+	events := &testEventStore{}
+	agent := New(Config{
+		Model: &scriptedModel{turns: []scriptedTurn{
+			toolCallTurnArgs("plan_call", "todo_write", `{"todos":[{"id":"task_1","content":"Read the runtime"}]}`),
+			{events: []model.Event{{Delta: "plan created"}}},
+			toolCallTurnArgs("done_call", "todo_update", `{"id":"task_1","status":"done"}`),
+			{events: []model.Event{{Delta: "task done"}}},
+			{events: []model.Event{{Delta: "summary done"}}},
+		}},
+		Events: events,
+		Mode:   ModePlanExecute,
+	})
+
+	stream, err := agent.Stream(ctx, Task{RunID: "run_title_plan", Input: "h"})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	collected := collectRunEvents(t, stream)
+	titles := eventsByType(collected, EventSessionTitle)
+	if len(titles) == 0 {
+		t.Fatal("no session.title events")
+	}
+	// The plan stage's own input carries planner.PlanPrompt; the title must name
+	// what the operator typed, not the instruction the preset appended to it.
+	for _, event := range titles {
+		if event.Payload["title"] != "h" {
+			t.Fatalf("title = %q, want the operator's own task", event.Payload["title"])
+		}
+	}
+	if got := titles[0].Payload["source"]; got != "fallback" {
+		t.Fatalf("source = %v, want fallback", got)
+	}
+}

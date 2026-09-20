@@ -134,3 +134,4 @@ and what the adapter answers today is
 | [0103](0103-the-user-layer-is-what-the-console-wrote-and-a-chosen-model-persists.md) | The user layer is what the console wrote, and a chosen model persists |
 | [0104](0104-a-session-exists-before-its-first-turn.md) | A session exists before its first turn, and a registered session has not chosen |
 | [0105](0105-the-durable-log-is-projected-into-the-consoles-vocabulary.md) | The durable log is projected into the console's session vocabulary |
+| [0106](0106-a-session-title-names-the-operators-task.md) | A session's title names the operator's task, not the preset's instruction |

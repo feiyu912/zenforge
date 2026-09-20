@@ -464,6 +464,21 @@ real provider: `user/message` at seq 1 with `surfaceOp: "append"`, the step's
 (`openai` / `qwen-plus`) and usage, a `tool/call` with its `tool/result`, a `turn/end`,
 and every other record `ignorable: true`. The copy was deleted with the scratch process.
 
+## Shipped: the sidebar names the operator's task (2026-09-20)
+
+The first conversation the operator opened in the console was listed as "h Create a
+concise todo plan for". The host's fallback title (ADR 0028) is derived from the run's
+input, and the plan-execute preset feeds its plan stage a copy of the input with
+`planner.PlanPrompt` appended — so the stage's own title publication named the harness's
+instruction instead of the operator's `h`, and the sidebar read the instruction back. The
+run's records were correct all along (`run.started`, and the `user/message` ADR 0105
+projects from it, carry `h`); only the title's derivation input was wrong, in the stage
+metadata freeze and in the `session.title` event.
+
+`sessionTitleInput` now reads the task the run recorded (`planning.input`) and falls back
+to the stage input only when there is none, at both derivation sites (ADR 0106). A
+planning session is listed by what the operator typed.
+
 ## Operator's one remaining step
 
 The host at `127.0.0.1:8787` is restarted onto this checkout, and the document at

@@ -975,7 +975,7 @@ func (a *Agent) runHarnessLoop(ctx context.Context, out chan<- Event, state harn
 				return err
 			}
 			if EventType(eventType) == EventRunStarted {
-				return a.publishSessionTitle(emit, state.Input)
+				return a.publishSessionTitle(emit, sessionTitleInput(state))
 			}
 			return nil
 		},
@@ -3203,7 +3203,7 @@ func (a *Agent) applyRunContext(ctx context.Context, emit eventEmitter, state *h
 	// normalizes to empty fails the run instead of silently vanishing.
 	// The event is published right after run.started so run.started
 	// stays the log's first record even when the store is failing.
-	title, source, err := a.sessionTitle(state.Input)
+	title, source, err := a.sessionTitle(sessionTitleInput(*state))
 	if err != nil {
 		return err
 	}
@@ -3558,6 +3558,21 @@ func (a *Agent) maybeInjectEnvironmentUpdate(
 		return err
 	}
 	return emit(EventEnvironmentUpdated, map[string]any{"environmentContext": current})
+}
+
+// sessionTitleInput is the text a run's fallback title is derived from: the
+// operator's own task, never a sentence a preset appended to it. The plan-execute
+// preset feeds its plan stage `input + "\n\n" + planner.PlanPrompt`, and that stage
+// carries a copy of the run's input, so deriving from the stage's own state.Input
+// titled every planning session with the preset's instruction -- the console's
+// sidebar read "h Create a concise todo plan for" (ADR 0106).
+func sessionTitleInput(state harness.RunState) string {
+	if task, ok := state.Meta[planExecuteInputMetaKey].(string); ok {
+		if strings.TrimSpace(task) != "" {
+			return task
+		}
+	}
+	return state.Input
 }
 
 // publishSessionTitle emits the session.title event for a run's input,
