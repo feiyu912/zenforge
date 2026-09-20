@@ -581,7 +581,11 @@ serves `qwen-plus`, and the card shows only what is written on it.
 > earlier turn is reachable (ADR 0108), and the host keeps its run registry on disk so the
 > sidebar survives a restart and lists the conversations already in the store (ADR 0109);
 > the next item is
-> "Next up" 1 in the ledger
+> "Next up" 1 in the ledger -- though `docs/limitations.md` now also records a gap found
+> while verifying this window: `session/cancel` only reaches a conversation's first turn,
+> so Stop on a later turn is a no-op while that turn keeps running. That is a small chain
+> (cancel the newest turn of the chain ADR 0108 already resolves) and it is the one an
+> operator will hit next if they press Stop mid-answer
 > -- re-testing the withheld `ui-directory-picker-browse` plugin, which has to run on a
 > scratch port because a plugin that fails activation is a fatal boot page, and the
 > operator's host on `127.0.0.1:8787` is the one that must not be taken down by the

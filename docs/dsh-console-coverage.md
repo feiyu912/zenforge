@@ -59,7 +59,7 @@ method list.
 | `llm/listProviders` | served | The registered provider routes. |
 | `permissionPresets/catalog` | served | The permission presets the host's own settings offer. |
 | `pluginInventory/list` | served | The console bundles and plugins this host ships. |
-| `session/cancel` | served | Stop a run. |
+| `session/cancel` | served | Stop a run. Only the session id's own run (turn one) can be cancelled, so Stop on a later turn of a conversation is a conflict while that turn keeps running (see the limitation note). |
 | `session/create` | served | Create a session. It exists before its first turn: its history is empty, not missing (ADR 0104). |
 | `session/list` | served | List sessions. The list is the host's durable run registry, so it survives a restart and does not expire at the terminal retention; a record whose run never wrote an event is omitted because the console cannot open it (ADR 0109). A planning session is listed by the operator's own task; the plan-execute preset's appended instruction never reaches the title (ADR 0106). |
 | `session/modelCatalog` | served | The models the page may offer, grouped per provider. |
