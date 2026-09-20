@@ -518,6 +518,31 @@ is derived from the durable event counts, never stored, so any process rebuilds 
 numbers. Two coordinates stay distinct: the session sequence the console cursors on, and
 each run's own durable tail, which is where the live follower attaches (ADR 0108).
 
+## Shipped: the sidebar survives a restart (2026-09-20)
+
+Every transcript the console had served was still on disk, and the sidebar showed one or
+three rows: `session/list` answers from `RunManager.List`, `zenforge serve` built its run
+manager **without a registry**, and a manager with no registry lists its own in-process
+records, which `finishLocked` deletes ten minutes after a run goes terminal. A restart
+emptied the list outright. On the operator's host, `/tmp/.zenforge/runs` held 45 runs while
+the sidebar held one.
+
+`zenforge serve` now opens `harnesshttp.OpenSQLiteRunRegistry` in its state directory
+(`<checkpoint-dir>/run-registry.sqlite`, or beside the store file when
+`--checkpoint-type sqlite` names one), seeds it from the runs the store already holds, and
+hands it to the run manager, so the list is the durable record of every run this install
+served -- including the ones served before the registry existed, whose transcripts were
+reachable by id but never clickable (ADR 0109). The seeding enumerates through a new
+optional `eventlog.RunLister` (memory, JSONL and SQLite all implement it) and reads each
+run's own log for its terminal status; a run another process holds is left alone.
+
+Three rules keep those records honest: `RunInfo.Live(now)` requires an unexpired lease, so
+a record left by a process that died is not reported as running and the next prompt
+continues the conversation instead of steering a run nobody owns; a record whose run never
+wrote an event is omitted, because `session/page` answers not-found for it; and a run whose
+log has no terminal event is recorded as cancelled when it is adopted. Drafts stay
+process-local (ADR 0104).
+
 ## Operator's one remaining step
 
 The host at `127.0.0.1:8787` is restarted onto this checkout, and the document at
@@ -531,6 +556,11 @@ knowing:
 - A draft session created **before** this restart is forgotten with the process (a draft
   has no transcript to keep, ADR 0104). The console opens a new one on its next page load,
   and that one works.
+- Since ADR 0109 the sidebar is durable, so the conversations served since the state
+  directory was created come back after a restart. Only the runs recorded while a registry
+  existed are listed: the host's own log is the way to name a session older than that
+  (`ls <state-dir> | head`, where the state directory is
+  `/tmp/.zenforge/runs` for the host started from `/tmp`).
 
 The OpenAI card comes back empty rather than showing the `--model qwen-plus` flag as a
 saved setting (ADR 0103). That is the fix, not a loss: the resolved configuration still
@@ -547,12 +577,17 @@ serves `qwen-plus`, and the card shows only what is written on it.
 > conversation possible at all (ADR 0104), the log is projected into the
 > console's session vocabulary so the transcript renders (ADR 0105), a session is titled
 > by the operator's own task (ADR 0106), a simple question is answered instead of planned
-> (ADR 0107), and a second prompt keeps the conversation's cursor so its history loads
-> and an earlier turn is reachable (ADR 0108); the next item is
+> (ADR 0107), a second prompt keeps the conversation's cursor so its history loads and an
+> earlier turn is reachable (ADR 0108), and the host keeps its run registry on disk so the
+> sidebar survives a restart and lists the conversations already in the store (ADR 0109);
+> the next item is
 > "Next up" 1 in the ledger
 > -- re-testing the withheld `ui-directory-picker-browse` plugin, which has to run on a
 > scratch port because a plugin that fails activation is a fatal boot page, and the
 > operator's host on `127.0.0.1:8787` is the one that must not be taken down by the
 > experiment. Since the settings document is now shared state, give a scratch host
 > `ZENFORGE_CONFIG_DIR` or `--settings-file` under a throwaway directory so it cannot
-> rewrite the operator's document. Never `git add -A`.
+> rewrite the operator's document -- and give it its own `--checkpoint-dir` too, because the
+> event store and the run registry are derived from it: a scratch host started in `/tmp`
+> writes its runs and its registry into the operator's own state directory. Never
+> `git add -A`.

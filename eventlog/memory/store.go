@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"sync"
 
 	"github.com/feiyu912/zenforge"
@@ -110,4 +111,20 @@ func cloneEvent(event zenforge.Event) (zenforge.Event, error) {
 		return zenforge.Event{}, err
 	}
 	return cloned, nil
+}
+
+// RunIDs enumerates the runs this store holds, which is how a caller lists the
+// conversations that survived a restart (eventlog.RunLister).
+func (s *Store) RunIDs(ctx context.Context) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]string, 0, len(s.events))
+	for runID := range s.events {
+		out = append(out, runID)
+	}
+	sort.Strings(out)
+	return out, nil
 }

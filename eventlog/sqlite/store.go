@@ -186,3 +186,31 @@ func latestSeq(ctx context.Context, q interface {
 	}
 	return latest.Int64, nil
 }
+
+// RunIDs enumerates the runs this store holds, so a caller can list the
+// conversations that survived a restart (eventlog.RunLister).
+func (s *Store) RunIDs(ctx context.Context) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := s.ready(); err != nil {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT run_id FROM events ORDER BY run_id ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var runID string
+		if err := rows.Scan(&runID); err != nil {
+			return nil, err
+		}
+		out = append(out, runID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}

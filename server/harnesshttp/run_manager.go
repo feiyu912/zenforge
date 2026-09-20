@@ -121,6 +121,27 @@ type RunInfo struct {
 	FinishedAt time.Time  `json:"finishedAt"`
 }
 
+// Live reports whether a run is executing right now: its status is active and
+// the lease a registry recorded for it has not expired.
+//
+// A lease is how the process executing a run proves it is still there, so an
+// expired one means that process is gone: what the registry holds is a durable
+// trace of an interrupted run, not a running one. Only a run that reached a
+// terminal status is *known* to have stopped without a lease, which is why a
+// record with no lease at all is judged by its status alone -- a manager with
+// no registry records none.
+func (info RunInfo) Live(now time.Time) bool {
+	switch info.Status {
+	case RunStarting, RunRunning, RunWaitingApproval:
+	default:
+		return false
+	}
+	if info.LeaseUntil == nil {
+		return true
+	}
+	return info.LeaseUntil.After(now)
+}
+
 // RunRecovery reports one explicit stale-run recovery attempt. Info is set
 // only when this manager won the resume claim.
 type RunRecovery struct {

@@ -61,7 +61,7 @@ method list.
 | `pluginInventory/list` | served | The console bundles and plugins this host ships. |
 | `session/cancel` | served | Stop a run. |
 | `session/create` | served | Create a session. It exists before its first turn: its history is empty, not missing (ADR 0104). |
-| `session/list` | served | List sessions. A planning session is listed by the operator's own task; the plan-execute preset's appended instruction never reaches the title (ADR 0106). |
+| `session/list` | served | List sessions. The list is the host's durable run registry, so it survives a restart and does not expire at the terminal retention; a record whose run never wrote an event is omitted because the console cannot open it (ADR 0109). A planning session is listed by the operator's own task; the plan-execute preset's appended instruction never reaches the title (ADR 0106). |
 | `session/modelCatalog` | served | The models the page may offer, grouped per provider. |
 | `session/page` | served | A page of a session's events, projected into the console's vocabulary. A created session with no turns answers an empty page (ADR 0104, ADR 0105). A session's turns share one sequence, so `Load earlier` reaches an earlier prompt (ADR 0108). |
 | `session/prompt` | served | Send a turn into a session. Under the plan-execute preset a question is answered in the plan stage and never reaches an execute or summary stage (ADR 0107). |

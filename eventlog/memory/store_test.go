@@ -3,10 +3,14 @@ package memory
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/feiyu912/zenforge"
+	"github.com/feiyu912/zenforge/eventlog"
 )
+
+var _ eventlog.RunLister = (*Store)(nil)
 
 func TestStoreAppendAssignsSeqAndReadFiltersByRun(t *testing.T) {
 	ctx := context.Background()
@@ -118,5 +122,22 @@ func TestStoreHonorsCanceledContext(t *testing.T) {
 	err := store.Append(ctx, zenforge.NewEvent(zenforge.EventRunStarted, "run_1", nil))
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+}
+
+func TestRunIDsEnumeratesEveryRunItHolds(t *testing.T) {
+	store := New()
+	ctx := context.Background()
+	for _, runID := range []string{"run_b", "run_a"} {
+		if err := store.Append(ctx, zenforge.NewEvent(zenforge.EventRunStarted, runID, map[string]any{"input": "hi"})); err != nil {
+			t.Fatalf("append %s: %v", runID, err)
+		}
+	}
+	ids, err := store.RunIDs(ctx)
+	if err != nil {
+		t.Fatalf("RunIDs: %v", err)
+	}
+	if !reflect.DeepEqual(ids, []string{"run_a", "run_b"}) {
+		t.Fatalf("RunIDs = %v, want the run ids in order", ids)
 	}
 }

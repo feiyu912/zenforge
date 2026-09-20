@@ -1083,3 +1083,32 @@ func TestForgetPublishesTheTerminalRecordBeforeDeletingIt(t *testing.T) {
 		t.Fatalf("registry get after forget = %v", err)
 	}
 }
+
+// TestRunInfoLiveTreatsAnExpiredLeaseAsNotRunning pins the rule a durable
+// registry makes necessary: a record whose status is active but whose lease has
+// expired belongs to a process that is gone, so a console must not present it as
+// a running conversation.
+func TestRunInfoLiveTreatsAnExpiredLeaseAsNotRunning(t *testing.T) {
+	now := time.Now().UTC()
+	expired := now.Add(-time.Second)
+	fresh := now.Add(time.Minute)
+	cases := []struct {
+		name string
+		info RunInfo
+		want bool
+	}{
+		{"running with a fresh lease", RunInfo{Status: RunRunning, LeaseUntil: &fresh}, true},
+		{"running with an expired lease", RunInfo{Status: RunRunning, LeaseUntil: &expired}, false},
+		{"running with no lease", RunInfo{Status: RunRunning}, true},
+		{"starting with a fresh lease", RunInfo{Status: RunStarting, LeaseUntil: &fresh}, true},
+		{"waiting for approval with a fresh lease", RunInfo{Status: RunWaitingApproval, LeaseUntil: &fresh}, true},
+		{"completed with a fresh lease", RunInfo{Status: RunCompleted, LeaseUntil: &fresh}, false},
+		{"failed with an expired lease", RunInfo{Status: RunFailed, LeaseUntil: &expired}, false},
+		{"cancelled with no lease", RunInfo{Status: RunCancelled}, false},
+	}
+	for _, testCase := range cases {
+		if got := testCase.info.Live(now); got != testCase.want {
+			t.Fatalf("%s: Live = %v, want %v", testCase.name, got, testCase.want)
+		}
+	}
+}

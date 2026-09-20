@@ -4,10 +4,14 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/feiyu912/zenforge"
+	"github.com/feiyu912/zenforge/eventlog"
 )
+
+var _ eventlog.RunLister = (*Store)(nil)
 
 func TestStoreAppendReadAndLatestSeq(t *testing.T) {
 	ctx := context.Background()
@@ -97,4 +101,25 @@ func openTestStore(t *testing.T) *Store {
 		t.Fatalf("Open returned error: %v", err)
 	}
 	return store
+}
+
+func TestRunIDsEnumeratesTheRunsItHolds(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, filepath.Join(t.TempDir(), "events.sqlite"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	for _, runID := range []string{"run_b", "run_a"} {
+		if err := store.Append(ctx, zenforge.NewEvent(zenforge.EventRunStarted, runID, map[string]any{"input": "hi"})); err != nil {
+			t.Fatalf("append %s: %v", runID, err)
+		}
+	}
+	ids, err := store.RunIDs(ctx)
+	if err != nil {
+		t.Fatalf("RunIDs: %v", err)
+	}
+	if !reflect.DeepEqual(ids, []string{"run_a", "run_b"}) {
+		t.Fatalf("RunIDs = %v, want the run ids in order", ids)
+	}
 }

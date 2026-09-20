@@ -3,6 +3,7 @@ package dshapi
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/feiyu912/zenforge"
 	"github.com/feiyu912/zenforge/eventlog"
+	"github.com/feiyu912/zenforge/eventlog/jsonl"
 	"github.com/feiyu912/zenforge/eventlog/memory"
 	"github.com/feiyu912/zenforge/internal/dshsession"
 	"github.com/feiyu912/zenforge/model"
@@ -792,5 +794,151 @@ func TestSessionPageServesEveryTurnInOneSequence(t *testing.T) {
 	// and reaches into the first turn.
 	if len(value.Records) != 2 || value.Records[0].Event.Seq != 4 || value.Records[1].Event.Seq != 5 {
 		t.Fatalf("earlier page seqs = [%d %d], want [4 5]", value.Records[0].Event.Seq, value.Records[1].Event.Seq)
+	}
+}
+
+// TestSessionListReportsAnExpiredLeaseAsNotRunning covers the record a host
+// leaves behind when the process executing a run dies: the status stays active
+// and the lease expires. The console must not present that conversation as
+// running, and the next prompt must continue the conversation instead of
+// steering a run nobody owns (ADR 0109).
+func TestSessionListReportsAnExpiredLeaseAsNotRunning(t *testing.T) {
+	registry := harnesshttp.NewMemoryRunRegistry()
+	store := memory.New()
+	bus := eventlog.NewBus()
+
+	// A previous process claimed the run and then died: the claim is active and
+	// its lease has already expired.
+	now := time.Now().UTC()
+	leaseUntil := now.Add(-time.Minute)
+	if _, err := registry.Claim(context.Background(), harnesshttp.RunClaim{
+		RunID: "run_interrupted", OwnerID: "owner-gone", Status: harnesshttp.RunRunning,
+		LeaseUntil: leaseUntil, StartedAt: now.Add(-2 * time.Minute), UpdatedAt: now.Add(-2 * time.Minute),
+	}); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	// The transcript is durable, so the session is real even though its owner is
+	// not: the title comes from the log, exactly as it would after a restart.
+	agent := newStubAgent(store)
+	agent.append("run_interrupted", zenforge.EventSessionTitle, map[string]any{"title": "an interrupted question"})
+
+	manager := harnesshttp.NewRunManager(agent, store, bus, harnesshttp.RunManagerOptions{
+		Registry: registry, OwnerID: "owner-new", TerminalRetention: -1,
+	})
+	t.Cleanup(func() { _ = manager.Close(context.Background()) })
+	handler, err := New(manager, store, Config{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	f := &fixture{handler: handler, manager: manager, agent: agent, store: store}
+
+	item := findItem(f.listItems(t), "run_interrupted")
+	if item == nil {
+		t.Fatal("the interrupted session is not listed")
+	}
+	if item.Running {
+		t.Fatal("an expired lease is listed as running")
+	}
+	if item.Title != "an interrupted question" {
+		t.Fatalf("title = %q, want the durable transcript's title", item.Title)
+	}
+
+	// The prompt continues the conversation: a run nobody owns cannot be steered.
+	recorder := f.post(t, "/api/session/prompt", rpcBody(t, "rpc-prompt", "session/prompt",
+		`{"requestId":"req-1","sessionId":"run_interrupted","mode":"queue","content":[{"type":"text","text":"carry on"}]}`))
+	if envelope := decodeResponse(t, recorder); !envelope.Result.OK {
+		t.Fatalf("prompt after an interruption failed: %s", recorder.Body.String())
+	}
+	second := dshsession.ContinuationRunID("run_interrupted", 2)
+	waitForStatus(t, manager, second, harnesshttp.RunRunning)
+}
+
+// TestSessionListSurvivesARestart covers what a durable registry is for: the
+// console lists the conversations this install served after the host restarts,
+// with their titles and their finished state, instead of an empty sidebar whose
+// transcripts are all still on disk.
+func TestSessionListSurvivesARestart(t *testing.T) {
+	dir := t.TempDir()
+	store := jsonl.New(dir)
+	registryPath := filepath.Join(dir, "runs.sqlite")
+
+	registry, err := harnesshttp.OpenSQLiteRunRegistry(context.Background(), registryPath)
+	if err != nil {
+		t.Fatalf("open registry: %v", err)
+	}
+	first := newFixtureOver(t, store, registry)
+	sessionID := first.createSession(t)
+	recorder := first.post(t, "/api/session/prompt", rpcBody(t, "rpc-prompt", "session/prompt",
+		fmt.Sprintf(`{"requestId":"req-1","sessionId":%s,"mode":"queue","content":[{"type":"text","text":"first question"}]}`, mustJSON(t, sessionID))))
+	if envelope := decodeResponse(t, recorder); !envelope.Result.OK {
+		t.Fatalf("prompt failed: %s", recorder.Body.String())
+	}
+	first.agent.append(sessionID, zenforge.EventSessionTitle, map[string]any{"title": "first question"})
+	first.agent.finish(sessionID)
+	waitForStatus(t, first.manager, sessionID, harnesshttp.RunCompleted)
+	if err := first.manager.Close(context.Background()); err != nil {
+		t.Fatalf("close the first manager: %v", err)
+	}
+	if err := registry.Close(); err != nil {
+		t.Fatalf("close the first registry: %v", err)
+	}
+
+	// A new host over the same durable state: an empty in-process manager and a
+	// registry that still knows the run.
+	restarted, err := harnesshttp.OpenSQLiteRunRegistry(context.Background(), registryPath)
+	if err != nil {
+		t.Fatalf("reopen registry: %v", err)
+	}
+	t.Cleanup(func() { _ = restarted.Close() })
+	second := newFixtureOver(t, store, restarted)
+
+	item := findItem(second.listItems(t), sessionID)
+	if item == nil {
+		t.Fatal("the restarted host does not list the conversation it served")
+	}
+	if item.Running {
+		t.Fatal("a finished conversation is listed as running after a restart")
+	}
+	if item.Title != "first question" {
+		t.Fatalf("title = %q, want the operator's task", item.Title)
+	}
+}
+
+// TestSessionListOmitsARunThatNeverWroteAnEvent covers the other half of a
+// durable registry: a run whose start failed keeps a record with no transcript,
+// and the console answers not-found for it. A registry that outlives the process
+// must not turn that record into a permanent conversation nobody can open.
+func TestSessionListOmitsARunThatNeverWroteAnEvent(t *testing.T) {
+	registry := harnesshttp.NewMemoryRunRegistry()
+	store := memory.New()
+	bus := eventlog.NewBus()
+	now := time.Now().UTC()
+	leaseUntil := now.Add(-time.Minute)
+	lease, err := registry.Claim(context.Background(), harnesshttp.RunClaim{
+		RunID: "run_failed_start", OwnerID: "owner-gone", Status: harnesshttp.RunStarting,
+		LeaseUntil: leaseUntil, StartedAt: now.Add(-time.Minute), UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	// The start failed before the transcript began: the record goes terminal and
+	// no event is ever written.
+	if err := registry.Release(context.Background(), lease, harnesshttp.RunInfo{
+		RunID: "run_failed_start", Status: harnesshttp.RunFailed, OwnerID: "owner-gone",
+		StartedAt: now.Add(-time.Minute), UpdatedAt: now, FinishedAt: now,
+	}); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	manager := harnesshttp.NewRunManager(newStubAgent(store), store, bus, harnesshttp.RunManagerOptions{
+		Registry: registry, OwnerID: "owner-new", TerminalRetention: -1,
+	})
+	t.Cleanup(func() { _ = manager.Close(context.Background()) })
+	handler, err := New(manager, store, Config{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	f := &fixture{handler: handler, manager: manager, agent: newStubAgent(store), store: store}
+	if item := findItem(f.listItems(t), "run_failed_start"); item != nil {
+		t.Fatalf("a run with no transcript is listed: %+v", item)
 	}
 }

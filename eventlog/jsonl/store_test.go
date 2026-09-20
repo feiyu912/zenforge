@@ -8,13 +8,17 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/feiyu912/zenforge"
+	"github.com/feiyu912/zenforge/eventlog"
 )
+
+var _ eventlog.RunLister = (*Store)(nil)
 
 func TestStoreAppendReadAndLatestSeq(t *testing.T) {
 	ctx := context.Background()
@@ -379,5 +383,28 @@ func TestConcurrentAppendsSerializeOnTheFileLock(t *testing.T) {
 		if event.Seq != int64(index+1) {
 			t.Fatalf("seq at %d = %d, want %d", index, event.Seq, index+1)
 		}
+	}
+}
+
+func TestRunIDsEnumeratesTheRunsAndSkipsWhatIsNotOne(t *testing.T) {
+	root := t.TempDir()
+	store := New(root)
+	ctx := context.Background()
+	for _, runID := range []string{"run_2", "run_1"} {
+		if err := store.Append(ctx, zenforge.NewEvent(zenforge.EventRunStarted, runID, map[string]any{"input": "hi"})); err != nil {
+			t.Fatalf("append %s: %v", runID, err)
+		}
+	}
+	// The root also holds the store's lock file and, for a console host, its run
+	// registry: neither is a run, and neither may appear in the list.
+	if err := os.WriteFile(filepath.Join(root, "run-registry.sqlite"), []byte("not a run"), 0o644); err != nil {
+		t.Fatalf("write the stray file: %v", err)
+	}
+	ids, err := store.RunIDs(ctx)
+	if err != nil {
+		t.Fatalf("RunIDs: %v", err)
+	}
+	if !reflect.DeepEqual(ids, []string{"run_1", "run_2"}) {
+		t.Fatalf("RunIDs = %v, want the two runs in order", ids)
 	}
 }

@@ -137,3 +137,4 @@ and what the adapter answers today is
 | [0106](0106-a-session-title-names-the-operators-task.md) | A session's title names the operator's task, not the preset's instruction |
 | [0107](0107-plan-execute-plans-only-when-the-request-needs-one.md) | Plan-execute plans only when the request needs a plan |
 | [0108](0108-a-sessions-log-is-one-sequence-across-its-turns.md) | A session's log is one sequence across its turns |
+| [0109](0109-the-console-host-keeps-its-run-registry-on-disk.md) | The console host keeps its run registry on disk |

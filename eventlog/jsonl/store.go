@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -295,4 +296,36 @@ func validateRunID(runID string) error {
 		return fmt.Errorf("invalid runID %q", runID)
 	}
 	return nil
+}
+
+// RunIDs enumerates the runs this store holds, so a caller can list the
+// conversations that survived a restart (eventlog.RunLister). A directory entry
+// that is not a run is skipped: the store's root also holds its lock file and,
+// for a console host, the run registry beside the runs it lists.
+func (s *Store) RunIDs(ctx context.Context) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if s.root == "" {
+		return nil, fmt.Errorf("event log root is required")
+	}
+	entries, err := os.ReadDir(s.root)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		if err := validateRunID(entry.Name()); err != nil {
+			continue
+		}
+		out = append(out, entry.Name())
+	}
+	sort.Strings(out)
+	return out, nil
 }

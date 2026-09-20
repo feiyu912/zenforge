@@ -153,6 +153,24 @@ func newFixtureWithStore(t *testing.T, cfg Config, store eventlog.Store) *fixtur
 	return &fixture{handler: handler, manager: manager, agent: agent, store: store}
 }
 
+// newFixtureOver builds a fixture over explicit durable state -- a store and a
+// registry -- so a test can close one host and open another over the same state,
+// which is what a restart is.
+func newFixtureOver(t *testing.T, store eventlog.Store, registry harnesshttp.RunRegistry) *fixture {
+	t.Helper()
+	bus := eventlog.NewBus()
+	agent := newStubAgent(store)
+	manager := harnesshttp.NewRunManager(agent, store, bus, harnesshttp.RunManagerOptions{
+		Registry: registry, OwnerID: "zenforge-serve", TerminalRetention: 10 * time.Minute,
+	})
+	handler, err := New(manager, store, Config{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { _ = manager.Close(context.Background()) })
+	return &fixture{handler: handler, manager: manager, agent: agent, store: store}
+}
+
 func (f *fixture) post(t *testing.T, endpoint, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	return f.request(t, http.MethodPost, endpoint, body, nil)

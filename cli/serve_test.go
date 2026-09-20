@@ -5,11 +5,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/feiyu912/zenforge/eventlog"
 	"github.com/feiyu912/zenforge/eventlog/memory"
@@ -392,5 +396,196 @@ func TestConsoleSettingsPassTheOnboardingNamespaceThrough(t *testing.T) {
 	}
 	if got := settings.ConsoleSection("ui-onboarding")["welcomeNoticeVersion"]; got != "2026-08-13.1" {
 		t.Fatalf("value = %v, want the acknowledgement the console wrote", got)
+	}
+}
+
+// TestServeKeepsItsRunRegistryOnDisk pins the wiring a durable sidebar needs:
+// the console lists sessions from the run registry, so the host configures one
+// in its checkpoint directory instead of the run manager's in-process records
+// (ADR 0109). Without it the sidebar forgets every conversation at the ten
+// minute terminal retention and every restart, while the transcripts stay on
+// disk.
+func TestServeKeepsItsRunRegistryOnDisk(t *testing.T) {
+	t.Setenv("ZENFORGE_CONFIG_DIR", t.TempDir())
+	workspace := t.TempDir()
+	state := t.TempDir()
+	opts := defaultOptions()
+	opts.workspace = workspace
+	opts.checkpointDir = filepath.Join(state, "runs")
+	opts.apiKey = "sk-test-key"
+	ioStreams := IO{Stdout: io.Discard, Stderr: io.Discard}
+
+	app, err := newServeApp(context.Background(), &opts, ioStreams, serveConfig{
+		settingsFile: filepath.Join(state, "console-settings.json"),
+	})
+	if err != nil {
+		t.Fatalf("newServeApp: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = app.Close(context.Background())
+		drainClosers(&opts, ioStreams)
+	})
+
+	registryPath := filepath.Join(opts.checkpointDir, "run-registry.sqlite")
+	if _, err := os.Stat(registryPath); err != nil {
+		t.Fatalf("the host kept no durable run registry at %s: %v", registryPath, err)
+	}
+	// A file is not a registry: reopening it must answer, which is what the next
+	// process does when it lists the sessions this one served.
+	registry, err := harnesshttp.OpenSQLiteRunRegistry(context.Background(), registryPath)
+	if err != nil {
+		t.Fatalf("reopen the host's registry: %v", err)
+	}
+	defer func() { _ = registry.Close() }()
+	if _, err := registry.List(context.Background()); err != nil {
+		t.Fatalf("list through the host's registry: %v", err)
+	}
+}
+
+// TestServeAdoptsTheRunsAlreadyInItsStateDirectory covers the operator whose
+// conversations predate the durable registry: their transcripts are on disk and
+// a fresh registry lists nothing, so the host records the stored runs at startup.
+// The run here is real -- a prompt through the console's own handler, answered by
+// a stub provider -- so the test also proves a conversation survives a restart
+// through the real serve seam, not only through the adapter (ADR 0109).
+func TestServeAdoptsTheRunsAlreadyInItsStateDirectory(t *testing.T) {
+	t.Setenv("ZENFORGE_CONFIG_DIR", t.TempDir())
+	model := newOpenAISSEStub(t, textChunk("recorded answer"))
+	opts := servedRunOptions(t, model.url)
+	settingsFile := filepath.Join(t.TempDir(), "console-settings.json")
+	ioStreams := servedRunStreams()
+	build := func() *serveApp {
+		t.Helper()
+		app, err := newServeApp(context.Background(), &opts, ioStreams, serveConfig{settingsFile: settingsFile})
+		if err != nil {
+			t.Fatalf("newServeApp: %v", err)
+		}
+		t.Cleanup(func() { _ = app.Close(context.Background()) })
+		return app
+	}
+
+	first := build()
+	sessionID := consoleSessionID(t, first)
+	consolePrompt(t, first, sessionID, "first question")
+	waitForConsoleSession(t, first, sessionID)
+
+	// The host stops, the way an install that predates the registry did: the
+	// transcripts stay and no registry row survives.
+	if err := first.Close(context.Background()); err != nil {
+		t.Fatalf("close the first host: %v", err)
+	}
+	registryPath, err := runRegistryPath(&opts)
+	if err != nil {
+		t.Fatalf("runRegistryPath: %v", err)
+	}
+	if err := os.Remove(registryPath); err != nil {
+		t.Fatalf("remove the registry: %v", err)
+	}
+
+	second := build()
+	item := findConsoleSession(t, second, sessionID)
+	if item == nil {
+		t.Fatal("the restarted host does not list the conversation it already served")
+	}
+	if item.Running {
+		t.Fatalf("an adopted conversation is listed as running: %+v", item)
+	}
+}
+
+// consoleSessionID creates a session through the console's own route.
+func consoleSessionID(t *testing.T, app *serveApp) string {
+	t.Helper()
+	recorder := consolePost(t, app, "session/create", "{}")
+	var value struct {
+		SessionID string `json:"sessionId"`
+	}
+	decodeConsoleValue(t, recorder, &value)
+	if value.SessionID == "" {
+		t.Fatalf("session/create returned no id: %s", recorder.Body.String())
+	}
+	return value.SessionID
+}
+
+// consolePrompt sends one turn through the console's own route.
+func consolePrompt(t *testing.T, app *serveApp, sessionID, text string) {
+	t.Helper()
+	body := fmt.Sprintf(`{"requestId":"req-1","sessionId":%q,"mode":"queue","content":[{"type":"text","text":%q}]}`, sessionID, text)
+	recorder := consolePost(t, app, "session/prompt", body)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("session/prompt = %d: %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+// waitForConsoleSession blocks until the session is listed and no longer running,
+// which is what the console shows as a finished turn.
+func waitForConsoleSession(t *testing.T, app *serveApp, sessionID string) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		item := findConsoleSession(t, app, sessionID)
+		if item != nil && !item.Running {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("session %s never finished its turn", sessionID)
+}
+
+// findConsoleSession lists sessions through the console's own route.
+func findConsoleSession(t *testing.T, app *serveApp, sessionID string) *consoleListItem {
+	t.Helper()
+	recorder := consolePost(t, app, "session/list", "{}")
+	var value struct {
+		Items []consoleListItem `json:"items"`
+	}
+	decodeConsoleValue(t, recorder, &value)
+	for index := range value.Items {
+		if value.Items[index].SessionID == sessionID {
+			return &value.Items[index]
+		}
+	}
+	return nil
+}
+
+type consoleListItem struct {
+	SessionID string `json:"sessionId"`
+	Running   bool   `json:"running"`
+	Title     string `json:"title"`
+}
+
+func consolePost(t *testing.T, app *serveApp, method, args string) *httptest.ResponseRecorder {
+	t.Helper()
+	body := fmt.Sprintf(`{"type":"client-request","rpcId":"rpc-%s","method":%q,"payload":{"args":%s}}`, method, method, args)
+	request := httptest.NewRequest(http.MethodPost, "/api/"+method, strings.NewReader(body))
+	request.Host = "127.0.0.1:8787"
+	request.RemoteAddr = "127.0.0.1:54321"
+	recorder := httptest.NewRecorder()
+	app.Handler().ServeHTTP(recorder, request)
+	return recorder
+}
+
+func decodeConsoleValue(t *testing.T, recorder *httptest.ResponseRecorder, target any) {
+	t.Helper()
+	var envelope struct {
+		Result struct {
+			OK    bool            `json:"ok"`
+			Value json.RawMessage `json:"value"`
+			Error *struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode the console envelope: %v: %s", err, recorder.Body.String())
+	}
+	if !envelope.Result.OK {
+		message := "no error reported"
+		if envelope.Result.Error != nil {
+			message = envelope.Result.Error.Message
+		}
+		t.Fatalf("the console request failed: %s", message)
+	}
+	if err := json.Unmarshal(envelope.Result.Value, target); err != nil {
+		t.Fatalf("decode the console value: %v: %s", err, envelope.Result.Value)
 	}
 }

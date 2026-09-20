@@ -72,7 +72,10 @@ func (h *Handler) sessionList(ctx context.Context, args map[string]json.RawMessa
 	}
 	items := make([]map[string]any, 0, len(order)+1)
 	for _, sessionID := range order {
-		item := h.summaryFor(ctx, newest[sessionID])
+		item, listable := h.listableSession(ctx, newest[sessionID])
+		if !listable {
+			continue
+		}
 		item["sessionId"] = sessionID
 		items = append(items, item)
 	}
@@ -106,29 +109,21 @@ func (h *Handler) sessionList(ctx context.Context, args map[string]json.RawMessa
 	return map[string]any{"items": items}, nil
 }
 
-// summaryFor maps one RunInfo to a SessionSummary. origin and parentSessionId
-// are omitted: the run manager has no subagent lineage to report, and an
-// omitted optional field is honest where a fabricated one is not.
-func (h *Handler) summaryFor(ctx context.Context, info harnesshttp.RunInfo) map[string]any {
-	item := map[string]any{
-		"sessionId": info.RunID,
-		"updatedAt": info.UpdatedAt.UnixMilli(),
-		"running":   runActive(info.Status),
-		"blank":     false,
-	}
-	if title, ok := h.latestTitle(ctx, info.RunID); ok {
-		item["title"] = title
-	}
-	return item
-}
-
-// latestTitle reads the newest session.title event from a run's durable log.
-// Rename is the writer, and the agent itself emits the same event at run
-// start, so the log is the single source of a session's title.
-func (h *Handler) latestTitle(ctx context.Context, runID string) (string, bool) {
-	events, err := h.events.Read(ctx, runID, 0, 0)
+// listableSession maps one RunInfo to a SessionSummary, and reports whether the
+// console can actually open it. origin and parentSessionId are omitted: the run
+// manager has no subagent lineage to report, and an omitted optional field is
+// honest where a fabricated one is not.
+//
+// A record whose run never wrote an event is a start that failed before the
+// transcript began. The console answers not-found for such a session, so
+// listing it offers the operator a conversation that cannot be opened --
+// and with a durable registry that record would otherwise be listed forever.
+// A live run is kept: it is between its claim and its first event only for a
+// moment, and the console shows it as running.
+func (h *Handler) listableSession(ctx context.Context, info harnesshttp.RunInfo) (map[string]any, bool) {
+	events, err := h.events.Read(ctx, info.RunID, 0, 0)
 	if err != nil {
-		return "", false
+		events = nil
 	}
 	title := ""
 	for _, event := range events {
@@ -139,7 +134,24 @@ func (h *Handler) latestTitle(ctx context.Context, runID string) (string, bool) 
 			title = value
 		}
 	}
-	return title, title != ""
+	live := info.Live(time.Now())
+	if len(events) == 0 && !live {
+		return nil, false
+	}
+	item := map[string]any{
+		"sessionId": info.RunID,
+		"updatedAt": info.UpdatedAt.UnixMilli(),
+		// Liveness is the run's own answer, not the record's status: a registry
+		// row left by a process that died keeps an active status and an expired
+		// lease, and the console must not show that conversation as running
+		// forever (ADR 0109).
+		"running": live,
+		"blank":   false,
+	}
+	if title != "" {
+		item["title"] = title
+	}
+	return item, true
 }
 
 // sessionCreate answers POST /api/session/create. It either adopts an explicit
@@ -322,7 +334,7 @@ func (h *Handler) sessionPrompt(ctx context.Context, args map[string]json.RawMes
 	current := runIDs[len(runIDs)-1]
 	info, err := h.manager.Get(current)
 	switch {
-	case err == nil && runActive(info.Status):
+	case err == nil && info.Live(time.Now()):
 		if _, err := h.manager.Steer(current, strings.TrimSpace(requestID), text); err != nil {
 			// Get found the run, so Steer's not-found here means this manager
 			// cannot reach it: a shared registry lists other processes' runs but
@@ -339,8 +351,9 @@ func (h *Handler) sessionPrompt(ctx context.Context, args map[string]json.RawMes
 		return nil, fail(codeInternal, "look up session: "+err.Error(), nil)
 	}
 
-	// The session's newest turn is finished (or its run is no longer tracked by
-	// this process), so the prompt starts the next turn of the same
+	// The session's newest turn is finished, its run is no longer tracked by this
+	// process, or its lease expired with the process that owned it (ADR 0109).
+	// Any of those means the prompt starts the next turn of the same
 	// conversation: a new run id from the chain, carrying the exchange so far.
 	turn := dshsession.NextTurn(runIDs)
 	continuationID := dshsession.ContinuationRunID(sessionID, turn)
@@ -694,17 +707,9 @@ func (h *Handler) wireIdentity(sessionID string) dshwire.Identity {
 	return dshwire.Identity{}
 }
 
-// runActive reports whether a run status is a live run for the console's
-// running flag: starting, running, and waiting on approval are all live.
-func runActive(status harnesshttp.RunStatus) bool {
-	switch status {
-	case harnesshttp.RunStarting, harnesshttp.RunRunning, harnesshttp.RunWaitingApproval:
-		return true
-	default:
-		return false
-	}
-}
-
+// finishedRunMessage explains the prompt a finished session cannot take. It is
+// the last resort: a session whose newest turn is finished starts the next turn
+// of the conversation, so this message covers a run the console cannot continue.
 func finishedRunMessage(sessionID, status string) string {
 	return fmt.Sprintf("session %q (%s) cannot accept a new prompt: this host maps one console session to one zenforge run, and a run accepts either a fresh start or a queued turn while it is active", sessionID, status)
 }

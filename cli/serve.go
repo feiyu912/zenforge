@@ -19,6 +19,7 @@ import (
 
 	"github.com/feiyu912/zenforge"
 	"github.com/feiyu912/zenforge/approval"
+	"github.com/feiyu912/zenforge/eventlog"
 	"github.com/feiyu912/zenforge/internal/dshapi"
 	"github.com/feiyu912/zenforge/internal/dshmount"
 	"github.com/feiyu912/zenforge/internal/dshstream"
@@ -134,6 +135,143 @@ func serveCommand(ctx context.Context, args []string, ioStreams IO) error {
 	return nil
 }
 
+// runRegistryPath is where the host keeps the run registry the console lists
+// sessions from: inside the event store directory for the JSONL store, and
+// beside the store file for the SQLite one, because that option names a file
+// rather than a directory. The directory is created when it is missing, since a
+// fresh install has no state directory until its first run.
+func runRegistryPath(opts *options) (string, error) {
+	stateDir := opts.checkpointDir
+	if stateDir == "" {
+		return "", fmt.Errorf("a run registry needs a state directory: set --checkpoint-dir")
+	}
+	if strings.EqualFold(opts.checkpointType, "sqlite") {
+		stateDir = filepath.Dir(stateDir)
+	}
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		return "", fmt.Errorf("create the state directory %s: %w", stateDir, err)
+	}
+	return filepath.Join(stateDir, "run-registry.sqlite"), nil
+}
+
+// adoptStoredRuns records the runs the state directory already holds but the
+// registry does not know. A host that starts with an empty registry would list
+// nothing until its next turn, and the console has no other way to reach a
+// transcript that is still on disk: the sidebar row is the only door (ADR 0109).
+//
+// Each run's own log decides its terminal state, because that is the writer of
+// record; a run whose log ends without a terminal event is recorded as cancelled,
+// which is what an interrupted run is. A run another process is still executing
+// is left alone: its unexpired lease refuses the claim.
+func adoptStoredRuns(ctx context.Context, events eventlog.Store, registry harnesshttp.RunRegistry, opts *options) error {
+	stored, err := storedRuns(ctx, events, opts)
+	if err != nil {
+		return err
+	}
+	adopted := 0
+	for _, run := range stored {
+		if _, err := registry.Get(ctx, run.RunID); err == nil {
+			continue
+		}
+		info := storedRunInfo(ctx, events, run)
+		lease, err := registry.Claim(ctx, harnesshttp.RunClaim{
+			RunID: run.RunID, OwnerID: "zenforge-serve", Status: harnesshttp.RunStarting,
+			// The lease is only held across the release below; its expiry is what
+			// makes a record left by a dead process readable as finished.
+			LeaseUntil: time.Now().UTC().Add(30 * time.Second),
+			StartedAt:  info.StartedAt, UpdatedAt: info.UpdatedAt,
+		})
+		if err != nil {
+			// Another process is still executing the run: its unexpired lease
+			// refuses the claim, and its own host will record the outcome.
+			continue
+		}
+		if err := registry.Release(ctx, lease, info); err != nil {
+			return fmt.Errorf("record the stored run %s: %w", run.RunID, err)
+		}
+		adopted++
+	}
+	if adopted > 0 {
+		slog.Info("adopted the runs already in the state directory",
+			"runs", adopted, "dir", opts.checkpointDir)
+	}
+	return nil
+}
+
+// storedRun is one run the state directory holds, with the newest checkpoint
+// time when the store that named it has one.
+type storedRun struct {
+	RunID   string
+	SavedAt time.Time
+}
+
+// storedRuns enumerates the runs already in the state directory. The event
+// store's own listing is the wide one -- it holds a run even when its start
+// failed before a checkpoint existed -- and the checkpoint summaries are the
+// fallback for a store that cannot enumerate.
+func storedRuns(ctx context.Context, events eventlog.Store, opts *options) ([]storedRun, error) {
+	if lister, ok := events.(eventlog.RunLister); ok {
+		ids, err := lister.RunIDs(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("list the runs already in %s: %w", opts.checkpointDir, err)
+		}
+		out := make([]storedRun, 0, len(ids))
+		for _, runID := range ids {
+			out = append(out, storedRun{RunID: runID})
+		}
+		return out, nil
+	}
+	summaries, closeStore, err := listRuns(ctx, opts.checkpointType, opts.checkpointDir)
+	if err != nil {
+		return nil, fmt.Errorf("list the runs already in %s: %w", opts.checkpointDir, err)
+	}
+	defer func() { _ = closeStore() }()
+	out := make([]storedRun, 0, len(summaries))
+	for _, summary := range summaries {
+		out = append(out, storedRun{RunID: summary.RunID, SavedAt: summary.SavedAt})
+	}
+	return out, nil
+}
+
+// storedRunInfo reads a stored run's log for the state the console needs: its
+// terminal status, and when it started and last moved. The durable log is the
+// single source -- a checkpoint can lag the run it belongs to -- and a run with
+// no readable log keeps the checkpoint's timestamp, or now when nothing else
+// dates it, because a registry claim requires one.
+func storedRunInfo(ctx context.Context, events eventlog.Store, run storedRun) harnesshttp.RunInfo {
+	at := run.SavedAt
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
+	info := harnesshttp.RunInfo{
+		RunID:      run.RunID,
+		Status:     harnesshttp.RunCancelled,
+		StartedAt:  at,
+		UpdatedAt:  at,
+		FinishedAt: at,
+	}
+	stored, err := events.Read(ctx, run.RunID, 0, 0)
+	if err != nil || len(stored) == 0 {
+		return info
+	}
+	info.StartedAt = time.UnixMilli(stored[0].Timestamp).UTC()
+	if newest := time.UnixMilli(stored[len(stored)-1].Timestamp).UTC(); newest.After(info.UpdatedAt) {
+		info.UpdatedAt = newest
+		info.FinishedAt = newest
+	}
+	for _, event := range stored {
+		switch event.Type {
+		case zenforge.EventRunDone:
+			info.Status = harnesshttp.RunCompleted
+		case zenforge.EventRunError:
+			info.Status = harnesshttp.RunFailed
+		case zenforge.EventRunCancelled:
+			info.Status = harnesshttp.RunCancelled
+		}
+	}
+	return info
+}
+
 // serveConfig is the small set of serve-only knobs, kept separate from the
 // shared options so newServeApp can be called by a test without a flag set.
 type serveConfig struct {
@@ -240,6 +378,25 @@ func newServeApp(ctx context.Context, opts *options, ioStreams IO, config serveC
 	if err != nil {
 		return nil, err
 	}
+	// The run registry is what the console lists sessions from, so it is durable:
+	// with only the manager's in-process records, a restart -- and the ten-minute
+	// terminal retention -- emptied the sidebar while every transcript stayed in
+	// the event store. A SQLite registry next to the store keeps the status of
+	// every run this install served, and a run whose owner died keeps its
+	// active status but loses its lease, which the console reads as not running
+	// (ADR 0109).
+	registryPath, err := runRegistryPath(opts)
+	if err != nil {
+		return nil, err
+	}
+	registry, err := harnesshttp.OpenSQLiteRunRegistry(ctx, registryPath)
+	if err != nil {
+		return nil, fmt.Errorf("open the durable run registry at %s: %w", registryPath, err)
+	}
+	opts.addCloser("run registry", registry.Close)
+	if err := adoptStoredRuns(ctx, events, registry, opts); err != nil {
+		return nil, err
+	}
 	runtime, err := harnesshttp.NewRuntime(agentConfig, events, harnesshttp.RuntimeOptions{
 		ApprovalInbox: inbox,
 		Webhook:       harnesshttp.WebhookOptions{Secret: config.webhookSecret},
@@ -247,6 +404,7 @@ func newServeApp(ctx context.Context, opts *options, ioStreams IO, config serveC
 			MaxActive:         16,
 			RunTimeout:        config.runTimeout,
 			TerminalRetention: 10 * time.Minute,
+			Registry:          registry,
 			OwnerID:           "zenforge-serve",
 		},
 	})

@@ -156,6 +156,13 @@ what is experimental, and what remains adapter territory.
   as `<session>~<turn>`, so a second message is a new turn rather than a refusal,
   and the conversation's turns share one sequence, so the second prompt loads its
   history and `Load earlier` reaches the first turn.
+- **The sidebar survives a restart** (ADR 0109): `zenforge serve` keeps a SQLite
+  run registry in its state directory (`<checkpoint-dir>/run-registry.sqlite`), so
+  the console lists the conversations this install served after the host restarts,
+  instead of losing them at the ten-minute terminal retention. A conversation whose
+  host was killed mid-turn is listed as finished and can be continued, because a
+  record whose lease expired is not reported as running. A session that never
+  started a turn is still process-local (ADR 0104).
 - The sidebar does not mutate live, background-job panels are empty, and
   assistant prose does not stream through the console's delta channel: this
   harness has a per-run event log, no global change feed, no job projections and
