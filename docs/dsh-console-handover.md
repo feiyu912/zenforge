@@ -388,17 +388,61 @@ Tests: `go test ./cli/ -run TestConsoleUserLayer` and
 `go test ./cli/ -run TestConsoleModelSelection`, plus the ADR 0102 suite under the new
 naming rule, plus `go test ./internal/dshapi/ -run TestSettings` for the user-layer face.
 
+## Shipped: a session exists before its first turn (2026-09-20)
+
+The host ADR 0103 had just restarted could not hold a conversation at all. The operator
+picked a model, sent `hello`, and the page said `Failed to load history: session
+"run_..." not found (session/not-found)` with no reply. Two defects met on the first
+prompt of a new chat, and this chain (**ADR 0104**) fixed both:
+
+- **A created session's empty history was refused.** The console creates a session, then
+  loads its history to render the empty conversation, and only then prompts. The id at
+  that moment names no run and no log, and `session/page` and `session/follow` both folded
+  that into the unknown-id case. A session this host created is a session: `session/page`
+  answers an empty page, and follow sends the empty snapshot (cursor -1) and then waits for
+  the prompt's run, so the first turn streams over the connection the page already opened.
+  The wait is a 50 ms poll bounded by the stream's context, because the run manager has no
+  "a run was created" notification and a run that does not exist has no bus to subscribe
+  to.
+- **Every registered session's first prompt failed on a selection nobody made.**
+  `session/create` registers the session so the console's projection has a `modelSelection`
+  key for it (ADR 0102); that record carries no choice, and `ApplyModelSelection` read the
+  record's *presence* as a choice -- handing `AdapterFor` a provider of `""`. It now tests
+  the record's own `selected` flag, which is what every other reader of that map already
+  uses. The registration (`d6931c7`) and the reader (`4f96c4d`) came from different chains
+  and each was correct alone; a record without a choice is only reachable because
+  registration created one.
+
+Only the RPC handler knows which sessions are drafts, so the mount exposes it
+(`dshmount.Mux.IsDraftSession`), the stream takes it as `Config.DraftSessions`, and an id
+this host never created is still `session/not-found` on both paths.
+
+Tests: `go test ./internal/dshapi/ -run TestSessionPage`,
+`go test ./internal/dshstream/ -run TestSessionFollow`,
+`go test ./cli/ -run TestRegisteredSessionWithoutAChoice`,
+`go test ./internal/dshmount/ -run TestMuxReportsDraftSessions`. Live, on a scratch host
+carrying a **copy** of the operator's document under a throwaway `ZENFORGE_CONFIG_DIR`:
+`session/create` -> empty `session/page` -> `session/prompt` accepted -> `run.done` with
+the model's own answer in the log (`"Hello! I'm ready to assist..."`). The copy was
+deleted with the scratch process.
+
 ## Operator's one remaining step
 
-The host at `127.0.0.1:8787` has to be **restarted onto this checkout** for ADR 0103 to
-take effect: the running binary predates it. Restarting costs nothing now -- the document
-at `~/.config/zenforge/console-settings.json` holds the credential, the declared `qwen`
-profile, the revision numbers and the welcome-notice acknowledgement -- with one
-exception: a model picked in the composer **before** this chain is not in that file,
-because the binary that recorded it did not write selections. Pick it once more after the
-restart and it stays. The OpenAI card will also come back empty rather than showing the
-`--model qwen-plus` flag as a saved setting; that is the fix, not a loss: the resolved
-configuration still serves `qwen-plus`, and the card shows only what is written on it.
+The host at `127.0.0.1:8787` is restarted onto this checkout, and the document at
+`~/.config/zenforge/console-settings.json` holds everything durable: the credential, the
+declared `qwen` profile, the revision numbers, the welcome-notice acknowledgement and --
+since ADR 0103 -- the model each session chooses. Two things about that restart are worth
+knowing:
+
+- A model picked in the composer **before** ADR 0103 is not in the file: the binary that
+  would have recorded it did not write selections. Pick it once more and it stays.
+- A draft session created **before** this restart is forgotten with the process (a draft
+  has no transcript to keep, ADR 0104). The console opens a new one on its next page load,
+  and that one works.
+
+The OpenAI card comes back empty rather than showing the `--model qwen-plus` flag as a
+saved setting (ADR 0103). That is the fix, not a loss: the resolved configuration still
+serves `qwen-plus`, and the card shows only what is written on it.
 
 ## Kickoff prompt for the next window
 
@@ -406,8 +450,9 @@ configuration still serves `qwen-plus`, and the card shows only what is written 
 > `docs/dsh-console-coverage.md`. Continue the console-attachment objective: keep the
 > three layers separate (deep API -> harness core -> adapters, ADR 0099), land every
 > chain with an ADR + docs + tests + commit/push + green CI and docs, and fill the
-> ledger's gaps in its order. The settings document shipped (ADR 0102) and so did the
-> user-layer/model-selection fix (ADR 0103); the next item is "Next up" 1 in the ledger
+> ledger's gaps in its order. The settings document shipped (ADR 0102), so did the
+> user-layer/model-selection fix (ADR 0103), and so did the first-turn fix that made a
+> conversation possible at all (ADR 0104); the next item is "Next up" 1 in the ledger
 > -- re-testing the withheld `ui-directory-picker-browse` plugin, which has to run on a
 > scratch port because a plugin that fails activation is a fatal boot page, and the
 > operator's host on `127.0.0.1:8787` is the one that must not be taken down by the

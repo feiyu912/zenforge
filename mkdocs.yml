@@ -245,6 +245,7 @@ nav:
       - 0101 The console's workspace registry is process-local: adr/0101-the-console-workspace-registry-is-process-local.md
       - 0102 The console's settings and credential persist in a host-owned file: adr/0102-the-consoles-settings-and-credential-persist-in-a-host-owned-file.md
       - 0103 The user layer is what the console wrote, and a chosen model persists: adr/0103-the-user-layer-is-what-the-console-wrote-and-a-chosen-model-persists.md
+      - 0104 A session exists before its first turn, and a registered session has not chosen: adr/0104-a-session-exists-before-its-first-turn.md
 
 extra:
   social:

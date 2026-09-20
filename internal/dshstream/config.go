@@ -45,6 +45,14 @@ type Config struct {
 	// function is called. The workspace/follow stream is where they are sent.
 	WorkspaceUpdates func(observe func(WorkspaceUpdate)) (unsubscribe func())
 
+	// DraftSessions, when set, reports whether this host created a session that
+	// has not started a turn yet. Such a session's history is empty rather than
+	// missing: the console opens a draft's log the moment it creates it, so
+	// follow serves the empty snapshot and waits for the first prompt's run. Nil
+	// reports that no session is a draft, which keeps a session this host never
+	// created a not-found.
+	DraftSessions func(sessionID string) bool
+
 	// ApprovalPollInterval is how often the $events stream re-reads
 	// approval.Inbox for pending requests. The repository has no global
 	// approval notification source (eventlog.Bus is per-run and the pending

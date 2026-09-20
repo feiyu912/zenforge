@@ -132,3 +132,4 @@ and what the adapter answers today is
 | [0101](0101-the-console-workspace-registry-is-process-local.md) | The console's workspace registry is process-local, and sessions run in the host's one directory |
 | [0102](0102-the-consoles-settings-and-credential-persist-in-a-host-owned-file.md) | The console's settings and credential persist in a host-owned file |
 | [0103](0103-the-user-layer-is-what-the-console-wrote-and-a-chosen-model-persists.md) | The user layer is what the console wrote, and a chosen model persists |
+| [0104](0104-a-session-exists-before-its-first-turn.md) | A session exists before its first turn, and a registered session has not chosen |

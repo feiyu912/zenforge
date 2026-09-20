@@ -60,10 +60,10 @@ method list.
 | `permissionPresets/catalog` | served | The permission presets the host's own settings offer. |
 | `pluginInventory/list` | served | The console bundles and plugins this host ships. |
 | `session/cancel` | served | Stop a run. |
-| `session/create` | served | Create a session. |
+| `session/create` | served | Create a session. It exists before its first turn: its history is empty, not missing (ADR 0104). |
 | `session/list` | served | List sessions. |
 | `session/modelCatalog` | served | The models the page may offer, grouped per provider. |
-| `session/page` | served | A page of a session's events. |
+| `session/page` | served | A page of a session's events. A created session with no turns answers an empty page (ADR 0104). |
 | `session/prompt` | served | Send a turn into a session. |
 | `session/rename` | served | Rename a session. |
 | `session/selectModel` | served | Choose the provider and model a session runs on. The choice is restored on the next start (ADR 0103). |
@@ -83,7 +83,7 @@ method list.
 | `workspaceFiles/readBytes` | served | Read a byte range of a file. |
 | `workspaceFiles/stat` | served | Stat a workspace path. |
 | `session/control` | stream | The control stream: job and model-selection projections. |
-| `session/follow` | stream | The follow stream: a session's durable event log. |
+| `session/follow` | stream | The follow stream: a session's durable event log. A draft's stream opens empty and waits for its first turn (ADR 0104). |
 | `workspace/follow` | stream | The workspace stream: every registration and the archived set. |
 
 ## Refused by name

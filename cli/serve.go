@@ -337,6 +337,11 @@ func newServeApp(ctx context.Context, opts *options, ioStreams IO, config serveC
 		ModelSelectionUpdates: selections.Updates,
 		Workspaces:            workspaceBaseline,
 		WorkspaceUpdates:      workspaceUpdates,
+		// The console opens a session's history the moment it creates it, before
+		// the first prompt has started a run. The RPC handler is the only place
+		// that knows which sessions those drafts are, so the follow stream asks it
+		// rather than refusing a session this host created (ADR 0104).
+		DraftSessions: console.IsDraftSession,
 	})
 	if err != nil {
 		return nil, err

@@ -567,6 +567,27 @@ func TestSessionPageReadsDurableStore(t *testing.T) {
 	}
 }
 
+// TestSessionPageServesACreatedSessionWithNoTurns is the draft case the console
+// hits on every new chat: it creates a session, then loads that session's
+// history before the first prompt has started a run. An empty history is not a
+// missing session, so the page is empty instead of not-found -- which is what the
+// page reported as "Failed to load history" on a brand-new conversation. An id
+// this host never created stays not-found, and that is the next test.
+func TestSessionPageServesACreatedSessionWithNoTurns(t *testing.T) {
+	f := newFixture(t, Config{})
+	sessionID := f.createSession(t)
+	recorder := f.post(t, "/api/session/page", rpcBody(t, "rpc-page", "session/page",
+		pageArgs(t, sessionID, `"throughSeq":-1`)))
+	var value pageValue
+	decodeValue(t, recorder, &value)
+	if len(value.Records) != 0 {
+		t.Fatalf("records = %d, want an empty page for a session with no turns", len(value.Records))
+	}
+	if value.HasMore {
+		t.Fatal("hasMore = true for an empty page")
+	}
+}
+
 func TestSessionPageUnknownSession(t *testing.T) {
 	f := newFixture(t, Config{})
 	recorder := f.post(t, "/api/session/page", rpcBody(t, "rpc-page", "session/page",

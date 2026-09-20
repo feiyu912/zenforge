@@ -415,11 +415,18 @@ func (s *consoleModelSelection) AdoptSelectionRecords(records map[string]console
 // ApplyModelSelection installs the adapter this session's run should use. A
 // session that never chose a model gets the operator's configured adapter, so a
 // fresh session cannot inherit the previous one's choice.
+//
+// The test is the record's own `selected` flag, not its presence in the map: a
+// session is registered the moment it is created so the console's projection has
+// a key for it (RegisterSession, ADR 0102), and a registered session with no
+// choice is exactly the session that must keep the configured adapter. Reading
+// the presence as a choice made every fresh session's first prompt fail with
+// "provider \"\" is not one this host can route to".
 func (s *consoleModelSelection) ApplyModelSelection(sessionID string) error {
 	s.mu.Lock()
-	record, chosen := s.records[sessionID]
+	record, known := s.records[sessionID]
 	s.mu.Unlock()
-	if !chosen {
+	if !known || !record.selected {
 		s.settings.rebuild()
 		return nil
 	}

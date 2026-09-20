@@ -161,6 +161,27 @@ func New(manager *harnesshttp.RunManager, events eventlog.Store, cfg Config) (*M
 	}, nil
 }
 
+// draftSessions is the part of the RPC handler the transports need: whether a
+// session exists without a turn in it yet.
+type draftSessions interface {
+	IsDraftSession(sessionID string) bool
+}
+
+// IsDraftSession reports whether the RPC handler knows this session as a draft --
+// created, no turn started. The follow stream asks through the mount rather than
+// guessing, because only the RPC handler holds the sessions it created, and a
+// draft's empty history has to be served as empty instead of refused.
+func (m *Mux) IsDraftSession(sessionID string) bool {
+	if m == nil {
+		return false
+	}
+	drafts, ok := m.api.(draftSessions)
+	if !ok {
+		return false
+	}
+	return drafts.IsDraftSession(sessionID)
+}
+
 // ServeHTTP routes one console request. The switch is on the path prefix rather
 // than a nested ServeMux so the /plugins combination URLs (whose query starts
 // with a literal '?') and the /api path are matched exactly as the shell builds

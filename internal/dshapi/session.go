@@ -610,6 +610,15 @@ func (h *Handler) sessionPage(ctx context.Context, args map[string]json.RawMessa
 		return nil, fail(codeInternal, "read session log: "+err.Error(), nil)
 	}
 	if len(events) == 0 {
+		// A session this host has created but no turn has started -- the draft the
+		// console opens before its first prompt -- has an empty history, not a
+		// missing one. The console loads a session's history the moment it opens
+		// it, so answering not-found here is what the page reports as "Failed to
+		// load history" on a brand-new chat. An id this host never created is
+		// still not-found.
+		if h.isPending(sessionID) {
+			return map[string]any{"records": []any{}, "hasMore": false}, nil
+		}
 		return nil, fail(codeSessionNotFound, fmt.Sprintf("session %q not found", sessionID),
 			map[string]any{"sessionId": sessionID})
 	}
@@ -768,6 +777,15 @@ func (h *Handler) takePending(sessionID string) bool {
 	}
 	delete(h.pending, sessionID)
 	return true
+}
+
+// IsDraftSession reports whether this host created the session and no turn has
+// started in it yet: the draft the console opens before its first prompt. Its
+// history is empty rather than missing, which is what session/page answers and
+// what the follow stream needs to know before it waits for the first turn
+// instead of refusing a session it has no run for.
+func (h *Handler) IsDraftSession(sessionID string) bool {
+	return h.isPending(sessionID)
 }
 
 func (h *Handler) isPending(sessionID string) bool {

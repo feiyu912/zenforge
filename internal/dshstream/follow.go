@@ -79,12 +79,23 @@ func (h *Handler) runFollow(ctx context.Context, payload []byte, send func(any) 
 	if err != nil {
 		return streamFail(codeInternal, "read session log: "+err.Error(), nil)
 	}
+	draft := false
 	if len(events) == 0 && infoErr != nil {
-		if errors.Is(infoErr, harnesshttp.ErrRunNotFound) {
-			return streamFail(codeSessionNotFound, fmt.Sprintf("session %q not found", request.sessionID),
-				map[string]any{"sessionId": request.sessionID})
+		// A session this host created and no turn has started -- the draft the
+		// console opens before its first prompt -- has an empty log and no run to
+		// attach to. That is not a missing session: its history is empty, and the
+		// stream is served (cursor -1, no records) so the client can open the
+		// conversation. The tail then waits for the run the first prompt starts
+		// instead of attaching to nothing. An id this host never created is still
+		// not-found.
+		draft = errors.Is(infoErr, harnesshttp.ErrRunNotFound) && h.isDraftSession(request.sessionID)
+		if !draft {
+			if errors.Is(infoErr, harnesshttp.ErrRunNotFound) {
+				return streamFail(codeSessionNotFound, fmt.Sprintf("session %q not found", request.sessionID),
+					map[string]any{"sessionId": request.sessionID})
+			}
+			return streamFail(codeInternal, "look up session: "+infoErr.Error(), nil)
 		}
-		return streamFail(codeInternal, "look up session: "+infoErr.Error(), nil)
 	}
 
 	// cursor is the durable tail. The client requires the snapshot's last
@@ -127,6 +138,14 @@ func (h *Handler) runFollow(ctx context.Context, payload []byte, send func(any) 
 	if afterSeq < 0 {
 		afterSeq = 0
 	}
+	if draft {
+		// The run does not exist yet; session/prompt creates it. Wait for it here
+		// rather than attaching to a run that is not there, so the first turn
+		// arrives over this connection instead of after a client reconnect.
+		if err := h.awaitDraftRun(ctx, runID); err != nil {
+			return err
+		}
+	}
 	live, liveErr, err := h.manager.Attach(ctx, runID, afterSeq)
 	if err != nil {
 		if errors.Is(err, harnesshttp.ErrRunNotFound) {
@@ -152,6 +171,44 @@ func (h *Handler) runFollow(ctx context.Context, payload []byte, send func(any) 
 			if err := send(eventRecord{Type: "event", Event: newWireEvent(event)}); err != nil {
 				return err
 			}
+		}
+	}
+}
+
+// isDraftSession reports whether the RPC handler created this session without a
+// turn in it yet. A transport with no draft seam says no, which keeps every
+// unknown id a not-found rather than inventing an empty session for it.
+func (h *Handler) isDraftSession(sessionID string) bool {
+	if h.cfg.DraftSessions == nil {
+		return false
+	}
+	return h.cfg.DraftSessions(sessionID)
+}
+
+// draftRunPollInterval is how often a draft's stream re-checks whether the first
+// prompt has created the run. The wait is a poll because the run manager exposes
+// no "a run was created" notification: eventlog.Bus is per-run and a run that
+// does not exist has no bus to subscribe to. It is short enough that the first
+// turn's first frame follows the prompt immediately.
+const draftRunPollInterval = 50 * time.Millisecond
+
+// awaitDraftRun waits until the run serving a draft session exists. The caller
+// has already sent the empty snapshot, so this is the tail of a stream that was
+// opened before the conversation's first turn: the wait is bounded by the
+// client's own connection.
+func (h *Handler) awaitDraftRun(ctx context.Context, runID string) error {
+	ticker := time.NewTicker(draftRunPollInterval)
+	defer ticker.Stop()
+	for {
+		if _, err := h.manager.Get(runID); err == nil {
+			return nil
+		} else if !errors.Is(err, harnesshttp.ErrRunNotFound) {
+			return streamFail(codeInternal, "look up session: "+err.Error(), nil)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
 		}
 	}
 }

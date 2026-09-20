@@ -1,8 +1,10 @@
 package dshstream
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -295,4 +297,55 @@ func decodeRecords(t *testing.T, snapshot map[string]json.RawMessage) []map[stri
 		assertKeys(t, record, "type", "event")
 	}
 	return records
+}
+
+// TestSessionFollowServesADraftSessionAndItsFirstTurn is the stream half of the
+// draft rule: the console opens a session's history as soon as it creates the
+// session, before the first prompt has started a run. That session has no run and
+// no log, which used to be answered as session/not-found -- the page's "Failed to
+// load history" on a brand-new chat. It is served as an empty log (cursor -1), and
+// the stream then waits for the first turn's run so the turn arrives over the same
+// connection instead of after a reconnect.
+func TestSessionFollowServesADraftSessionAndItsFirstTurn(t *testing.T) {
+	var mu sync.Mutex
+	drafts := map[string]bool{}
+	f := newFixture(t, Config{
+		DraftSessions: func(sessionID string) bool {
+			mu.Lock()
+			defer mu.Unlock()
+			return drafts[sessionID]
+		},
+	})
+	runID := zenforge.NewRunID()
+	mu.Lock()
+	drafts[runID] = true
+	mu.Unlock()
+
+	conn := f.mustDial(t)
+	openStream(t, conn, "follow", "session/follow", followArgs(t, runID, false))
+	snapshot := readItem(t, conn, "follow")
+	assertField(t, snapshot, "type", "snapshot")
+	if cursor := intField(t, snapshot, "cursor"); cursor != -1 {
+		t.Fatalf("snapshot cursor = %d, want -1 for a log with no records", cursor)
+	}
+	if records := decodeRecords(t, snapshot); len(records) != 0 {
+		t.Fatalf("snapshot records = %d, want an empty draft history", len(records))
+	}
+
+	// session/prompt creates the run. The stream, already open, waits for it and
+	// then streams the turn.
+	mu.Lock()
+	drafts[runID] = false
+	mu.Unlock()
+	if _, err := f.manager.Start(context.Background(), zenforge.Task{RunID: runID, Input: "hello"}); err != nil {
+		t.Fatalf("start the draft's first run: %v", err)
+	}
+	seen := map[string]bool{}
+	for len(seen) == 0 {
+		value := readItem(t, conn, "follow")
+		seen[recordEventType(t, value)] = true
+	}
+	if !seen[string(zenforge.EventRunStarted)] {
+		t.Fatalf("first frames = %v, want the draft's run.started", seen)
+	}
 }

@@ -178,7 +178,10 @@ what is experimental, and what remains adapter territory.
   **concurrently** under different selections share whichever adapter was applied
   last, because the harness's task carries no model field and this host owns one
   adapter; no model-selection event is written to the session log; and no model
-  exposes a reasoning-effort choice. Since ADR 0103 a session's chosen model is
+  exposes a reasoning-effort choice. A session that has been created but has not
+  started a turn -- the draft the console opens before its first prompt -- is
+  process-local too: it is served as an empty history (ADR 0104), and a restart
+  forgets it because it has no transcript to keep. Since ADR 0103 a session's chosen model is
   written to the settings document and restored on the next start, with two
   bounds: only sessions whose model an operator actually chose are recorded, and
   the 64 most recent choices are kept -- a session that chose nothing still gets

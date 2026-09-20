@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/feiyu912/zenforge/internal/dshapi"
+	"github.com/feiyu912/zenforge/model"
 	"github.com/feiyu912/zenforge/model/provider"
 )
 
@@ -848,5 +849,62 @@ func TestConsoleUserLayerBelongsToTheCardItWasWrittenOn(t *testing.T) {
 	}
 	if _, found := restarted.SettingsUserSection(provider.OpenAI); found {
 		t.Fatal("the openai card reports a user layer after a restart, want it still absent")
+	}
+}
+
+// TestRegisteredSessionWithoutAChoiceKeepsTheConfiguredModel is the regression the
+// console's first prompt hit: a session is registered the moment it is created, so
+// the projection has a key for it (ADR 0102), and a registered session with no
+// choice must fall back to the configured model. Treating the record's presence as
+// a choice installed an adapter for provider "" and failed every fresh session's
+// first prompt with "provider \"\" is not one this host can route to".
+func TestRegisteredSessionWithoutAChoiceKeepsTheConfiguredModel(t *testing.T) {
+	path := filepath.Join(t.TempDir(), consoleSettingsFileName)
+	harness := newDocumentHarness(t, path, documentSeed())
+	// The chosen session runs on a declared profile, and the host's one stored
+	// credential is what an unnamed reference resolves to (ADR 0084, ADR 0095).
+	harness.store.mu.Lock()
+	harness.store.current.apiKey = "sk-acme-test"
+	harness.store.mu.Unlock()
+
+	var installed []string
+	harness.selections.install = func(adapter model.Model) {
+		installed = append(installed, fmt.Sprintf("%T", adapter))
+	}
+	harness.selections.RegisterSession("session-fresh")
+	if err := harness.selections.ApplyModelSelection("session-fresh"); err != nil {
+		t.Fatalf("ApplyModelSelection for a registered session with no choice: %v", err)
+	}
+	if len(installed) != 0 {
+		t.Fatalf("installed %v, want the configured adapter left in place", installed)
+	}
+	// The record is still there, still with no choice, so the composer keeps its
+	// projection key and the session is not silently forgotten.
+	state, known := harness.selections.States()["session-fresh"]
+	if !known {
+		t.Fatal("the registered session is gone after applying its (empty) selection")
+	}
+	if state.Projection.Next != nil {
+		t.Fatalf("projection = %+v, want no selection for a session that chose nothing", *state.Projection.Next)
+	}
+
+	// And a session that did choose still installs its own adapter: the flag must
+	// not turn every choice into the fallback.
+	if _, err := harness.profiles.SetProviderProfile(dshapi.ProviderProfile{
+		Provider: "acme",
+		API:      dshapi.ProtocolOpenAICompletions,
+		BaseURL:  "https://acme.test/v1",
+		Models:   []dshapi.ProviderModel{{ID: "acme-1"}},
+	}); err != nil {
+		t.Fatalf("declare the profile: %v", err)
+	}
+	if _, err := harness.selections.SelectModel("session-chosen", dshapi.ModelSelection{Provider: "acme", Model: "acme-1"}); err != nil {
+		t.Fatalf("SelectModel: %v", err)
+	}
+	if err := harness.selections.ApplyModelSelection("session-chosen"); err != nil {
+		t.Fatalf("ApplyModelSelection for a chosen session: %v", err)
+	}
+	if len(installed) != 1 {
+		t.Fatalf("installed %v, want exactly the chosen session's adapter", installed)
 	}
 }

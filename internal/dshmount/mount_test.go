@@ -14,6 +14,7 @@ import (
 
 	"github.com/feiyu912/zenforge/eventlog"
 	"github.com/feiyu912/zenforge/eventlog/memory"
+	"github.com/feiyu912/zenforge/internal/dshapi"
 	"github.com/feiyu912/zenforge/internal/dshboot"
 	"github.com/feiyu912/zenforge/server/harnesshttp"
 	dshconsole "github.com/feiyu912/zenforge/webui/dsh"
@@ -672,5 +673,54 @@ func TestPluginInventoryDescribesTheRoster(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("the withheld native directory picker is missing from the inventory")
+	}
+}
+
+// TestMuxReportsDraftSessionsFromTheRPCHandler pins the seam the follow stream
+// asks through. Only the RPC handler holds the sessions this host created, so a
+// mount that answered "no drafts" for everything would take the console back to
+// "Failed to load history" on every new chat; one that answered "yes" for
+// everything would invent sessions for ids the host never created.
+func TestMuxReportsDraftSessionsFromTheRPCHandler(t *testing.T) {
+	store := memory.New()
+	manager := harnesshttp.NewRunManager(nil, store, eventlog.NewBus(), harnesshttp.RunManagerOptions{})
+	api, err := dshapi.New(manager, store, dshapi.Config{})
+	if err != nil {
+		t.Fatalf("dshapi.New: %v", err)
+	}
+	server := httptest.NewServer(api)
+	defer server.Close()
+
+	body := `{"type":"client-request","rpcId":"c1","method":"session/create","payload":{"args":{}}}`
+	response, err := http.Post(server.URL+"/api/session/create", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("session/create: %v", err)
+	}
+	defer response.Body.Close()
+	var envelope struct {
+		Result struct {
+			Value struct {
+				SessionID string `json:"sessionId"`
+			} `json:"value"`
+		} `json:"result"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&envelope); err != nil {
+		t.Fatalf("decode session/create: %v", err)
+	}
+	sessionID := envelope.Result.Value.SessionID
+	if sessionID == "" {
+		t.Fatal("session/create returned no session id")
+	}
+
+	mux := &Mux{api: api}
+	if !mux.IsDraftSession(sessionID) {
+		t.Fatalf("the mount does not report %s, the session the RPC handler created, as a draft", sessionID)
+	}
+	if mux.IsDraftSession("run-never-created") {
+		t.Fatal("the mount reports a session this host never created as a draft")
+	}
+	// A mount with no RPC handler answers no rather than guessing.
+	if (&Mux{}).IsDraftSession(sessionID) {
+		t.Fatal("an empty mount reports a draft session")
 	}
 }
