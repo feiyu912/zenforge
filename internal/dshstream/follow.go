@@ -53,7 +53,9 @@ func (h *Handler) sessionProjectionBaseline(sessionID string, cursor int64) proj
 // are appended, then ends cleanly when the run reaches a terminal event. The
 // snapshot and the live frames use the same SessionWireEvent mapping
 // session/page already uses, so the two history paths cannot disagree about a
-// record's shape.
+// record's shape, and both serve the session's whole conversation: each turn's
+// events are shifted past the turns before them (dshwire.Session), so a second
+// prompt does not restart the sequence the console cursors on.
 //
 // What this host does not send is assistant-stream frames. The harness does
 // stream model output, but as durable model.delta events carrying
@@ -72,16 +74,23 @@ func (h *Handler) runFollow(ctx context.Context, payload []byte, send func(any) 
 		return failure
 	}
 
-	// Follow the run serving this session's newest turn: a conversation that
-	// has moved past its first run must stream the run actually answering.
-	runID := h.currentRun(ctx, request.sessionID)
-	info, infoErr := h.manager.Get(runID)
-	events, err := h.events.Read(ctx, runID, 0, 0)
+	// The session's served log is its whole conversation: every turn's records in
+	// one session-wide sequence, with the newest turn's projection to tail. Turn
+	// one is the session id itself, so a session that has never been prompted has
+	// no turns and no records.
+	turnIdentity := func(turn int) dshwire.Identity {
+		identity := h.wireIdentity(request.sessionID)
+		identity.Turn = turn
+		return identity
+	}
+	log, err := dshwire.Session(ctx, h, request.sessionID, turnIdentity)
 	if err != nil {
 		return streamFail(codeInternal, "read session log: "+err.Error(), nil)
 	}
-	draft := false
-	if len(events) == 0 && infoErr != nil {
+	runID := log.NewestRun
+	info, infoErr := h.manager.Get(runID)
+	draft := len(log.Runs) == 0
+	if draft {
 		// A session this host created and no turn has started -- the draft the
 		// console opens before its first prompt -- has an empty log and no run to
 		// attach to. That is not a missing session: its history is empty, and the
@@ -89,34 +98,28 @@ func (h *Handler) runFollow(ctx context.Context, payload []byte, send func(any) 
 		// conversation. The tail then waits for the run the first prompt starts
 		// instead of attaching to nothing. An id this host never created is still
 		// not-found.
-		draft = errors.Is(infoErr, harnesshttp.ErrRunNotFound) && h.isDraftSession(request.sessionID)
-		if !draft {
-			if errors.Is(infoErr, harnesshttp.ErrRunNotFound) {
-				return streamFail(codeSessionNotFound, fmt.Sprintf("session %q not found", request.sessionID),
-					map[string]any{"sessionId": request.sessionID})
-			}
-			return streamFail(codeInternal, "look up session: "+infoErr.Error(), nil)
+		if !h.isDraftSession(request.sessionID) {
+			return streamFail(codeSessionNotFound, fmt.Sprintf("session %q not found", request.sessionID),
+				map[string]any{"sessionId": request.sessionID})
 		}
+		runID = request.sessionID
 	}
 
-	// cursor is the durable tail. The client requires the snapshot's last
-	// record to end exactly at cursor, and an empty page to cite upstream's
-	// empty cursor of -1 (api/gateway/src/client/journal-stream.ts
-	// assertPageThrough + SessionEventStream's emptyCursor).
-	cursor := int64(-1)
-	if len(events) > 0 {
-		cursor = events[len(events)-1].Seq
-	}
-	// The projection covers the whole log even though only a window is sent: an
-	// assistant message is the settlement of the deltas before it, so a window
-	// that opens mid-step still needs the step's accumulated content. The same
-	// projection is then continued live, which is why it is built here rather
-	// than inside the record loop.
-	projection := dshwire.Project(events, h.wireIdentity(request.sessionID))
-	window, hasMore := projection.Window(request.maxMessages)
+	// cursor is the session's newest sequence. The client requires the snapshot's
+	// last record to end exactly at cursor, an empty page to cite upstream's empty
+	// cursor of -1, every live event to be one past the cursor, and a resumed
+	// generation to cite a cursor at or ahead of the last entry it applied
+	// (api/gateway/src/client/journal-stream.ts assertPageThrough + follows +
+	// opening). A session-wide sequence is what makes all four hold across turns.
+	cursor := log.Cursor()
+	window, hasMore := log.Window(request.maxMessages)
 	records := make([]eventRecord, 0, len(window))
 	for _, event := range window {
 		records = append(records, eventRecord{Type: "event", Event: event})
+	}
+	events := []zenforge.Event(nil)
+	if log.Newest != nil {
+		events = log.Newest.Source
 	}
 	snapshot := snapshotFrame{
 		Type:            "snapshot",
@@ -134,11 +137,13 @@ func (h *Handler) runFollow(ctx context.Context, payload []byte, send func(any) 
 		return err
 	}
 
-	// Attach subscribes before reading the durable watermark, then replays
-	// through it, so an append that races the snapshot is delivered exactly
-	// once and in seq order. A negative cursor means "the log was empty"; the
-	// live tail then starts at seq 1.
-	afterSeq := cursor
+	// The live tail continues the newest turn's projection, and attaches at that
+	// turn's own durable tail: the manager's follower speaks the run's sequence,
+	// not the session's shifted one. Attach subscribes before reading the durable
+	// watermark and then replays through it, so an append that races the snapshot
+	// is delivered exactly once and in seq order.
+	tail := log.Newest
+	afterSeq := log.NewestTail
 	if afterSeq < 0 {
 		afterSeq = 0
 	}
@@ -149,6 +154,17 @@ func (h *Handler) runFollow(ctx context.Context, payload []byte, send func(any) 
 		if err := h.awaitDraftRun(ctx, runID); err != nil {
 			return err
 		}
+		// The empty snapshot cited cursor -1, so the console requires the first
+		// event to be sequence 1: attach at the beginning and let the replay send
+		// the whole first turn. The tail starts empty and is fed by that replay,
+		// which projects it exactly once.
+		tail = dshwire.Project(nil, turnIdentity(1))
+		afterSeq = 0
+	}
+	if tail == nil {
+		// A turn whose log is still empty (a run that has just started) has no
+		// events to project yet; its first event creates the record.
+		tail = dshwire.Project(nil, turnIdentity(log.NewestTurn))
 	}
 	live, liveErr, err := h.manager.Attach(ctx, runID, afterSeq)
 	if err != nil {
@@ -172,11 +188,13 @@ func (h *Handler) runFollow(ctx context.Context, payload []byte, send func(any) 
 			if !ok {
 				return nil
 			}
-			// Continue the snapshot's projection rather than starting a new one:
-			// the step being streamed is the same step, and its settlement must
-			// carry the deltas the snapshot already counted.
-			projection.Append(event)
-			projected := projection.Events[len(projection.Events)-1]
+			// Continue the snapshot's projection of the newest turn rather than
+			// starting a new one: the step being streamed is the same step, its
+			// settlement must carry the deltas the snapshot already counted, and
+			// the turn's sequence offset is what keeps this event one past the
+			// snapshot cursor the console holds.
+			tail.Append(event)
+			projected := tail.Events[len(tail.Events)-1]
 			if err := send(eventRecord{Type: "event", Event: projected}); err != nil {
 				return err
 			}

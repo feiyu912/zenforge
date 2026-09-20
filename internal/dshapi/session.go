@@ -595,22 +595,21 @@ func (h *Handler) sessionPage(ctx context.Context, args map[string]json.RawMessa
 		maxMessages = maxPageMessages
 	}
 
-	// Read the run serving the session's newest turn, which is the run follow
-	// streams: a page read from the first turn while follow streamed the second
-	// would show one conversation's history beside another's answer.
-	//
-	// This host does not yet merge a session's turns into one paged log. The
-	// wire cursor is a sequence number, and each run's log numbers its own
-	// events from one, so a merged page would need a synthetic coordinate and
-	// rewritten per-event ids. Until that exists, the page is the newest turn's
-	// log and an earlier turn's transcript is not reachable through it; ADR 0086
-	// records that as a known gap rather than hiding it.
-	runID := h.currentRun(ctx, sessionID)
-	events, err := h.events.Read(ctx, runID, 0, 0)
+	// The page is the session's whole conversation, not the newest turn's log:
+	// each turn's events are shifted past the turns before them so the sequence
+	// the console cursors on never moves backwards (dshwire.Session). Reading
+	// only the newest turn served a second turn's numbers from one, which the
+	// console rejects as a stream resumed behind its last applied entry, and it
+	// made an earlier turn unreachable through "load earlier".
+	log, err := dshwire.Session(ctx, h, sessionID, func(turn int) dshwire.Identity {
+		identity := h.wireIdentity(sessionID)
+		identity.Turn = turn
+		return identity
+	})
 	if err != nil {
 		return nil, fail(codeInternal, "read session log: "+err.Error(), nil)
 	}
-	if len(events) == 0 {
+	if len(log.Records) == 0 {
 		// A session this host has created but no turn has started -- the draft the
 		// console opens before its first prompt -- has an empty history, not a
 		// missing one. The console loads a session's history the moment it opens
@@ -623,37 +622,10 @@ func (h *Handler) sessionPage(ctx context.Context, args map[string]json.RawMessa
 		return nil, fail(codeSessionNotFound, fmt.Sprintf("session %q not found", sessionID),
 			map[string]any{"sessionId": sessionID})
 	}
-	latest := events[len(events)-1].Seq
-	cursor := throughSeq
-	if cursor < 0 || cursor > latest {
-		cursor = latest
-	}
-	upper := cursor + 1
-	if hasBefore && beforeSeq < upper {
-		upper = beforeSeq
-	}
-	selected := make([]int, 0, maxMessages)
-	for index := len(events) - 1; index >= 0; index-- {
-		if events[index].Seq >= upper {
-			continue
-		}
-		if int64(len(selected)) >= maxMessages {
-			break
-		}
-		selected = append(selected, index)
-	}
-	// The projection is built over the whole log even though only a window is
-	// served: an assistant message is the settlement of the deltas that preceded
-	// it, so a window that starts mid-step still needs the step's accumulated
-	// content. The window then selects the projected records.
-	projection := dshwire.Project(events, h.wireIdentity(sessionID))
-	records := make([]map[string]any, 0, len(selected))
-	for index := len(selected) - 1; index >= 0; index-- {
-		records = append(records, map[string]any{"type": "event", "event": projection.Events[selected[index]]})
-	}
-	hasMore := false
-	if len(selected) > 0 {
-		hasMore = selected[len(selected)-1] > 0
+	window, hasMore := log.Through(throughSeq, beforeSeq, hasBefore, int(maxMessages))
+	records := make([]map[string]any, 0, len(window))
+	for _, record := range window {
+		records = append(records, map[string]any{"type": "event", "event": record})
 	}
 	return map[string]any{"records": records, "hasMore": hasMore}, nil
 }

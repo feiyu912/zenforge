@@ -36,6 +36,18 @@ func (h *Handler) sessionRunIDs(ctx context.Context, sessionID string) []string 
 	}
 }
 
+// Turns implements dshwire.Source: the runs serving a session's turns, in turn
+// order. It is sessionRunIDs with an error arm, so the session log builder and
+// the prompt path cannot disagree about which runs a session is.
+func (h *Handler) Turns(ctx context.Context, sessionID string) ([]string, error) {
+	return h.sessionRunIDs(ctx, sessionID), nil
+}
+
+// Read implements dshwire.Source: one run's durable events from the beginning.
+func (h *Handler) Read(ctx context.Context, runID string) ([]zenforge.Event, error) {
+	return h.events.Read(ctx, runID, 0, 0)
+}
+
 // runExists reports whether a run id names a run this host knows: live in the
 // manager, or with a durable log the manager no longer tracks.
 func (h *Handler) runExists(ctx context.Context, runID string) bool {

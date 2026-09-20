@@ -63,7 +63,7 @@ method list.
 | `session/create` | served | Create a session. It exists before its first turn: its history is empty, not missing (ADR 0104). |
 | `session/list` | served | List sessions. A planning session is listed by the operator's own task; the plan-execute preset's appended instruction never reaches the title (ADR 0106). |
 | `session/modelCatalog` | served | The models the page may offer, grouped per provider. |
-| `session/page` | served | A page of a session's events, projected into the console's vocabulary. A created session with no turns answers an empty page (ADR 0104, ADR 0105). |
+| `session/page` | served | A page of a session's events, projected into the console's vocabulary. A created session with no turns answers an empty page (ADR 0104, ADR 0105). A session's turns share one sequence, so `Load earlier` reaches an earlier prompt (ADR 0108). |
 | `session/prompt` | served | Send a turn into a session. Under the plan-execute preset a question is answered in the plan stage and never reaches an execute or summary stage (ADR 0107). |
 | `session/rename` | served | Rename a session. |
 | `session/selectModel` | served | Choose the provider and model a session runs on. The choice is restored on the next start (ADR 0103). |
@@ -83,7 +83,7 @@ method list.
 | `workspaceFiles/readBytes` | served | Read a byte range of a file. |
 | `workspaceFiles/stat` | served | Stat a workspace path. |
 | `session/control` | stream | The control stream: job and model-selection projections. |
-| `session/follow` | stream | The follow stream: a session's durable event log, projected into the console's vocabulary. A draft's stream opens empty and waits for its first turn (ADR 0104, ADR 0105). |
+| `session/follow` | stream | The follow stream: a session's durable event log, projected into the console's vocabulary. A draft's stream opens empty and waits for its first turn (ADR 0104, ADR 0105). A resumed stream cites a cursor ahead of the one the console already applied, so a second prompt does not break history loading (ADR 0108). |
 | `workspace/follow` | stream | The workspace stream: every registration and the archived set. |
 
 ## Refused by name

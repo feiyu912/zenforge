@@ -11,6 +11,7 @@ import (
 	"github.com/feiyu912/zenforge"
 	"github.com/feiyu912/zenforge/eventlog"
 	"github.com/feiyu912/zenforge/eventlog/memory"
+	"github.com/feiyu912/zenforge/internal/dshsession"
 	"github.com/feiyu912/zenforge/model"
 	"github.com/feiyu912/zenforge/server/harnesshttp"
 )
@@ -711,5 +712,81 @@ func TestSessionPageServesTheNewestTurn(t *testing.T) {
 	}
 	if !strings.Contains(page.Body.String(), "the second question") {
 		t.Fatalf("page does not serve the newest turn: %s", page.Body.String())
+	}
+}
+
+func TestSessionPageServesEveryTurnInOneSequence(t *testing.T) {
+	f := newFixture(t, Config{})
+	sessionID := f.startSession(t)
+	f.agent.append(sessionID, zenforge.EventStepStarted, map[string]any{"step": 1})
+	f.agent.append(sessionID, zenforge.EventStepDone, map[string]any{"step": 1})
+	f.agent.finish(sessionID)
+
+	// The operator asks a second question: the console prompts the same session,
+	// and the host starts the next turn of the conversation under the
+	// deterministic continuation run id.
+	recorder := f.post(t, "/api/session/prompt",
+		rpcBody(t, "rpc-prompt-2", "session/prompt",
+			fmt.Sprintf(`{"requestId":"req-2","sessionId":%s,"mode":"queue","content":[{"type":"text","text":"again"}]}`, mustJSON(t, sessionID))))
+	if envelope := decodeResponse(t, recorder); !envelope.Result.OK {
+		t.Fatalf("second prompt failed: %s", recorder.Body.String())
+	}
+	second := dshsession.ContinuationRunID(sessionID, 2)
+	waitForStatus(t, f.manager, second, harnesshttp.RunRunning)
+	f.agent.append(second, zenforge.EventStepStarted, map[string]any{"step": 1})
+	f.agent.finish(second)
+
+	recorder = f.post(t, "/api/session/page", rpcBody(t, "rpc-page-turns", "session/page",
+		pageArgs(t, sessionID, `"throughSeq":-1,"maxMessages":50`)))
+	var value pageValue
+	decodeValue(t, recorder, &value)
+	if len(value.Records) != 7 {
+		t.Fatalf("records = %d, want both turns' seven events", len(value.Records))
+	}
+	// One conversation, one sequence: a second turn that numbered from one is what
+	// the console rejects as a stream resumed behind its last applied entry.
+	for index, record := range value.Records {
+		want := int64(index + 1)
+		if record.Event.Seq != want {
+			t.Fatalf("record %d has seq %d, want %d", index, record.Event.Seq, want)
+		}
+	}
+	if value.HasMore {
+		t.Fatal("hasMore = true, want false for a log this short")
+	}
+	// The second turn's prompt is a user message of its own, and its records are
+	// grouped as turn 2 rather than folded into the first turn.
+	var prompts []int64
+	for _, record := range value.Records {
+		if record.Event.Type == "user/message" {
+			prompts = append(prompts, record.Event.Seq)
+		}
+		if turn, ok := record.Event.Data["turn"].(float64); ok && turn != 2 && record.Event.Seq > 4 {
+			t.Fatalf("seq %d carries turn %v, want the second turn", record.Event.Seq, turn)
+		}
+	}
+	if len(prompts) != 2 {
+		t.Fatalf("user messages at %v, want one per turn", prompts)
+	}
+
+	// "Load earlier" pages back below the second turn's records and reaches the
+	// first turn, ending exactly where the console's window begins.
+	recorder = f.post(t, "/api/session/page", rpcBody(t, "rpc-page-earlier", "session/page",
+		pageArgs(t, sessionID, `"throughSeq":-1,"maxMessages":2`)))
+	decodeValue(t, recorder, &value)
+	if len(value.Records) != 2 || value.Records[0].Event.Seq != 6 || value.Records[1].Event.Seq != 7 {
+		t.Fatalf("newest page seqs = [%d %d], want [6 7]", value.Records[0].Event.Seq, value.Records[1].Event.Seq)
+	}
+	if !value.HasMore {
+		t.Fatal("hasMore = false, want the earlier turn available")
+	}
+	recorder = f.post(t, "/api/session/page", rpcBody(t, "rpc-page-first", "session/page",
+		pageArgs(t, sessionID, `"throughSeq":-1,"beforeSeq":6,"maxMessages":2`)))
+	decodeValue(t, recorder, &value)
+	// The page ends exactly one below the window it extends -- the console's
+	// prepend requires the earlier page's newest record to be firstCursor - 1 --
+	// and reaches into the first turn.
+	if len(value.Records) != 2 || value.Records[0].Event.Seq != 4 || value.Records[1].Event.Seq != 5 {
+		t.Fatalf("earlier page seqs = [%d %d], want [4 5]", value.Records[0].Event.Seq, value.Records[1].Event.Seq)
 	}
 }

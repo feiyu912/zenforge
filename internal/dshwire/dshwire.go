@@ -61,12 +61,29 @@ type Event struct {
 type Identity struct {
 	Provider string
 	Model    string
+	// Turn is the console turn number these events belong to. A console session
+	// outlives its runs: each turn is one zenforge run, and the console groups a
+	// transcript by this number, so turn 1 and turn 2 must not share it. Zero
+	// means the first turn.
+	Turn int
+	// SeqOffset moves this run's durable sequence into the session's. A session's
+	// served log is the concatenation of its turns (dshwire.Session), so turn k's
+	// wire sequence is its durable sequence shifted past every event of the turns
+	// before it -- which is what keeps the console's cursor monotone across turns
+	// instead of restarting at one.
+	SeqOffset int64
 }
 
-// Turn is the turn number every event of a zenforge run is projected onto. A
-// console session maps to one zenforge run (ADR 0101), and a run is one turn:
-// a queued prompt is a steer inside the running turn rather than a new one.
-const Turn = 1
+// DefaultTurn is the turn number a projection uses when its identity names none.
+const DefaultTurn = 1
+
+// turn returns the console turn this identity projects onto.
+func (i Identity) turn() int {
+	if i.Turn <= 0 {
+		return DefaultTurn
+	}
+	return i.Turn
+}
 
 // SurfaceEligibleTypes are the only event types the console allows `surfaceOp`
 // on. They are the message-producing types of the model-visible surface
@@ -154,7 +171,7 @@ func (p *Projection) Window(maxMessages int) ([]Event, bool) {
 // Next projects one durable event.
 func (p *Projector) Next(event zenforge.Event) Event {
 	data := payload(event)
-	base := Event{Seq: event.Seq, Time: event.Timestamp, Data: data}
+	base := Event{Seq: p.identity.SeqOffset + event.Seq, Time: event.Timestamp, Data: data}
 
 	switch event.Type {
 	case zenforge.EventRunStarted:
@@ -168,11 +185,11 @@ func (p *Projector) Next(event zenforge.Event) Event {
 	case zenforge.EventStepStarted:
 		if step, ok := intField(data, "step"); ok {
 			p.current = step
-			return base.known("step/start", turnStep(step))
+			return base.known("step/start", p.turnStep(step))
 		}
 	case zenforge.EventStepDone:
 		if step, ok := intField(data, "step"); ok {
-			return base.known("step/end", turnStep(step))
+			return base.known("step/end", p.turnStep(step))
 		}
 	case zenforge.EventModelStarted:
 		// A new attempt starts a fresh stream; a retried step must not carry the
@@ -204,11 +221,11 @@ func (p *Projector) Next(event zenforge.Event) Event {
 			// A step that settled without model-visible content is an attempt,
 			// not a message: the console records it as log-only history.
 			return base.known("assistant/attempt", map[string]any{
-				"turn": Turn, "step": step, "stream": []any{},
+				"turn": p.identity.turn(), "step": step, "stream": []any{},
 			})
 		}
 		message := map[string]any{
-			"turn": Turn,
+			"turn": p.identity.turn(),
 			"step": step,
 			"message": map[string]any{
 				"id":      messageID(event.Seq),
@@ -238,7 +255,7 @@ func (p *Projector) Next(event zenforge.Event) Event {
 		}
 		p.steps[callID] = step
 		return base.known("tool/call", map[string]any{
-			"turn":      Turn,
+			"turn":      p.identity.turn(),
 			"step":      step,
 			"callId":    callID,
 			"name":      name,
@@ -257,10 +274,10 @@ func (p *Projector) Next(event zenforge.Event) Event {
 		if step == 0 {
 			step = p.current
 		}
-		return p.surface(base, "tool/result", toolResult(event.Seq, step, callID, output, event.Type == zenforge.EventToolError))
+		return p.surface(base, "tool/result", p.toolResult(base.Seq, step, callID, output, event.Type == zenforge.EventToolError))
 	case zenforge.EventRunDone:
 		return base.known("turn/end", map[string]any{
-			"turn": Turn, "reason": map[string]any{"kind": "completed"},
+			"turn": p.identity.turn(), "reason": map[string]any{"kind": "completed"},
 		})
 	case zenforge.EventRunError:
 		message, _ := firstStringField(data, "error", "message")
@@ -268,7 +285,7 @@ func (p *Projector) Next(event zenforge.Event) Event {
 			message = "the run failed"
 		}
 		return base.known("turn/end", map[string]any{
-			"turn": Turn,
+			"turn": p.identity.turn(),
 			"reason": map[string]any{
 				"kind":  "error",
 				"error": map[string]any{"message": message, "code": "UNKNOWN"},
@@ -276,7 +293,7 @@ func (p *Projector) Next(event zenforge.Event) Event {
 		})
 	case zenforge.EventRunCancelled:
 		return base.known("turn/end", map[string]any{
-			"turn":   Turn,
+			"turn":   p.identity.turn(),
 			"reason": map[string]any{"kind": "aborted", "reason": map[string]any{"kind": "user"}},
 		})
 	}
@@ -286,8 +303,8 @@ func (p *Projector) Next(event zenforge.Event) Event {
 	// never marked ignorable -- it is passed through for the console to read.
 	return Event{
 		Type:      string(event.Type),
-		Seq:       event.Seq,
-		Time:      event.Timestamp,
+		Seq:       base.Seq,
+		Time:      base.Time,
 		Data:      data,
 		Ignorable: !KnownEventTypes[string(event.Type)],
 	}
@@ -350,8 +367,8 @@ func wireBlocks(blocks []map[string]any) []any {
 	return encoded
 }
 
-func turnStep(step int) map[string]any {
-	return map[string]any{"turn": Turn, "step": step}
+func (p *Projector) turnStep(step int) map[string]any {
+	return map[string]any{"turn": p.identity.turn(), "step": step}
 }
 
 // messageID names one projected message. The console carries a message identity
@@ -375,7 +392,7 @@ func userMessage(seq int64, text string) map[string]any {
 // the block is the only place failure is stated, which is the shape this host
 // can honestly produce -- it has the tool's exit state, not the console's
 // structured failure identity.
-func toolResult(seq int64, step int, callID, output string, isError bool) map[string]any {
+func (p *Projector) toolResult(seq int64, step int, callID, output string, isError bool) map[string]any {
 	block := map[string]any{
 		"type":       "tool-result",
 		"toolCallId": callID,
@@ -385,7 +402,7 @@ func toolResult(seq int64, step int, callID, output string, isError bool) map[st
 		block["isError"] = true
 	}
 	return map[string]any{
-		"turn": Turn,
+		"turn": p.identity.turn(),
 		"step": step,
 		"message": map[string]any{
 			"id":      messageID(seq),

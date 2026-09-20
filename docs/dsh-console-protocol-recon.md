@@ -495,6 +495,17 @@ Stream items (`SessionFollowFrame`, `types.ts:516-527`):
 `{address, throughSeq, beforeSeq?, maxMessages?}` → `{records, hasMore}` (`types.ts:441-447,510-513`).
 Caller `client/transport.ts:228`. Needed only for scrolling past the opening window.
 
+**Corrected 2026-09-20 (ADR 0108):** the snapshot's `cursor` is not per run but per
+**session**: `client/journal-stream.ts` keeps one last-applied cursor for the whole
+conversation (`follows(left, right) => right === left + 1`), requires a snapshot window's
+last record to end exactly at the cursor it cites (`assertPageThrough`), and throws
+`<name> resumed at a cursor behind the last applied entry` when a resumed generation cites
+a lower one (`opening(item, resumed)`). A host whose runs each number their log from one —
+which is what this harness does for a session's turns — must therefore serve a session's
+turns in one sequence, or the second prompt fails with
+`Failed to load history: session event stream resumed at a cursor behind the last applied
+entry (gateway/internal)`, which is exactly what this host did before ADR 0108.
+
 **`POST /api/session/cancel`** — args `{ "sessionId": "…" }` → `{ "accepted": true }`
 (`types.ts:353-360`). Caller `sessions/session.ts:340`.
 

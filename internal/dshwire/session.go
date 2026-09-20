@@ -1,0 +1,175 @@
+package dshwire
+
+import (
+	"context"
+
+	"github.com/feiyu912/zenforge"
+)
+
+// This file serves a console session's log, which is more than one run's.
+//
+// A console session is a conversation: the operator keeps prompting it, and each
+// prompt after the first is a new zenforge run (dshsession.ContinuationRunID) so
+// a finished turn can be continued. Each run numbers its own durable events from
+// one, and the console's cursor is that number. Serving a later turn's log with
+// its own numbering therefore moves the cursor *backwards*, which the console
+// refuses:
+//
+//	Failed to load history: session event stream resumed at a cursor behind the
+//	last applied entry (gateway/internal)
+//
+// The invariant is not cosmetic. The shipped client keeps one last-applied cursor
+// for the whole conversation, requires every live event to be exactly one past
+// it, requires a snapshot's last record to end exactly at the snapshot's cursor,
+// and requires a resumed generation's cursor to be at or ahead of what it already
+// applied (api/gateway/src/client/journal-stream.ts assertPageThrough +
+// opening + follows). A conversation whose second turn renumbers from one breaks
+// all three at once, and its earlier turn is unreachable as well.
+//
+// So a session's served log is the concatenation of its turns in one sequence:
+// turn k's wire sequence is its durable sequence shifted past every event of the
+// turns before it. The shift is derived, not stored -- a turn's event count is
+// fixed once that turn has ended, and a later turn only starts after the previous
+// one reached a terminal event -- so the same session always serves the same
+// numbers, and a restart or another process rebuilds them identically.
+
+// Source is what a session log needs from a host: the runs serving a session's
+// turns, in turn order, and their durable logs. dshapi and dshstream each
+// implement it over the same manager and event store, so the RPC surface and the
+// stream cannot disagree about which runs a session is or how they are numbered.
+type Source interface {
+	// Turns returns the run ids serving a session, in turn order. A session whose
+	// first turn has not started has no turns, which is not an error: that is the
+	// draft the console opens before its first prompt.
+	Turns(ctx context.Context, sessionID string) ([]string, error)
+	// Read returns one run's durable events from the beginning.
+	Read(ctx context.Context, runID string) ([]zenforge.Event, error)
+}
+
+// SessionLog is the served view of a console session: every turn's projected
+// records, in one session-wide sequence, plus the newest turn's own projection so
+// a live follow can continue it.
+type SessionLog struct {
+	// SessionID is the session the log belongs to.
+	SessionID string
+	// Runs are the runs serving the session's turns, in turn order. The last is
+	// the turn a follow stream tails.
+	Runs []string
+	// Records are every turn's wire events, in session sequence: turn k's records
+	// carry SeqOffset(k) added to their durable sequence, so the sequence is
+	// strictly increasing across turns and contiguous within them.
+	Records []Event
+	// Newest is the newest turn's projection, continued by a live tail. It is nil
+	// when the session has no turns yet.
+	Newest *Projection
+	// NewestRun is the run id of the newest turn, empty when there is none.
+	NewestRun string
+	// NewestTail is the newest turn's own durable tail sequence (not the session
+	// sequence), which is where a follower attaches.
+	NewestTail int64
+	// NewestTurn is the newest turn's console turn number, one-based.
+	NewestTurn int
+}
+
+// Session builds a session's log by projecting each of its turns and shifting it
+// into the session sequence. Identity reports the provenance and the turn number
+// for one turn -- the provider and model are the host's answer for every turn,
+// while turn and sequence offset are the session's own coordinates.
+//
+// A session with no turns yet yields an empty log with no error; callers decide
+// whether that is a draft (the console's new chat) or a session this host does
+// not serve.
+func Session(ctx context.Context, source Source, sessionID string, identity func(turn int) Identity) (*SessionLog, error) {
+	runs, err := source.Turns(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	log := &SessionLog{SessionID: sessionID, Runs: runs}
+	offset := int64(0)
+	for index, runID := range runs {
+		events, err := source.Read(ctx, runID)
+		if err != nil {
+			return nil, err
+		}
+		turn := index + 1
+		stamp := identity(turn)
+		stamp.Turn = turn
+		stamp.SeqOffset = offset
+		projection := Project(events, stamp)
+		log.Records = append(log.Records, projection.Events...)
+		// The next turn starts where this one's events end, whether or not this
+		// turn produced records: the sequence covers durable events, and a turn
+		// that logged nothing contributes no numbers to skip.
+		offset += int64(len(events))
+		if index == len(runs)-1 {
+			log.Newest = projection
+			log.NewestRun = runID
+			log.NewestTurn = turn
+			if len(events) > 0 {
+				log.NewestTail = events[len(events)-1].Seq
+			}
+		}
+	}
+	return log, nil
+}
+
+// Cursor is the session's newest sequence number, or -1 for a session with no
+// records. It is what a snapshot cites and what the console's cursor becomes: the
+// value the next event must be one past.
+func (l *SessionLog) Cursor() int64 {
+	if len(l.Records) == 0 {
+		return -1
+	}
+	return l.Records[len(l.Records)-1].Seq
+}
+
+// Window returns the newest maxMessages records, or all of them when maxMessages
+// is not positive, plus whether older records were left out. The window can span
+// turns: the operator scrolling back through a conversation expects the earlier
+// turn, not the current turn's beginning.
+func (l *SessionLog) Window(maxMessages int) ([]Event, bool) {
+	if maxMessages <= 0 || len(l.Records) <= maxMessages {
+		return l.Records, false
+	}
+	return l.Records[len(l.Records)-maxMessages:], true
+}
+
+// Through returns the records of one page: the newest maxMessages records below
+// the inclusive cursor, honoring beforeSeq as an exclusive upper bound when it is
+// lower. It is the selection session/page answers with, and it exists here so the
+// page and the snapshot agree on what a window is.
+//
+// hasMore reports whether any record precedes the page, which is what the
+// console's "load earlier" reads.
+func (l *SessionLog) Through(cursor int64, beforeSeq int64, hasBefore bool, maxMessages int) ([]Event, bool) {
+	if cursor < 0 || cursor > l.Cursor() {
+		cursor = l.Cursor()
+	}
+	upper := cursor + 1
+	if hasBefore && beforeSeq < upper {
+		upper = beforeSeq
+	}
+	if maxMessages <= 0 {
+		maxMessages = len(l.Records)
+	}
+	selected := make([]Event, 0, maxMessages)
+	for index := len(l.Records) - 1; index >= 0; index-- {
+		record := l.Records[index]
+		if record.Seq >= upper {
+			continue
+		}
+		if len(selected) >= maxMessages {
+			break
+		}
+		selected = append(selected, record)
+	}
+	hasMore := false
+	if len(selected) > 0 {
+		hasMore = selected[len(selected)-1].Seq > l.Records[0].Seq
+	}
+	// selected is newest-first; the page is served oldest-first.
+	for left, right := 0, len(selected)-1; left < right; left, right = left+1, right-1 {
+		selected[left], selected[right] = selected[right], selected[left]
+	}
+	return selected, hasMore
+}

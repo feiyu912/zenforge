@@ -184,15 +184,15 @@ machine, and it also relaxes the settings API to non-loopback callers.
   machine while short runs passed; CI was the reliable arbiter. Prefer targeted
   `-run`/single-package runs locally and let CI run the suite.
 
-## Multi-turn: shipped, with one known gap
+## Multi-turn: shipped (ADR 0086, ADR 0108)
 
 The seam described below is now implemented (ADR 0086): a session's turns are
 named by the deterministic chain in `internal/dshsession`, `session/prompt`
 starts the next turn with `InitialMessages` rebuilt from the durable logs,
 `session/list` groups the turns under one session, and `session/follow` and
-`session/page` resolve a session to its newest turn. The remaining gap is that a
-session's turns are **not** merged into one paged log -- see `docs/limitations.md`
--- so an earlier turn's transcript is not reachable through `session/page`.
+`session/page` resolve a session to its newest turn. The turns are also merged
+into **one session-wide sequence** (ADR 0108), so a second prompt loads its
+history and `Load earlier` reaches an earlier turn.
 
 The research that decided it, kept because it explains the choices:
 
@@ -497,6 +497,27 @@ stage so a resume replays the answer instead of planning again. A stage that nei
 planned nor answered still fails `plan_not_created`, and multi-step work is unchanged
 (ADR 0107).
 
+## Shipped: a second prompt keeps the conversation's cursor (2026-09-20)
+
+The operator greeted the console, read the reply, and typed a second message. The history
+pane answered `Failed to load history: session event stream resumed at a cursor behind the
+last applied entry (gateway/internal)`. A console session is a conversation of several
+runs (turn one is the session id, turn *k* is `session~k`), each of which numbers its own
+durable log from one, while the console keeps **one** cursor for the whole conversation. Both
+read paths served only the newest turn's log, so turn two's snapshot cited sequence 5 after
+the conversation had reached 42: `opening(item, resumed)` rejects that, `follows` rejects
+turn two's first live event, and `assertPageThrough` cannot end turn two's window at a
+cursor the client already passed. The earlier turn was unreachable through `Load earlier`
+for the same reason.
+
+`internal/dshwire/session.go` now builds a session's log as the concatenation of its turns
+in one sequence: each turn is projected afresh and shifted past every event of the turns
+before it (`SeqOffset`), carries its own `turn` number, and `session/page` and
+`session/follow` both read it, so the RPC surface and the stream cannot disagree. The shift
+is derived from the durable event counts, never stored, so any process rebuilds the same
+numbers. Two coordinates stay distinct: the session sequence the console cursors on, and
+each run's own durable tail, which is where the live follower attaches (ADR 0108).
+
 ## Operator's one remaining step
 
 The host at `127.0.0.1:8787` is restarted onto this checkout, and the document at
@@ -523,8 +544,11 @@ serves `qwen-plus`, and the card shows only what is written on it.
 > chain with an ADR + docs + tests + commit/push + green CI and docs, and fill the
 > ledger's gaps in its order. The settings document shipped (ADR 0102), so did the
 > user-layer/model-selection fix (ADR 0103), and so did the first-turn fix that made a
-> conversation possible at all (ADR 0104), and the log is now projected into the
-> console's session vocabulary so the transcript renders (ADR 0105); the next item is
+> conversation possible at all (ADR 0104), the log is projected into the
+> console's session vocabulary so the transcript renders (ADR 0105), a session is titled
+> by the operator's own task (ADR 0106), a simple question is answered instead of planned
+> (ADR 0107), and a second prompt keeps the conversation's cursor so its history loads
+> and an earlier turn is reachable (ADR 0108); the next item is
 > "Next up" 1 in the ledger
 > -- re-testing the withheld `ui-directory-picker-browse` plugin, which has to run on a
 > scratch port because a plugin that fails activation is a fatal boot page, and the

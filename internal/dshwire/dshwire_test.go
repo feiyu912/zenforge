@@ -92,7 +92,7 @@ func TestProjectionKeepsOneRecordPerEventAndTheDurableSeq(t *testing.T) {
 func TestProjectionRendersTheTurnAsAConsoleTranscript(t *testing.T) {
 	projected := project(t, aTurn())
 
-	if start := findByType(t, projected, "step/start"); start.Data["step"] != 1 || start.Data["turn"] != Turn {
+	if start := findByType(t, projected, "step/start"); start.Data["step"] != 1 || start.Data["turn"] != DefaultTurn {
 		t.Fatalf("step/start data = %v, want turn 1 step 1", start.Data)
 	}
 
@@ -113,7 +113,7 @@ func TestProjectionRendersTheTurnAsAConsoleTranscript(t *testing.T) {
 	}
 
 	assistant := findByType(t, projected, "assistant/message")
-	if assistant.Data["turn"] != Turn || assistant.Data["step"] != 1 {
+	if assistant.Data["turn"] != DefaultTurn || assistant.Data["step"] != 1 {
 		t.Fatalf("assistant message data = %v, want turn 1 step 1", assistant.Data)
 	}
 	assistantMessage, ok := assistant.Data["message"].(map[string]any)

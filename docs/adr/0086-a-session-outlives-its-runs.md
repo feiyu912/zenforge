@@ -2,6 +2,9 @@
 
 Status: accepted
 
+Amended by ADR 0108: a session's turns are served as one session-wide sequence, so an
+earlier turn's transcript is reachable.
+
 ## Context
 
 The console treats a session as a conversation: it creates one, prompts it, and
@@ -56,6 +59,10 @@ never deliver the answer being waited for. `session/page` resolves the same way,
 so history and the live stream describe the same run.
 
 ## Known gap
+
+**Closed by ADR 0108**: a session's turns are now served as one session-wide sequence, so
+`session/page` and `session/follow` reach every turn. The decision below is kept as the
+record of what was true when it was written.
 
 A session's turns are **not** merged into one paged log. The wire cursor is a
 sequence number and each run's log numbers its own events from one, so a merged

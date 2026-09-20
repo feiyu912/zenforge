@@ -3,6 +3,7 @@ package dshstream
 import (
 	"context"
 
+	"github.com/feiyu912/zenforge"
 	"github.com/feiyu912/zenforge/internal/dshsession"
 )
 
@@ -17,14 +18,36 @@ import (
 // missing link (a run whose log was pruned) ends the resolution rather than
 // skipping past it into an unrelated run.
 func (h *Handler) currentRun(ctx context.Context, sessionID string) string {
-	runID := sessionID
-	for turn := 2; ; turn++ {
-		next := dshsession.ContinuationRunID(sessionID, turn)
-		if !h.runExists(ctx, next) {
-			return runID
-		}
-		runID = next
+	runIDs := h.sessionRunIDs(ctx, sessionID)
+	if len(runIDs) == 0 {
+		return sessionID
 	}
+	return runIDs[len(runIDs)-1]
+}
+
+// sessionRunIDs returns the run ids serving a session, in turn order, stopping
+// at the first turn that does not exist.
+func (h *Handler) sessionRunIDs(ctx context.Context, sessionID string) []string {
+	runIDs := make([]string, 0, 2)
+	for turn := 1; ; turn++ {
+		runID := dshsession.ContinuationRunID(sessionID, turn)
+		if !h.runExists(ctx, runID) {
+			return runIDs
+		}
+		runIDs = append(runIDs, runID)
+	}
+}
+
+// Turns implements dshwire.Source: the runs serving a session's turns, in turn
+// order. The session log builder reads a session's turns through this, so the
+// stream and the page cannot disagree about what a session is.
+func (h *Handler) Turns(ctx context.Context, sessionID string) ([]string, error) {
+	return h.sessionRunIDs(ctx, sessionID), nil
+}
+
+// Read implements dshwire.Source: one run's durable events from the beginning.
+func (h *Handler) Read(ctx context.Context, runID string) ([]zenforge.Event, error) {
+	return h.events.Read(ctx, runID, 0, 0)
 }
 
 // runExists reports whether a run id names a run this host knows: tracked by the
