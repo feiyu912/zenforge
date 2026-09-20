@@ -721,6 +721,10 @@ func TestSessionPageServesEveryTurnInOneSequence(t *testing.T) {
 	f.agent.append(sessionID, zenforge.EventStepStarted, map[string]any{"step": 1})
 	f.agent.append(sessionID, zenforge.EventStepDone, map[string]any{"step": 1})
 	f.agent.finish(sessionID)
+	// Wait for the first turn to be terminal before prompting again: an active run
+	// would take the second prompt as a steer of the first turn instead of
+	// starting the conversation's next turn, which is the resolution under test.
+	waitForStatus(t, f.manager, sessionID, harnesshttp.RunCompleted)
 
 	// The operator asks a second question: the console prompts the same session,
 	// and the host starts the next turn of the conversation under the
