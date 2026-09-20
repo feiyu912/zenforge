@@ -570,6 +570,7 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 		fail(planExecuteStagePlan, nil, err)
 		return
 	}
+	planAnswer := ""
 	if len(todos) == 0 {
 		planInput := task.Input + "\n\n" + planner.PlanPrompt
 		planState := newTaskRunState(runID, planInput, task.InitialMessages, planExecuteMeta(task.Meta, task.Input, planExecuteStagePlan))
@@ -587,6 +588,7 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 			_ = finish(planExecuteStagePlan, todos, terminal.Type, errors.New(stringValue(terminal.Data["error"])))
 			return
 		}
+		planAnswer = stringValue(terminal.Data["output"])
 		todos, err = a.todos.List(ctx, runID)
 		if err != nil {
 			fail(planExecuteStagePlan, todos, err)
@@ -594,6 +596,17 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 		}
 	}
 	if len(todos) == 0 {
+		// No plan was created. Either the request needed none and the plan stage
+		// answered it directly, in which case that answer is the run's output and
+		// there is nothing to execute or summarize (ADR 0107), or the stage
+		// produced nothing usable and the orchestration failed as before. The
+		// stage's own completed checkpoint already holds the answer, and
+		// planExecuteTerminal treats exactly that state as terminal, so a resume
+		// replays the output instead of planning again.
+		if strings.TrimSpace(planAnswer) != "" {
+			_ = emit(EventRunDone, map[string]any{"output": planAnswer, "todos": []planner.Todo{}})
+			return
+		}
 		fail(planExecuteStagePlan, todos, fmt.Errorf("plan_not_created"))
 		return
 	}
@@ -729,6 +742,13 @@ func planExecuteStage(meta map[string]any) string {
 
 func planExecuteTerminal(state harness.RunState) bool {
 	if terminal, ok := state.Meta[planExecuteTerminalKey].(bool); ok && terminal {
+		return true
+	}
+	if planExecuteStage(state.Meta) == planExecuteStagePlan && state.Phase == harness.RunPhaseCompleted && len(state.Todos) == 0 {
+		// A completed plan stage that created no todos answered the request
+		// directly, so the run ended there (ADR 0107). A completed plan stage that
+		// did plan carries its todos, and one that failed carries the terminal
+		// marker above, so neither is confused with this state.
 		return true
 	}
 	return planExecuteStage(state.Meta) == planExecuteStageSummary &&

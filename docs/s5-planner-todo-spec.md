@@ -183,11 +183,15 @@ Allowed tools:
 
 Requirement:
 
-- model must call `todo_write` before plan stage ends.
+- the model decides whether the request needs a plan: if it needs more than one
+  step, it must call `todo_write` before the plan stage ends and before any final
+  answer (ADR 0107).
 
 If no todos are created:
 
-- run fails with `plan_not_created`.
+- if the plan stage answered the request directly, that answer is the run's output
+  and the run ends there — no execute stage and no summary (ADR 0107);
+- otherwise the run fails with `plan_not_created`.
 
 ### Execute Stage
 
@@ -269,7 +273,9 @@ and summarizes once all todos are terminal.
 
 Overall success, failure, and cancellation checkpoints set
 `planning.terminal=true`. This distinguishes a completed internal stage from a
-completed run. Orchestration failures such as `plan_not_created`, invalid todo
+completed run. A plan stage that answered without a plan is terminal by its own
+state — stage `plan`, phase completed, no todos — so it carries no
+`planning.terminal` marker and a resume replays its answer (ADR 0107). Orchestration failures such as `plan_not_created`, invalid todo
 state, or todo manager errors save the terminal reason and do not retry work on
 resume.
 

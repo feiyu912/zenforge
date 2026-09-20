@@ -45,7 +45,7 @@ method list.
 
 | Method | State | What it answers |
 | --- | --- | --- |
-| `agentPresets/list` | served | The execution presets this host was built with. |
+| `agentPresets/list` | served | The execution presets this host was built with. The default is plan-execute, which creates a todo plan only when the request needs one (ADR 0107). |
 | `agentPresets/read` | served | One preset's definition. |
 | `commands/execute` | served | Run one slash command. |
 | `commands/list` | served | The workspace's slash commands. |
@@ -64,7 +64,7 @@ method list.
 | `session/list` | served | List sessions. A planning session is listed by the operator's own task; the plan-execute preset's appended instruction never reaches the title (ADR 0106). |
 | `session/modelCatalog` | served | The models the page may offer, grouped per provider. |
 | `session/page` | served | A page of a session's events, projected into the console's vocabulary. A created session with no turns answers an empty page (ADR 0104, ADR 0105). |
-| `session/prompt` | served | Send a turn into a session. |
+| `session/prompt` | served | Send a turn into a session. Under the plan-execute preset a question is answered in the plan stage and never reaches an execute or summary stage (ADR 0107). |
 | `session/rename` | served | Rename a session. |
 | `session/selectModel` | served | Choose the provider and model a session runs on. The choice is restored on the next start (ADR 0103). |
 | `settings/canOpenAgentPresetDirectory` | served | Whether a native editor can be opened here (it cannot). |

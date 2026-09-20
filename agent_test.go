@@ -3549,10 +3549,70 @@ func TestAgentPlanExecuteStopsAfterInternalStageFailure(t *testing.T) {
 	}
 }
 
+func TestAgentPlanExecuteAnswersAQuestionWithoutAPlan(t *testing.T) {
+	ctx := context.Background()
+	checkpoints := checkpointmemory.New()
+	fakeModel := &scriptedModel{turns: []scriptedTurn{{
+		events: []model.Event{{Delta: "I'm a senior Go backend engineer."}},
+	}}}
+	agent := New(Config{
+		Model:       fakeModel,
+		Planning:    PlanningPlanExecute,
+		Checkpoints: checkpoints,
+	})
+
+	result, err := agent.Run(ctx, Task{RunID: "run_plan_question", Input: "who are you"})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	// The plan stage answered the question itself: no plan was created, so there
+	// is nothing to execute and nothing to summarize (ADR 0107).
+	if result.Output != "I'm a senior Go backend engineer." {
+		t.Fatalf("output = %q, want the plan stage's own answer", result.Output)
+	}
+	if len(fakeModel.requests) != 1 {
+		t.Fatalf("model calls = %d, want the single answering call", len(fakeModel.requests))
+	}
+	if countMessageContent(fakeModel.requests[0].Messages, "who are you\n\n"+planner.PlanPrompt) != 1 {
+		t.Fatalf("plan stage input = %#v, want the plan instruction appended", fakeModel.requests[0].Messages)
+	}
+
+	cp, err := checkpoints.Load(ctx, "run_plan_question")
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cp.State.Phase != harness.RunPhaseCompleted || !planExecuteTerminal(cp.State) {
+		t.Fatalf("terminal checkpoint = %#v, want a completed terminal plan stage", cp.State)
+	}
+	if got := planExecuteStage(cp.State.Meta); got != planExecuteStagePlan {
+		t.Fatalf("stage = %q, want the plan stage to be the run's last stage", got)
+	}
+
+	// A resume replays that answer instead of planning the question again.
+	resumed, err := agent.Resume(ctx, "run_plan_question")
+	if err != nil {
+		t.Fatalf("Resume returned error: %v", err)
+	}
+	var output string
+	for event := range resumed {
+		if event.Type == EventRunDone {
+			output = stringValue(event.Payload["output"])
+		}
+	}
+	if output != "I'm a senior Go backend engineer." {
+		t.Fatalf("resumed output = %q", output)
+	}
+	if len(fakeModel.requests) != 1 {
+		t.Fatalf("terminal resume retried planning: %#v", fakeModel.requests)
+	}
+}
+
 func TestAgentPlanExecutePersistsPlanNotCreatedFailure(t *testing.T) {
 	checkpoints := checkpointmemory.New()
 	fakeModel := &scriptedModel{turns: []scriptedTurn{{
-		events: []model.Event{{Delta: "I cannot create a plan"}},
+		// The stage neither planned nor answered: there is no output to serve as
+		// the run's answer, so the orchestration still fails (ADR 0107).
+		events: []model.Event{{Delta: "   "}},
 	}}}
 	agent := New(Config{
 		Model:       fakeModel,

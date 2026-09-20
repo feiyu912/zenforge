@@ -479,6 +479,24 @@ metadata freeze and in the `session.title` event.
 to the stage input only when there is none, at both derivation sites (ADR 0106). A
 planning session is listed by what the operator typed.
 
+## Shipped: a simple question is answered, not planned (2026-09-20)
+
+The operator typed `who are you` and `h` into the console and got todo lists, a research
+loop that read the workspace, and an approval prompt for a shell command. The plan-execute
+preset appended `planner.PlanPrompt` to every input and that prompt allowed one outcome
+("You must call todo_write with the todo list before giving any final answer"), and a plan
+stage that produced no todos *failed the run* (`plan_not_created`) — so the preset could
+not answer a question, and the answer the model did write in the plan stage was discarded
+because the run's output comes from the summary stage after every todo executes.
+
+`planner.PlanPrompt` now asks the model to decide: plan before acting when the request
+needs more than one step, answer directly when it is a question or a single step. A plan
+stage that created no todos and produced an answer *is* the run's answer — one model call,
+no execute stage, no summary — and `planExecuteTerminal` recognizes that completed `plan`
+stage so a resume replays the answer instead of planning again. A stage that neither
+planned nor answered still fails `plan_not_created`, and multi-step work is unchanged
+(ADR 0107).
+
 ## Operator's one remaining step
 
 The host at `127.0.0.1:8787` is restarted onto this checkout, and the document at

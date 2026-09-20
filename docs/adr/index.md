@@ -135,3 +135,4 @@ and what the adapter answers today is
 | [0104](0104-a-session-exists-before-its-first-turn.md) | A session exists before its first turn, and a registered session has not chosen |
 | [0105](0105-the-durable-log-is-projected-into-the-consoles-vocabulary.md) | The durable log is projected into the console's session vocabulary |
 | [0106](0106-a-session-title-names-the-operators-task.md) | A session's title names the operator's task, not the preset's instruction |
+| [0107](0107-plan-execute-plans-only-when-the-request-needs-one.md) | Plan-execute plans only when the request needs a plan |

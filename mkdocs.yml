@@ -248,6 +248,7 @@ nav:
       - 0104 A session exists before its first turn, and a registered session has not chosen: adr/0104-a-session-exists-before-its-first-turn.md
       - 0105 The durable log is projected into the console's session vocabulary: adr/0105-the-durable-log-is-projected-into-the-consoles-vocabulary.md
       - 0106 A session title names the operator's task: adr/0106-a-session-title-names-the-operators-task.md
+      - 0107 Plan-execute plans only when the request needs one: adr/0107-plan-execute-plans-only-when-the-request-needs-one.md
 
 extra:
   social:
