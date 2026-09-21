@@ -152,10 +152,11 @@ what is experimental, and what remains adapter territory.
   `contextWindow`, `maxTokens`) is refused rather than kept verbatim, so a model
   adopted from an endpoint that disclosed an input-modality list is named and
   refused instead of quietly trimmed.
-- **Multi-turn works** (ADR 0086, ADR 0108): a session's finished run continues
+- **Multi-turn works** (ADR 0086, ADR 0108, ADR 0114): a session's finished run continues
   as `<session>~<turn>`, so a second message is a new turn rather than a refusal,
-  and the conversation's turns share one sequence, so the second prompt loads its
-  history and `Load earlier` reaches the first turn.
+  the conversation's turns share one sequence, and the follow stream stays open across
+  them, so the second prompt loads its history and `Load earlier` reaches the first turn
+  instead of being undone by a reconnect.
 - **The sidebar survives a restart** (ADR 0109): `zenforge serve` keeps a SQLite
   run registry in its state directory (`<checkpoint-dir>/run-registry.sqlite`), so
   the console lists the conversations this install served after the host restarts,

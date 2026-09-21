@@ -295,6 +295,72 @@ func readItem(t *testing.T, conn *websocket.Conn, streamID string) map[string]js
 	return value
 }
 
+// frameReader reads frames on its own goroutine so a test can wait for one with
+// a deadline without using the connection's read deadline: gorilla leaves a
+// connection whose read timed out in a failed state, and the streaming tests have
+// to keep reading after an idle window.
+type frameReader struct {
+	frames chan map[string]json.RawMessage
+	fail   chan error
+}
+
+// startFrameReader takes over a connection's reads. Any read deadline an earlier
+// direct read left behind is cleared first.
+func startFrameReader(t *testing.T, conn *websocket.Conn) *frameReader {
+	t.Helper()
+	if err := conn.SetReadDeadline(time.Time{}); err != nil {
+		t.Fatalf("clear read deadline: %v", err)
+	}
+	reader := &frameReader{frames: make(chan map[string]json.RawMessage, 128), fail: make(chan error, 1)}
+	go func() {
+		defer close(reader.frames)
+		for {
+			_, data, err := conn.ReadMessage()
+			if err != nil {
+				reader.fail <- err
+				return
+			}
+			object, err := decodeJSONObject(data)
+			if err != nil {
+				reader.fail <- err
+				return
+			}
+			reader.frames <- object
+		}
+	}()
+	return reader
+}
+
+// next returns the next frame, or ok=false when none arrived within wait. A
+// connection that closed is a failure: a stream under test stays open.
+func (r *frameReader) next(t *testing.T, wait time.Duration) (map[string]json.RawMessage, bool) {
+	t.Helper()
+	select {
+	case frame, open := <-r.frames:
+		if !open {
+			select {
+			case err := <-r.fail:
+				t.Fatalf("stream closed while a frame was expected: %v", err)
+			default:
+				t.Fatalf("stream closed while a frame was expected")
+			}
+		}
+		return frame, true
+	case <-time.After(wait):
+		return nil, false
+	}
+}
+
+// requireNext reads the next frame, failing the test when none arrives.
+func (r *frameReader) requireNext(t *testing.T, wait time.Duration) map[string]json.RawMessage {
+	t.Helper()
+	frame, ok := r.next(t, wait)
+	if !ok {
+		t.Fatalf("no frame within %s", wait)
+	}
+	return frame
+}
+
 // readStreamEnd reads the next frame and requires it to be a terminal frame,
 // returning its discriminator ("end" or "error").
 func readStreamEnd(t *testing.T, conn *websocket.Conn, streamID string) (string, map[string]json.RawMessage) {

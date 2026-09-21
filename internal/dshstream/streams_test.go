@@ -131,7 +131,7 @@ func TestSessionControlRejectsArguments(t *testing.T) {
 	assertField(t, failure, "code", codeArgumentsInvalid)
 }
 
-func TestSessionFollowSnapshotThenEventsThenEndOnFinish(t *testing.T) {
+func TestSessionFollowStaysOpenAndCarriesTheNextTurn(t *testing.T) {
 	f := newFixture(t, Config{})
 	runID := f.startRun(t, "finish")
 	f.agent.emit(runID, zenforge.EventStepStarted, map[string]any{"step": 1})
@@ -186,19 +186,43 @@ func TestSessionFollowSnapshotThenEventsThenEndOnFinish(t *testing.T) {
 	}
 
 	f.agent.finish(runID)
+	var turnEnd int64
 	for {
 		value := readItem(t, conn, "follow")
 		if recordEventType(t, value) == "turn/end" {
+			turnEnd = intField(t, decodeValueObject(t, value["event"]), "seq")
 			break
 		}
 	}
-	kind, _ := readStreamEnd(t, conn, "follow")
-	if kind != "end" {
-		t.Fatalf("terminal frame = %q, want end", kind)
+	// The turn is over; the stream is not. The client builds a carrier failure for
+	// a stream that ends after its opening snapshot and reconnects, and every
+	// reconnect reinstalls the tail window over whatever "load earlier" added, so
+	// an end here is what makes the button repage forever without showing less
+	// (ADR 0114). An idle conversation must show silence instead.
+	reader := startFrameReader(t, conn)
+	if frame, ok := reader.next(t, 400*time.Millisecond); ok {
+		t.Fatalf("frame after the turn ended: %v, want silence", frame)
+	}
+	// The conversation's next turn arrives on the same stream and continues the
+	// session sequence the console already cursors on, which is what makes its
+	// first event land exactly one past the turn that ended.
+	startTurn(t, f, runID, 2, "second turn")
+	frame := reader.requireNext(t, 5*time.Second)
+	assertField(t, frame, "type", "item")
+	assertField(t, frame, "streamId", "follow")
+	value, err := decodeJSONObject(frame["value"])
+	if err != nil {
+		t.Fatalf("next turn's item value is not an object: %v", err)
+	}
+	if got := recordEventType(t, value); got != "user/message" {
+		t.Fatalf("first frame of the next turn = %q, want user/message", got)
+	}
+	if seq := intField(t, decodeValueObject(t, value["event"]), "seq"); seq != turnEnd+1 {
+		t.Fatalf("next turn's first seq = %d, want %d", seq, turnEnd+1)
 	}
 }
 
-func TestSessionFollowEndsOnCancelledRun(t *testing.T) {
+func TestSessionFollowStaysOpenAfterACancelledRun(t *testing.T) {
 	f := newFixture(t, Config{})
 	runID := f.startRun(t, "cancel")
 
@@ -217,9 +241,11 @@ func TestSessionFollowEndsOnCancelledRun(t *testing.T) {
 			break
 		}
 	}
-	kind, _ := readStreamEnd(t, conn, "follow")
-	if kind != "end" {
-		t.Fatalf("terminal frame = %q, want end", kind)
+	// A cancelled turn leaves the conversation usable: the stream stays open so the
+	// console can prompt again on the same connection (ADR 0114).
+	reader := startFrameReader(t, conn)
+	if frame, ok := reader.next(t, 400*time.Millisecond); ok {
+		t.Fatalf("frame after the cancelled turn: %v, want silence", frame)
 	}
 }
 

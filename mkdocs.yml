@@ -255,6 +255,7 @@ nav:
       - 0111 A run records the prompt identity its caller submitted: adr/0111-a-run-records-the-prompt-identity-its-caller-submitted.md
       - 0112 The coverage ledger's gaps are a dated audit: adr/0112-the-coverage-ledgers-gaps-are-a-dated-audit.md
       - 0113 Cancel reaches the turn that is running: adr/0113-cancel-reaches-the-turn-that-is-running.md
+      - 0114 A follow stream follows the conversation: adr/0114-a-follow-stream-follows-the-conversation.md
 
 extra:
   social:

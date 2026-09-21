@@ -69,6 +69,12 @@ type SessionLog struct {
 	NewestTail int64
 	// NewestTurn is the newest turn's console turn number, one-based.
 	NewestTurn int
+	// NewestIdentity is the stamp the newest turn's projection carries: its turn
+	// number and the sequence offset its events are shifted by. A follower that
+	// moves on to the conversation's next turn stamps it with this value, so the
+	// offset stays derived from the durable shape instead of being reinvented at
+	// the attach point (ADR 0108).
+	NewestIdentity Identity
 }
 
 // Session builds a session's log by projecting each of its turns and shifting it
@@ -105,6 +111,7 @@ func Session(ctx context.Context, source Source, sessionID string, identity func
 			log.Newest = projection
 			log.NewestRun = runID
 			log.NewestTurn = turn
+			log.NewestIdentity = stamp
 			if len(events) > 0 {
 				log.NewestTail = events[len(events)-1].Seq
 			}

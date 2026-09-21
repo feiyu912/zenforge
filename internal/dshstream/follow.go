@@ -49,13 +49,23 @@ func (h *Handler) sessionProjectionBaseline(sessionID string, cursor int64) proj
 
 // runFollow serves the session/follow logical stream.
 //
-// It sends exactly one opening snapshot, then the run's durable events as they
-// are appended, then ends cleanly when the run reaches a terminal event. The
-// snapshot and the live frames use the same SessionWireEvent mapping
-// session/page already uses, so the two history paths cannot disagree about a
-// record's shape, and both serve the session's whole conversation: each turn's
-// events are shifted past the turns before them (dshwire.Session), so a second
-// prompt does not restart the sequence the console cursors on.
+// It sends exactly one opening snapshot, then the conversation's durable events
+// as they are appended -- moving on to its next turn when the turn being followed
+// ends -- and stays open until the client goes away. The snapshot and the live
+// frames use the same SessionWireEvent mapping session/page already uses, so the
+// two history paths cannot disagree about a record's shape, and both serve the
+// session's whole conversation: each turn's events are shifted past the turns
+// before them (dshwire.Session), so a second prompt does not restart the sequence
+// the console cursors on.
+//
+// A turn's log ending is deliberately not the stream's end. The client builds a
+// carrier failure for a stream that ends after its opening snapshot
+// (api/gateway/src/client/journal-stream.ts, the `ended` callback) and reconnects,
+// and every reconnect reinstalls the tail window over whatever "load earlier"
+// added -- so ending here makes the conversation page backwards forever without
+// ever showing less, and the console answers a click on "load earlier" with
+// nothing (ADR 0114). The stream therefore waits on the finished turn and follows
+// the conversation's next turn when one starts.
 //
 // What this host does not send is assistant-stream frames. The harness does
 // stream model output, but as durable model.delta events carrying
@@ -147,57 +157,126 @@ func (h *Handler) runFollow(ctx context.Context, payload []byte, send func(any) 
 	if afterSeq < 0 {
 		afterSeq = 0
 	}
+	draftTurn := log.NewestTurn
 	if draft {
 		// The run does not exist yet; session/prompt creates it. Wait for it here
 		// rather than attaching to a run that is not there, so the first turn
-		// arrives over this connection instead of after a client reconnect.
-		if err := h.awaitDraftRun(ctx, runID); err != nil {
-			return err
-		}
-		// The empty snapshot cited cursor -1, so the console requires the first
-		// event to be sequence 1: attach at the beginning and let the replay send
-		// the whole first turn. The tail starts empty and is fed by that replay,
-		// which projects it exactly once.
+		// arrives over this connection instead of after a client reconnect. The
+		// empty snapshot cited cursor -1, so the console requires the first event
+		// to be sequence 1: attach at the beginning and let the replay send the
+		// whole first turn. The tail starts empty and is fed by that replay, which
+		// projects it exactly once.
+		draftTurn = 1
 		tail = dshwire.Project(nil, turnIdentity(1))
 		afterSeq = 0
 	}
 	if tail == nil {
 		// A turn whose log is still empty (a run that has just started) has no
 		// events to project yet; its first event creates the record.
-		tail = dshwire.Project(nil, turnIdentity(log.NewestTurn))
+		tail = dshwire.Project(nil, turnIdentity(draftTurn))
 	}
-	live, liveErr, err := h.manager.Attach(ctx, runID, afterSeq)
-	if err != nil {
-		if errors.Is(err, harnesshttp.ErrRunNotFound) {
-			return streamFail(codeSessionNotFound, fmt.Sprintf("session %q not found", request.sessionID),
-				map[string]any{"sessionId": request.sessionID})
+	for {
+		if draft {
+			if err := h.awaitDraftRun(ctx, runID); err != nil {
+				return err
+			}
+			draft = false
 		}
-		return streamFail(codeInternal, "follow session: "+err.Error(), nil)
+		live, liveErr, err := h.manager.Attach(ctx, runID, afterSeq)
+		if err != nil {
+			if errors.Is(err, harnesshttp.ErrRunNotFound) {
+				return streamFail(codeSessionNotFound, fmt.Sprintf("session %q not found", request.sessionID),
+					map[string]any{"sessionId": request.sessionID})
+			}
+			return streamFail(codeInternal, "follow session: "+err.Error(), nil)
+		}
+		ended, failure := pumpTurn(ctx, live, liveErr, tail, send)
+		if failure != nil {
+			return failure
+		}
+		if !ended {
+			return ctx.Err()
+		}
+		// The turn ended; the stream does not. Wait for the conversation's next
+		// turn, then continue the same sequence from its first event.
+		next, err := h.awaitSessionTurn(ctx, request.sessionID, runID)
+		if err != nil {
+			return err
+		}
+		if next == "" {
+			return ctx.Err()
+		}
+		nextLog, err := dshwire.Session(ctx, h, request.sessionID, turnIdentity)
+		if err != nil {
+			return streamFail(codeInternal, "read session log: "+err.Error(), nil)
+		}
+		runID = next
+		afterSeq = 0
+		// The next turn's events are all new to this stream, and its stamped
+		// identity is where its own durable sequence moves onto the session's, so
+		// the first frame it projects is one past the cursor the console holds.
+		tail = dshwire.Project(nil, nextLog.NewestIdentity)
 	}
+}
+
+// pumpTurn forwards one turn's durable events onto the session sequence until the
+// turn's log ends, the client goes away or the stream fails. ended reports that
+// the turn reached the end of its log normally: the caller continues the
+// conversation with its next turn instead of ending the stream.
+func pumpTurn(ctx context.Context, live <-chan zenforge.Event, liveErr <-chan error, tail *dshwire.Projection, send func(any) error) (bool, error) {
 	for {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return false, ctx.Err()
 		case followErr, ok := <-liveErr:
 			if ok && followErr != nil {
-				return streamFail(codeInternal, "follow session: "+followErr.Error(), nil)
+				return false, streamFail(codeInternal, "follow session: "+followErr.Error(), nil)
 			}
-			// The error channel closing with no value means the durable
-			// follower reached the log's end normally.
+			// The error channel closing with no value means the durable follower
+			// reached the log's end normally; the event channel drains first.
 		case event, ok := <-live:
 			if !ok {
-				return nil
+				return true, nil
 			}
-			// Continue the snapshot's projection of the newest turn rather than
-			// starting a new one: the step being streamed is the same step, its
-			// settlement must carry the deltas the snapshot already counted, and
-			// the turn's sequence offset is what keeps this event one past the
-			// snapshot cursor the console holds.
+			// Continue the snapshot's projection of this turn rather than starting
+			// a new one: the step being streamed is the same step, its settlement
+			// must carry the deltas the snapshot already counted, and the turn's
+			// sequence offset is what keeps this event one past the cursor the
+			// console holds.
 			tail.Append(event)
 			projected := tail.Events[len(tail.Events)-1]
 			if err := send(eventRecord{Type: "event", Event: projected}); err != nil {
-				return err
+				return false, err
 			}
+		}
+	}
+}
+
+// sessionTurnPollInterval is how often a live follow re-checks whether the
+// conversation has moved on to another turn. The wait is a poll for the same
+// reason awaitDraftRun's is: the run registry has no "a turn was created"
+// notification, and the follower a finished turn leaves behind speaks only that
+// run. A quarter of a second keeps the next turn's first frame close to immediate
+// without a timer per open conversation waking more often than it needs to.
+const sessionTurnPollInterval = 250 * time.Millisecond
+
+// awaitSessionTurn waits until the conversation has a turn after current and
+// returns its run id. An empty id means the context ended first.
+func (h *Handler) awaitSessionTurn(ctx context.Context, sessionID, current string) (string, error) {
+	ticker := time.NewTicker(sessionTurnPollInterval)
+	defer ticker.Stop()
+	for {
+		turns, err := h.Turns(ctx, sessionID)
+		if err != nil {
+			return "", streamFail(codeInternal, "read session turns: "+err.Error(), nil)
+		}
+		if len(turns) > 0 && turns[len(turns)-1] != current {
+			return turns[len(turns)-1], nil
+		}
+		select {
+		case <-ctx.Done():
+			return "", nil
+		case <-ticker.C:
 		}
 	}
 }

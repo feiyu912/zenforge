@@ -543,6 +543,30 @@ wrote an event is omitted, because `session/page` answers not-found for it; and 
 log has no terminal event is recorded as cancelled when it is adopted. Drafts stay
 process-local (ADR 0104).
 
+## Shipped: a follow stream follows the conversation (2026-09-21)
+
+The operator asked a second question and reported that "Load earlier" appeared and then could
+not be used. Driving the served console in a headless Chrome over the DevTools protocol showed
+both: the click's `session/page` answered 200 with exactly the right earlier records, the
+controller applied them (`prependWindow entries: 6 hasMoreArg: false`) — and the button stayed,
+because the store the component reads still said `hasMore: true` and, measuring the session's
+WebSocket, the host was sending **a fresh snapshot and end every few milliseconds**, each
+reconnect re-installing the tail window over the earlier page.
+
+The cause was this host: `runFollow` returned when the followed run's log ended, and the console
+treats a stream that ends after its snapshot as a carrier failure
+(`RemoteStreamCarrierError("… ended without a terminal result")`) and reconnects at once. Two
+turns are needed to notice because one short turn fits in the opening window; the second question
+is what makes the window stop covering the conversation.
+
+The stream now follows the conversation: a turn ending is not the stream's end, the next turn's
+projection is stamped with the sequence offset `dshwire.Session` derived (`NewestIdentity`), and
+the stream waits for that turn and continues the same sequence (ADR 0114). Measured after the
+fix on the same conversation: **0** frames while idle (was a snapshot/end pair every few
+milliseconds), the click loads the first turn's `hello` and the button disappears, and a new chat
+asked twice streams "hello there" and "and again" over the connection that was already open,
+each rendered exactly once.
+
 ## Shipped: Stop stops the turn that is running (2026-09-21)
 
 `session/cancel` cancelled the id the caller named. The console names the session it has open —
@@ -645,9 +669,10 @@ serves `qwen-plus`, and the card shows only what is written on it.
 > sequence (ADR 0110), a submitted question is on screen exactly once because the run
 > records the caller's prompt identity (ADR 0111), and the ledger's "Next up" list is a dated
 > audit that no longer claims the browse directory picker is withheld (ADR 0112).
-> Stop reaches the turn that is running (ADR 0113), so the next chain is "Next up" 1 in the
-> ledger: `session/openWorkspacePath` and `session/canOpenWorkspacePath`, opening a workspace
-> into a session. If a scratch host is
+> Stop reaches the turn that is running (ADR 0113) and a follow stream follows the conversation
+> instead of one turn, so "Load earlier" actually loads (ADR 0114). The next chain is "Next up" 1
+> in the ledger: `session/openWorkspacePath` and `session/canOpenWorkspacePath`, opening a
+> workspace into a session. If a scratch host is
 > needed, give it `ZENFORGE_CONFIG_DIR` or `--settings-file` under a throwaway directory so
 > it cannot rewrite the operator's document, and its own `--checkpoint-dir` too, because the
 > event store and the run registry are derived from it: a scratch host started in `/tmp`

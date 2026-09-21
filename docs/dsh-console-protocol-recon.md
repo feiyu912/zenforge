@@ -506,6 +506,16 @@ turns in one sequence, or the second prompt fails with
 `Failed to load history: session event stream resumed at a cursor behind the last applied
 entry (gateway/internal)`, which is exactly what this host did before ADR 0108.
 
+**Corrected 2026-09-21 (ADR 0114):** a follow stream has no clean end while the console is
+showing the conversation. `journal-stream.ts`'s `ended` callback turns a stream that ended
+after its opening snapshot into `RemoteStreamCarrierError("<name> ended without a terminal
+result")`, and the reconnecting transport opens a new generation at once; the new snapshot
+re-installs the tail window, so every page `Load earlier` fetched is discarded. A host that
+ends the stream when the followed turn's log ends therefore reconnects in a loop — measured
+on this host as a snapshot and end pair every few milliseconds for as long as the session
+stayed open, with the "Load earlier" button rendered and every click undone. The stream must
+follow the conversation across its turns and stay open; only a refused open is terminal.
+
 **`POST /api/session/cancel`** — args `{ "sessionId": "…" }` → `{ "accepted": true }`
 (`types.ts:353-360`). Caller `sessions/session.ts:340`.
 

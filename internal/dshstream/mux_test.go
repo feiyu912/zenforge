@@ -183,16 +183,26 @@ func TestMuxFrameKeysAreExact(t *testing.T) {
 		assertKeys(t, event, "type", "seq", "time", "data", "surfaceOp")
 	}
 
-	// A clean terminal frame is exactly {type, streamId}.
+	// A finished turn leaves the stream open and quiet: the console's client
+	// treats a clean end after the snapshot as a carrier failure and reconnects,
+	// which is what discards every earlier page "load earlier" fetched (ADR 0114).
+	// Every frame the turn does send keeps the exact item key set.
 	f.agent.finish(runID)
+	reader := startFrameReader(t, conn)
 	for {
-		frame := readFrame(t, conn)
-		kind, _ := stringField(t, frame, "type")
-		if kind == "end" {
-			assertKeys(t, frame, "type", "streamId")
+		frame := reader.requireNext(t, 5*time.Second)
+		assertKeys(t, frame, "type", "streamId", "value")
+		assertField(t, frame, "type", "item")
+		value, err := decodeJSONObject(frame["value"])
+		if err != nil {
+			t.Fatalf("item value is not an object: %v", err)
+		}
+		if recordEventType(t, value) == "turn/end" {
 			break
 		}
-		assertKeys(t, frame, "type", "streamId", "value")
+	}
+	if frame, ok := reader.next(t, 300*time.Millisecond); ok {
+		t.Fatalf("frame after the turn ended: %v, want silence", frame)
 	}
 }
 
