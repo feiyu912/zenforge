@@ -204,7 +204,7 @@ func TestProjectionMarksOnlySurfaceEvents(t *testing.T) {
 func TestProjectionServesTheConsoleItsOwnWindow(t *testing.T) {
 	projected := project(t, aTurn())
 	want := []string{
-		"user/message", "step/start", "assistant/message", "tool/call",
+		"turn/start", "user/message", "step/start", "assistant/message", "tool/call",
 		"tool/result", "step/end", "step/start", "assistant/message",
 		"step/end", "turn/end",
 	}
@@ -318,13 +318,14 @@ func TestProjectionContinuesAfterASnapshot(t *testing.T) {
 	if got := firstText(t, assistant.Data); got != "Hello there" {
 		t.Fatalf("assistant text = %q, want the deltas from both halves", got)
 	}
-	// Four records: the prompt, step/start, and the one settled message. The
-	// deltas and the model events between them are not records (ADR 0117).
-	if len(projection.Events) != 3 {
-		t.Fatalf("records = %d, want 3: %v", len(projection.Events), eventTypes(projection.Events))
+	// Four records: the turn's opening marker, the prompt, step/start and the one
+	// settled message. The deltas and the model events between them are not records
+	// (ADR 0117).
+	if len(projection.Events) != 4 {
+		t.Fatalf("records = %d, want 4: %v", len(projection.Events), eventTypes(projection.Events))
 	}
-	if assistant.Seq != 3 {
-		t.Fatalf("assistant message cites seq %d, want the third record", assistant.Seq)
+	if assistant.Seq != 4 {
+		t.Fatalf("assistant message cites seq %d, want the fourth record", assistant.Seq)
 	}
 }
 

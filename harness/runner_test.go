@@ -42,6 +42,9 @@ func TestRunnerCompletesTextOnlyRun(t *testing.T) {
 		RuntimeStepStarted,
 		RuntimeModelStarted,
 		RuntimeModelDone,
+		// A step closes when its model call settles and every tool it asked for has
+		// resolved: the console marks the step settled on this event.
+		RuntimeStepDone,
 		RuntimeRunDone,
 	}
 	if !reflect.DeepEqual(events, wantEvents) {

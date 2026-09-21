@@ -347,7 +347,7 @@ func TestAssistantTrackerHandsOverAnOpenAttemptAsABaseline(t *testing.T) {
 	}
 	// The replay stamped the records itself, so startedAfterSeq is the sequence of
 	// the record the console already holds, not the cursor the stream opened with.
-	if opening.StartedAfterSeq != 2 {
+	if opening.StartedAfterSeq != 3 {
 		t.Fatalf("startedAfterSeq = %d, want the last record before the attempt", opening.StartedAfterSeq)
 	}
 	// Two blocks, six chunk frames: the reasoning block's start and its delta, the

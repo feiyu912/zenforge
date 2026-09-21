@@ -180,7 +180,17 @@ func TestMuxFrameKeysAreExact(t *testing.T) {
 		assertKeys(t, record, "type", "event")
 		assertField(t, record, "type", "event")
 		event := decodeValueObject(t, record["event"])
-		assertKeys(t, event, "type", "seq", "time", "data", "surfaceOp")
+		// Only the four message types carry a surface operation; a turn or step
+		// marker is a console event with the plain key set (ADR 0121).
+		var kind string
+		if err := json.Unmarshal(event["type"], &kind); err != nil {
+			t.Fatalf("record type is not a string: %v", err)
+		}
+		if kind == "user/message" || kind == "assistant/message" {
+			assertKeys(t, event, "type", "seq", "time", "data", "surfaceOp")
+			continue
+		}
+		assertKeys(t, event, "type", "seq", "time", "data")
 	}
 
 	// A finished turn leaves the stream open and quiet: the console's client

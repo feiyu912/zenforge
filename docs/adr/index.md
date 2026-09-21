@@ -149,3 +149,4 @@ and what the adapter answers today is
 | [0118](0118-a-reconnect-mid-answer-resumes-the-attempt.md) | A reconnect mid-answer resumes the attempt |
 | [0119](0119-the-console-baselines-are-complete.md) | The console's baselines are complete |
 | [0120](0120-the-file-surfaces-the-console-reads.md) | The file surfaces the console reads |
+| [0121](0121-the-turn-and-step-boundaries-the-console-reads.md) | The turn and step boundaries the console reads |

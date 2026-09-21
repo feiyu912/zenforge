@@ -315,17 +315,21 @@ func pumpTurn(ctx context.Context, live <-chan zenforge.Event, liveErr <-chan er
 			// advances the projection's state and nothing else (ADR 0117).
 			before := len(tail.Events)
 			tail.Append(event)
-			if len(tail.Events) == before {
-				continue
-			}
-			projected := tail.Events[len(tail.Events)-1]
-			if err := send(eventRecord{Type: "event", Event: projected}); err != nil {
-				return false, err
-			}
-			if assistant != nil {
-				for _, frame := range assistant.onRecord(projected) {
-					if err := send(frame); err != nil {
-						return false, err
+			// Every record the event produced is sent, in order. One durable event
+			// can produce more than one -- a turn's opening marker and the question
+			// behind it -- and sending only the last would drop the marker the
+			// console anchors the turn's process row on while still counting it in
+			// the sequence, which leaves every later frame numbered one past the
+			// cursor the console holds.
+			for _, projected := range tail.Events[before:] {
+				if err := send(eventRecord{Type: "event", Event: projected}); err != nil {
+					return false, err
+				}
+				if assistant != nil {
+					for _, frame := range assistant.onRecord(projected) {
+						if err := send(frame); err != nil {
+							return false, err
+						}
 					}
 				}
 			}

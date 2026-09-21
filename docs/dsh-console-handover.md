@@ -451,7 +451,10 @@ were wrong, and the second had been wrong since the follow stream was written.
   `step/start`/`step/end`/`turn/end`, and every other event travels as an ignorable record
   with its own name and payload. One durable event in, one wire event out, wire `seq` =
   durable `seq`, so the cursor, `throughSeq` paging and the live `afterSeq` keep speaking
-  the log's own sequence.
+  the log's own sequence. (Since ADR 0121 that is one durable event into *at most* several
+  wire events -- a run's opening event becomes the turn's marker and the question behind
+  it -- and the served `seq` counts records, so the page and the tail both drain the whole
+  group.)
 
 `internal/dshwire` holds the projection; the two packages' duplicated `wireEvent` writers
 are gone. `internal/dshwire/boundary_test.go` re-extracts the console's known-type list
@@ -542,6 +545,28 @@ continues the conversation instead of steering a run nobody owns; a record whose
 wrote an event is omitted, because `session/page` answers not-found for it; and a run whose
 log has no terminal event is recorded as cancelled when it is adopted. Drafts stay
 process-local (ADR 0104).
+
+## Shipped: the turn and step boundaries (2026-09-21)
+
+The console anchors its turn-process row on `turn/start` — `match: (event) => event.type
+=== "turn/start" ? { id: String(event.data.turn), role: "start" } : …` — and this host
+never sent it, so a turn had no start for its step timeline or its token row to hang
+off. It also never sent `step/end`, for a reason the projection hid: the mapping from a
+durable `step.done` had always been there, but nothing in `harness/runner.go` ever wrote
+one, so the console's attempt reducer kept the step open for the rest of the run.
+
+Both are served now (ADR 0121): the runner closes a step once its model call settles and
+every tool it asked for has resolved, and the projector opens a turn with
+`turn/start {turn}` before the question. Live-verified against qwen-plus:
+`turn/start#1 {turn:1}, user/message#2, session/title#3, session/title#4,
+step/start#5 {step:1,turn:1}, assistant/message#6, step/end#7 {step:1,turn:1},
+turn/end#8 {reason:{kind:"completed"},turn:1}`.
+
+That change made one durable event produce two records for the first time, which exposed
+a real bug in the live tail: it sent only the last record of an append while the
+projection counted both, so every later frame was numbered one past the cursor the
+console held — the reconnect rule it enforces. The tail now sends the whole group, and
+the socket test pins both frames of a new turn.
 
 ## Shipped: the file surfaces and the forwarded-event answers (2026-09-21)
 

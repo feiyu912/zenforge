@@ -220,11 +220,23 @@ func TestSessionFollowStaysOpenAndCarriesTheNextTurn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("next turn's item value is not an object: %v", err)
 	}
-	if got := recordEventType(t, value); got != "user/message" {
-		t.Fatalf("first frame of the next turn = %q, want user/message", got)
+	// The next turn opens with its own marker, then carries the question: both
+	// records come from the run's opening durable event, and both are sent.
+	if got := recordEventType(t, value); got != "turn/start" {
+		t.Fatalf("first frame of the next turn = %q, want the turn's opening marker", got)
 	}
 	if seq := intField(t, decodeValueObject(t, value["event"]), "seq"); seq != turnEnd+1 {
 		t.Fatalf("next turn's first seq = %d, want %d", seq, turnEnd+1)
+	}
+	question, err := decodeJSONObject(reader.requireNext(t, 5*time.Second)["value"])
+	if err != nil {
+		t.Fatalf("next turn's second item value is not an object: %v", err)
+	}
+	if got := recordEventType(t, question); got != "user/message" {
+		t.Fatalf("second frame of the next turn = %q, want the question", got)
+	}
+	if seq := intField(t, decodeValueObject(t, question["event"]), "seq"); seq != turnEnd+2 {
+		t.Fatalf("next turn's question seq = %d, want %d", seq, turnEnd+2)
 	}
 }
 
@@ -487,8 +499,12 @@ func TestSessionFollowServesADraftSessionAndItsFirstTurn(t *testing.T) {
 		value := readItem(t, conn, "follow")
 		seen[recordEventType(t, value)] = true
 	}
-	if !seen["user/message"] {
-		t.Fatalf("first frames = %v, want the draft's first prompt as a user/message", seen)
+	if !seen["turn/start"] {
+		t.Fatalf("first frames = %v, want the turn's opening marker", seen)
+	}
+	value := readItem(t, conn, "follow")
+	if got := recordEventType(t, value); got != "user/message" {
+		t.Fatalf("frame after the turn marker = %q, want the draft's first prompt", got)
 	}
 }
 

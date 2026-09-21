@@ -550,8 +550,8 @@ func TestSessionPageReturnsRecordsAndHasMore(t *testing.T) {
 	if len(value.Records) != 2 {
 		t.Fatalf("records = %d, want 2", len(value.Records))
 	}
-	if value.Records[0].Event.Seq != 2 || value.Records[1].Event.Seq != 3 {
-		t.Fatalf("seqs = [%d %d], want [2 3]", value.Records[0].Event.Seq, value.Records[1].Event.Seq)
+	if value.Records[0].Event.Seq != 3 || value.Records[1].Event.Seq != 4 {
+		t.Fatalf("seqs = [%d %d], want [3 4]", value.Records[0].Event.Seq, value.Records[1].Event.Seq)
 	}
 	if !value.HasMore {
 		t.Fatal("hasMore = false, want true with an earlier event available")
@@ -580,10 +580,24 @@ func TestSessionPageReturnsRecordsAndHasMore(t *testing.T) {
 	if value.Records[0].Event.Seq != 1 || value.Records[1].Event.Seq != 2 {
 		t.Fatalf("earlier seqs = [%d %d], want [1 2]", value.Records[0].Event.Seq, value.Records[1].Event.Seq)
 	}
-	// The run's opening event is the prompt: the console renders it as the
-	// user's message, and that one is a surface append.
-	if value.Records[0].Event.Type != "user/message" || value.Records[0].Event.SurfaceOp != "append" {
-		t.Fatalf("record = %+v, want the prompt as an append user/message", value.Records[0])
+	if value.Records[0].Event.Type != "turn/start" {
+		t.Fatalf("record = %+v, want the turn's opening marker", value.Records[0])
+	}
+	// The turn's marker carries the turn and nothing else, and is not a surface
+	// append: the console reads it as the anchor of the turn's process row.
+	if turn, ok := value.Records[0].Event.Data["turn"].(float64); !ok || turn != 1 {
+		t.Fatalf("turn/start data = %v, want the turn number", value.Records[0].Event.Data)
+	}
+	// The page layer adds the addressed turn and step to every record it serves, so
+	// the step here is the page's, not the marker's: what matters is that the
+	// projector's own map carried the turn (asserted above) and no surface op.
+
+	if value.Records[0].Event.SurfaceOp != "" {
+		t.Fatalf("turn/start carries surfaceOp %q", value.Records[0].Event.SurfaceOp)
+	}
+	// The prompt follows it, and that one is a surface append.
+	if value.Records[1].Event.Type != "user/message" || value.Records[1].Event.SurfaceOp != "append" {
+		t.Fatalf("record = %+v, want the prompt as an append user/message", value.Records[1])
 	}
 	if value.HasMore {
 		t.Fatal("hasMore = true, want false at the start of the log")
@@ -598,8 +612,8 @@ func TestSessionPageReadsDurableStore(t *testing.T) {
 		pageArgs(t, sessionID, `"throughSeq":-1,"maxMessages":10`)))
 	var value pageValue
 	decodeValue(t, recorder, &value)
-	if len(value.Records) != 2 {
-		t.Fatalf("records = %d, want 2 from the jsonl store", len(value.Records))
+	if len(value.Records) != 3 {
+		t.Fatalf("records = %d, want 3 from the jsonl store", len(value.Records))
 	}
 }
 
@@ -765,8 +779,11 @@ func TestSessionPageServesEveryTurnInOneSequence(t *testing.T) {
 		pageArgs(t, sessionID, `"throughSeq":-1,"maxMessages":50`)))
 	var value pageValue
 	decodeValue(t, recorder, &value)
-	if len(value.Records) != 7 {
-		t.Fatalf("records = %d, want both turns' seven events", len(value.Records))
+	if len(value.Records) != 9 {
+		// Five records for the prompted turn (turn/start, step/start, the prompt,
+		// the assistant settlement and the step's end) and four for the second, whose
+		// question is grouped with the step that starts it.
+		t.Fatalf("records = %d, want both turns' nine events", len(value.Records))
 	}
 	// One conversation, one sequence: a second turn that numbered from one is what
 	// the console rejects as a stream resumed behind its last applied entry.
@@ -790,7 +807,7 @@ func TestSessionPageServesEveryTurnInOneSequence(t *testing.T) {
 			identity, _ := source["rpcId"].(string)
 			promptIdentities = append(promptIdentities, identity)
 		}
-		if turn, ok := record.Event.Data["turn"].(float64); ok && turn != 2 && record.Event.Seq > 4 {
+		if turn, ok := record.Event.Data["turn"].(float64); ok && turn != 2 && record.Event.Seq > 11 {
 			t.Fatalf("seq %d carries turn %v, want the second turn", record.Event.Seq, turn)
 		}
 	}
@@ -834,8 +851,8 @@ func TestSessionPageServesEveryTurnInOneSequence(t *testing.T) {
 	recorder = f.post(t, "/api/session/page", rpcBody(t, "rpc-page-earlier", "session/page",
 		pageArgs(t, sessionID, `"throughSeq":-1,"maxMessages":2`)))
 	decodeValue(t, recorder, &value)
-	if len(value.Records) != 2 || value.Records[0].Event.Seq != 6 || value.Records[1].Event.Seq != 7 {
-		t.Fatalf("newest page seqs = [%d %d], want [6 7]", value.Records[0].Event.Seq, value.Records[1].Event.Seq)
+	if len(value.Records) != 2 || value.Records[0].Event.Seq != 8 || value.Records[1].Event.Seq != 9 {
+		t.Fatalf("newest page seqs = [%d %d], want [8 9]", value.Records[0].Event.Seq, value.Records[1].Event.Seq)
 	}
 	if !value.HasMore {
 		t.Fatal("hasMore = false, want the earlier turn available")

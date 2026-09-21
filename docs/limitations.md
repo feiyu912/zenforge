@@ -174,10 +174,10 @@ what is experimental, and what remains adapter territory.
   message). A file resource renders because the host answers its `ready`
   subscription, but no `change` frames follow: this host watches no files, so a
   rewritten file shows its version at open time until the tab is reopened
-  (ADR 0120). The turn vocabulary is the smallest honest slice: `turn/start` and
-  `step/end` are not emitted, the request's model header and context window are not
-  served, and a failed attempt's partial stream is dropped rather than projected as
-  `assistant/attempt`.
+  (ADR 0120). The turn and step boundaries are
+  served (ADR 0121), but `turn/end` carries three of the console's six reasons, the
+  request's model header and context window are not served, and a failed attempt's
+  partial stream is dropped rather than projected as `assistant/attempt`.
 - **The served log is the console's log** (ADR 0117): the host's own durable
   events -- checkpoints, the model lifecycle, every streamed delta -- are not
   served as records and consume no sequence number, so one ordinary turn occupies

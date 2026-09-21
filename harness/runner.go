@@ -13,12 +13,17 @@ import (
 type RuntimeEvent string
 
 const (
-	RuntimeRunStarted       RuntimeEvent = "run.started"
-	RuntimeRunResumed       RuntimeEvent = "run.resumed"
-	RuntimeRunDone          RuntimeEvent = "run.done"
-	RuntimeRunError         RuntimeEvent = "run.error"
-	RuntimeRunCancelled     RuntimeEvent = "run.cancelled"
-	RuntimeStepStarted      RuntimeEvent = "step.started"
+	RuntimeRunStarted   RuntimeEvent = "run.started"
+	RuntimeRunResumed   RuntimeEvent = "run.resumed"
+	RuntimeRunDone      RuntimeEvent = "run.done"
+	RuntimeRunError     RuntimeEvent = "run.error"
+	RuntimeRunCancelled RuntimeEvent = "run.cancelled"
+	RuntimeStepStarted  RuntimeEvent = "step.started"
+	// RuntimeStepDone closes a step: its model call has settled and the tools it
+	// asked for have all resolved. The console marks a step settled on it and reads
+	// the step's coordinate from it, so a step that never closes leaves the live
+	// answer's state machine open (session-controller assistant-attempt reducer).
+	RuntimeStepDone         RuntimeEvent = "step.done"
 	RuntimeModelStarted     RuntimeEvent = "model.started"
 	RuntimeModelInterrupted RuntimeEvent = "model.interrupted"
 	RuntimeModelSuperseded  RuntimeEvent = "model.superseded"
@@ -270,6 +275,11 @@ func (r Runner) Run(ctx context.Context, state RunState, resumed bool) (terminal
 				fail(err)
 				return terminal
 			}
+			// The step's tools are resolved, so the step is over: the model call
+			// that opened it, and every call it asked for, have both settled.
+			if !emit(RuntimeStepDone, map[string]any{"step": state.Step}) {
+				return terminal
+			}
 			continue
 		}
 		if r.DrainSteers != nil {
@@ -330,6 +340,9 @@ func (r Runner) Run(ctx context.Context, state RunState, resumed bool) (terminal
 			return terminal
 		}
 		if len(state.Tool.Pending) == 0 {
+			if !emit(RuntimeStepDone, map[string]any{"step": state.Step}) {
+				return terminal
+			}
 			state.Phase = RunPhaseCompleted
 			state.Control.Status = RunStatusCompleted
 			if err := checkpointState(); err != nil {

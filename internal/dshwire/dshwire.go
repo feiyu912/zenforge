@@ -133,6 +133,10 @@ type Projector struct {
 	// carries it as `stream`, which is where the console's trajectory view reads
 	// the byte-exact answer from (ADR 0117).
 	chunks []wireChunks
+	// pending holds the records the last durable event produced beyond the first,
+	// in order. One durable event can need more than one console record, and the
+	// console renders them in this order.
+	pending []Event
 }
 
 // wireChunks is one content block's streamed timeline, compacted the way the
@@ -181,11 +185,11 @@ func Project(events []zenforge.Event, identity Identity) *Projection {
 func (p *Projection) Append(events ...zenforge.Event) {
 	for _, event := range events {
 		record, ok := p.projector.Next(event)
-		if !ok {
-			continue
+		for ok {
+			p.Events = append(p.Events, record)
+			p.Source = append(p.Source, event)
+			record, ok = p.projector.Pop()
 		}
-		p.Events = append(p.Events, record)
-		p.Source = append(p.Source, event)
 	}
 }
 
@@ -199,25 +203,81 @@ func (p *Projection) Window(maxMessages int) ([]Event, bool) {
 }
 
 // Next projects one durable event. The second result is false when the event has
-// no console record: either it is this host's bookkeeping or a model delta, or it
-// is a console event this host cannot project truthfully. A record's sequence is
-// this turn's next unused number, which is only committed when a record is
-// produced -- so the served sequence counts records, not durable events.
+// no console record. Records beyond the first -- the question a step answers, which
+// follows the step's own opening marker -- are drained with Pop.
 func (p *Projector) Next(event zenforge.Event) (Event, bool) {
+	p.pending = p.project(event)
+	return p.Pop()
+}
+
+// Pop returns the next queued record from the last durable event, if any. The
+// projection drains it so one durable event can produce several records without
+// losing the ones after the first.
+func (p *Projector) Pop() (Event, bool) {
+	if len(p.pending) == 0 {
+		return Event{}, false
+	}
+	next := p.pending[0]
+	p.pending = p.pending[1:]
+	return next, true
+}
+
+// project returns every record one durable event produces, in order.
+func (p *Projector) project(event zenforge.Event) []Event {
+	out := make([]Event, 0, 2)
+	switch event.Type {
+	case zenforge.EventRunStarted:
+		// The turn's opening marker comes first: it is what the console hangs the
+		// turn's process row off, and without it the whole step timeline for the
+		// turn is dropped (session-controller turnProcessDefinition).
+		out = append(out, p.mustEmit(Event{Time: event.Timestamp}.known("turn/start",
+			map[string]any{"turn": p.identity.turn()})))
+		data := payload(event)
+		if text, ok := stringField(data, "input"); ok && text != "" {
+			// The question follows immediately. Upstream records it inside the step
+			// that answers it, but holding it back would hide a prompt the operator
+			// just submitted until the model's first step opens, and this host has no
+			// separate echo to carry it in the meantime. The console does not require
+			// the upstream order either: its turn row anchors on turn/start and its
+			// step rows on step/start (session-controller turnProcessDefinition), so
+			// the question renders where it belongs either way.
+			//
+			// The caller's identity for this prompt (Task.PromptID) is the console's
+			// requestId: it retires the echo it painted locally when the durable
+			// message carrying that identity renders (api-session-controller
+			// observeSubmissionEvent, ui-chat observedRpcIds), and without it the echo
+			// stays on screen as a second copy of the question (ADR 0111).
+			seq := p.nextSeq()
+			out = append(out, p.surface(Event{Seq: seq, Time: event.Timestamp}, "user/message",
+				userMessage(seq, text, promptIdentity(data))))
+		}
+		return out
+	}
+	record, ok := p.projectOne(event)
+	if ok {
+		out = append(out, record)
+	}
+	return out
+}
+
+// mustEmit emits one record and returns it. Every minted record is emitted, so a
+// caller that needs the record cannot fail.
+func (p *Projector) mustEmit(event Event) Event {
+	record, _ := p.emit(event)
+	return record
+}
+
+// projectOne projects one durable event into at most one record. The second result
+// is false when the event has no console record: either it is this host's
+// bookkeeping or a model delta, or it is a console event this host cannot project
+// truthfully. A record's sequence is this turn's next unused number, which is only
+// committed when a record is produced -- so the served sequence counts records, not
+// durable events.
+func (p *Projector) projectOne(event zenforge.Event) (Event, bool) {
 	data := payload(event)
 	base := Event{Seq: p.identity.SeqOffset + int64(p.records) + 1, Time: event.Timestamp, Data: data}
 
 	switch event.Type {
-	case zenforge.EventRunStarted:
-		if text, ok := stringField(data, "input"); ok && text != "" {
-			// The caller's identity for this prompt (Task.PromptID) is the
-			// console's requestId: it retires the echo it painted locally when
-			// the durable message carrying that identity renders
-			// (api/session-controller observeSubmissionEvent, ui-chat
-			// observedRpcIds), and without it the echo stays on screen as a
-			// second copy of the question (ADR 0111).
-			return p.emit(p.surface(base, "user/message", userMessage(base.Seq, text, promptIdentity(data))))
-		}
 	case zenforge.EventRequestSteer:
 		// The harness records a queued turn as `request.steer` with the text
 		// under "message"; without that key the console would never see the
@@ -377,9 +437,15 @@ func (p *Projector) Next(event zenforge.Event) (Event, bool) {
 // counter: a number the console is served must never be skipped, because its
 // journal stream reads a gap as a carrier failure and reconnects.
 func (p *Projector) emit(event Event) (Event, bool) {
-	p.records++
-	event.Seq = p.identity.SeqOffset + int64(p.records)
+	event.Seq = p.nextSeq()
 	return event, true
+}
+
+// nextSeq reserves the turn's next console sequence. It is reserved rather than
+// predicted so a record can be built from its own number.
+func (p *Projector) nextSeq() int64 {
+	p.records++
+	return p.identity.SeqOffset + int64(p.records)
 }
 
 // surface marks an event as a surface append. Only the eligible types reach it.
