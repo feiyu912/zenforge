@@ -16,9 +16,10 @@
 // package doc comment on roster.go for the derivation and for the staged
 // bundles that are deliberately withheld from the advertised graph.
 //
-// This package intentionally does not implement the WebSocket mux
-// (/api/remote.mux) or the settings namespace. The console boots and renders
-// without them; live sessions and streaming do not work until they exist.
+// This package mounts the console's assets and decides which plugin entries the
+// client may load. The WebSocket mux (/api/remote.mux) and the settings namespace
+// are not here: dshstream serves the mux and dshapi serves the RPC surface, and
+// both are wired by the serve command.
 package dshmount
 
 import (

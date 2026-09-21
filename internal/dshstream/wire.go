@@ -25,11 +25,14 @@ const eventStreamEndpoint = "$events"
 // own vocabulary; the session/* and approval/* codes are this host's additions
 // for failures a panel surfaces. The client accepts any string code.
 const (
-	codeBadRequest         = "gateway/bad-request"
-	codeArgumentsInvalid   = "gateway/arguments-invalid"
-	codeInternal           = "gateway/internal"
-	codeNotFound           = "gateway/not-found"
-	codeServiceUnavailable = "gateway/service-unavailable"
+	codeBadRequest       = "gateway/bad-request"
+	codeArgumentsInvalid = "gateway/arguments-invalid"
+	codeInternal         = "gateway/internal"
+	// codeInvocationUnavailable is upstream's own answer for a stream endpoint no
+	// active method exports. An invented gateway/not-found would be a code the
+	// console's vocabulary does not contain (ADR 0120).
+	codeInvocationUnavailable = "gateway/invocation-unavailable"
+	codeServiceUnavailable    = "gateway/service-unavailable"
 	// codeUnimplemented is the honest answer for a capability this host knows
 	// about but cannot implement without inventing semantics.
 	codeUnimplemented    = "unimplemented"

@@ -34,9 +34,9 @@ func (s *stubWorkspaceFiles) ReadPage(string, int, int) (WorkspaceFileText, erro
 	return s.page, s.err
 }
 
-func (s *stubWorkspaceFiles) ReadAll(string) (WorkspaceFileText, error) {
+func (s *stubWorkspaceFiles) ReadAll(string) (WorkspaceFileBytes, error) {
 	s.calls = append(s.calls, "readAll")
-	return s.page, s.err
+	return s.bytes, s.err
 }
 
 func (s *stubWorkspaceFiles) ReadBytes(string, int, int) (WorkspaceFileBytes, error) {
@@ -234,10 +234,14 @@ func TestWorkspaceFileSurfacesWithoutAFaceAnswerUnimplemented(t *testing.T) {
 	}
 }
 
-func TestWorkspaceFileWatchAndRelationReadsAreNamedGaps(t *testing.T) {
+func TestWorkspaceFileRelationReadIsANamedGap(t *testing.T) {
 	f, scope, _ := workspaceFileFixture(t)
+	// workspaceFiles/changes is a stream on the mux, not a unary method: it has no
+	// route here at all, exactly like session/follow (ADR 0120).
+	if _, routed := f.handler.method("workspaceFiles/changes"); routed {
+		t.Fatal("workspaceFiles/changes is routed as a unary method; it is a stream")
+	}
 	cases := map[string]string{
-		"workspaceFiles/changes":     "workspace file watching",
 		"workspaceFiles/readRelated": "workspace file relation reads",
 	}
 	for method, capability := range cases {

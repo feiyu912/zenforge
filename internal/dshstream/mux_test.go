@@ -214,7 +214,7 @@ func TestMuxRejectsUnknownEndpoint(t *testing.T) {
 	if kind != "error" {
 		t.Fatalf("terminal frame = %q, want error", kind)
 	}
-	assertField(t, failure, "code", codeNotFound)
+	assertField(t, failure, "code", codeInvocationUnavailable)
 }
 
 func TestMuxRejectsExtraClientMessageKeys(t *testing.T) {

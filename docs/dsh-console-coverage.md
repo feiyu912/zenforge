@@ -33,8 +33,8 @@ does not serve the remaining **53**.
 | State | Count |
 | --- | --- |
 | served | 37 |
-| stream | 3 |
-| refused | 16 |
+| stream | 4 |
+| refused | 15 |
 | unserved | 53 |
 | **client methods total** | **109** |
 
@@ -81,7 +81,7 @@ attach the prompt to the session it has open (ADR 0115).
 | `workspace/unarchiveSession` | served | Restore an archived session. |
 | `workspaceFiles/list` | served | List a directory in a session's workspace. |
 | `workspaceFiles/read` | served | Read a workspace file. |
-| `workspaceFiles/readAll` | served | Read a file with its full context. |
+| `workspaceFiles/readAll` | served | The whole file as base64 bytes, the arm the console's document preview decodes (ADR 0120). |
 | `workspaceFiles/readBytes` | served | Read a byte range of a file. |
 | `workspaceFiles/stat` | served | Stat a workspace path. |
 | `session/control` | stream | The control stream: job and model-selection projections. |
@@ -106,7 +106,7 @@ attach the prompt to the session it has open (ADR 0115).
 | `pluginManager/setPluginEnabled` | refused | this host ships a fixed set of console bundles and has no loader, so it cannot install, enable, disable or remove a plugin |
 | `settings/openAgentPresetDirectory` | refused | this host has no native editor to open a settings document or a preset directory in; configure the host with --base-url, --model, --api-key or the settings panel instead |
 | `settings/openSettingsDocument` | refused | this host has no native editor to open a settings document or a preset directory in; configure the host with --base-url, --model, --api-key or the settings panel instead |
-| `workspaceFiles/changes` | refused | this host does not watch workspace files; reopen the file to see its current content |
+| `workspaceFiles/changes` | stream | The subscription a file resource opens before it stats anything: the `ready` frame unblocks the tab, and this host sends no `change` frames because it watches no files (ADR 0120). |
 | `workspaceFiles/readRelated` | refused | this host does not read a file relative to another; read the file by its own path |
 
 ## Not served

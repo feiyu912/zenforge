@@ -142,8 +142,13 @@ func TestConsoleWorkspaceFilesReadPages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadAll: %v", err)
 	}
-	if all.Text != "one\ntwo\nthree\n" || all.Lines != 3 || !all.EOF || all.Offset != 1 {
-		t.Fatalf("readAll = %+v, want the whole file and three lines", all)
+	// The arm is bytes: the console's document preview base64-decodes `data`, so a
+	// text arm fails it (ADR 0120).
+	if all.Data != base64.StdEncoding.EncodeToString([]byte("one\ntwo\nthree\n")) {
+		t.Fatalf("readAll data = %q, want the whole file base64-encoded", all.Data)
+	}
+	if !all.EOF || all.Offset != 0 {
+		t.Fatalf("readAll = %+v, want the whole file from offset 0", all)
 	}
 }
 

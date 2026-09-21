@@ -106,22 +106,23 @@ func TestEventsResultRejects(t *testing.T) {
 	}
 }
 
-func TestEventsResultUnknownEventFailsClosed(t *testing.T) {
+// An answer for an event this host never delivered is a no-op, not a failure:
+// upstream's receiveRemoteEventResult does nothing for an unknown eventId, and the
+// client treats a failed result call as a failure of the whole forwarded-event
+// stream (ADR 0120).
+func TestEventsResultUnknownEventIsANoOp(t *testing.T) {
 	f := newFixture(t, Config{})
 	conn := f.mustDial(t)
 	clientID := openEventsStream(t, conn, "events")
 
 	response := f.postResult(t, resultBody(t, clientID, "approval-does-not-exist", `{"kind":"result","value":"allowed-once"}`))
 	envelope := decodeResponse(t, response)
-	if envelope.Result.OK {
-		t.Fatal("unknown eventId was accepted")
-	}
-	if envelope.Result.Error == nil || envelope.Result.Error.Code != codeApprovalNotFound {
-		t.Fatalf("error = %+v, want code %q", envelope.Result.Error, codeApprovalNotFound)
+	if !envelope.Result.OK {
+		t.Fatalf("an answer for an unknown event failed the stream: %+v", envelope.Result.Error)
 	}
 }
 
-func TestEventsResultAlreadyAnsweredFailsClosed(t *testing.T) {
+func TestEventsResultAlreadyAnsweredIsANoOp(t *testing.T) {
 	f := newFixture(t, Config{})
 	runID := f.startRun(t, "twice")
 	request := newApprovalRequest("approval-twice", runID)
@@ -138,16 +139,16 @@ func TestEventsResultAlreadyAnsweredFailsClosed(t *testing.T) {
 	}
 	<-decisions
 
+	// The second answer finds nothing pending, which upstream answers success for;
+	// the operator's real decision already stands (the first one approved, and this
+	// rejection must not overturn it).
 	second := decodeResponse(t, f.postResult(t, resultBody(t, clientID, request.ID, `{"kind":"result","value":"rejected"}`)))
-	if second.Result.OK {
-		t.Fatal("second answer to the same approval was accepted")
-	}
-	if second.Result.Error == nil || second.Result.Error.Code != codeApprovalNotFound {
-		t.Fatalf("error = %+v, want code %q", second.Result.Error, codeApprovalNotFound)
+	if !second.Result.OK {
+		t.Fatalf("a stale second answer failed the whole stream: %+v", second.Result.Error)
 	}
 }
 
-func TestEventsResultExpiredFailsClosed(t *testing.T) {
+func TestEventsResultExpiredIsANoOp(t *testing.T) {
 	f := newFixture(t, Config{})
 	runID := f.startRun(t, "expired")
 	request := newApprovalRequest("approval-expired", runID)
@@ -162,11 +163,10 @@ func TestEventsResultExpiredFailsClosed(t *testing.T) {
 
 	response := f.postResult(t, resultBody(t, clientID, request.ID, `{"kind":"result","value":"allowed-once"}`))
 	envelope := decodeResponse(t, response)
-	if envelope.Result.OK {
-		t.Fatal("expired approval was accepted")
-	}
-	if envelope.Result.Error == nil || envelope.Result.Error.Code != codeApprovalConflict {
-		t.Fatalf("error = %+v, want code %q", envelope.Result.Error, codeApprovalConflict)
+	// Success, because the request was not revived either way: the honest answer is
+	// "nothing happened", not a stream-killing error the client reconnects over.
+	if !envelope.Result.OK {
+		t.Fatalf("an answer to an expired approval failed the stream: %+v", envelope.Result.Error)
 	}
 	// Fail closed means the request is still pending, not silently allowed.
 	select {
@@ -193,15 +193,17 @@ func TestEventsResultUnknownClientFailsClosed(t *testing.T) {
 	if envelope.Result.OK {
 		t.Fatal("answer from an unknown clientId was accepted")
 	}
-	if envelope.Result.Error == nil || envelope.Result.Error.Code != codeArgumentsInvalid {
-		t.Fatalf("error = %+v, want code %q", envelope.Result.Error, codeArgumentsInvalid)
+	// The one failure on this route: upstream throws for an unknown clientId too
+	// (rpcFailure -> gateway/internal), and it is a caller error, not a race.
+	if envelope.Result.Error == nil || envelope.Result.Error.Code != codeInternal {
+		t.Fatalf("error = %+v, want code %q", envelope.Result.Error, codeInternal)
 	}
 	if _, pending := f.broker.Pending(request.ID); !pending {
 		t.Fatal("approval was resolved by an unidentified client")
 	}
 }
 
-func TestEventsResultNextOutcomeFailsClosed(t *testing.T) {
+func TestEventsResultNextOutcomeStaysPending(t *testing.T) {
 	f := newFixture(t, Config{})
 	runID := f.startRun(t, "next")
 	request := newApprovalRequest("approval-next", runID)
@@ -214,11 +216,11 @@ func TestEventsResultNextOutcomeFailsClosed(t *testing.T) {
 
 	response := f.postResult(t, resultBody(t, clientID, request.ID, `{"kind":"next"}`))
 	envelope := decodeResponse(t, response)
-	if envelope.Result.OK {
-		t.Fatal(`outcome "next" was accepted as an approval`)
-	}
-	if envelope.Result.Error == nil || envelope.Result.Error.Code != codeUnimplemented {
-		t.Fatalf("error = %+v, want code %q", envelope.Result.Error, codeUnimplemented)
+	// Delegation is a legal answer that decides nothing: the shipped panel sends it
+	// whenever it cannot scope the owning session, and failing it would rebuild the
+	// whole forwarded-event stream.
+	if !envelope.Result.OK {
+		t.Fatalf(`outcome "next" failed the stream: %+v`, envelope.Result.Error)
 	}
 	if _, pending := f.broker.Pending(request.ID); !pending {
 		t.Fatal(`outcome "next" resolved the approval`)

@@ -148,3 +148,4 @@ and what the adapter answers today is
 | [0117](0117-the-session-log-carries-the-console-vocabulary.md) | The session log carries the console's vocabulary |
 | [0118](0118-a-reconnect-mid-answer-resumes-the-attempt.md) | A reconnect mid-answer resumes the attempt |
 | [0119](0119-the-console-baselines-are-complete.md) | The console's baselines are complete |
+| [0120](0120-the-file-surfaces-the-console-reads.md) | The file surfaces the console reads |

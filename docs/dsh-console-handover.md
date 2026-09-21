@@ -543,6 +543,30 @@ wrote an event is omitted, because `session/page` answers not-found for it; and 
 log has no terminal event is recorded as cancelled when it is adopted. Drafts stay
 process-local (ADR 0104).
 
+## Shipped: the file surfaces and the forwarded-event answers (2026-09-21)
+
+The fifth audit slice found three more deviations, two of them operator-visible.
+`workspaceFiles/changes` had no stream route, and the console's file provider opens
+that subscription *before* it stats the path — so every `@file` reference opened a
+tab that stayed `loading` forever. `workspaceFiles/readAll` returned a text arm
+where upstream returns bytes, which the document preview base64-decodes. And a
+failed `$events/result` call — for an unknown `eventId`, a delegating
+`{kind:"next"}`, a listener failure `{kind:"rejected"}` — tore down the whole
+forwarded-event stream and re-delivered every pending waterfall; the shipped
+approval panel sends `next` whenever it cannot scope the owning session, so this
+was reachable on every background approval.
+
+All three are fixed (ADR 0120): the watch stream answers `ready` (and no `change`
+frames, because this host watches no files), `readAll` is the bytes arm, and an
+unusable forwarded-event answer is a success that decides nothing.
+
+The same audit proved a live defect in ADR 0118's code by running upstream's own
+`expandAssistantStream` over this host's output: the reconnect baseline's compact
+prefix marshalled `dt: null` for a block with exactly one delta, and the validator
+throws `TypeError: text-chunks dt must contain safe integers` — so a mid-answer
+reconnect whose prefix held a short reasoning block died terminally instead of
+resuming. The gap list is now always an array, and a socket test asserts it.
+
 ## Shipped: the console's baselines are complete (2026-09-21)
 
 A file-by-file audit of the host against the client the console actually ships

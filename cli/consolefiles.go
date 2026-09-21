@@ -220,19 +220,37 @@ func (c *consoleWorkspaceFiles) ReadPage(target string, offset, limit int) (dsha
 	return page, nil
 }
 
-// ReadAll returns the whole file. The workspace's own cap refuses a file over the
-// complete-file limit rather than truncating it, which is upstream's rule too.
-func (c *consoleWorkspaceFiles) ReadAll(target string) (dshapi.WorkspaceFileText, error) {
-	page := dshapi.WorkspaceFileText{Offset: 1}
-	text, info, err := c.readText(target)
+// ReadAll returns the whole file as bytes. The workspace's own cap refuses a file
+// over the complete-file limit rather than truncating it, which is upstream's rule
+// too. The arm is bytes because that is what the console's document preview reads:
+// it decodes `data` as base64, so a text arm would fail it with "malformed base64
+// data" (ADR 0120).
+func (c *consoleWorkspaceFiles) ReadAll(target string) (dshapi.WorkspaceFileBytes, error) {
+	whole := dshapi.WorkspaceFileBytes{Offset: 0}
+	ctx := context.Background()
+	info, err := c.workspace.Stat(ctx, target)
 	if err != nil {
-		return page, err
+		return whole, consoleFileRefusal(target, err, 0)
 	}
-	page.WorkspaceFileStat = c.statOf(info)
-	page.Text = text
-	page.Lines = countLines(text)
-	page.EOF = true
-	return page, nil
+	if info.IsDir {
+		return whole, consoleNotRegularFile(target, "directory")
+	}
+	data, err := c.workspace.Read(ctx, target)
+	if err != nil {
+		return whole, consoleFileRefusal(target, err, dshapi.WorkspaceFileMaxBytes)
+	}
+	if len(data) > dshapi.WorkspaceFileMaxBytes {
+		return whole, &dshapi.WorkspaceFileError{
+			Code: "workspace-file/too-large",
+			Message: fmt.Sprintf("workspace file %q is %d bytes, over the %d byte limit",
+				target, len(data), dshapi.WorkspaceFileMaxBytes),
+			Details: map[string]any{"path": target, "limit": dshapi.WorkspaceFileMaxBytes},
+		}
+	}
+	whole.WorkspaceFileStat = c.statOf(info)
+	whole.Data = base64.StdEncoding.EncodeToString(data)
+	whole.EOF = true
+	return whole, nil
 }
 
 // ReadBytes returns one byte window in base64.

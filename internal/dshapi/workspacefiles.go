@@ -130,9 +130,14 @@ type WorkspaceFiles interface {
 	// ReadPage returns lines offset through offset+limit-1, refusing a page over
 	// WorkspacePageMaxBytes rather than shortening it.
 	ReadPage(path string, offset, limit int) (WorkspaceFileText, error)
-	// ReadAll returns the whole file, refusing anything over
+	// ReadAll returns the whole file as bytes, refusing anything over
 	// WorkspaceFileMaxBytes rather than truncating it.
-	ReadAll(path string) (WorkspaceFileText, error)
+	//
+	// The arm is bytes, not text: upstream declares readAll as
+	// Promise<WorkspaceFileBytes> (dsh-api-workspace-files/lib/typert.remote-client.d.ts:14),
+	// and a consumer that previews a document decodes `data` as base64 and fails
+	// with "malformed base64 data" when it is absent (ADR 0120).
+	ReadAll(path string) (WorkspaceFileBytes, error)
 	// ReadBytes returns one byte window, refusing a window over
 	// WorkspacePageMaxBytes.
 	ReadBytes(path string, offset, length int) (WorkspaceFileBytes, error)
@@ -358,14 +363,9 @@ func workspaceByteRange(args map[string]json.RawMessage) (int, int, *methodError
 	return offset, length, nil
 }
 
-// workspaceFilesChanges is the streaming watch this host does not implement. The
-// refusal names the capability: no shipped panel calls it, so it degrades to an
-// error a console can show rather than a stream that never opens.
-func (h *Handler) workspaceFilesChanges(_ context.Context, _ map[string]json.RawMessage) (any, *methodError) {
-	return nil, fail(codeUnimplemented,
-		"this host does not watch workspace files; reopen the file to see its current content",
-		map[string]any{"capability": "workspace file watching"})
-}
+// workspaceFiles/changes is not routed here. It is a stream on the console's own
+// face -- the fourth of upstream's four -- and dshstream serves it (ADR 0120), so a
+// unary POST has no route, exactly like session/follow and workspace/follow.
 
 // workspaceFilesReadRelated reads a file named relative to another one. This host
 // does not implement it, and no shipped panel calls it: the document preview

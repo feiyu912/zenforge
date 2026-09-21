@@ -540,6 +540,13 @@ func TestSessionFollowSnapshotResumesAMidAnswerAttempt(t *testing.T) {
 	if texts, ok := stream[1]["texts"].([]any); !ok || len(texts) != 1 || texts[0] != "half" {
 		t.Fatalf("baseline timeline = %v, want the streamed text", stream[1])
 	}
+	// A one-delta run has no gap at all, and the console's expander requires an
+	// array: a nil slice marshals as null and the validator rejects the whole
+	// baseline with "dt must contain safe integers" (ADR 0120, verified against
+	// dsh-llm's own expandAssistantStream).
+	if gaps, ok := stream[1]["dt"].([]any); !ok || len(gaps) != 0 {
+		t.Fatalf("baseline gaps = %#v, want an empty array", stream[1]["dt"])
+	}
 
 	// The live tail continues the attempt: the next delta is a chunk frame whose
 	// index is the one after the baseline's, not a new start.
@@ -595,4 +602,29 @@ func TestSessionFollowServesTheTitleProjection(t *testing.T) {
 	if got := intField(t, projections, "asOfSeq"); got < 1 {
 		t.Fatalf("projection watermark = %d, want the served sequence that set the title", got)
 	}
+}
+
+// A file resource opens this subscription before it stats anything and renders only
+// after the ready frame, so a stream that fails leaves the tab loading forever. The
+// scope is checked for presence rather than existence: upstream's scope is a session,
+// which exists before its first turn, while this host's only existence test is a
+// started turn (ADR 0120).
+func TestWorkspaceFileChangesStreamsReady(t *testing.T) {
+	f := newFixture(t, Config{})
+	scope := f.startRun(t, "hello")
+
+	conn := f.mustDial(t)
+	openStream(t, conn, "changes", "workspaceFiles/changes",
+		fmt.Sprintf(`{"workspaceFileScopeId":%s}`, mustJSON(t, scope)))
+	ready := readItem(t, conn, "changes")
+	assertField(t, ready, "kind", "ready")
+	assertKeys(t, ready, "kind")
+
+	empty := f.mustDial(t)
+	openStream(t, empty, "changes", "workspaceFiles/changes", `{"workspaceFileScopeId":""}`)
+	kind, failure := readStreamEnd(t, empty, "changes")
+	if kind != "error" {
+		t.Fatalf("terminal frame = %q, want error", kind)
+	}
+	assertField(t, failure, "code", codeArgumentsInvalid)
 }

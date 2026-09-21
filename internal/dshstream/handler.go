@@ -101,8 +101,10 @@ func (h *Handler) runStream(ctx context.Context, endpoint string, payload json.R
 		return h.runFollow(ctx, payload, send)
 	case "workspace/follow":
 		return h.runWorkspaceFollow(ctx, payload, send)
+	case "workspaceFiles/changes":
+		return h.runWorkspaceFileChanges(ctx, payload, send)
 	default:
-		return streamFail(codeNotFound, "stream endpoint not found: "+endpoint,
+		return streamFail(codeInvocationUnavailable, "stream endpoint not found: "+endpoint,
 			map[string]any{"endpoint": endpoint})
 	}
 }

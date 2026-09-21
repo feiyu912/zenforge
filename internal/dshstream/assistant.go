@@ -149,9 +149,23 @@ func (t *assistantTracker) onRecord(record dshwire.Event) []any {
 	if record.Type != "assistant/message" && record.Type != "assistant/attempt" {
 		return nil
 	}
-	// The client binds a settlement to an attempt by turn and step, so a record
-	// that belongs to another step must not close this attempt.
+	// The binder mirrors the client's own predicate for a settlement, because a
+	// committed end frame must name a sequence the client actually staged: the
+	// client requires the record to be an assistant message on the append surface,
+	// to be past the attempt's opening sequence, and to carry the attempt's own
+	// turn and step (api-session-controller/src/client/transport.ts
+	// attemptForSettlement). A looser binder here would release an attempt with a
+	// sequence the console never held, which it answers with a rebaseline.
 	if step, ok := payloadIntValueOK(record.Data, "step"); !ok || step != t.active.step {
+		return nil
+	}
+	if turn, ok := payloadIntValueOK(record.Data, "turn"); !ok || turn != t.turn {
+		return nil
+	}
+	if record.Type == "assistant/message" && record.SurfaceOp != "append" {
+		return nil
+	}
+	if record.Seq <= t.active.startedAfterSeq {
 		return nil
 	}
 	// The block the attempt ends inside is finalized before the attempt is
@@ -366,7 +380,11 @@ func compactFrames(frames []any) []any {
 			kind = "reasoning-chunks"
 		}
 		if open == nil || open.kind != kind || open.index != delta.Index {
-			open = &compactRun{kind: kind, index: delta.Index, record: map[string]any{
+			// The gap list is allocated, not left nil: a run with one delta has no
+			// gap at all, and a nil slice marshals as `null` where the console's
+			// expander requires an array and rejects the whole baseline with
+			// "dt must contain safe integers" (dsh-llm/lib/index.js validateRun).
+			open = &compactRun{kind: kind, index: delta.Index, gaps: []any{}, record: map[string]any{
 				"type": kind, "time0": frame.Time, "index": delta.Index,
 			}}
 			stream = append(stream, open.record)

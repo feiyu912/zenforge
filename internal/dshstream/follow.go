@@ -73,17 +73,18 @@ func (h *Handler) sessionProjectionBaseline(sessionID string, cursor int64, titl
 // nothing (ADR 0114). The stream therefore waits on the finished turn and follows
 // the conversation's next turn when one starts.
 //
-// What this host does not send is assistant-stream frames. The harness does
-// stream model output, but as durable model.delta events carrying
-// attemptId/step/chunkSeq/offset/textDelta (agent.go callModelAttemptDurable)
-// — not as the console's process-local, cursorless revision/index protocol.
-// Those deltas therefore arrive as ordinary durable event frames. Minting
-// assistant-stream frames would require inventing a dense revision/index
-// sequence whose exact reconnect semantics the upstream recon itself could not
-// establish (docs/dsh-console-protocol-recon.md §8.5), so it is not done. The
-// opted-in opening baseline is still sent, because the shipped client throws
-// when it is missing; revision 0 is upstream's own fallback for a session with
-// no active accumulator (session-controller/src/history.ts:185).
+// The answer arrives twice over, and the two are not alternatives. The durable
+// projection carries each step's settled assistant message, and the dense
+// assistant-stream frames carry the prose while it is still being written -- the
+// console renders live text from those frames alone, so a host that sent only the
+// settlement would show the operator an answer that appears all at once (ADR 0116).
+//
+// A tracker is rebuilt from the newest turn's durable log before the snapshot is
+// written, so a console that reconnects in the middle of an answer is handed the
+// attempt it was rendering (ADR 0118) and the live tail continues that same
+// attempt rather than announcing a second start. The snapshot's baseline cites the
+// tracker's own frame counter and, when the turn has settled, omits the attempt
+// (ADR 0119).
 func (h *Handler) runFollow(ctx context.Context, payload []byte, send func(any) error) error {
 	request, failure := decodeFollowRequest(payload)
 	if failure != nil {

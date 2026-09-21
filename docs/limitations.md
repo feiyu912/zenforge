@@ -171,7 +171,10 @@ what is experimental, and what remains adapter territory.
   partial answer is on screen again before the next chunk arrives (ADR 0118). The
   honest limits: tool-call arguments do not stream (this harness emits a complete
   `tool.call`), and no `usage` chunk is sent (the accounting rides the settled
-  message). The turn vocabulary is the smallest honest slice: `turn/start` and
+  message). A file resource renders because the host answers its `ready`
+  subscription, but no `change` frames follow: this host watches no files, so a
+  rewritten file shows its version at open time until the tab is reopened
+  (ADR 0120). The turn vocabulary is the smallest honest slice: `turn/start` and
   `step/end` are not emitted, the request's model header and context window are not
   served, and a failed attempt's partial stream is dropped rather than projected as
   `assistant/attempt`.

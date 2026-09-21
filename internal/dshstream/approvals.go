@@ -85,41 +85,50 @@ func (h *Handler) answerApproval(ctx context.Context, args map[string]json.RawMe
 		return argumentRequired("eventId")
 	}
 	if !h.clientActive(clientID) {
-		return fail(codeArgumentsInvalid,
+		// Upstream fails here too, with rpcFailure's gateway/internal (gateway
+		// lib/index.js:566-573): the only failure on this route that is a caller
+		// error rather than a race.
+		return fail(codeInternal,
 			fmt.Sprintf("clientId %q identifies no active $events stream; reconnect and answer the approval it delivered", clientID),
 			map[string]any{"clientId": clientID})
 	}
 
-	decision, failure := decodeApprovalOutcome(eventID, rawOutcome)
+	decision, delegate, failure := decodeApprovalOutcome(eventID, rawOutcome)
 	if failure != nil {
 		return failure
+	}
+	if delegate {
+		// A delegating or listener-failure answer is not a decision. Upstream
+		// answers success and leaves the request untouched, so it stays pending and
+		// can still be answered; refusing it would tear down the whole
+		// forwarded-event stream, because the client treats a failed result call as
+		// a generation failure (api-gateway/src/client/remote-events.ts throws on
+		// !response.ok) and rebuilds it, dropping every other pending waterfall.
+		return nil
 	}
 
 	pending, err := h.inbox.Lookup(ctx, eventID)
 	switch {
 	case errors.Is(err, approval.ErrRequestNotFound):
-		return fail(codeApprovalNotFound,
-			fmt.Sprintf("approval %q is not pending: it was already answered, expired, or never existed", eventID),
-			map[string]any{"eventId": eventID})
+		// Already answered, expired, or never delivered to this host:
+		// receiveRemoteEventResult is a no-op for an unknown eventId upstream, and a
+		// stale double-click must not cost the stream.
+		return nil
 	case err != nil:
 		return fail(codeInternal, "look up approval: "+err.Error(), nil)
 	}
 	if pending.ExpiresAt != nil && !pending.ExpiresAt.After(time.Now()) {
 		// The broker may still hold an expired request; answering it must not
-		// revive it.
-		return fail(codeApprovalConflict,
-			fmt.Sprintf("approval %q has expired", eventID),
-			map[string]any{"eventId": eventID})
+		// revive it -- and must not be reported as a failure either.
+		return nil
 	}
 	if err := h.inbox.Submit(ctx, decision); err != nil {
 		switch {
 		case errors.Is(err, approval.ErrRequestNotFound):
-			return fail(codeApprovalNotFound,
-				fmt.Sprintf("approval %q is no longer pending", eventID),
-				map[string]any{"eventId": eventID})
+			// Lost the race with another answerer or with expiry.
+			return nil
 		case errors.Is(err, approval.ErrDecisionConflict), errors.Is(err, approval.ErrRequestExpired):
-			return fail(codeApprovalConflict, "approval could not be answered: "+err.Error(),
-				map[string]any{"eventId": eventID})
+			return nil
 		default:
 			return fail(codeInternal, "submit approval decision: "+err.Error(), nil)
 		}
@@ -134,33 +143,33 @@ func (h *Handler) answerApproval(ctx context.Context, args map[string]json.RawMe
 //	{kind:"next"}
 //	{kind:"result"} | {kind:"result", value}
 //	{kind:"rejected", error}
-func decodeApprovalOutcome(eventID string, raw json.RawMessage) (approval.Decision, *methodError) {
+func decodeApprovalOutcome(eventID string, raw json.RawMessage) (approval.Decision, bool, *methodError) {
 	outcome, err := decodeJSONObject(raw)
 	if err != nil {
-		return approval.Decision{}, fail(codeArgumentsInvalid, `"outcome" must be a JSON object`,
+		return approval.Decision{}, false, fail(codeArgumentsInvalid, `"outcome" must be a JSON object`,
 			map[string]any{"argument": "outcome"})
 	}
 	kind := ""
 	if rawKind, ok := outcome["kind"]; ok {
 		if err := json.Unmarshal(rawKind, &kind); err != nil {
-			return approval.Decision{}, fail(codeArgumentsInvalid, `"outcome.kind" must be a string`,
+			return approval.Decision{}, false, fail(codeArgumentsInvalid, `"outcome.kind" must be a string`,
 				map[string]any{"argument": "outcome"})
 		}
 	}
 	switch kind {
 	case "result":
 		if len(outcome) > 2 {
-			return approval.Decision{}, fail(codeArgumentsInvalid,
+			return approval.Decision{}, false, fail(codeArgumentsInvalid,
 				`outcome "result" accepts only "kind" and "value"`,
 				map[string]any{"argument": "outcome"})
 		}
 		rawValue, ok := outcome["value"]
 		if !ok {
-			return approval.Decision{}, argumentRequired("outcome.value")
+			return approval.Decision{}, false, argumentRequired("outcome.value")
 		}
 		var value string
 		if err := json.Unmarshal(rawValue, &value); err != nil {
-			return approval.Decision{}, fail(codeArgumentsInvalid, `"outcome.value" must be a string`,
+			return approval.Decision{}, false, fail(codeArgumentsInvalid, `"outcome.value" must be a string`,
 				map[string]any{"argument": "outcome"})
 		}
 		var action approval.DecisionAction
@@ -170,7 +179,7 @@ func decodeApprovalOutcome(eventID string, raw json.RawMessage) (approval.Decisi
 		case "rejected":
 			action = approval.DecisionReject
 		default:
-			return approval.Decision{}, fail(codeArgumentsInvalid,
+			return approval.Decision{}, false, fail(codeArgumentsInvalid,
 				fmt.Sprintf("approval outcome %q is not supported: this host accepts %q or %q",
 					value, "allowed-once", "rejected"),
 				map[string]any{"argument": "outcome", "value": value})
@@ -180,17 +189,20 @@ func decodeApprovalOutcome(eventID string, raw json.RawMessage) (approval.Decisi
 			Action:    action,
 			Scope:     approval.ScopeOnce,
 			DecidedAt: time.Now().UTC(),
-		}, nil
+		}, false, nil
 	case "next":
-		return approval.Decision{}, fail(codeUnimplemented,
-			`approval outcome "next" delegates the request and never allows it; this host has no further answerer to delegate to`,
-			map[string]any{"argument": "outcome"})
+		// The panel delegates when it cannot scope the owning session, which is
+		// upstream's own path (ui-approval: scopeOf(owner) === undefined ? next()).
+		// There is no further answerer here, so the request stays pending and the
+		// operator can still answer it; failing would drop the whole stream.
+		return approval.Decision{}, true, nil
 	case "rejected":
-		return approval.Decision{}, fail(codeUnimplemented,
-			`approval outcome "rejected" reports a client-side listener failure, not a decision; answer with {"kind":"result","value":"rejected"} to deny the tool call`,
-			map[string]any{"argument": "outcome"})
+		// A client-side listener failure, not an operator's decision: upstream
+		// settles the waterfall and answers success. The request stays pending, so
+		// a real answer can still arrive.
+		return approval.Decision{}, true, nil
 	default:
-		return approval.Decision{}, fail(codeArgumentsInvalid,
+		return approval.Decision{}, false, fail(codeArgumentsInvalid,
 			fmt.Sprintf("approval outcome kind %q is unknown", kind),
 			map[string]any{"argument": "outcome"})
 	}

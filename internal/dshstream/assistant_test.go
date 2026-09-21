@@ -126,13 +126,13 @@ func TestAssistantTrackerStreamsDeltasAndSettlesThem(t *testing.T) {
 
 	// A settlement for another step must not close this attempt: the client binds
 	// them by turn and step, and so does the tracker.
-	if frames := tracker.onRecord(dshwire.Event{Type: "assistant/message", Seq: 40, Data: map[string]any{"step": 9}}); len(frames) != 0 {
+	if frames := tracker.onRecord(dshwire.Event{Type: "assistant/message", Seq: 40, SurfaceOp: "append", Data: map[string]any{"turn": 2, "step": 9}}); len(frames) != 0 {
 		t.Fatalf("a settlement for another step closed the attempt: %+v", frames)
 	}
 
 	// The step's settlement is released with the sequence it has: the block closes
 	// with its final text, and then the attempt is closed exactly once.
-	end := framesOf(t, tracker.onRecord(dshwire.Event{Type: "assistant/message", Seq: 41, Time: 1050, Data: map[string]any{"step": 3}}))
+	end := framesOf(t, tracker.onRecord(dshwire.Event{Type: "assistant/message", Seq: 41, Time: 1050, SurfaceOp: "append", Data: map[string]any{"turn": 2, "step": 3}}))
 	if len(end) != 2 {
 		t.Fatalf("frames = %d, want a block end and an end", len(end))
 	}
@@ -157,7 +157,7 @@ func TestAssistantTrackerStreamsDeltasAndSettlesThem(t *testing.T) {
 	if closing.Index != 4 {
 		t.Fatalf("end index = %d, want the four frames it settles", closing.Index)
 	}
-	if frames := tracker.onRecord(dshwire.Event{Type: "assistant/message", Seq: 42, Data: map[string]any{"step": 3}}); len(frames) != 0 {
+	if frames := tracker.onRecord(dshwire.Event{Type: "assistant/message", Seq: 42, SurfaceOp: "append", Data: map[string]any{"turn": 2, "step": 3}}); len(frames) != 0 {
 		t.Fatalf("the closed attempt settled twice: %+v", frames)
 	}
 }
@@ -313,7 +313,7 @@ func TestAssistantTrackerNumbersEveryFrameConsecutively(t *testing.T) {
 	for index, text := range []string{"al", "pha"} {
 		visit(tracker.onEvent(deltaEvent(int64(index+1), text, "attempt-1", 1)))
 	}
-	visit(tracker.onRecord(dshwire.Event{Type: "assistant/message", Seq: 9, Data: map[string]any{"step": 1}}))
+	visit(tracker.onRecord(dshwire.Event{Type: "assistant/message", Seq: 9, SurfaceOp: "append", Data: map[string]any{"turn": 1, "step": 1}}))
 
 	// Two deltas contribute a start, a block start, two chunks and a block end,
 	// and the settlement closes the attempt.

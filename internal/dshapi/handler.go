@@ -288,7 +288,6 @@ func (h *Handler) method(endpoint string) (methodFunc, bool) {
 		case "readBytes":
 			return h.workspaceFilesReadBytes, true
 		case "changes":
-			return h.workspaceFilesChanges, true
 		case "readRelated":
 			return h.workspaceFilesReadRelated, true
 		}
