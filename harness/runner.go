@@ -68,6 +68,17 @@ type Runner struct {
 	IsPersistenceError    func(error) bool
 }
 
+// runStartedData is what a run publishes when it starts: the prompt and the
+// mode, plus the caller's identity for the prompt when it supplied one, so a
+// reader of the durable log can still tell which submission this turn answers.
+func runStartedData(state RunState, mode string) map[string]any {
+	data := map[string]any{"input": state.Input, "mode": mode}
+	if state.PromptID != "" {
+		data["promptId"] = state.PromptID
+	}
+	return data
+}
+
 func (r Runner) Run(ctx context.Context, state RunState, resumed bool) (terminal Terminal) {
 	emit := func(eventType RuntimeEvent, data map[string]any) bool {
 		if r.Emit == nil {
@@ -231,7 +242,7 @@ func (r Runner) Run(ctx context.Context, state RunState, resumed bool) (terminal
 				resumeFinalizing = false
 			}
 		}
-	} else if !emit(RuntimeRunStarted, map[string]any{"input": state.Input, "mode": mode}) {
+	} else if !emit(RuntimeRunStarted, runStartedData(state, mode)) {
 		return terminal
 	}
 

@@ -315,7 +315,11 @@ func (h *Handler) sessionPrompt(ctx context.Context, args map[string]json.RawMes
 			_ = h.rememberPending(sessionID)
 			return nil, failure
 		}
-		if _, err := h.manager.Start(ctx, zenforge.Task{RunID: sessionID, Input: text}); err != nil {
+		if _, err := h.manager.Start(ctx, zenforge.Task{
+			RunID:    sessionID,
+			Input:    text,
+			PromptID: strings.TrimSpace(requestID),
+		}); err != nil {
 			// The allocation survives a start that never happened, so the
 			// console can retry the prompt without re-creating the session.
 			_ = h.rememberPending(sessionID)
@@ -363,8 +367,12 @@ func (h *Handler) sessionPrompt(ctx context.Context, args map[string]json.RawMes
 		return nil, failure
 	}
 	task := zenforge.Task{
-		RunID:           continuationID,
-		Input:           text,
+		RunID: continuationID,
+		Input: text,
+		// Every turn carries the identity of the prompt that started it: the
+		// console retires one echo per submission, so a continuation's prompt
+		// needs its own identity just as the first turn's does (ADR 0111).
+		PromptID:        strings.TrimSpace(requestID),
 		InitialMessages: h.conversationMessages(ctx, runIDs),
 	}
 	if _, err := h.manager.Start(ctx, task); err != nil {

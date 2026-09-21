@@ -42,7 +42,7 @@ func TestAgentResumeRejectsInvalidCheckpointRunState(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			runID := "run_invalid_resume"
-			cp := newCheckpoint(newRunState(runID, "work", nil), 1)
+			cp := newCheckpoint(newRunState(runID, "work", "", nil), 1)
 			test.mutate(&cp)
 
 			store := &failingCheckpointStore{latest: &cp}
@@ -71,7 +71,7 @@ func TestAgentResumeRejectsNilCheckpointFromStore(t *testing.T) {
 
 func TestAgentResumeRejectsCheckpointForDifferentRun(t *testing.T) {
 	const requestedRunID = "run_requested"
-	state := newRunState("run_other", "use record", nil)
+	state := newRunState("run_other", "use record", "", nil)
 	state.Step = 1
 	state.Phase = harness.RunPhaseTool
 	state.Control.Status = harness.RunStatusToolExecuting
@@ -183,7 +183,7 @@ func TestAgentInitialMessagesReachModelAndCheckpointResumeWithoutDuplication(t *
 	}
 
 	checkpoints := checkpointmemory.New()
-	state := newTaskRunState("run_history_resume", "current query", history, nil)
+	state := newTaskRunState("run_history_resume", "current query", "", history, nil)
 	state.Phase = harness.RunPhaseModel
 	state.Control.Status = harness.RunStatusModelStreaming
 	if err := checkpoints.Save(context.Background(), checkpoint.Checkpoint{
@@ -1360,7 +1360,7 @@ func TestAgentOneshotCapsToolRoundsAndPersistsMode(t *testing.T) {
 
 func TestAgentResumeUsesCheckpointedOneshotMode(t *testing.T) {
 	checkpoints := checkpointmemory.New()
-	state := newRunState("run_oneshot_resume", "continue", nil)
+	state := newRunState("run_oneshot_resume", "continue", "", nil)
 	state.Mode = string(ModeOneshot)
 	state.Step = 2
 	state.Phase = harness.RunPhaseModel
@@ -1567,7 +1567,7 @@ func TestAgentCarriesSandboxStateBetweenToolCalls(t *testing.T) {
 }
 
 func TestApplySandboxResultStateClearsClosedSession(t *testing.T) {
-	state := newRunState("run_sandbox_clear", "clear sandbox", nil)
+	state := newRunState("run_sandbox_clear", "clear sandbox", "", nil)
 	state.Sandbox = harness.SandboxState{
 		SessionID: "session_1",
 		RunID:     "run_sandbox_clear",
@@ -1583,7 +1583,7 @@ func TestApplySandboxResultStateClearsClosedSession(t *testing.T) {
 func TestAgentResumeCompletedDoesNotCallModelAgain(t *testing.T) {
 	checkpoints := checkpointmemory.New()
 	now := time.Now().UTC()
-	state := newRunState("run_completed", "done already", nil)
+	state := newRunState("run_completed", "done already", "", nil)
 	state.Phase = harness.RunPhaseCompleted
 	state.Control.Status = harness.RunStatusCompleted
 	state.Messages = append(state.Messages, harness.MessageState{Role: "assistant", Content: "already done"})
@@ -1624,7 +1624,7 @@ func TestAgentResumeCompletedDoesNotCallModelAgain(t *testing.T) {
 
 func TestAgentResumeActiveToolRetriesTool(t *testing.T) {
 	checkpoints := checkpointmemory.New()
-	state := newRunState("run_active_tool", "use echo", nil)
+	state := newRunState("run_active_tool", "use echo", "", nil)
 	state.Step = 1
 	state.Phase = harness.RunPhaseTool
 	state.Control.Status = harness.RunStatusToolExecuting
@@ -1671,7 +1671,7 @@ func TestAgentResumeActiveToolRetriesTool(t *testing.T) {
 
 func TestAgentResumeActiveToolFromJSONLCheckpoint(t *testing.T) {
 	checkpoints := checkpointjsonl.New(t.TempDir())
-	state := newRunState("run_jsonl_active_tool", "use echo", nil)
+	state := newRunState("run_jsonl_active_tool", "use echo", "", nil)
 	state.Step = 1
 	state.Phase = harness.RunPhaseTool
 	state.Control.Status = harness.RunStatusToolExecuting
@@ -1724,7 +1724,7 @@ func TestAgentResumeActiveToolFromJSONLCheckpoint(t *testing.T) {
 
 func TestAgentResumeWaitingApprovalUsesBroker(t *testing.T) {
 	checkpoints := checkpointmemory.New()
-	state := newRunState("run_waiting_approval", "approve then continue", nil)
+	state := newRunState("run_waiting_approval", "approve then continue", "", nil)
 	state.Step = 1
 	state.Phase = harness.RunPhaseApproval
 	state.Control.Status = harness.RunStatusWaitingSubmit
@@ -1781,7 +1781,7 @@ func TestAgentResumeWaitingApprovalUsesBroker(t *testing.T) {
 
 func TestAgentResumeWaitingApprovalWithoutBrokerStaysPaused(t *testing.T) {
 	checkpoints := checkpointmemory.New()
-	state := newRunState("run_waiting_without_broker", "approve later", nil)
+	state := newRunState("run_waiting_without_broker", "approve later", "", nil)
 	state.Step = 1
 	now := time.Now().UTC()
 	state.Tool.Active = &harness.ToolCallState{
@@ -2235,7 +2235,7 @@ func TestAgentReusesApprovalScopeWithinRun(t *testing.T) {
 
 func TestAgentResumeReusesCheckpointedApprovalGrant(t *testing.T) {
 	checkpoints := checkpointmemory.New()
-	state := newRunState("run_scope_resume", "continue approved work", nil)
+	state := newRunState("run_scope_resume", "continue approved work", "", nil)
 	state.Step = 1
 	state.Phase = harness.RunPhaseTool
 	state.Control.Status = harness.RunStatusToolExecuting
@@ -2612,7 +2612,7 @@ func TestAgentNormalizesApprovalRuntimeIdentity(t *testing.T) {
 }
 
 func TestResolveApprovalRejectsMismatchedDecisionRequest(t *testing.T) {
-	state := newRunState("run_approval_identity", "approve", nil)
+	state := newRunState("run_approval_identity", "approve", "", nil)
 	req := approval.Request{
 		ID:        "approval_expected",
 		RunID:     state.RunID,
@@ -2868,7 +2868,7 @@ func TestAgentSubAgentRequestCannotRaiseHostTaskLimit(t *testing.T) {
 			return subagent.TaskResult{Output: "must not run"}, nil
 		}),
 	})
-	state := newRunState("run_subagent_limit", "delegate", nil)
+	state := newRunState("run_subagent_limit", "delegate", "", nil)
 	tasks := make([]map[string]any, 9)
 	for i := range tasks {
 		tasks[i] = map[string]any{
@@ -2988,7 +2988,7 @@ func TestInvokeSubAgentToolSkipsCompletedSubtaskOnResume(t *testing.T) {
 			return subagent.TaskResult{Output: spec.Name + " reran " + task.Input}, nil
 		}),
 	})
-	state := newRunState("run_subagent_resume_skip", "delegate", nil)
+	state := newRunState("run_subagent_resume_skip", "delegate", "", nil)
 	state.Subtasks = []harness.SubtaskState{
 		{
 			ID:        "subtask_1",
@@ -3027,7 +3027,7 @@ func TestInvokeSubAgentToolSkipsCompletedSubtaskOnResume(t *testing.T) {
 func TestInvokeSubAgentToolResumesNonTerminalChildCheckpoint(t *testing.T) {
 	checkpoints := checkpointmemory.New()
 	childRunID := "run_subagent_resume_child_sub_subtask_1"
-	childState := newRunState(childRunID, "summarize docs", map[string]any{
+	childState := newRunState(childRunID, "summarize docs", "", map[string]any{
 		"parentRunId":    "run_subagent_resume_child",
 		"subtaskId":      "subtask_1",
 		"subagent.depth": 1,
@@ -3051,7 +3051,7 @@ func TestInvokeSubAgentToolResumesNonTerminalChildCheckpoint(t *testing.T) {
 		SubAgentRegistry: subagent.MustRegistry(subagent.SubAgentSpec{Name: "researcher"}),
 		Checkpoints:      checkpoints,
 	})
-	state := newRunState("run_subagent_resume_child", "delegate", nil)
+	state := newRunState("run_subagent_resume_child", "delegate", "", nil)
 	state.Subtasks = []harness.SubtaskState{
 		{
 			ID:        "subtask_1",
@@ -3164,7 +3164,7 @@ func TestInvokeSubAgentToolScopesParentContext(t *testing.T) {
 					}, nil
 				}),
 			})
-			state := newRunState("run_parent_context", "delegate", map[string]any{
+			state := newRunState("run_parent_context", "delegate", "", map[string]any{
 				"platform.sessionId": "session_1",
 			})
 			call := harness.ToolCallState{
@@ -3341,7 +3341,7 @@ func TestRunChildSubAgentSupportsHostBoundedNestedDelegation(t *testing.T) {
 
 func TestNestedSubAgentCallIsRejectedByDefaultBeforeStateChange(t *testing.T) {
 	agent := New(Config{Model: &scriptedModel{}})
-	state := newRunState("run_nested_blocked", "nested", map[string]any{"subagent.depth": 1})
+	state := newRunState("run_nested_blocked", "nested", "", map[string]any{"subagent.depth": 1})
 	call := harness.ToolCallState{
 		ID:        "nested_task",
 		Name:      "task",
@@ -3455,7 +3455,7 @@ func TestAgentPlanExecuteResumeKeepsCheckpointedHistoryOnce(t *testing.T) {
 	checkpoints := checkpointmemory.New()
 	history := []model.Message{{Role: "user", Content: "earlier request"}, {Role: "assistant", Content: "earlier response"}}
 	planInput := "current request\n\n" + planner.PlanPrompt
-	state := newTaskRunState("run_plan_history_resume", planInput, history, planExecuteMeta(nil, "current request", planExecuteStagePlan))
+	state := newTaskRunState("run_plan_history_resume", planInput, "", history, planExecuteMeta(nil, "current request", planExecuteStagePlan))
 	state.Mode = string(ModePlanExecute)
 	state.Phase = harness.RunPhaseModel
 	state.Control.Status = harness.RunStatusModelStreaming
@@ -3962,7 +3962,7 @@ func TestAgentPlanExecuteResumeContinuesActiveTodoFromCheckpoint(t *testing.T) {
 	state := newRunState(runID, taskPrompt([]planner.Todo{
 		{ID: "todo_1", Content: "First", Status: planner.TodoDone},
 		{ID: "todo_2", Content: "Second", Status: planner.TodoInProgress},
-	}, planner.Todo{ID: "todo_2", Content: "Second", Status: planner.TodoInProgress}), planExecuteMeta(nil, "do the work", planExecuteStageExecute))
+	}, planner.Todo{ID: "todo_2", Content: "Second", Status: planner.TodoInProgress}), "", planExecuteMeta(nil, "do the work", planExecuteStageExecute))
 	state.Todos = []harness.TodoState{
 		{ID: "todo_1", Content: "First", Status: harness.TodoDone},
 		{ID: "todo_2", Content: "Second", Status: harness.TodoInProgress},
@@ -4022,7 +4022,7 @@ func TestAgentPlanExecuteResumeContinuesActiveTodoFromCheckpoint(t *testing.T) {
 func TestAgentPlanExecuteResumeSummarizesTerminalTodos(t *testing.T) {
 	checkpoints := checkpointmemory.New()
 	runID := "run_plan_execute_resume_summary"
-	state := newRunState(runID, "do the work", planExecuteMeta(nil, "do the work", planExecuteStageExecute))
+	state := newRunState(runID, "do the work", "", planExecuteMeta(nil, "do the work", planExecuteStageExecute))
 	state.Todos = []harness.TodoState{
 		{ID: "todo_1", Content: "First", Status: harness.TodoDone},
 		{ID: "todo_2", Content: "Second", Status: harness.TodoDone},
@@ -4068,7 +4068,7 @@ func TestAgentPlanExecuteResumeSummarizesTerminalTodos(t *testing.T) {
 func TestAgentPlanExecuteSummaryReplacesInterruptedAttempt(t *testing.T) {
 	checkpoints := checkpointmemory.New()
 	runID := "run_plan_execute_summary_replacement"
-	state := newRunState(runID, "do the work", planExecuteMeta(nil, "do the work", planExecuteStageExecute))
+	state := newRunState(runID, "do the work", "", planExecuteMeta(nil, "do the work", planExecuteStageExecute))
 	state.Mode = string(ModePlanExecute)
 	state.Todos = []harness.TodoState{{ID: "todo_1", Content: "First", Status: harness.TodoDone}}
 	now := time.Now().UTC()
@@ -4547,7 +4547,7 @@ func TestAgentForkBranchesFromParentCheckpoint(t *testing.T) {
 	checkpoints := checkpointmemory.New()
 	events := &runEventStore{}
 	parentID := "run_parent"
-	state := newTaskRunState(parentID, "parent task", nil, nil)
+	state := newTaskRunState(parentID, "parent task", "", nil, nil)
 	state.Phase = harness.RunPhaseModel
 	state.Messages = []harness.MessageState{{Role: "user", Content: "parent task"}}
 	state.Meta = map[string]any{"planning.preset": "plan_execute", "planning.input": "parent task"}
@@ -4607,7 +4607,7 @@ func TestAgentRevertRewindsAndResumeContinuesFromIt(t *testing.T) {
 	checkpoints := checkpointmemory.New()
 	events := &runEventStore{}
 	runID := "run_revert"
-	base := newTaskRunState(runID, "task", nil, nil)
+	base := newTaskRunState(runID, "task", "", nil, nil)
 
 	// Two checkpoints: the later one is the abandoned branch.
 	early := base
@@ -4770,4 +4770,32 @@ func (p *probeTool) Description() string    { return "probe tool" }
 func (p *probeTool) Schema() map[string]any { return map[string]any{"type": "object"} }
 func (p *probeTool) Call(_ context.Context, _ json.RawMessage, call tool.Context) (tool.Result, error) {
 	return p.call(call)
+}
+
+// TestAgentRecordsThePromptsIdentityInRunStarted pins the deep layer's half of
+// ADR 0111: the caller's identity for a prompt is checkpointed with the run and
+// published on run.started, where a host projecting the run reads it back.
+func TestAgentRecordsThePromptsIdentityInRunStarted(t *testing.T) {
+	agent := New(Config{})
+	events, err := agent.Stream(context.Background(), Task{Input: "hello", PromptID: "req-1"})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	first := <-events
+	if first.Type != EventRunStarted {
+		t.Fatalf("first event = %s, want run.started", first.Type)
+	}
+	if first.Payload["input"] != "hello" || first.Payload["promptId"] != "req-1" {
+		t.Fatalf("run.started payload = %v, want the input and the prompt identity", first.Payload)
+	}
+
+	// A caller that labelled nothing publishes no identity.
+	events, err = agent.Stream(context.Background(), Task{Input: "hello"})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	first = <-events
+	if _, present := first.Payload["promptId"]; present {
+		t.Fatalf("run.started payload = %v, want no promptId without a caller identity", first.Payload)
+	}
 }

@@ -543,6 +543,24 @@ wrote an event is omitted, because `session/page` answers not-found for it; and 
 log has no terminal event is recorded as cancelled when it is adopted. Drafts stay
 process-local (ADR 0104).
 
+## Shipped: a submitted question is no longer on screen twice (2026-09-21)
+
+The operator asked `hello`, read the answer, and the transcript showed `hello` once more after
+it. That trailing copy was the console's local submission echo: it is retired only when a
+durable `user/message` arrives whose `source.rpcId` equals the prompt's `requestId`
+(`api/session-controller` `observeSubmissionEvent`; `ui-chat` `observedRpcIds` hides the same
+echo in the render). This host projected `"source": {"kind": "user"}` with no identity, so the
+echo stayed; and because the harness records a queued turn as `request.steer` with its text
+under `message` — a key the projection did not read — a queued question never became a durable
+message at all.
+
+`Task.PromptID` now carries the prompt's `requestId` into the run: it is checkpointed as
+`harness.RunState.PromptID`, published as `run.started`'s `promptId`, and projected as
+`source.rpcId` on the user message. `session/prompt` sets it on every turn it starts, and the
+queued arm reads `message` and takes its identity from the `steerId` the host queues the turn
+under (ADR 0111). Verified end to end through `zenforge serve`: a prompt sent with
+`requestId: req-live-1` pages back `"source":{"kind":"user","rpcId":"req-live-1"}`.
+
 ## Operator's one remaining step
 
 The host at `127.0.0.1:8787` is restarted onto this checkout, and the document at

@@ -492,6 +492,66 @@ func TestServeAdoptsTheRunsAlreadyInItsStateDirectory(t *testing.T) {
 	}
 }
 
+// TestServeCarriesThePromptsRequestIdentity walks the whole chain the console
+// depends on: it prompts through the console's own route, the real agent records
+// the run with the identity the prompt RPC carried, and the page the console
+// reads names that identity on the durable user message, which is what retires
+// the local echo of the submission (ADR 0111).
+func TestServeCarriesThePromptsRequestIdentity(t *testing.T) {
+	t.Setenv("ZENFORGE_CONFIG_DIR", t.TempDir())
+	model := newOpenAISSEStub(t, textChunk("an answer"))
+	opts := servedRunOptions(t, model.url)
+	app, err := newServeApp(context.Background(), &opts, servedRunStreams(), serveConfig{settingsFile: filepath.Join(t.TempDir(), "console-settings.json")})
+	if err != nil {
+		t.Fatalf("newServeApp: %v", err)
+	}
+	t.Cleanup(func() { _ = app.Close(context.Background()) })
+
+	sessionID := consoleSessionID(t, app)
+	consolePrompt(t, app, sessionID, "a recorded question")
+	waitForConsoleSession(t, app, sessionID)
+
+	recorder := consolePost(t, app, "session/page",
+		fmt.Sprintf(`{"address":{"kind":"session","sessionId":%q},"throughSeq":-1,"maxMessages":50}`, sessionID))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("session/page = %d: %s", recorder.Code, recorder.Body.String())
+	}
+	type pageRecord struct {
+		Event struct {
+			Type string `json:"type"`
+			Data struct {
+				// A record's source is whatever its own type declares: a map
+				// for a message, a string for the title's own provenance.
+				Source any `json:"source"`
+			} `json:"data"`
+		} `json:"event"`
+	}
+	var envelope struct {
+		Result struct {
+			Value struct {
+				Records []pageRecord `json:"records"`
+			} `json:"value"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode page: %v", err)
+	}
+	found := false
+	for _, record := range envelope.Result.Value.Records {
+		if record.Event.Type != "user/message" {
+			continue
+		}
+		found = true
+		source, _ := record.Event.Data.Source.(map[string]any)
+		if identity, _ := source["rpcId"].(string); identity != "req-1" {
+			t.Fatalf("prompt source = %v, want the requestId the console prompted with", source)
+		}
+	}
+	if !found {
+		t.Fatalf("the page carries no user message: %s", recorder.Body.String())
+	}
+}
+
 // consoleSessionID creates a session through the console's own route.
 func consoleSessionID(t *testing.T, app *serveApp) string {
 	t.Helper()

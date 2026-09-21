@@ -139,3 +139,4 @@ and what the adapter answers today is
 | [0108](0108-a-sessions-log-is-one-sequence-across-its-turns.md) | A session's log is one sequence across its turns |
 | [0109](0109-the-console-host-keeps-its-run-registry-on-disk.md) | The console host keeps its run registry on disk |
 | [0110](0110-a-projected-message-is-identified-by-the-session-sequence.md) | A projected message is identified by the session sequence, not the run's |
+| [0111](0111-a-run-records-the-prompt-identity-its-caller-submitted.md) | A run records the prompt identity its caller submitted |

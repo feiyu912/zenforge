@@ -294,3 +294,41 @@ func testRunState() RunState {
 		Control:  RunControlState{Status: RunStatusRunning},
 	}
 }
+
+// TestRunnerPublishesThePromptsIdentityWithRunStarted pins what a host reading
+// the durable log needs to correlate a projected prompt with the submission its
+// caller made: the caller's identity for the prompt, checkpointed with the run
+// and emitted once at the start (ADR 0111).
+func TestRunnerPublishesThePromptsIdentityWithRunStarted(t *testing.T) {
+	started := map[string]any{}
+	runner := Runner{
+		MaxSteps: 1,
+		Emit: func(eventType RuntimeEvent, data map[string]any) error {
+			if eventType == RuntimeRunStarted {
+				started = data
+			}
+			return nil
+		},
+		Checkpoint: func(context.Context, RunState) error { return nil },
+		CallModel: func(context.Context, RunState, model.ToolChoice) (MessageState, model.Usage, error) {
+			return MessageState{Role: "assistant", Content: "done"}, model.Usage{}, nil
+		},
+	}
+	state := testRunState()
+	state.PromptID = "req-1"
+	if terminal := runner.Run(context.Background(), state, false); terminal.Err != nil {
+		t.Fatalf("run failed: %v", terminal.Err)
+	}
+	if started["input"] != "test" || started["promptId"] != "req-1" {
+		t.Fatalf("run.started data = %v, want the input and the prompt identity", started)
+	}
+
+	// A run nobody labelled publishes no identity at all.
+	started = map[string]any{}
+	if terminal := runner.Run(context.Background(), testRunState(), false); terminal.Err != nil {
+		t.Fatalf("run failed: %v", terminal.Err)
+	}
+	if _, present := started["promptId"]; present {
+		t.Fatalf("run.started data = %v, want no promptId without a caller identity", started)
+	}
+}

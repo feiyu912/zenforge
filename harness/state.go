@@ -174,11 +174,15 @@ func validateModelAttempt(attempt ModelAttempt, historical bool, ids map[string]
 }
 
 type RunState struct {
-	Version     string             `json:"version"`
-	RunID       string             `json:"runId"`
-	ParentRunID string             `json:"parentRunId,omitempty"`
-	TaskID      string             `json:"taskId,omitempty"`
-	Input       string             `json:"input"`
+	Version     string `json:"version"`
+	RunID       string `json:"runId"`
+	ParentRunID string `json:"parentRunId,omitempty"`
+	TaskID      string `json:"taskId,omitempty"`
+	Input       string `json:"input"`
+	// PromptID is the caller's identity for the prompt that started the run. It
+	// is checkpointed here so a resume, and any process that reads the run's
+	// log, still knows which submission the run's first user turn answers.
+	PromptID    string             `json:"promptId,omitempty"`
 	Mode        string             `json:"mode,omitempty"`
 	Phase       RunPhase           `json:"phase"`
 	Step        int                `json:"step"`

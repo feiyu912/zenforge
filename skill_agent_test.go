@@ -212,7 +212,7 @@ func TestAgentSkillsResumeIdentityBinding(t *testing.T) {
 			const runID = "skills_resume"
 			store := checkpointmemory.New()
 			checkpointAgent := New(Config{Skills: test.checkpointBundle})
-			cp := checkpointAgent.newCheckpoint(newRunState(runID, "resume me", nil), 1)
+			cp := checkpointAgent.newCheckpoint(newRunState(runID, "resume me", "", nil), 1)
 			if err := store.Save(context.Background(), cp); err != nil {
 				t.Fatal(err)
 			}

@@ -358,3 +358,53 @@ func zenforgeEventNames(t *testing.T) []string {
 	}
 	return ordered
 }
+
+// TestProjectionCarriesThePromptsRequestIdentity covers the identity the console
+// retires its local submission echo by: a durable user message whose
+// `source.rpcId` equals the requestId the prompt RPC carried (ADR 0111).
+func TestProjectionCarriesThePromptsRequestIdentity(t *testing.T) {
+	withIdentity := project(t, []zenforge.Event{
+		event(1, zenforge.EventRunStarted, map[string]any{"input": "hello", "promptId": "req-1"}),
+	})
+	prompt := findByType(t, withIdentity, "user/message")
+	if got := sourceRPCID(t, prompt); got != "req-1" {
+		t.Fatalf("prompt source rpcId = %q, want the identity the caller submitted", got)
+	}
+
+	// A run nobody labelled keeps the source shape it always had: no identity,
+	// and a console with no echo to retire.
+	without := project(t, []zenforge.Event{
+		event(1, zenforge.EventRunStarted, map[string]any{"input": "hello"}),
+	})
+	source, ok := findByType(t, without, "user/message").Data["source"].(map[string]any)
+	if !ok {
+		t.Fatal("user/message has no source")
+	}
+	if _, present := source["rpcId"]; present {
+		t.Fatalf("source = %v, want no rpcId without a caller identity", source)
+	}
+
+	// A queued turn: the harness names the text "message", and the identity the
+	// host passed as the steer id is the prompt's requestId.
+	queued := project(t, []zenforge.Event{
+		event(1, zenforge.EventRequestSteer, map[string]any{"steerId": "req-2", "message": "and this"}),
+	})
+	steer := findByType(t, queued, "user/message")
+	if got := sourceRPCID(t, steer); got != "req-2" {
+		t.Fatalf("steer source rpcId = %q, want the queued prompt's identity", got)
+	}
+	if text := firstText(t, steer.Data); text != "and this" {
+		t.Fatalf("steer text = %q, want the queued message's text", text)
+	}
+}
+
+// sourceRPCID reads the identity a projected user message carries.
+func sourceRPCID(t *testing.T, projected Event) string {
+	t.Helper()
+	source, ok := projected.Data["source"].(map[string]any)
+	if !ok {
+		t.Fatalf("%s has no source: %v", projected.Type, projected.Data)
+	}
+	identity, _ := source["rpcId"].(string)
+	return identity
+}

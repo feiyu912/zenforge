@@ -75,8 +75,15 @@ func (a *stubAgent) Stream(ctx context.Context, task zenforge.Task) (<-chan zenf
 	a.runs[task.RunID] = run
 	a.tasks = append(a.tasks, task)
 	a.mu.Unlock()
-	a.append(task.RunID, zenforge.EventRunStarted, map[string]any{"input": task.Input})
-	run.emit(zenforge.NewEvent(zenforge.EventRunStarted, task.RunID, map[string]any{"input": task.Input}))
+	// The stub writes the prompt the way the real harness does, identity
+	// included: a run that carries Task.PromptID records it on run.started
+	// (ADR 0111), and the projection reads it back from there.
+	started := map[string]any{"input": task.Input}
+	if task.PromptID != "" {
+		started["promptId"] = task.PromptID
+	}
+	a.append(task.RunID, zenforge.EventRunStarted, started)
+	run.emit(zenforge.NewEvent(zenforge.EventRunStarted, task.RunID, started))
 	go func() {
 		<-ctx.Done()
 		run.close()

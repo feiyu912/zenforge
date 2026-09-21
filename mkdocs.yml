@@ -252,6 +252,7 @@ nav:
       - 0108 A session's log is one sequence across its turns: adr/0108-a-sessions-log-is-one-sequence-across-its-turns.md
       - 0109 The console host keeps its run registry on disk: adr/0109-the-console-host-keeps-its-run-registry-on-disk.md
       - 0110 A projected message is identified by the session sequence: adr/0110-a-projected-message-is-identified-by-the-session-sequence.md
+      - 0111 A run records the prompt identity its caller submitted: adr/0111-a-run-records-the-prompt-identity-its-caller-submitted.md
 
 extra:
   social:

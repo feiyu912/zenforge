@@ -763,9 +763,13 @@ func TestSessionPageServesEveryTurnInOneSequence(t *testing.T) {
 	// The second turn's prompt is a user message of its own, and its records are
 	// grouped as turn 2 rather than folded into the first turn.
 	var prompts []int64
+	var promptIdentities []string
 	for _, record := range value.Records {
 		if record.Event.Type == "user/message" {
 			prompts = append(prompts, record.Event.Seq)
+			source, _ := record.Event.Data["source"].(map[string]any)
+			identity, _ := source["rpcId"].(string)
+			promptIdentities = append(promptIdentities, identity)
 		}
 		if turn, ok := record.Event.Data["turn"].(float64); ok && turn != 2 && record.Event.Seq > 4 {
 			t.Fatalf("seq %d carries turn %v, want the second turn", record.Event.Seq, turn)
@@ -773,6 +777,12 @@ func TestSessionPageServesEveryTurnInOneSequence(t *testing.T) {
 	}
 	if len(prompts) != 2 {
 		t.Fatalf("user messages at %v, want one per turn", prompts)
+	}
+	// Each prompt names the requestId it arrived with: that is the identity the
+	// console matches its local submission echo against, and a turn without one
+	// leaves the echo on screen as a second copy of the question (ADR 0111).
+	if len(promptIdentities) != 2 || promptIdentities[0] != "req-1" || promptIdentities[1] != "req-2" {
+		t.Fatalf("prompt identities = %v, want the requestId of each turn's prompt", promptIdentities)
 	}
 	// Each message names itself by the conversation's sequence, not the run's:
 	// the console matches a `user/message` node on `String(data.id)`, so two

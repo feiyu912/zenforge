@@ -106,7 +106,7 @@ func TestAgentResumeReplaysPersistedInstructions(t *testing.T) {
 
 	// A mid-run checkpoint carries the frozen prompt context in Meta,
 	// exactly as a fresh run would have persisted it.
-	state := newRunState("run_resume_context", "work", nil)
+	state := newRunState("run_resume_context", "work", "", nil)
 	state.Phase = harness.RunPhaseModel
 	state.Control.Status = harness.RunStatusModelStreaming
 	if state.Meta == nil {

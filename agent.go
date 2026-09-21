@@ -209,7 +209,7 @@ func (a *Agent) Stream(ctx context.Context, task Task) (<-chan Event, error) {
 		runID = newRunID()
 	}
 	if a.config.Model == nil {
-		return a.streamNoop(ctx, runID, task.Input), nil
+		return a.streamNoop(ctx, runID, task.Input, task.PromptID), nil
 	}
 	if err := a.openRunControl(runID); err != nil {
 		return nil, err
@@ -228,7 +228,7 @@ func (a *Agent) Stream(ctx context.Context, task Task) (<-chan Event, error) {
 		return events, nil
 	}
 
-	state := newTaskRunState(runID, task.Input, task.InitialMessages, task.Meta)
+	state := newTaskRunState(runID, task.Input, task.PromptID, task.InitialMessages, task.Meta)
 	state.Mode = string(mode)
 	events := make(chan Event, 32)
 	go func() {
@@ -456,7 +456,7 @@ func traceEvent(event Event) trace.Event {
 	}
 }
 
-func (a *Agent) streamNoop(ctx context.Context, runID, input string) <-chan Event {
+func (a *Agent) streamNoop(ctx context.Context, runID, input, promptID string) <-chan Event {
 	events := make(chan Event, 2)
 	go func() {
 		defer close(events)
@@ -466,7 +466,7 @@ func (a *Agent) streamNoop(ctx context.Context, runID, input string) <-chan Even
 			return
 		default:
 		}
-		if err := a.emit(ctx, events, EventRunStarted, runID, map[string]any{"input": input}); err != nil {
+		if err := a.emit(ctx, events, EventRunStarted, runID, promptStartPayload(input, promptID)); err != nil {
 			return
 		}
 		_ = a.emit(ctx, events, EventRunDone, runID, map[string]any{"output": ""})
@@ -490,7 +490,7 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 		return a.emit(ctx, out, eventType, runID, data)
 	})
 	finish := func(stage string, todos []planner.Todo, eventType EventType, err error) error {
-		state := newTaskRunState(runID, task.Input, task.InitialMessages, planExecuteMeta(task.Meta, task.Input, stage))
+		state := newTaskRunState(runID, task.Input, task.PromptID, task.InitialMessages, planExecuteMeta(task.Meta, task.Input, stage))
 		state.Mode = string(ModePlanExecute)
 		loadCtx := ctx
 		if ctx.Err() != nil {
@@ -557,7 +557,10 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 			return
 		}
 	} else {
-		if err := emit(EventRunStarted, map[string]any{"input": task.Input, "mode": string(ModePlanExecute), "preset": string(PlanningPlanExecute)}); err != nil {
+		started := promptStartPayload(task.Input, task.PromptID)
+		started["mode"] = string(ModePlanExecute)
+		started["preset"] = string(PlanningPlanExecute)
+		if err := emit(EventRunStarted, started); err != nil {
 			return
 		}
 		if err := a.publishSessionTitle(emit, task.Input); err != nil {
@@ -573,7 +576,7 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 	planAnswer := ""
 	if len(todos) == 0 {
 		planInput := task.Input + "\n\n" + planner.PlanPrompt
-		planState := newTaskRunState(runID, planInput, task.InitialMessages, planExecuteMeta(task.Meta, task.Input, planExecuteStagePlan))
+		planState := newTaskRunState(runID, planInput, task.PromptID, task.InitialMessages, planExecuteMeta(task.Meta, task.Input, planExecuteStagePlan))
 		resumedPlan := resumeState != nil && planExecuteStage(resumeState.Meta) == planExecuteStagePlan
 		if resumedPlan {
 			planState = *resumeState
@@ -636,7 +639,7 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 			return
 		}
 
-		executeState := newRunState(runID, taskPrompt(todos, current), planExecuteMeta(task.Meta, task.Input, planExecuteStageExecute))
+		executeState := newRunState(runID, taskPrompt(todos, current), task.PromptID, planExecuteMeta(task.Meta, task.Input, planExecuteStageExecute))
 		executeState.Mode = string(ModePlanExecute)
 		if resumeState != nil && planExecuteStage(resumeState.Meta) == planExecuteStageExecute {
 			executeState = *resumeState
@@ -687,7 +690,7 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 		}
 	}
 
-	summaryState := newRunState(runID, summaryPrompt(task.Input, todos), planExecuteMeta(task.Meta, task.Input, planExecuteStageSummary))
+	summaryState := newRunState(runID, summaryPrompt(task.Input, todos), task.PromptID, planExecuteMeta(task.Meta, task.Input, planExecuteStageSummary))
 	summaryState.Mode = string(ModePlanExecute)
 	summaryState.Todos, _ = plannerTodos(todos)
 	summaryState.Phase = harness.RunPhaseFinalizing
@@ -776,11 +779,23 @@ func plannerTodosFromState(todos []harness.TodoState) []planner.Todo {
 	return out
 }
 
-func newRunState(runID, input string, meta map[string]any) harness.RunState {
-	return newTaskRunState(runID, input, nil, meta)
+func newRunState(runID, input, promptID string, meta map[string]any) harness.RunState {
+	return newTaskRunState(runID, input, promptID, nil, meta)
 }
 
-func newTaskRunState(runID, input string, initial []model.Message, meta map[string]any) harness.RunState {
+// promptStartPayload is run.started's data: the prompt, and the caller's
+// identity for it when the caller supplied one. The identity is what a host
+// projecting the run needs to match the durable message with the submission its
+// console echoed locally, so it rides in the log next to the input itself.
+func promptStartPayload(input, promptID string) map[string]any {
+	payload := map[string]any{"input": input}
+	if promptID != "" {
+		payload["promptId"] = promptID
+	}
+	return payload
+}
+
+func newTaskRunState(runID, input, promptID string, initial []model.Message, meta map[string]any) harness.RunState {
 	now := time.Now().UTC()
 	messages := make([]harness.MessageState, 0, len(initial)+1)
 	for _, message := range initial {
@@ -791,6 +806,7 @@ func newTaskRunState(runID, input string, initial []model.Message, meta map[stri
 		Version:   harness.RunStateVersion,
 		RunID:     runID,
 		Input:     input,
+		PromptID:  promptID,
 		Phase:     harness.RunPhaseCreated,
 		CreatedAt: now,
 		UpdatedAt: now,

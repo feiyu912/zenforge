@@ -6,9 +6,17 @@ import (
 )
 
 type Task struct {
-	RunID             string
-	Input             string
-	InitialMessages   []model.Message
+	RunID           string
+	Input           string
+	InitialMessages []model.Message
+	// PromptID is the caller's identity for the prompt that starts this run --
+	// the console's `requestId`, which it also sends on the prompt RPC and uses
+	// to match the durable message with the submission it echoed locally. It is
+	// checkpointed with the run and emitted as run.started's "promptId", so a
+	// host projecting the run can carry the identity on the projected user
+	// message. Empty for a run started without one, such as a CLI run or a
+	// resumed run, and the identity is then simply absent.
+	PromptID          string
 	Meta              map[string]any
 	ApprovalNamespace approval.Namespace
 	// OnEvent, when set, is called for every event [Agent.Run] consumes, in

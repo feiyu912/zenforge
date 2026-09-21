@@ -80,6 +80,6 @@ first prompt and `msg-<offset+n>` for a later turn's.
 - A page, a snapshot window, and a live tail agree on the same identities, because all three
   read the same projection.
 - The console's local echo of a submission is matched to its durable occurrence by
-  `source.rpcId`; this host does not project one, so the echo leaves when the submission
-  leaves the session snapshot rather than the moment the durable record arrives. No duplicate
-  was observed in the verification, and it is left as it is.
+  `source.rpcId`. This host did not project one, which
+  [ADR 0111](0111-a-run-records-the-prompt-identity-its-caller-submitted.md) fixes: the run
+  records the caller's identity for its prompt, and the projected message carries it.

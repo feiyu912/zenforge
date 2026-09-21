@@ -176,11 +176,22 @@ func (p *Projector) Next(event zenforge.Event) Event {
 	switch event.Type {
 	case zenforge.EventRunStarted:
 		if text, ok := stringField(data, "input"); ok && text != "" {
-			return p.surface(base, "user/message", userMessage(base.Seq, text))
+			// The caller's identity for this prompt (Task.PromptID) is the
+			// console's requestId: it retires the echo it painted locally when
+			// the durable message carrying that identity renders
+			// (api/session-controller observeSubmissionEvent, ui-chat
+			// observedRpcIds), and without it the echo stays on screen as a
+			// second copy of the question (ADR 0111).
+			return p.surface(base, "user/message", userMessage(base.Seq, text, promptIdentity(data)))
 		}
 	case zenforge.EventRequestSteer:
-		if text, ok := firstStringField(data, "input", "text", "content"); ok {
-			return p.surface(base, "user/message", userMessage(base.Seq, text))
+		// The harness records a queued turn as `request.steer` with the text
+		// under "message"; without that key the console would never see the
+		// question it queued, only its own local echo.
+		if text, ok := firstStringField(data, "input", "text", "content", "message"); ok {
+			// A queued turn arrives durably as request.steer; the host passes the
+			// prompt's requestId as the steer id, so the same identity is here.
+			return p.surface(base, "user/message", userMessage(base.Seq, text, steerIdentity(data)))
 		}
 	case zenforge.EventStepStarted:
 		if step, ok := intField(data, "step"); ok {
@@ -381,13 +392,32 @@ func messageID(seq int64) string {
 	return fmt.Sprintf("msg-%d", seq)
 }
 
-func userMessage(seq int64, text string) map[string]any {
+func userMessage(seq int64, text, rpcID string) map[string]any {
+	source := map[string]any{"kind": "user"}
+	if rpcID != "" {
+		source["rpcId"] = rpcID
+	}
 	return map[string]any{
 		"id":      messageID(seq),
 		"role":    "user",
 		"content": []any{map[string]any{"type": "text", "text": text}},
-		"source":  map[string]any{"kind": "user"},
+		"source":  source,
 	}
+}
+
+// promptIdentity is the caller's identity for the prompt a run started with, as
+// the deep layer recorded it beside the input. Absent for a run nobody labelled
+// (a CLI run, a resumed run), and then the console simply has no echo to retire.
+func promptIdentity(data map[string]any) string {
+	value, _ := stringField(data, "promptId")
+	return strings.TrimSpace(value)
+}
+
+// steerIdentity is the same identity on the queued-turn path, where the host
+// passes the prompt's requestId as the steer id.
+func steerIdentity(data map[string]any) string {
+	value, _ := stringField(data, "steerId")
+	return strings.TrimSpace(value)
 }
 
 // toolResult carries the tool's model-facing result, correlated with its call.
