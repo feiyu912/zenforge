@@ -977,3 +977,81 @@ func TestSessionListOmitsARunThatNeverWroteAnEvent(t *testing.T) {
 		t.Fatalf("a run with no transcript is listed: %+v", item)
 	}
 }
+
+// TestSessionCancelStopsTheNewestTurn is the operator's case: the console names
+// the session it has open, which is the conversation's first turn, while the
+// turn actually running is `<session>~2`. Stop has to reach that turn instead of
+// answering a conflict about a finished one (ADR 0113).
+func TestSessionCancelStopsTheNewestTurn(t *testing.T) {
+	f := newFixture(t, Config{})
+	sessionID := f.startSession(t)
+	f.agent.finish(sessionID)
+	waitForStatus(t, f.manager, sessionID, harnesshttp.RunCompleted)
+
+	recorder := f.post(t, "/api/session/prompt",
+		rpcBody(t, "rpc-prompt-2", "session/prompt",
+			fmt.Sprintf(`{"requestId":"req-2","sessionId":%s,"mode":"queue","content":[{"type":"text","text":"again"}]}`, mustJSON(t, sessionID))))
+	if envelope := decodeResponse(t, recorder); !envelope.Result.OK {
+		t.Fatalf("second prompt failed: %s", recorder.Body.String())
+	}
+	second := dshsession.ContinuationRunID(sessionID, 2)
+	waitForStatus(t, f.manager, second, harnesshttp.RunRunning)
+
+	recorder = f.post(t, "/api/session/cancel", rpcBody(t, "rpc-cancel", "session/cancel",
+		fmt.Sprintf(`{"sessionId":%s}`, mustJSON(t, sessionID))))
+	var value struct {
+		Accepted bool `json:"accepted"`
+	}
+	decodeValue(t, recorder, &value)
+	if !value.Accepted {
+		t.Fatalf("cancel of the running turn rejected: %s", recorder.Body.String())
+	}
+	waitForStatus(t, f.manager, second, harnesshttp.RunCancelled)
+
+	// The first turn keeps what its own log ended with: stopping the newest turn
+	// does not rewrite the conversation.
+	info, err := f.manager.Get(sessionID)
+	if err != nil {
+		t.Fatalf("the first turn is no longer known: %v", err)
+	}
+	if info.Status != harnesshttp.RunCompleted {
+		t.Fatalf("first turn status = %q, want it untouched at completed", info.Status)
+	}
+
+	// Naming the running turn directly still cancels it, and cancelling it twice
+	// stays idempotent.
+	recorder = f.post(t, "/api/session/cancel", rpcBody(t, "rpc-cancel-turn", "session/cancel",
+		fmt.Sprintf(`{"sessionId":%s}`, mustJSON(t, second))))
+	decodeValue(t, recorder, &value)
+	if !value.Accepted {
+		t.Fatalf("cancel by the continuation id rejected: %s", recorder.Body.String())
+	}
+}
+
+// TestSessionCancelReportsTheTurnItRefused: when the newest turn is finished,
+// the conflict names that turn rather than the id the caller used, which is the
+// message the operator read while a later turn was still running.
+func TestSessionCancelReportsTheTurnItRefused(t *testing.T) {
+	f := newFixture(t, Config{})
+	sessionID := f.startSession(t)
+	f.agent.finish(sessionID)
+	waitForStatus(t, f.manager, sessionID, harnesshttp.RunCompleted)
+
+	recorder := f.post(t, "/api/session/prompt",
+		rpcBody(t, "rpc-prompt-2", "session/prompt",
+			fmt.Sprintf(`{"requestId":"req-2","sessionId":%s,"mode":"queue","content":[{"type":"text","text":"again"}]}`, mustJSON(t, sessionID))))
+	if envelope := decodeResponse(t, recorder); !envelope.Result.OK {
+		t.Fatalf("second prompt failed: %s", recorder.Body.String())
+	}
+	second := dshsession.ContinuationRunID(sessionID, 2)
+	waitForStatus(t, f.manager, second, harnesshttp.RunRunning)
+	f.agent.finish(second)
+	waitForStatus(t, f.manager, second, harnesshttp.RunCompleted)
+
+	recorder = f.post(t, "/api/session/cancel", rpcBody(t, "rpc-cancel", "session/cancel",
+		fmt.Sprintf(`{"sessionId":%s}`, mustJSON(t, sessionID))))
+	envelope := assertMethodFailure(t, recorder, codeSessionConflict)
+	if !strings.Contains(envelope.Result.Error.Message, second) {
+		t.Fatalf("conflict names the wrong turn: %s", envelope.Result.Error.Message)
+	}
+}

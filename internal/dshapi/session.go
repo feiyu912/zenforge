@@ -459,7 +459,14 @@ func decodePromptContent(raw json.RawMessage) (string, *methodError) {
 // sessionCancel answers POST /api/session/cancel. Cancel is idempotent for an
 // already-cancelled run; any other terminal state is reported as a conflict
 // rather than dressed up as a cancellation that did not happen.
-func (h *Handler) sessionCancel(_ context.Context, args map[string]json.RawMessage) (any, *methodError) {
+//
+// The console stops the session it has open, whose id names the conversation's
+// first turn, while a conversation of several turns runs its newest one under
+// `<session>~<k>` (ADR 0108). Cancel therefore names the conversation's newest
+// turn, not the id the caller happened to use: cancelling the first turn is a
+// no-op that reports a conflict about a finished run while the run the operator
+// is watching keeps going (ADR 0113).
+func (h *Handler) sessionCancel(ctx context.Context, args map[string]json.RawMessage) (any, *methodError) {
 	sessionID, _, failure := stringArg(args, "sessionId")
 	if failure != nil {
 		return nil, failure
@@ -468,19 +475,26 @@ func (h *Handler) sessionCancel(_ context.Context, args map[string]json.RawMessa
 	if sessionID == "" {
 		return nil, argumentRequired("sessionId")
 	}
-	if err := h.manager.Cancel(sessionID); err != nil {
+	// A caller may name any turn of the conversation; the newest one is the turn
+	// that can be running. A session with no turns yet (a draft) keeps the id it
+	// was named by, which the manager answers as not-found.
+	target := sessionID
+	if runIDs := h.sessionRunIDs(ctx, sessionID); len(runIDs) > 0 {
+		target = runIDs[len(runIDs)-1]
+	}
+	if err := h.manager.Cancel(target); err != nil {
 		switch {
 		case errors.Is(err, harnesshttp.ErrRunNotFound):
 			return nil, fail(codeSessionNotFound, fmt.Sprintf("session %q not found", sessionID),
 				map[string]any{"sessionId": sessionID})
 		case errors.Is(err, harnesshttp.ErrRunTerminal):
 			status := "terminal"
-			if info, getErr := h.manager.Get(sessionID); getErr == nil {
+			if info, getErr := h.manager.Get(target); getErr == nil {
 				status = string(info.Status)
 			}
 			return nil, fail(codeSessionConflict,
-				fmt.Sprintf("session %q already finished with status %q; cancel is a no-op", sessionID, status),
-				map[string]any{"sessionId": sessionID, "status": status})
+				fmt.Sprintf("session %q already finished with status %q; cancel is a no-op", target, status),
+				map[string]any{"sessionId": sessionID, "turn": target, "status": status})
 		case errors.Is(err, harnesshttp.ErrInvalidRunID):
 			return nil, argumentRequired("sessionId")
 		default:

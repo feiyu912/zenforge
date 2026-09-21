@@ -156,13 +156,6 @@ what is experimental, and what remains adapter territory.
   as `<session>~<turn>`, so a second message is a new turn rather than a refusal,
   and the conversation's turns share one sequence, so the second prompt loads its
   history and `Load earlier` reaches the first turn.
-- **Stop reaches only a conversation's first turn**: `session/cancel` names a session,
-  and only the session id's own run (turn one) is cancelled. In a multi-turn session the
-  turn that is actually running is `<session>~<k>`, so the console's Stop is answered
-  `session/conflict` ("already finished with status \"completed\"; cancel is a no-op")
-  while the current turn keeps running. Observed on the operator's host on 2026-09-20
-  against a second turn waiting on approval. The fix is to cancel the newest turn of the
-  chain the read paths already resolve (ADR 0108); it is not implemented yet.
 - **The sidebar survives a restart** (ADR 0109): `zenforge serve` keeps a SQLite
   run registry in its state directory (`<checkpoint-dir>/run-registry.sqlite`), so
   the console lists the conversations this install served after the host restarts,

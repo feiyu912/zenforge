@@ -141,3 +141,4 @@ and what the adapter answers today is
 | [0110](0110-a-projected-message-is-identified-by-the-session-sequence.md) | A projected message is identified by the session sequence, not the run's |
 | [0111](0111-a-run-records-the-prompt-identity-its-caller-submitted.md) | A run records the prompt identity its caller submitted |
 | [0112](0112-the-coverage-ledgers-gaps-are-a-dated-audit.md) | The coverage ledger's gaps are a dated audit |
+| [0113](0113-cancel-reaches-the-turn-that-is-running.md) | Cancel reaches the turn that is running |

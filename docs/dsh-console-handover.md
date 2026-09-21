@@ -543,6 +543,21 @@ wrote an event is omitted, because `session/page` answers not-found for it; and 
 log has no terminal event is recorded as cancelled when it is adopted. Drafts stay
 process-local (ADR 0104).
 
+## Shipped: Stop stops the turn that is running (2026-09-21)
+
+`session/cancel` cancelled the id the caller named. The console names the session it has open —
+the conversation's first turn — while a conversation of several turns runs its newest one under
+`<session>~<k>` (ADR 0108), so Stop on a second turn was answered
+`session "…" already finished with status "completed"; cancel is a no-op` while that turn kept
+running. Observed on the operator's host against a second turn waiting on approval, and again
+while cleaning up this window's verification session.
+
+`sessionCancel` now resolves the conversation's turns and cancels the **newest** one, which is
+the only turn that can be running; a session with no turns yet keeps the id it was named by, and
+the conflict for a finished turn names the turn it refused instead of the id the caller used
+(ADR 0113). Reverting just that resolution makes the new tests fail with exactly the operator's
+message, so the regression is pinned in both directions.
+
 ## The ledger's "Next up" list was stale (2026-09-21)
 
 The ledger's first gap said `ui-directory-picker-browse` was withheld and that re-testing it
@@ -630,11 +645,9 @@ serves `qwen-plus`, and the card shows only what is written on it.
 > sequence (ADR 0110), a submitted question is on screen exactly once because the run
 > records the caller's prompt identity (ADR 0111), and the ledger's "Next up" list is a dated
 > audit that no longer claims the browse directory picker is withheld (ADR 0112).
-> `docs/limitations.md` records a gap found while verifying this window, and it is the next
-> chain: `session/cancel` only reaches a conversation's first turn, so Stop on a later turn
-> is a no-op while that turn keeps running (cancel the newest turn of the chain ADR 0108
-> already resolves). After that comes "Next up" 1 in the ledger,
-> `session/openWorkspacePath` and `session/canOpenWorkspacePath`. If a scratch host is
+> Stop reaches the turn that is running (ADR 0113), so the next chain is "Next up" 1 in the
+> ledger: `session/openWorkspacePath` and `session/canOpenWorkspacePath`, opening a workspace
+> into a session. If a scratch host is
 > needed, give it `ZENFORGE_CONFIG_DIR` or `--settings-file` under a throwaway directory so
 > it cannot rewrite the operator's document, and its own `--checkpoint-dir` too, because the
 > event store and the run registry are derived from it: a scratch host started in `/tmp`
