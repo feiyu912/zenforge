@@ -134,7 +134,7 @@ func TestConsoleSettingsDocumentSurvivesARestart(t *testing.T) {
 	if got := restarted.ConsoleSection("ui-onboarding")["welcomeNoticeVersion"]; got != "2026-09-19.1" {
 		t.Errorf("the welcome notice acknowledgement after restart = %v, want the stored version", got)
 	}
-	listed := restartedProfiles.ProviderProfiles()
+	listed := declaredAfterBuiltins(t, restartedProfiles.ProviderProfiles())
 	if len(listed) != 1 || listed[0].Profile.Provider != "acme" {
 		t.Fatalf("declared profiles after restart = %+v, want the one route the console declared", listed)
 	}
@@ -446,7 +446,10 @@ func TestConsoleSettingsDocumentLeavesAFieldItNeverMovedAlone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read the document: %v", err)
 	}
-	if strings.Contains(string(raw), "apiKey") {
+	// The credential *value* field, not apiKeyEnv: a seeded provider profile names
+	// the environment variable its route reads, which is a reference the operator
+	// can see, while the value field is what must never be written (ADR 0122).
+	if strings.Contains(string(raw), `"apiKey":`) {
 		t.Fatalf("the document named a credential the console never wrote: %s", raw)
 	}
 	restarted, _ := newDocumentStores(t, path, seeded)
@@ -596,8 +599,8 @@ func TestConsoleSettingsDocumentCarriesRevisionsAndSections(t *testing.T) {
 	if got := file.Revisions[dshapi.PiAiNamespace]; got != 4 {
 		t.Errorf("document revision for %s = %d, want 4 (the initial revision plus three writes)", dshapi.PiAiNamespace, got)
 	}
-	if len(file.ProviderProfiles) != 1 || file.ProviderProfiles[0].Provider != "acme" {
-		t.Fatalf("document profiles = %+v, want the one declared route", file.ProviderProfiles)
+	if len(file.ProviderProfiles) != 3 || file.ProviderProfiles[2].Provider != "acme" {
+		t.Fatalf("document profiles = %+v, want the two built-in routes and the declared one", file.ProviderProfiles)
 	}
 	// The document is JSON a operator can read, and it numbers itself.
 	if file.Version != consoleSettingsFileVersion {
@@ -623,7 +626,7 @@ func TestConsoleSettingsDocumentRemovesAProfileFromDisk(t *testing.T) {
 	if got := restarted.SettingsRevision("llm-openai"); got != dshapi.SettingsInitialRevision {
 		t.Errorf("an untouched namespace reports revision %d, want the initial revision", got)
 	}
-	listed := restartedProfiles.ProviderProfiles()
+	listed := declaredAfterBuiltins(t, restartedProfiles.ProviderProfiles())
 	if len(listed) != 1 || listed[0].Profile.Provider != "other" {
 		t.Fatalf("profiles after restart = %+v, want only the route that was not removed", listed)
 	}
@@ -907,4 +910,14 @@ func TestRegisteredSessionWithoutAChoiceKeepsTheConfiguredModel(t *testing.T) {
 	if len(installed) != 1 {
 		t.Fatalf("installed %v, want exactly the chosen session's adapter", installed)
 	}
+}
+
+// declaredAfterBuiltins drops the two routes this host is built to serve, which are
+// seeded into the pi-ai namespace before any hand-declared one (ADR 0122).
+func declaredAfterBuiltins(t *testing.T, listed []dshapi.ProviderProfileStatus) []dshapi.ProviderProfileStatus {
+	t.Helper()
+	if len(listed) < 2 || listed[0].Profile.Provider != provider.OpenAI || listed[1].Profile.Provider != provider.Anthropic {
+		t.Fatalf("profiles = %+v, want the built-in routes first", listed)
+	}
+	return listed[2:]
 }

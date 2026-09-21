@@ -32,11 +32,25 @@ func (m consoleModels) Catalog() dshapi.ModelCatalog {
 	}
 	view := m.settings.view()
 	configuredRoute := consoleConfiguredRoute(view)
+	// The built-in routes are seeded into the pi-ai namespace, so the live route
+	// arrives below as a declared profile too. It is one endpoint: its declared
+	// models replace the configured one's, and it is not added a second time
+	// (ADR 0122).
+	declared := map[string]dshapi.ProviderProfile{}
+	for _, status := range m.declared() {
+		declared[status.Profile.Provider] = status.Profile
+	}
 	if modelName := strings.TrimSpace(view.Model); modelName != "" {
+		models := []dshapi.ModelCatalogModel{{ID: modelName, Name: modelName}}
+		if profile, ok := declared[configuredRoute]; ok {
+			if declaredModels := consoleProfileModels(profile); len(declaredModels) > 0 {
+				models = declaredModels
+			}
+		}
 		catalog.Groups = append(catalog.Groups, dshapi.ModelProviderGroup{
 			ID:     configuredRoute,
 			Name:   consoleProviderName(configuredRoute),
-			Models: []dshapi.ModelCatalogModel{{ID: modelName, Name: modelName}},
+			Models: models,
 		})
 		catalog.Default = dshapi.ModelSelection{Provider: configuredRoute, Model: modelName}
 		catalog.RoutableProviders = append(catalog.RoutableProviders, configuredRoute)
@@ -53,6 +67,9 @@ func (m consoleModels) Catalog() dshapi.ModelCatalog {
 		}
 	}
 	for _, status := range m.declared() {
+		if status.Profile.Provider == configuredRoute {
+			continue
+		}
 		models := consoleProfileModels(status.Profile)
 		if len(models) == 0 {
 			continue

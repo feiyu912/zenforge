@@ -59,7 +59,7 @@ func TestDeclaredProfileIsStoredBeforeItsCredentialExists(t *testing.T) {
 	if !strings.Contains(status.Error, "ACME_API_KEY") {
 		t.Fatalf("error = %q, want it to name the missing credential", status.Error)
 	}
-	if stored := store.ProviderProfiles(); len(stored) != 1 || stored[0].Profile.Provider != "acme" {
+	if stored := declaredOnly(store.ProviderProfiles()); len(stored) != 1 || stored[0].Profile.Provider != "acme" {
 		t.Fatalf("profiles = %+v, want the profile stored anyway", stored)
 	}
 }
@@ -118,6 +118,71 @@ func TestDiagnosticFollowsACredentialThatArrivesLater(t *testing.T) {
 	}
 }
 
+// The Models page picks a provider's editor by the name of the namespace its
+// directory entry points at: the console knows llm-deepseek and llm-pi-ai, and
+// reports anything else as unknown, which renders a card with no fields and a
+// disabled save. Every route this host offers must therefore be a pi-ai card, and
+// the two it is built to serve must carry what the host is actually configured
+// with rather than an empty form (ADR 0122).
+func TestBuiltinRoutesAreEditablePiAiCards(t *testing.T) {
+	settings := profileSettingsStore(t, "sk-host")
+	settings.rebuild()
+	store := newConsoleProviderProfiles(settings)
+	listed := store.ProviderProfiles()
+	if len(listed) < 2 {
+		t.Fatalf("profiles = %+v, want the built-in routes listed", listed)
+	}
+	live := profileByRoute(t, listed, provider.OpenAI)
+	if live.Profile.BaseURL != testSettingsBaseURL || len(live.Profile.Models) != 1 || live.Profile.Models[0].ID != "qwen-plus" {
+		t.Fatalf("the live route's card = %+v, want the host's own endpoint and model", live.Profile)
+	}
+	if live.Profile.APIKeyEnv != "" {
+		t.Fatalf("the live route names credential %q, want the host's own", live.Profile.APIKeyEnv)
+	}
+	other := profileByRoute(t, listed, provider.Anthropic)
+	if other.Profile.API != dshapi.ProtocolAnthropicMessages {
+		t.Fatalf("anthropic api = %q, want the messages protocol", other.Profile.API)
+	}
+	// A route the host is not running on names the variable it reads, so it cannot
+	// borrow a key for a different service.
+	if other.Profile.APIKeyEnv != "ANTHROPIC_API_KEY" {
+		t.Fatalf("anthropic credential reference = %q, want its own variable", other.Profile.APIKeyEnv)
+	}
+	for _, status := range listed {
+		entry := consoleDeclaredProvider(status)
+		if entry.SettingsNS != dshapi.PiAiNamespace || len(entry.SettingsPath) != 2 ||
+			entry.SettingsPath[0] != "providers" || entry.SettingsPath[1] != status.Profile.Provider {
+			t.Fatalf("entry = %+v, want a pi-ai card at providers.%s", entry, status.Profile.Provider)
+		}
+	}
+}
+
+// declaredOnly drops the routes every store is seeded with -- the two this host is
+// built to serve, advertised in the pi-ai namespace (ADR 0122) -- so a test can
+// assert on what the console declared.
+func declaredOnly(listed []dshapi.ProviderProfileStatus) []dshapi.ProviderProfileStatus {
+	kept := make([]dshapi.ProviderProfileStatus, 0, len(listed))
+	for _, status := range listed {
+		if status.Profile.Provider == provider.OpenAI || status.Profile.Provider == provider.Anthropic {
+			continue
+		}
+		kept = append(kept, status)
+	}
+	return kept
+}
+
+// profileByRoute finds one route's status, wherever the seeded routes put it.
+func profileByRoute(t *testing.T, listed []dshapi.ProviderProfileStatus, route string) dshapi.ProviderProfileStatus {
+	t.Helper()
+	for _, status := range listed {
+		if status.Profile.Provider == route {
+			return status
+		}
+	}
+	t.Fatalf("no profile for %q in %+v", route, listed)
+	return dshapi.ProviderProfileStatus{}
+}
+
 func TestDeclaredProfilesKeepDeclarationOrderAndAreRemovable(t *testing.T) {
 	store, _ := profileStoreFixture(t)
 	t.Setenv("A_API_KEY", "k")
@@ -133,7 +198,7 @@ func TestDeclaredProfilesKeepDeclarationOrderAndAreRemovable(t *testing.T) {
 		"https://second.example/v2", "A_API_KEY", "m2")); err != nil {
 		t.Fatalf("SetProviderProfile(second): %v", err)
 	}
-	listed := store.ProviderProfiles()
+	listed := declaredOnly(store.ProviderProfiles())
 	if len(listed) != 2 || listed[0].Profile.Provider != "second" || listed[1].Profile.Provider != "first" {
 		t.Fatalf("profiles = %+v, want declaration order preserved across a replace", listed)
 	}
@@ -143,7 +208,7 @@ func TestDeclaredProfilesKeepDeclarationOrderAndAreRemovable(t *testing.T) {
 	if err := store.RemoveProviderProfile("second"); err != nil {
 		t.Fatalf("RemoveProviderProfile: %v", err)
 	}
-	if listed := store.ProviderProfiles(); len(listed) != 1 || listed[0].Profile.Provider != "first" {
+	if listed := declaredOnly(store.ProviderProfiles()); len(listed) != 1 || listed[0].Profile.Provider != "first" {
 		t.Fatalf("profiles = %+v, want only first left", listed)
 	}
 }
@@ -208,11 +273,19 @@ func TestDeclaredProfilesReachTheConsoleDirectory(t *testing.T) {
 		t.Fatalf("SetProviderProfile: %v", err)
 	}
 	entries := make([]dshapi.LlmConfigurableProvider, 0, 1)
-	for _, status := range store.ProviderProfiles() {
+	for _, status := range declaredOnly(store.ProviderProfiles()) {
 		entries = append(entries, consoleDeclaredProvider(status))
 	}
 	if len(entries) != 1 || entries[0].Provider != "acme" || entries[0].Error != "" {
 		t.Fatalf("entries = %+v, want one serviceable declared route", entries)
+	}
+	// The built-in routes are listed too, and every one of them points at the
+	// pi-ai namespace: that name is what gives the card its editor.
+	for _, status := range store.ProviderProfiles() {
+		entry := consoleDeclaredProvider(status)
+		if entry.SettingsNS != dshapi.PiAiNamespace || len(entry.SettingsPath) != 2 {
+			t.Fatalf("entry = %+v, want a pi-ai settings address", entry)
+		}
 	}
 }
 

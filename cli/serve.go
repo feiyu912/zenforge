@@ -451,12 +451,12 @@ func newServeApp(ctx context.Context, opts *options, ioStreams IO, config serveC
 		if liveProvider == "" {
 			liveProvider = provider.OpenAI
 		}
-		configurable := []dshapi.LlmConfigurableProvider{
-			{Provider: provider.OpenAI, DisplayName: "OpenAI", SettingsNS: "llm-openai", SettingsPath: []string{}},
-			{Provider: provider.Anthropic, DisplayName: "Anthropic", SettingsNS: "llm-anthropic", SettingsPath: []string{}},
-		}
-		// Hand-declared routes come last, as upstream orders them, and carry the
-		// settings address in the pi-ai namespace that they were written to.
+		configurable := []dshapi.LlmConfigurableProvider{}
+		// Every configurable route carries its address in the pi-ai namespace: the
+		// built-in routes are seeded there with the host's own configuration, and
+		// hand-declared routes follow them (ADR 0122). A route advertised under a
+		// namespace name the console does not know renders as a card with no fields
+		// and a disabled save, which is what the Models page used to show.
 		for _, status := range profiles.ProviderProfiles() {
 			configurable = append(configurable, consoleDeclaredProvider(status))
 		}

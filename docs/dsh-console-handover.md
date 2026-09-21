@@ -546,6 +546,22 @@ wrote an event is omitted, because `session/page` answers not-found for it; and 
 log has no terminal event is recorded as cancelled when it is adopted. Drafts stay
 process-local (ADR 0104).
 
+## Shipped: the built-in provider routes are editable (2026-09-21)
+
+The Models page could not edit the routes this host is built to serve. The console
+picks a provider's editor by the *name* of the settings namespace the directory entry
+points at -- it knows `llm-deepseek` and `llm-pi-ai`, and reports anything else as
+`unknown`, which renders a card with no fields and a disabled save. This host advertised
+OpenAI and Anthropic under namespaces of its own invention, so both were uneditable
+hints while a hand-declared route (already pointing at `llm-pi-ai`) edited fine.
+
+Every configurable route is now a pi-ai card at `providers.<route>` (ADR 0122), and the
+two built-ins are seeded with what the host is actually configured with: the live route's
+own base URL and model, the protocol from the schema's union, and -- for a route the host
+is not running on -- its own credential variable, so it cannot borrow a key for a
+different service. The live route stays one group in the model picker: its seeded profile
+supplies that group's models instead of adding a second entry for the same endpoint.
+
 ## Shipped: the turn and step boundaries (2026-09-21)
 
 The console anchors its turn-process row on `turn/start` — `match: (event) => event.type

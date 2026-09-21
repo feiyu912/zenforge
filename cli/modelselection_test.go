@@ -171,7 +171,7 @@ func TestDeclaredProfileCredentialsFollowTheConsoleReference(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("SetProviderProfile: %v", err)
 	}
-	foreign := profiles.ProviderProfiles()[0]
+	foreign := profileByRoute(t, profiles.ProviderProfiles(), "acme-gw")
 	if foreign.Error == "" {
 		t.Fatal("a profile naming a foreign reference borrowed the host's credential")
 	}
@@ -186,7 +186,7 @@ func TestDeclaredProfileCredentialsFollowTheConsoleReference(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("SetProviderProfile: %v", err)
 	}
-	derived := profiles.ProviderProfiles()[1]
+	derived := profileByRoute(t, profiles.ProviderProfiles(), "acme")
 	if derived.Error != "" {
 		t.Fatalf("error = %q, want the derived reference to resolve from the host's key", derived.Error)
 	}

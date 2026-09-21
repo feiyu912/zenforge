@@ -29,8 +29,82 @@ type consoleProviderProfiles struct {
 	profiles map[string]dshapi.ProviderProfile
 }
 
+// newConsoleProviderProfiles starts from the routes this host is built to serve.
+//
+// The console picks a provider's editor by the *name* of the namespace the
+// directory points at (ui-settings-models client.js: it knows llm-deepseek and
+// llm-pi-ai and reports anything else as "unknown", which renders a card with no
+// fields and a disabled save). Advertising the built-in routes under this host's
+// own namespace names therefore produced cards the operator could see but not
+// edit. They are seeded into the pi-ai namespace instead, carrying what the host is
+// actually configured with, so the card opens on the real endpoint and model and an
+// edit is stored through the same path as any hand-declared route (ADR 0122).
+//
+// No apiKeyEnv is seeded: this host resolves its own credential (the CLI's
+// --api-key-env, or the page's stored key), and naming a variable it does not read
+// would be a lie the operator could act on.
 func newConsoleProviderProfiles(settings *settingsStore) *consoleProviderProfiles {
-	return &consoleProviderProfiles{settings: settings, profiles: map[string]dshapi.ProviderProfile{}}
+	store := &consoleProviderProfiles{settings: settings, profiles: map[string]dshapi.ProviderProfile{}}
+	view := settings.view()
+	for _, route := range []string{provider.OpenAI, provider.Anthropic} {
+		profile := dshapi.ProviderProfile{
+			Provider:    route,
+			DisplayName: consoleProviderName(route),
+			API:         providerProfileProtocol(route),
+			BaseURL:     providerProfileBaseURL(view, route),
+			Models:      []dshapi.ProviderModel{},
+		}
+		// The route the host runs on carries the model it runs: the card then shows
+		// the operator's own configuration rather than an empty form. It also keeps
+		// an empty apiKeyEnv, which is how a profile says "the host's own
+		// credential"; a built-in route the host is *not* running on names its
+		// conventional variable instead, because an empty reference there would let
+		// it borrow a key for a different service.
+		if strings.TrimSpace(view.Provider) == route {
+			if model := strings.TrimSpace(view.Model); model != "" {
+				profile.Models = []dshapi.ProviderModel{{ID: model}}
+			}
+		} else {
+			profile.APIKeyEnv = providerProfileCredentialEnv(route)
+		}
+		store.order = append(store.order, route)
+		store.profiles[route] = profile
+	}
+	return store
+}
+
+// providerProfileCredentialEnv is the conventional variable a built-in route's key
+// is read from when it is not the route the host is already running on. The host
+// reads this name from the profile, so the seed is a reference it honours.
+func providerProfileCredentialEnv(route string) string {
+	if route == provider.Anthropic {
+		return "ANTHROPIC_API_KEY"
+	}
+	return "OPENAI_API_KEY"
+}
+
+// providerProfileProtocol is the wire protocol a built-in route speaks, from the
+// same union the pi-ai schema offers.
+func providerProfileProtocol(route string) string {
+	if route == provider.Anthropic {
+		return dshapi.ProtocolAnthropicMessages
+	}
+	return dshapi.ProtocolOpenAICompletions
+}
+
+// providerProfileBaseURL is the endpoint a built-in route starts at: the one this
+// host was configured with when it is the live route, and the provider's own
+// default otherwise.
+func providerProfileBaseURL(view settingsView, route string) string {
+	if strings.TrimSpace(view.Provider) == route {
+		if base := strings.TrimSpace(view.BaseURL); base != "" {
+			return base
+		}
+	}
+	if route == provider.Anthropic {
+		return "https://api.anthropic.com/v1"
+	}
+	return "https://api.openai.com/v1"
 }
 
 // applyDocument loads the profiles the document carries. Declaration order is
