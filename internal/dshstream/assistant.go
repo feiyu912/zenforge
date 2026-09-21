@@ -59,6 +59,11 @@ type assistantTracker struct {
 	pending *assistantAttempt
 	// active is the attempt the console has been told about and is rendering.
 	active *assistantAttempt
+	// sent holds the open attempt's chunk frames in order. It is what a
+	// reconnecting console is handed as its baseline: the client recomputes the
+	// live answer from these, so a reload in the middle of one resumes where it
+	// left instead of waiting for the settlement (ADR 0118).
+	sent []any
 }
 
 // assistantAttempt is one open model attempt as the console counts it: the
@@ -67,6 +72,9 @@ type assistantAttempt struct {
 	id   string
 	step int
 	next int
+	// startedAfterSeq is the sequence the console held when this attempt opened,
+	// which is what binds a settlement to the window the client had applied.
+	startedAfterSeq int64
 	// blocks is the attempt's content in arrival order. A chunk's index is the
 	// block's position here, and the block's text is what its block-end names.
 	blocks []assistantBlock
@@ -89,9 +97,18 @@ func newAssistantTracker(runID string, cursor int64) *assistantTracker {
 // watermark and the attempt counter are deliberately kept: the console's cursor
 // and revision continue across turns, and only the turn number changes.
 func (t *assistantTracker) startTurn(runID string, turn int) {
+	if t.runID == runID && t.turn == turn {
+		// Already on this turn: a tracker rebuilt from the durable log is being
+		// continued, and the attempt it restored must survive. Clearing here would
+		// make the live tail announce a second start for an attempt the console
+		// already has open, which is a rebaseline (ADR 0118).
+		return
+	}
 	t.runID = runID
 	t.turn = turn
 	t.pending = nil
+	t.active = nil
+	t.sent = nil
 }
 
 // onEvent returns the frames one durable event produces, in order. They are sent
@@ -154,6 +171,7 @@ func (t *assistantTracker) onRecord(record dshwire.Event) []any {
 	}})
 	t.active = nil
 	t.pending = nil
+	t.sent = nil
 	return frames
 }
 
@@ -188,12 +206,13 @@ func (t *assistantTracker) chunk(event zenforge.Event, kind string) []any {
 		if attempt.id == "" {
 			attempt.id = fmt.Sprintf("%s/attempt/%d", t.runID, step)
 		}
+		attempt.startedAfterSeq = t.lastSeq
 		t.active = attempt
 		frames = append(frames, assistantStreamValue{Type: "assistant-stream", Frame: assistantStartFrame{
 			Type:            "start",
 			AttemptID:       attempt.id,
 			Revision:        t.nextRevision(),
-			StartedAfterSeq: t.lastSeq,
+			StartedAfterSeq: attempt.startedAfterSeq,
 			Turn:            t.turn,
 			Step:            step,
 		}})
@@ -224,7 +243,7 @@ func (t *assistantTracker) chunk(event zenforge.Event, kind string) []any {
 		Chunk:     assistantDeltaChunk{Type: kind + "-delta", Index: block, Text: text},
 	}})
 	t.active.next++
-	return frames
+	return t.keep(frames)
 }
 
 // blockEnd finalizes one block of the open attempt, if there is one. The block
@@ -248,6 +267,9 @@ func (t *assistantTracker) blockEnd(index int, time int64) []any {
 		},
 	}}
 	t.active.next++
+	// The caller keeps the frames: blockEnd runs inside chunk when the kind
+	// changes, and recording here too would count the frame twice in the baseline
+	// prefix (and so in the client's next index).
 	return []any{frame}
 }
 
@@ -255,6 +277,124 @@ func (t *assistantTracker) blockEnd(index int, time int64) []any {
 // attempt has not streamed one yet.
 func lastBlockIndex(blocks []assistantBlock) int {
 	return len(blocks) - 1
+}
+
+// keep remembers the chunk frames of the open attempt, which is the prefix a
+// reconnecting console is handed. A start or end frame is not part of it: the
+// client counts only chunk frames toward its next index.
+func (t *assistantTracker) keep(frames []any) []any {
+	for _, frame := range frames {
+		value, ok := frame.(assistantStreamValue)
+		if !ok {
+			continue
+		}
+		if _, ok := value.Frame.(assistantChunkFrame); ok {
+			t.sent = append(t.sent, frame)
+		}
+	}
+	return frames
+}
+
+// baselineOf renders the attempt the console has not finished seeing, if any, as
+// its reconnect baseline. Everything the client needs to repaint the live answer
+// is here: the attempt's identity, the sequence it started after, and the compact
+// prefix of its chunks.
+func (t *assistantTracker) baselineOf() *assistantActiveAttempt {
+	if t.active == nil {
+		return nil
+	}
+	return &assistantActiveAttempt{
+		AttemptID:       t.active.id,
+		StartedAfterSeq: t.active.startedAfterSeq,
+		Turn:            t.turn,
+		Step:            t.active.step,
+		NextIndex:       t.active.next,
+		Stream:          compactFrames(t.sent),
+	}
+}
+
+// replayAssistant rebuilds a follow stream's tracker from one turn's durable log,
+// exactly as the live stream would have built it: the same projection, the same
+// record hand-offs, the same frame numbering. A turn whose answer already settled
+// yields a tracker with no open attempt; a turn still streaming yields one that a
+// snapshot can hand over as a baseline and a live tail can continue -- which is
+// what keeps a reconnecting console from being sent a second start frame for an
+// attempt it already has open (ADR 0118).
+func replayAssistant(sessionID string, turn int, cursor int64, identity dshwire.Identity, events []zenforge.Event) *assistantTracker {
+	tracker := newAssistantTracker(sessionID, cursor)
+	tracker.startTurn(sessionID, turn)
+	tail := dshwire.Project(nil, identity)
+	for _, event := range events {
+		tracker.onEvent(event)
+		before := len(tail.Events)
+		tail.Append(event)
+		if len(tail.Events) == before {
+			continue
+		}
+		tracker.onRecord(tail.Events[len(tail.Events)-1])
+	}
+	return tracker
+}
+
+// compactFrames compacts an attempt's chunk frames the way a settled message
+// stores its stream: runs of deltas of one block become text-chunks or
+// reasoning-chunks records, and any other frame is stored verbatim as a chunk
+// record. The client reads both forms with the same expander, so its expansion
+// yields exactly the frames a nextIndex counts (ADR 0116, ADR 0118).
+func compactFrames(frames []any) []any {
+	stream := []any{}
+	var open *compactRun
+	for _, item := range frames {
+		value, ok := item.(assistantStreamValue)
+		if !ok {
+			continue
+		}
+		frame, ok := value.Frame.(assistantChunkFrame)
+		if !ok {
+			continue
+		}
+		delta, ok := frame.Chunk.(assistantDeltaChunk)
+		if !ok {
+			open = nil
+			stream = append(stream, map[string]any{
+				"type": "chunk", "time": frame.Time, "chunk": frame.Chunk,
+			})
+			continue
+		}
+		kind := "text-chunks"
+		if delta.Type == assistantReasoningBlock+"-delta" {
+			kind = "reasoning-chunks"
+		}
+		if open == nil || open.kind != kind || open.index != delta.Index {
+			open = &compactRun{kind: kind, index: delta.Index, record: map[string]any{
+				"type": kind, "time0": frame.Time, "index": delta.Index,
+			}}
+			stream = append(stream, open.record)
+		} else {
+			gap := frame.Time - open.last
+			if gap < 0 {
+				gap = 0
+			}
+			open.gaps = append(open.gaps, gap)
+		}
+		open.last = frame.Time
+		open.texts = append(open.texts, delta.Text)
+		open.record["texts"] = open.texts
+		open.record["dt"] = open.gaps
+	}
+	return stream
+}
+
+// compactRun is one open run of deltas being folded into a compact record. The
+// first delta contributes no gap, so dt is always one shorter than texts, which is
+// what the client's validator requires.
+type compactRun struct {
+	kind   string
+	index  int
+	last   int64
+	texts  []any
+	gaps   []any
+	record map[string]any
 }
 
 // nextRevision advances the generation's frame counter.
@@ -277,6 +417,7 @@ func (t *assistantTracker) abandon() []any {
 	}}
 	t.active = nil
 	t.pending = nil
+	t.sent = nil
 	return []any{frame}
 }
 

@@ -196,6 +196,25 @@ type projectionBaseline struct {
 // session with no active accumulator (session-controller/src/history.ts:185).
 type assistantBaseline struct {
 	Revision int `json:"revision"`
+	// ActiveAttempt hands a reconnecting console the attempt that is still
+	// streaming, so the partial answer is on screen before the next chunk arrives
+	// instead of appearing when the step settles (ADR 0118). It is omitted when no
+	// attempt is open, which is upstream's shape for a settled conversation.
+	ActiveAttempt *assistantActiveAttempt `json:"activeAttempt,omitempty"`
+}
+
+// assistantActiveAttempt is SessionAssistantActiveAttempt: the open attempt plus
+// the compact prefix of its chunks. `stream` is the same compaction a settled
+// message carries (text-chunks/reasoning-chunks, and a verbatim `chunk` record for
+// a frame that is not a delta), so the client expands it with the same reader and
+// counts exactly nextIndex frames.
+type assistantActiveAttempt struct {
+	AttemptID       string `json:"attemptId"`
+	StartedAfterSeq int64  `json:"startedAfterSeq"`
+	Turn            int    `json:"turn"`
+	Step            int    `json:"step"`
+	NextIndex       int    `json:"nextIndex"`
+	Stream          []any  `json:"stream"`
 }
 
 // assistantStreamValue is one dense assistant-stream item:

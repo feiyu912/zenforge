@@ -128,7 +128,14 @@ func (h *Handler) runFollow(ctx context.Context, payload []byte, send func(any) 
 	// them: the frames and the baseline are one capability.
 	var assistant *assistantTracker
 	if request.assistantStream {
+		// Rebuilding the tracker from the newest turn's durable log is what makes a
+		// reconnect mid-answer resume: an attempt that is still streaming is handed
+		// over in the snapshot's baseline and then continued by the live tail,
+		// instead of being announced a second time (ADR 0118).
 		assistant = newAssistantTracker(runID, cursor)
+		if len(log.NewestEvents) > 0 {
+			assistant = replayAssistant(runID, log.NewestTurn, cursor, log.NewestIdentity, log.NewestEvents)
+		}
 	}
 	window, hasMore := log.Window(request.maxMessages)
 	records := make([]eventRecord, 0, len(window))
@@ -149,7 +156,7 @@ func (h *Handler) runFollow(ctx context.Context, payload []byte, send func(any) 
 		AssistantStream: nil,
 	}
 	if request.assistantStream {
-		snapshot.AssistantStream = &assistantBaseline{Revision: 0}
+		snapshot.AssistantStream = &assistantBaseline{Revision: 0, ActiveAttempt: assistant.baselineOf()}
 	}
 	if err := send(snapshot); err != nil {
 		return err

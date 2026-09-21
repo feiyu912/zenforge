@@ -69,6 +69,12 @@ type SessionLog struct {
 	NewestTail int64
 	// NewestTurn is the newest turn's console turn number, one-based.
 	NewestTurn int
+	// NewestEvents is the newest turn's durable log, from its beginning. It is
+	// what a reader replays to reconstruct state the projection does not keep --
+	// an assistant attempt that is still streaming, which a reconnecting console
+	// must be handed as its baseline rather than discovering at the settlement
+	// (ADR 0118). It is nil when the session has no turns.
+	NewestEvents []zenforge.Event
 	// NewestIdentity is the stamp the newest turn's projection carries: its turn
 	// number and the sequence offset its events are shifted by. A follower that
 	// moves on to the conversation's next turn stamps it with this value, so the
@@ -112,6 +118,7 @@ func Session(ctx context.Context, source Source, sessionID string, identity func
 			log.Newest = projection
 			log.NewestRun = runID
 			log.NewestTurn = turn
+			log.NewestEvents = events
 			log.NewestIdentity = stamp
 			if len(events) > 0 {
 				log.NewestTail = events[len(events)-1].Seq

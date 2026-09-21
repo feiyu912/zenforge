@@ -543,6 +543,27 @@ wrote an event is omitted, because `session/page` answers not-found for it; and 
 log has no terminal event is recorded as cancelled when it is adopted. Drafts stay
 process-local (ADR 0104).
 
+## Shipped: a reconnect mid-answer resumes the attempt (2026-09-21)
+
+Since ADR 0117 the console renders live prose from the dense frames alone, so a page
+reload in the middle of an answer had nothing to repaint from: measured live, the
+snapshot's baseline carried `activeAttempt: null`, the next delta announced a *new*
+attempt with a `start` frame, and only the tokens after the reload rendered — the
+partial answer appeared to restart from the middle. The follow stream now rebuilds
+its tracker by replaying the newest turn's durable log through the same projection
+the live tail uses, and hands the still-open attempt to the snapshot as upstream's
+`assistantStream.activeAttempt` (attempt id, `startedAfterSeq`, turn, step,
+`nextIndex`, and the compact prefix of its chunks). The live tail continues that
+same tracker, so no second start follows (ADR 0118).
+
+Measured after the fix, reloading mid-answer: the baseline carried `nextIndex: 10`
+with a two-record compact prefix, **no `start` frame followed**, and the partial
+answer was on screen immediately. Two traps are worth remembering: the baseline's
+compact `stream` must expand to exactly the frames `nextIndex` counts (the client
+stops there, and a block-end counted twice made it expand to one too many), and
+`startTurn` must be inert when the tracker is already on that turn — otherwise the
+follow path's own turn bookkeeping discards the attempt the replay just restored.
+
 ## Shipped: the session log is the console's log (2026-09-21)
 
 The console offered `Load earlier` after two short questions, and the trajectory
@@ -730,8 +751,9 @@ serves `qwen-plus`, and the card shows only what is written on it.
 > Stop reaches the turn that is running (ADR 0113), a follow stream follows the conversation
 > instead of one turn so "Load earlier" actually loads (ADR 0114), an approval names the
 > conversation so a later turn's prompt is answerable (ADR 0115), the answer streams as
-> assistant-stream frames (ADR 0116), and the served log is the console's own vocabulary and
-> numbering rather than the host's durable log (ADR 0117). The next chain is "Next up" 1 in the ledger:
+> assistant-stream frames (ADR 0116), the served log is the console's own vocabulary and
+> numbering rather than the host's durable log (ADR 0117), and a reconnect mid-answer
+> resumes the attempt instead of restarting it (ADR 0118). The next chain is "Next up" 1 in the ledger:
 > `session/openWorkspacePath` and `session/canOpenWorkspacePath`, opening a workspace into a
 > session. If a scratch host is
 > needed, give it `ZENFORGE_CONFIG_DIR` or `--settings-file` under a throwaway directory so

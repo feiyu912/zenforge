@@ -166,11 +166,12 @@ what is experimental, and what remains adapter territory.
   started a turn is still process-local (ADR 0104).
 - **Assistant prose streams** (ADR 0116): the follow stream mints the console's
   dense `assistant-stream` frames from the harness's own durable deltas, so an
-  answer renders token by token instead of appearing when its step settles. The
-  honest limits: a reconnect in the middle of an answer does not re-baseline the
-  open attempt (the partial text appears with its settlement), tool-call arguments
-  do not stream (this harness emits a complete `tool.call`), and no `usage` chunk
-  is sent (the accounting rides the settled message).
+  answer renders token by token instead of appearing when its step settles, and a
+  reconnect in the middle of one is handed the open attempt as its baseline, so the
+  partial answer is on screen again before the next chunk arrives (ADR 0118). The
+  honest limits: tool-call arguments do not stream (this harness emits a complete
+  `tool.call`), and no `usage` chunk is sent (the accounting rides the settled
+  message).
 - **The served log is the console's log** (ADR 0117): the host's own durable
   events -- checkpoints, the model lifecycle, every streamed delta -- are not
   served as records and consume no sequence number, so one ordinary turn occupies

@@ -485,3 +485,75 @@ func TestSessionFollowServesADraftSessionAndItsFirstTurn(t *testing.T) {
 		t.Fatalf("first frames = %v, want the draft's first prompt as a user/message", seen)
 	}
 }
+
+// A console that reconnects while an answer is still streaming must be handed the
+// open attempt in the snapshot's baseline, and the live tail must continue that
+// same attempt rather than starting a second one -- a second start frame makes the
+// client rebaseline, so a reload mid-answer would restart the whole stream and the
+// operator would watch the partial answer disappear (ADR 0118).
+func TestSessionFollowSnapshotResumesAMidAnswerAttempt(t *testing.T) {
+	f := newFixture(t, Config{})
+	runID := f.startRun(t, "deltas")
+	f.agent.emit(runID, zenforge.EventModelStarted, map[string]any{"attemptId": "attempt-1", "step": 1})
+	f.agent.emit(runID, zenforge.EventModelDelta, map[string]any{
+		"attemptId": "attempt-1", "step": 1, "chunkSeq": 1, "offset": 0, "textDelta": "half",
+	})
+	waitForLoggedEvents(t, f, runID, 3)
+
+	conn := f.mustDial(t)
+	openStream(t, conn, "follow", "session/follow", followArgs(t, runID, true))
+	snapshot := readItem(t, conn, "follow")
+	assertField(t, snapshot, "type", "snapshot")
+	baseline := decodeValueObject(t, snapshot["assistantStream"])
+	assertKeys(t, baseline, "revision", "activeAttempt")
+	opening := decodeValueObject(t, baseline["activeAttempt"])
+	assertKeys(t, opening, "attemptId", "startedAfterSeq", "turn", "step", "nextIndex", "stream")
+	assertField(t, opening, "attemptId", "attempt-1")
+	if got := intField(t, opening, "step"); got != 1 {
+		t.Fatalf("baseline step = %d, want 1", got)
+	}
+	// Frames so far: the block start and the delta.
+	if got := intField(t, opening, "nextIndex"); got != 2 {
+		t.Fatalf("baseline nextIndex = %d, want the two frames the attempt has", got)
+	}
+	var stream []map[string]any
+	if err := json.Unmarshal(opening["stream"], &stream); err != nil {
+		t.Fatalf("baseline stream did not decode: %v", err)
+	}
+	if len(stream) != 2 || stream[0]["type"] != "chunk" || stream[1]["type"] != "text-chunks" {
+		t.Fatalf("baseline stream = %v, want the block start and the text run", stream)
+	}
+	if texts, ok := stream[1]["texts"].([]any); !ok || len(texts) != 1 || texts[0] != "half" {
+		t.Fatalf("baseline timeline = %v, want the streamed text", stream[1])
+	}
+
+	// The live tail continues the attempt: the next delta is a chunk frame whose
+	// index is the one after the baseline's, not a new start.
+	f.agent.emit(runID, zenforge.EventModelDelta, map[string]any{
+		"attemptId": "attempt-1", "step": 1, "chunkSeq": 2, "offset": 4, "textDelta": " an answer",
+	})
+	next := readItem(t, conn, "follow")
+	assertField(t, next, "type", "assistant-stream")
+	nextFrame := decodeValueObject(t, next["frame"])
+	assertField(t, nextFrame, "type", "chunk")
+	if got := intField(t, nextFrame, "index"); got != 2 {
+		t.Fatalf("continuing chunk index = %d, want 2", got)
+	}
+	delta := decodeValueObject(t, nextFrame["chunk"])
+	assertField(t, delta, "text", " an answer")
+}
+
+// waitForLoggedEvents polls the durable log until it holds at least count events,
+// which is what makes a snapshot taken afterwards carry them.
+func waitForLoggedEvents(t *testing.T, f *fixture, runID string, count int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		events, err := f.store.Read(context.Background(), runID, 0, 0)
+		if err == nil && len(events) >= count {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("run %q never logged %d events", runID, count)
+}

@@ -8,6 +8,11 @@ import (
 	"github.com/feiyu912/zenforge/internal/dshwire"
 )
 
+// durableEvent is one durable event as the harness writes it.
+func durableEvent(seq int64, eventType zenforge.EventType, data map[string]any) zenforge.Event {
+	return zenforge.Event{Seq: seq, Type: eventType, Timestamp: 1000 + seq, Payload: data}
+}
+
 // deltaEvent is one durable model.delta as the harness writes it.
 func deltaEvent(seq int64, text string, attemptID string, step int) zenforge.Event {
 	return zenforge.Event{
@@ -316,4 +321,90 @@ func TestAssistantTrackerNumbersEveryFrameConsecutively(t *testing.T) {
 	if !reflect.DeepEqual(revisions, want) {
 		t.Fatalf("frame revisions = %v, want %v", revisions, want)
 	}
+}
+
+// A console that reconnects in the middle of an answer has to be handed the live
+// attempt, or it repaints only the settlement and the operator watches the answer
+// vanish and reappear (ADR 0118). The baseline is rebuilt by replaying the turn's
+// durable log, and its compact stream must expand to exactly the frames nextIndex
+// counts -- the client stops reading the baseline at that count.
+func TestAssistantTrackerHandsOverAnOpenAttemptAsABaseline(t *testing.T) {
+	events := []zenforge.Event{
+		durableEvent(1, zenforge.EventRunStarted, map[string]any{"input": "hello"}),
+		durableEvent(2, zenforge.EventStepStarted, map[string]any{"step": 1}),
+		durableEvent(3, zenforge.EventModelStarted, map[string]any{"step": 1, "attemptId": "attempt-1"}),
+		reasoningEvent(4, "why", 1),
+		deltaEvent(5, "the ", "attempt-1", 1),
+		deltaEvent(6, "answer", "attempt-1", 1),
+	}
+	tracker := replayAssistant("run-1", 2, 8, dshwire.Identity{Turn: 2}, events)
+	opening := tracker.baselineOf()
+	if opening == nil {
+		t.Fatal("a turn that is still streaming handed over no attempt")
+	}
+	if opening.AttemptID != "attempt-1" || opening.Step != 1 || opening.Turn != 2 {
+		t.Fatalf("baseline = %+v, want attempt-1 step 1 of turn 2", opening)
+	}
+	// The replay stamped the records itself, so startedAfterSeq is the sequence of
+	// the record the console already holds, not the cursor the stream opened with.
+	if opening.StartedAfterSeq != 2 {
+		t.Fatalf("startedAfterSeq = %d, want the last record before the attempt", opening.StartedAfterSeq)
+	}
+	// Two blocks, six chunk frames: the reasoning block's start and its delta, the
+	// close of that block, the text block's start and its delta, then the second
+	// text delta.
+	if opening.NextIndex != 6 {
+		t.Fatalf("nextIndex = %d, want the six frames the attempt has", opening.NextIndex)
+	}
+	if expanded := countExpanded(t, opening.Stream); expanded != opening.NextIndex {
+		t.Fatalf("the baseline expands to %d frames but nextIndex says %d", expanded, opening.NextIndex)
+	}
+	// The stream is the console's own compaction: a verbatim chunk record for each
+	// block boundary, and one run per block of deltas.
+	kinds := []string{}
+	for _, record := range opening.Stream {
+		object := record.(map[string]any)
+		kinds = append(kinds, object["type"].(string))
+	}
+	want := []string{"chunk", "reasoning-chunks", "chunk", "chunk", "text-chunks"}
+	if !reflect.DeepEqual(kinds, want) {
+		t.Fatalf("baseline stream = %v, want %v", kinds, want)
+	}
+
+	// A turn whose answer settled has no attempt to hand over.
+	settled := replayAssistant("run-1", 1, 0, dshwire.Identity{}, []zenforge.Event{
+		durableEvent(1, zenforge.EventRunStarted, map[string]any{"input": "hello"}),
+		durableEvent(2, zenforge.EventStepStarted, map[string]any{"step": 1}),
+		deltaEvent(3, "done", "attempt-1", 1),
+		durableEvent(4, zenforge.EventModelDone, map[string]any{"step": 1}),
+	})
+	if settling := settled.baselineOf(); settling != nil {
+		t.Fatalf("a settled turn handed over %+v", settling)
+	}
+}
+
+// countExpanded counts the frames the client's expander would produce from a
+// compact stream: one per delta, and one per verbatim chunk record.
+func countExpanded(t *testing.T, stream []any) int {
+	t.Helper()
+	count := 0
+	for _, record := range stream {
+		object, ok := record.(map[string]any)
+		if !ok {
+			t.Fatalf("stream record %T is not an object", record)
+		}
+		switch object["type"] {
+		case "chunk":
+			count++
+		case "text-chunks", "reasoning-chunks":
+			texts, ok := object["texts"].([]any)
+			if !ok || len(texts) == 0 {
+				t.Fatalf("timeline %v has no texts", object)
+			}
+			count += len(texts)
+		default:
+			t.Fatalf("unexpected stream record type %v", object["type"])
+		}
+	}
+	return count
 }

@@ -501,6 +501,20 @@ real answer in a browser):
 A host that never sends these frames is not broken, just slow: the answer appears
 with its settlement.
 
+**Added 2026-09-21 (ADR 0118): the opening snapshot's `activeAttempt`.** The client
+renders live prose from these frames *only*, so a reconnecting console cannot know
+an answer was half-written unless the snapshot says so. `activeAttempt`
+(`{attemptId, startedAfterSeq, turn, step, nextIndex, stream}`) is restored by
+`ClientAssistantStream.replace`: it records the attempt and pushes
+`expandAssistantStream(stream)` as transient chunks, **stopping at `nextIndex`**
+frames. Two consequences for a host: the compact `stream` must expand to at least
+`nextIndex` frames in the exact order they were sent (a run of same-kind deltas in
+one block is one `text-chunks`/`reasoning-chunks` record; a block start or end is a
+verbatim `chunk` record), and the host must keep sending the *same* attempt after
+the snapshot — a second `start` frame for an attempt the client already has open is
+`{type:"rebaseline"}`, which restarts the stream. A settled turn omits
+`activeAttempt`.
+
 - `SessionWireEvent` envelope (`types.ts:428-438`): `{type:string, seq:number, time:number,
   data:JsonValue, ignorable?:true, sourceEventSeqs?:JsonValue, surfaceOp?:JsonValue}`.
   The client rejects **unexpected fields** and requires `seq`/`time` safe integers

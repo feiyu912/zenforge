@@ -146,3 +146,4 @@ and what the adapter answers today is
 | [0115](0115-an-approval-names-the-conversation.md) | An approval names the conversation, not the turn |
 | [0116](0116-the-answer-streams-as-assistant-frames.md) | The answer streams as assistant-stream frames |
 | [0117](0117-the-session-log-carries-the-console-vocabulary.md) | The session log carries the console's vocabulary |
+| [0118](0118-a-reconnect-mid-answer-resumes-the-attempt.md) | A reconnect mid-answer resumes the attempt |
