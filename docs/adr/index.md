@@ -140,3 +140,4 @@ and what the adapter answers today is
 | [0109](0109-the-console-host-keeps-its-run-registry-on-disk.md) | The console host keeps its run registry on disk |
 | [0110](0110-a-projected-message-is-identified-by-the-session-sequence.md) | A projected message is identified by the session sequence, not the run's |
 | [0111](0111-a-run-records-the-prompt-identity-its-caller-submitted.md) | A run records the prompt identity its caller submitted |
+| [0112](0112-the-coverage-ledgers-gaps-are-a-dated-audit.md) | The coverage ledger's gaps are a dated audit |

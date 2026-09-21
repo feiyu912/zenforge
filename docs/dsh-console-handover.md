@@ -543,6 +543,34 @@ wrote an event is omitted, because `session/page` answers not-found for it; and 
 log has no terminal event is recorded as cancelled when it is adopted. Drafts stay
 process-local (ADR 0104).
 
+## The ledger's "Next up" list was stale (2026-09-21)
+
+The ledger's first gap said `ui-directory-picker-browse` was withheld and that re-testing it
+was the next step. That work had already shipped: commit `a32cc8c` ("Load the browse
+directory picker instead of withholding it") moved the plugin out of the roster's `blocked`
+list after re-testing its activation on a scratch port, and `internal/dshmount/mount_test.go`
+keeps it served. The prose was never updated, so the next window would have spent a session
+re-doing it. Re-checked live on the operator's host:
+
+```
+$ curl -s http://127.0.0.1:8787/                 # window.__DSH_BOOT__
+53 entries, including @deepseek-ai/dsh-client-ui-directory-picker-browse
+$ curl -s -o /dev/null -w '%{http_code} %{size_download}\n' \
+    'http://127.0.0.1:8787/plugins/??@deepseek-ai/dsh-client-ui-directory-picker-browse/client.js'
+200 49199
+```
+
+Every advertised bundle in the graph answered 200, and the only `inject` names not on the
+graph are the shell-provided singletons and one deliberately omitted package -- the
+degradation path the console documents. The operator can use the workspace picker's add
+action, which is what the withheld plugin had disabled.
+
+The ledger's table rows are cross-checked against the routing table by a test (ADR 0099), so
+a *method* row cannot drift; the prose could, which is what happened. The list is now stamped
+with its audit date and its derivation, and a test keeps the same misreading from recurring:
+no item in "Next up" may name a method the host routes, or a plugin the roster serves
+(ADR 0112).
+
 ## Shipped: a submitted question is no longer on screen twice (2026-09-21)
 
 The operator asked `hello`, read the answer, and the transcript showed `hello` once more after
@@ -599,18 +627,16 @@ serves `qwen-plus`, and the card shows only what is written on it.
 > earlier turn is reachable (ADR 0108), the host keeps its run registry on disk so the
 > sidebar survives a restart and lists the conversations already in the store (ADR 0109), and
 > a second question renders as itself because every message is identified by the session
-> sequence (ADR 0110); the next item is
-> "Next up" 1 in the ledger -- though `docs/limitations.md` now also records a gap found
-> while verifying this window: `session/cancel` only reaches a conversation's first turn,
-> so Stop on a later turn is a no-op while that turn keeps running. That is a small chain
-> (cancel the newest turn of the chain ADR 0108 already resolves) and it is the one an
-> operator will hit next if they press Stop mid-answer
-> -- re-testing the withheld `ui-directory-picker-browse` plugin, which has to run on a
-> scratch port because a plugin that fails activation is a fatal boot page, and the
-> operator's host on `127.0.0.1:8787` is the one that must not be taken down by the
-> experiment. Since the settings document is now shared state, give a scratch host
-> `ZENFORGE_CONFIG_DIR` or `--settings-file` under a throwaway directory so it cannot
-> rewrite the operator's document -- and give it its own `--checkpoint-dir` too, because the
+> sequence (ADR 0110), a submitted question is on screen exactly once because the run
+> records the caller's prompt identity (ADR 0111), and the ledger's "Next up" list is a dated
+> audit that no longer claims the browse directory picker is withheld (ADR 0112).
+> `docs/limitations.md` records a gap found while verifying this window, and it is the next
+> chain: `session/cancel` only reaches a conversation's first turn, so Stop on a later turn
+> is a no-op while that turn keeps running (cancel the newest turn of the chain ADR 0108
+> already resolves). After that comes "Next up" 1 in the ledger,
+> `session/openWorkspacePath` and `session/canOpenWorkspacePath`. If a scratch host is
+> needed, give it `ZENFORGE_CONFIG_DIR` or `--settings-file` under a throwaway directory so
+> it cannot rewrite the operator's document, and its own `--checkpoint-dir` too, because the
 > event store and the run registry are derived from it: a scratch host started in `/tmp`
 > writes its runs and its registry into the operator's own state directory. Never
 > `git add -A`.

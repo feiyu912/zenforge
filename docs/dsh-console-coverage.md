@@ -167,33 +167,46 @@ method list.
 
 ## Next up
 
-The gaps in the order they block the page, from what the console asks first:
+Audited **2026-09-21**. The list is a dated reading, not a description that stays true
+by itself: it was re-derived from the host's routing table (`method` in
+`internal/dshapi/handler.go`), the plugin roster (`internal/dshmount/roster.json`), and a
+live `zenforge serve` whose boot graph and every advertised bundle were fetched. An item
+that has shipped is removed rather than left to mislead the next window; the gaps below are
+in the order they block the page, from what the console asks first.
 
-1. **`ui-directory-picker-browse` is withheld, so the workspace picker has no
-   add action at all.** The host half is now served (`directoryPicker/list` and
-   `directoryPicker/createDirectory` answer; `pick` is refused by name), but the
-   console plugin that renders the in-app browser is in the roster's `blocked`
-   list: a running host once reported it — and only it — failing activation, and
-   the reason was not established. DSH degrades a plugin *absent* from the graph
-   to a slot fallback, while one *present* and unable to activate is a fatal boot
-   page, so it was withheld. Re-testing it is the next step, on a scratch port so
-   a boot failure cannot take the working console with it.
-2. **`session/openWorkspacePath`, `session/canOpenWorkspacePath`** — opening a
+1. **`session/openWorkspacePath`, `session/canOpenWorkspacePath`** — opening a
    workspace into a session, the other half of selection.
-3. **`session/search`, `session/fork`, `session/attachment`, `session/updateQueue`**
+2. **`session/search`, `session/fork`, `session/attachment`, `session/updateQueue`**
    — session management the sidebar offers.
-4. **`goals/*`** — the goal panel. The framework has a goal registry
+3. **`goals/*`** — the goal panel. The framework has a goal registry
    (`goals/`); this is wiring, not new capability.
-5. **`skills/list`, `subagents/list`, `subagents/prompt`, `subagents/interruptByParent`**
+4. **`skills/list`, `subagents/list`, `subagents/prompt`, `subagents/interruptByParent`**
    — framework features that are not exposed to the console yet.
-6. **`terminal/*`** — an embedded terminal, which this host does not claim.
-7. **`workspace/insertBefore`, `workspace/insertSessionBefore`** — the manual
+5. **`terminal/*`** — an embedded terminal, which this host does not claim.
+6. **`workspace/insertBefore`, `workspace/insertSessionBefore`** — the manual
    row order inside the workspace list. Registrations, titles, deletion and the
    archived set are served (ADR 0101); only the drag-to-reorder mutations are
    left.
-8. **`messageFeedback/*`, `sessionFeedback/*`, `fileReferences/list`,
+7. **`messageFeedback/*`, `sessionFeedback/*`, `fileReferences/list`,
    `fileUploads/upload`, `officeToPdf/*`, `agentTeams/*`, `sessionReferenceResolver/candidates`,
    `dynamicCordisRunner/*`** — page features with no host-side counterpart yet.
+
+The directory-picker family, which used to head this list, is no longer a gap: the browse
+half is loaded from the roster and its bundle is served, so the workspace control's add
+action has a dialog behind it. `directoryPicker/pick` stays refused by name — this host has
+no operator display — and the native sibling is the roster's `blocked` entry, withheld with
+the reason it actually needs (ADR 0100). Which plugins are withheld or omitted is the
+roster's own answer, and it is the only place that claim is made:
+
+```
+$ curl -s http://127.0.0.1:8787/ | grep -o '__DSH_BOOT__.*'   # the served graph
+53 entries, including @deepseek-ai/dsh-client-ui-directory-picker-browse
+$ curl -s -o /dev/null -w '%{http_code}\n' \
+    'http://127.0.0.1:8787/plugins/??@deepseek-ai/dsh-client-ui-directory-picker-browse/client.js'
+200
+$ python3 -c 'import json; r=json.load(open("internal/dshmount/roster.json")); print([b["dir"] for b in r["blocked"]])'
+['client/ui-directory-picker-native', 'extensions/ui-cordis']
+```
 
 ## Regenerating this ledger
 

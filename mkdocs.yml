@@ -253,6 +253,7 @@ nav:
       - 0109 The console host keeps its run registry on disk: adr/0109-the-console-host-keeps-its-run-registry-on-disk.md
       - 0110 A projected message is identified by the session sequence: adr/0110-a-projected-message-is-identified-by-the-session-sequence.md
       - 0111 A run records the prompt identity its caller submitted: adr/0111-a-run-records-the-prompt-identity-its-caller-submitted.md
+      - 0112 The coverage ledger's gaps are a dated audit: adr/0112-the-coverage-ledgers-gaps-are-a-dated-audit.md
 
 extra:
   social:
