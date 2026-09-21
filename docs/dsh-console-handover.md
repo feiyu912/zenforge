@@ -546,6 +546,45 @@ wrote an event is omitted, because `session/page` answers not-found for it; and 
 log has no terminal event is recorded as cancelled when it is adopted. Drafts stay
 process-local (ADR 0104).
 
+## Next: `goals/*` -- the exact wiring, already surveyed (2026-09-21)
+
+The goal dock is dead because all seven methods are unserved
+(`docs/dsh-console-coverage.md` lists `goals/clear|complete|create|edit|get|pause|resume` as
+`unserved`). The framework half already exists, so this is wiring -- but it is wiring with
+three parts, and this section records what was surveyed so the next round does not re-derive
+it.
+
+**The console half.** The vendored client plugin is in this repo
+(`webui/dsh/plugins/client/ui-goal/client.js`). It declares required services
+`remote` and `remote.goals` and calls, against a session id:
+
+- `ctx.remote.goals.get(sessionId)` for the current projection,
+- `ctx.remote.goals.edit(sessionId, ref, {objective})`, `.pause(sessionId, ref)`,
+  `.resume(sessionId, ref)`, `.clear(sessionId, ref)`,
+- `ctx.remote.$on("goal/activation-changed", ...)` for live activation, and
+- it reads `projection.goal.phase` (only `"active"` arms the dock) and
+  `projection.activation`, comparing `{id, revision, activation}` snapshots by value.
+
+The typed `remote.goals` surface is upstream's `@deepseek-ai/dsh-goal/remote`, whose domain is
+`packages/goal/goal/src/domain.ts`: operations `create | edit | pause | resume | complete |
+clear`, a `GoalRef` of `{id, revision}`, and a projection carrying the current goal plus the
+latest mutation ref, where `clear` is a **tombstone** (`{operation: "clear", cleared,
+clearedAt}`) rather than an absent goal. The exact request/response envelopes come from that
+remote type -- read it before writing the routes.
+
+**The host half.** `goals/goal.go` is a pure state machine over `goals.State`:
+`Create(State, CreateOptions)`, `Edit(State, EditOptions)`, `Pause/Resume/Complete(State,
+time.Time)`, `Block(State, BlockReason, time.Time)` and `AdmitRound`, with `State.Revision()`
+and `State.Armed()`. It maps onto the console's domain nearly one to one: our `Block` has no
+console operation (it is the blocked phase), and the console's `clear` is our state emptied
+plus a tombstone that reports the ref it cleared.
+
+**What is still open, to check first:** where a session's goal state is persisted today
+(`cli/goal.go` drives the CLI and writes round reports; whether the state itself lives on the
+run registry, in checkpoint metadata, or only in the CLI's process is the first thing to
+establish), and whether the projection rides `session/page`'s projections or a stream of its
+own. Neither the activation event nor the projection cell has been built.
+
 ## Shipped: the stream chunks and the interrupted tool call (2026-09-21)
 
 Three things the console renders were missing from the served stream (ADR 0124). The usage
