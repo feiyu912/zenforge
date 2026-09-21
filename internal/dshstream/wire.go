@@ -141,8 +141,31 @@ type controlBaselineFrame struct {
 }
 
 type controlBaseline struct {
-	Jobs        map[string][]sessionJob `json:"jobs"`
-	Projections map[string]any          `json:"projections"`
+	// Queues is required, not optional. The client's replaceControlBaseline does
+	// Object.entries(baseline.queues) before anything else and throws on an absent
+	// key, which discards the whole baseline -- including the projections seeded
+	// right after it (api-session-controller/src/client/sessions/manager.ts
+	// replaceControlBaseline). An empty map is the honest value for a host with no
+	// queue mirror yet; omitting the key is not (ADR 0119).
+	Queues      map[string][]sessionQueuedItem `json:"queues"`
+	Jobs        map[string][]sessionJob        `json:"jobs"`
+	Projections map[string]any                 `json:"projections"`
+}
+
+// sessionQueuedItem is SessionQueuedItem: one pending inbox occurrence. This host
+// has no queue mirror, so no item is ever sent; the type exists so the empty map
+// has the shape the client reads rather than a placeholder.
+type sessionQueuedItem struct {
+	ID        string               `json:"id"`
+	Placement string               `json:"placement"`
+	RPCID     string               `json:"rpcId,omitempty"`
+	Message   sessionQueuedMessage `json:"message"`
+}
+
+// sessionQueuedMessage is the JSON-safe message fields a pending queue row shows.
+type sessionQueuedMessage struct {
+	ID      string `json:"id"`
+	Content []any  `json:"content"`
 }
 
 // sessionJob is the browser-safe background-job row the console expects. This

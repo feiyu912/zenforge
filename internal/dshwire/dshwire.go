@@ -227,6 +227,26 @@ func (p *Projector) Next(event zenforge.Event) (Event, bool) {
 			// prompt's requestId as the steer id, so the same identity is here.
 			return p.emit(p.surface(base, "user/message", userMessage(base.Seq, text, steerIdentity(data))))
 		}
+	case zenforge.EventSessionTitle:
+		// The console names a conversation from the `title` projection it folds out
+		// of this event, and the projection is the only place the name can come
+		// from: a list row seeds its projection store with it and the header reads
+		// the same cell, while a title field of its own renders nowhere
+		// (api-session-controller/src/client/sessions/manager.ts). The durable
+		// record carries the name and a source string; the wire source is a tagged
+		// object, and the two kinds this host writes are an operator's rename and a
+		// title derived from the first prompt (ADR 0119).
+		if title, ok := stringField(data, "title"); ok && title != "" {
+			kind := "fallback"
+			if source, ok := stringField(data, "source"); ok && source == "user" {
+				kind = "user"
+			}
+			return p.emit(base.known("session/title", map[string]any{
+				"title":       title,
+				"messageSeqs": []any{},
+				"source":      map[string]any{"kind": kind},
+			}))
+		}
 	case zenforge.EventStepStarted:
 		if step, ok := intField(data, "step"); ok {
 			p.current = step

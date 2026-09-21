@@ -515,6 +515,30 @@ the snapshot — a second `start` frame for an attempt the client already has op
 `{type:"rebaseline"}`, which restarts the stream. A settled turn omits
 `activeAttempt`.
 
+**Added 2026-09-21 (ADR 0119): which upstream is authoritative, and the revision
+rule.** The reference for this host is the client the console actually serves
+(`webui/dsh`, upstream `ddefc45` / `0.1.6-alpha.2`, checked out at `/tmp/dsh-src`),
+not the published `@deepseek-ai/*@0.1.5-rc.2` artifacts under `node_modules`: five
+result schemas differ, and four of the five newer fields are ones this host already
+sends (`agentPresets/list.modeSelectionEnabled`, `commands/list.definitionId`,
+`pluginInventory/list.managementAvailable`, `llm/discoverModels.inputModalities`).
+Auditing against the rc would flag our own extra fields as violations.
+
+Two baseline rules that a host gets wrong silently rather than loudly:
+
+- The `session/control` baseline's `queues` key is **required**. The client's
+  `replaceControlBaseline` calls `Object.entries(baseline.queues)` first and throws
+  on an absent key, which discards the projection seeding that follows it.
+- The follow snapshot's `assistantStream.revision` is the accumulator's frame
+  counter, not a constant, and the client requires every later frame to be exactly
+  one past it. A host that replays a turn's log to rebuild the accumulator (ADR
+  0118) must therefore cite the counter it reached; citing `0` makes the first live
+  frame a carrier failure and the stream reconnects in a loop.
+
+The conversation's name reaches the console only through the `title` **projection**:
+a list row seeds its store from `projections.values` and the header folds the same
+cell, so a host-side `title` field on a list row renders nowhere.
+
 - `SessionWireEvent` envelope (`types.ts:428-438`): `{type:string, seq:number, time:number,
   data:JsonValue, ignorable?:true, sourceEventSeqs?:JsonValue, surfaceOp?:JsonValue}`.
   The client rejects **unexpected fields** and requires `seq`/`time` safe integers

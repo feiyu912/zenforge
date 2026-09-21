@@ -260,6 +260,7 @@ nav:
       - 0116 The answer streams as assistant-stream frames: adr/0116-the-answer-streams-as-assistant-frames.md
       - 0117 The session log carries the console vocabulary: adr/0117-the-session-log-carries-the-console-vocabulary.md
       - 0118 A reconnect mid-answer resumes the attempt: adr/0118-a-reconnect-mid-answer-resumes-the-attempt.md
+      - 0119 The console's baselines are complete: adr/0119-the-console-baselines-are-complete.md
 
 extra:
   social:

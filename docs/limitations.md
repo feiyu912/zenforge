@@ -171,7 +171,10 @@ what is experimental, and what remains adapter territory.
   partial answer is on screen again before the next chunk arrives (ADR 0118). The
   honest limits: tool-call arguments do not stream (this harness emits a complete
   `tool.call`), and no `usage` chunk is sent (the accounting rides the settled
-  message).
+  message). The turn vocabulary is the smallest honest slice: `turn/start` and
+  `step/end` are not emitted, the request's model header and context window are not
+  served, and a failed attempt's partial stream is dropped rather than projected as
+  `assistant/attempt`.
 - **The served log is the console's log** (ADR 0117): the host's own durable
   events -- checkpoints, the model lifecycle, every streamed delta -- are not
   served as records and consume no sequence number, so one ordinary turn occupies

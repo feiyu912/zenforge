@@ -1,5 +1,12 @@
 package dshwire
 
+// TitleProjection is the projection key a conversation's name is published under.
+// The console reads the title from this projection cell -- a session list row
+// seeds its projection store with it and the header folds it -- never from a
+// field of its own, so the key belongs with the vocabulary rather than with one
+// adapter (ADR 0119).
+const TitleProjection = "title"
+
 // KnownEventTypes is the console's own event vocabulary, copied from the
 // vendored client's generated catalog
 // (webui/dsh/plugins/api/session-controller/client.js KNOWN_SESSION_EVENT_TYPES).

@@ -154,7 +154,7 @@ func TestMuxFrameKeysAreExact(t *testing.T) {
 	assertKeys(t, baseline, "type", "value")
 	assertField(t, baseline, "type", "baseline")
 	controlValue := decodeValueObject(t, baseline["value"])
-	assertKeys(t, controlValue, "jobs", "projections")
+	assertKeys(t, controlValue, "queues", "jobs", "projections")
 
 	// session/follow: snapshot is the first item and every nested object is
 	// exact.

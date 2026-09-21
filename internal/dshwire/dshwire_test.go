@@ -450,3 +450,44 @@ func sourceRPCID(t *testing.T, projected Event) string {
 	identity, _ := source["rpcId"].(string)
 	return identity
 }
+
+// The console reads a conversation's name from the `title` projection, which it
+// folds out of this event, so the durable record has to reach the wire in the
+// shape the fold expects -- a tagged source object rather than the string the
+// durable payload carries (ADR 0119).
+func TestProjectionServesTheTitleTheConsoleFolds(t *testing.T) {
+	projector := New(Identity{Turn: 1})
+	renamed, ok := projector.Next(zenforge.Event{
+		Seq: 1, Type: zenforge.EventSessionTitle, Timestamp: 7,
+		Payload: map[string]any{"title": "My Session", "source": "user"},
+	})
+	if !ok {
+		t.Fatal("a rename was not served")
+	}
+	if renamed.Type != "session/title" {
+		t.Fatalf("type = %q, want session/title", renamed.Type)
+	}
+	if renamed.Data["title"] != "My Session" {
+		t.Fatalf("title = %v, want My Session", renamed.Data["title"])
+	}
+	source, ok := renamed.Data["source"].(map[string]any)
+	if !ok || source["kind"] != "user" {
+		t.Fatalf("source = %v, want {kind:user}", renamed.Data["source"])
+	}
+	if seqs, ok := renamed.Data["messageSeqs"].([]any); !ok || len(seqs) != 0 {
+		t.Fatalf("messageSeqs = %v, want an empty list", renamed.Data["messageSeqs"])
+	}
+
+	// A title derived from the first prompt is the fallback kind, not the operator's.
+	derived, ok := projector.Next(zenforge.Event{
+		Seq: 2, Type: zenforge.EventSessionTitle, Timestamp: 8,
+		Payload: map[string]any{"title": "first question", "source": "fallback"},
+	})
+	if !ok {
+		t.Fatal("a derived title was not served")
+	}
+	derivedSource, _ := derived.Data["source"].(map[string]any)
+	if derivedSource["kind"] != "fallback" {
+		t.Fatalf("source = %v, want {kind:fallback}", derived.Data["source"])
+	}
+}

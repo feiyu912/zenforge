@@ -72,7 +72,7 @@ func (h *Handler) sessionList(ctx context.Context, args map[string]json.RawMessa
 	}
 	items := make([]map[string]any, 0, len(order)+1)
 	for _, sessionID := range order {
-		item, listable := h.listableSession(ctx, newest[sessionID])
+		item, listable := h.listableSession(ctx, sessionID, newest[sessionID])
 		if !listable {
 			continue
 		}
@@ -120,19 +120,10 @@ func (h *Handler) sessionList(ctx context.Context, args map[string]json.RawMessa
 // and with a durable registry that record would otherwise be listed forever.
 // A live run is kept: it is between its claim and its first event only for a
 // moment, and the console shows it as running.
-func (h *Handler) listableSession(ctx context.Context, info harnesshttp.RunInfo) (map[string]any, bool) {
+func (h *Handler) listableSession(ctx context.Context, sessionID string, info harnesshttp.RunInfo) (map[string]any, bool) {
 	events, err := h.events.Read(ctx, info.RunID, 0, 0)
 	if err != nil {
 		events = nil
-	}
-	title := ""
-	for _, event := range events {
-		if event.Type != zenforge.EventSessionTitle {
-			continue
-		}
-		if value, ok := event.Payload["title"].(string); ok && value != "" {
-			title = value
-		}
 	}
 	live := info.Live(time.Now())
 	if len(events) == 0 && !live {
@@ -148,8 +139,22 @@ func (h *Handler) listableSession(ctx context.Context, info harnesshttp.RunInfo)
 		"running": live,
 		"blank":   false,
 	}
-	if title != "" {
-		item["title"] = title
+	// The name travels as the `title` projection, with the served sequence that set
+	// it as the watermark -- not as a field of its own. The client seeds each row's
+	// projection store from this block and reads the row title from the store, so a
+	// top-level title is a field nothing renders (ADR 0119). The title is read from
+	// the session's whole log, because a rename can have landed on any turn.
+	if log, err := dshwire.Session(ctx, h, sessionID, func(turn int) dshwire.Identity {
+		identity := h.wireIdentity(sessionID)
+		identity.Turn = turn
+		return identity
+	}); err == nil {
+		if title, seq := log.Title(); title != "" {
+			item["projections"] = map[string]any{
+				"asOfSeq": seq,
+				"values":  map[string]any{dshwire.TitleProjection: title},
+			}
+		}
 	}
 	return item, true
 }

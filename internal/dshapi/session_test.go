@@ -23,7 +23,22 @@ type listItem struct {
 	UpdatedAt int64  `json:"updatedAt"`
 	Running   bool   `json:"running"`
 	Blank     bool   `json:"blank"`
-	Title     string `json:"title"`
+	// Projections is the row's projection hints block. The console reads a
+	// conversation's name from this block's `title` cell and from nowhere else, so
+	// a top-level title field would be a field nothing renders (ADR 0119).
+	Projections *struct {
+		AsOfSeq int64          `json:"asOfSeq"`
+		Values  map[string]any `json:"values"`
+	} `json:"projections"`
+}
+
+// title is the name the console would render for this row.
+func (i listItem) title() string {
+	if i.Projections == nil {
+		return ""
+	}
+	value, _ := i.Projections.Values["title"].(string)
+	return value
 }
 
 func (f *fixture) listItems(t *testing.T) []listItem {
@@ -461,8 +476,12 @@ func TestSessionRenameCommitsDurableTitle(t *testing.T) {
 		t.Fatalf("event title = %v, want My Session", events[0].Payload["title"])
 	}
 	item := findItem(f.listItems(t), sessionID)
-	if item == nil || item.Title != "My Session" {
-		t.Fatalf("list item = %+v, want title My Session", item)
+	if item == nil || item.title() != "My Session" {
+		t.Fatalf("list item = %+v, want the title projection My Session", item)
+	}
+	if item.Projections.AsOfSeq < 1 {
+		t.Fatalf("title projection watermark = %d, want the served sequence that set it",
+			item.Projections.AsOfSeq)
 	}
 }
 
@@ -874,8 +893,8 @@ func TestSessionListReportsAnExpiredLeaseAsNotRunning(t *testing.T) {
 	if item.Running {
 		t.Fatal("an expired lease is listed as running")
 	}
-	if item.Title != "an interrupted question" {
-		t.Fatalf("title = %q, want the durable transcript's title", item.Title)
+	if item.title() != "an interrupted question" {
+		t.Fatalf("title = %q, want the durable transcript's title", item.title())
 	}
 
 	// The prompt continues the conversation: a run nobody owns cannot be steered.
@@ -934,8 +953,8 @@ func TestSessionListSurvivesARestart(t *testing.T) {
 	if item.Running {
 		t.Fatal("a finished conversation is listed as running after a restart")
 	}
-	if item.Title != "first question" {
-		t.Fatalf("title = %q, want the operator's task", item.Title)
+	if item.title() != "first question" {
+		t.Fatalf("title = %q, want the operator's task", item.title())
 	}
 }
 

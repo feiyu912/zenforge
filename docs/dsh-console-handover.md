@@ -543,6 +543,28 @@ wrote an event is omitted, because `session/page` answers not-found for it; and 
 log has no terminal event is recorded as cancelled when it is adopted. Drafts stay
 process-local (ADR 0104).
 
+## Shipped: the console's baselines are complete (2026-09-21)
+
+A file-by-file audit of the host against the client the console actually ships
+(`ddefc45` / `0.1.6-alpha.2`, not the `0.1.5-rc.2` npm artifacts — the recon now
+records that distinction, and five result schemas differ between them) found three
+opening baselines the console was silently discarding. The control baseline omitted
+the **required** `queues` key, whose absence makes the client's
+`replaceControlBaseline` throw before it seeds any projection. The follow
+snapshot's `assistantStream.revision` was hardcoded to 0 even after ADR 0118 made
+the stream replay a turn's log and number its frames, so the first live frame was
+rejected as a skipped revision — measured, the stream delivered **zero** frames
+after a reload. And the conversation's name was served as a field of
+`session/list`, which nothing renders: the client reads the `title`
+**projection**.
+
+All three are fixed (ADR 0119). Measured after the fix: reloading mid-answer
+produced a baseline with `revision: 22` and `activeAttempt.nextIndex: 21`, and the
+stream then delivered 21 more chunk frames plus the settlement, with no second
+`start`; every `session/list` row carries
+`projections.values.title` with its watermark; the durable title now reaches the
+wire as `session/title` in the shape the projection fold expects.
+
 ## Shipped: a reconnect mid-answer resumes the attempt (2026-09-21)
 
 Since ADR 0117 the console renders live prose from the dense frames alone, so a page

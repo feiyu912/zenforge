@@ -111,7 +111,13 @@ func TestSessionControlBaseline(t *testing.T) {
 	assertKeys(t, value, "type", "value")
 	assertField(t, value, "type", "baseline")
 	baseline := decodeValueObject(t, value["value"])
-	assertKeys(t, baseline, "jobs", "projections")
+	// queues is required by the client's baseline handler -- it iterates the map
+	// before anything else and throws on an absent key, which would discard the
+	// projections seeded right after it (ADR 0119).
+	assertKeys(t, baseline, "queues", "jobs", "projections")
+	if got := string(baseline["queues"]); got != "{}" {
+		t.Fatalf("queues = %s, want {}", got)
+	}
 	if got := string(baseline["jobs"]); got != "{}" {
 		t.Fatalf("jobs = %s, want {}", got)
 	}
@@ -516,6 +522,14 @@ func TestSessionFollowSnapshotResumesAMidAnswerAttempt(t *testing.T) {
 	if got := intField(t, opening, "nextIndex"); got != 2 {
 		t.Fatalf("baseline nextIndex = %d, want the two frames the attempt has", got)
 	}
+	// The baseline revision is the generation's frame counter, not a constant: the
+	// client holds every frame to revision+1, so citing 0 after replaying two
+	// frames makes the next live frame a carrier failure (ADR 0119).
+	// Three frames were numbered: the attempt's start, its block start, and the
+	// delta (the client counts only the last two toward nextIndex).
+	if got := intField(t, baseline, "revision"); got != 3 {
+		t.Fatalf("baseline revision = %d, want the three frames it replayed", got)
+	}
 	var stream []map[string]any
 	if err := json.Unmarshal(opening["stream"], &stream); err != nil {
 		t.Fatalf("baseline stream did not decode: %v", err)
@@ -539,6 +553,9 @@ func TestSessionFollowSnapshotResumesAMidAnswerAttempt(t *testing.T) {
 	if got := intField(t, nextFrame, "index"); got != 2 {
 		t.Fatalf("continuing chunk index = %d, want 2", got)
 	}
+	if got := intField(t, nextFrame, "revision"); got != 4 {
+		t.Fatalf("continuing chunk revision = %d, want the baseline's + 1", got)
+	}
 	delta := decodeValueObject(t, nextFrame["chunk"])
 	assertField(t, delta, "text", " an answer")
 }
@@ -556,4 +573,26 @@ func waitForLoggedEvents(t *testing.T, f *fixture, runID string, count int) {
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatalf("run %q never logged %d events", runID, count)
+}
+
+// A reconnected console learns the conversation's name from the snapshot's
+// projections block: that is the cell the header and the sidebar read, and a name
+// served only as a durable event leaves both showing the raw session id
+// (ADR 0119).
+func TestSessionFollowServesTheTitleProjection(t *testing.T) {
+	f := newFixture(t, Config{})
+	runID := f.startRun(t, "hello")
+	f.agent.emit(runID, zenforge.EventSessionTitle, map[string]any{"title": "Named Chat", "source": "user"})
+	waitForLoggedEvents(t, f, runID, 2)
+
+	conn := f.mustDial(t)
+	openStream(t, conn, "follow", "session/follow", followArgs(t, runID, false))
+	snapshot := readItem(t, conn, "follow")
+	assertField(t, snapshot, "type", "snapshot")
+	projections := decodeValueObject(t, snapshot["projections"])
+	values := decodeValueObject(t, projections["values"])
+	assertField(t, values, "title", "Named Chat")
+	if got := intField(t, projections, "asOfSeq"); got < 1 {
+		t.Fatalf("projection watermark = %d, want the served sequence that set the title", got)
+	}
 }

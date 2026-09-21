@@ -52,6 +52,7 @@ func (h *Handler) runControl(ctx context.Context, payload []byte, send func(any)
 	}
 	baseline := controlBaseline{
 		Jobs:        map[string][]sessionJob{},
+		Queues:      map[string][]sessionQueuedItem{},
 		Projections: h.projectionBaseline(ctx),
 	}
 	if err := send(controlBaselineFrame{Type: "baseline", Value: baseline}); err != nil {

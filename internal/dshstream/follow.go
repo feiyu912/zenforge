@@ -27,8 +27,14 @@ const (
 // The watermark is the session-log cursor the snapshot already cites -- the value
 // is current as of that cursor -- while the selection's own sequence orders the
 // control stream's live updates.
-func (h *Handler) sessionProjectionBaseline(sessionID string, cursor int64) projectionBaseline {
+func (h *Handler) sessionProjectionBaseline(sessionID string, cursor int64, title string) projectionBaseline {
 	values := map[string]any{}
+	if title != "" {
+		// The header and the sidebar both read the `title` cell, so a reconnected
+		// console repaints the conversation's name instead of falling back to the
+		// raw session id (ADR 0119).
+		values[dshwire.TitleProjection] = title
+	}
 	if h.cfg.ModelSelections != nil {
 		// The key is registered for every session this host serves, not only for
 		// sessions a model has already been chosen in. The console's selector reads
@@ -137,6 +143,9 @@ func (h *Handler) runFollow(ctx context.Context, payload []byte, send func(any) 
 			assistant = replayAssistant(runID, log.NewestTurn, cursor, log.NewestIdentity, log.NewestEvents)
 		}
 	}
+	// The conversation's name travels as a projection cell, not as a field: the
+	// header and the sidebar both fold it from there (ADR 0119).
+	title, _ := log.Title()
 	window, hasMore := log.Window(request.maxMessages)
 	records := make([]eventRecord, 0, len(window))
 	for _, event := range window {
@@ -152,11 +161,20 @@ func (h *Handler) runFollow(ctx context.Context, payload []byte, send func(any) 
 		Cursor:          cursor,
 		Records:         records,
 		HasMore:         hasMore,
-		Projections:     h.sessionProjectionBaseline(request.sessionID, cursor),
+		Projections:     h.sessionProjectionBaseline(request.sessionID, cursor, title),
 		AssistantStream: nil,
 	}
 	if request.assistantStream {
-		snapshot.AssistantStream = &assistantBaseline{Revision: 0, ActiveAttempt: assistant.baselineOf()}
+		// The revision is the generation's frame counter, not a constant: a tracker
+		// rebuilt from the durable log has already numbered the frames it replayed,
+		// and the client holds every frame to revision+1 from the snapshot onward.
+		// Reporting 0 after a replay makes the first live frame a carrier failure
+		// (api/session-controller/src/client/transport.ts:87,100-105), which tears
+		// the stream down and reconnects forever (ADR 0119).
+		snapshot.AssistantStream = &assistantBaseline{
+			Revision:      assistant.revision,
+			ActiveAttempt: assistant.baselineOf(),
+		}
 	}
 	if err := send(snapshot); err != nil {
 		return err

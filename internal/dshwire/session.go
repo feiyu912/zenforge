@@ -83,6 +83,30 @@ type SessionLog struct {
 	NewestIdentity Identity
 }
 
+// Title is the conversation's title and the served sequence that set it, from the
+// newest title record in the log. It is empty for a conversation nobody named.
+//
+// The console reads the title from the `title` projection, not from a field of
+// session/list: a list row seeds its projection store with this value and the
+// header folds it from the same key (api-session-controller/src/client/sessions/
+// manager.ts reads s.projections.values, :804-812 derives the row title). Serving
+// the durable record alone is not enough, and a run-scoped title lookup misses a
+// rename that landed on an earlier turn.
+func (l *SessionLog) Title() (string, int64) {
+	title, seq := "", int64(0)
+	for _, record := range l.Records {
+		if record.Type != "session/title" {
+			continue
+		}
+		value, ok := record.Data["title"].(string)
+		if !ok || value == "" {
+			continue
+		}
+		title, seq = value, record.Seq
+	}
+	return title, seq
+}
+
 // Session builds a session's log by projecting each of its turns and shifting it
 // into the session sequence. Identity reports the provenance and the turn number
 // for one turn -- the provider and model are the host's answer for every turn,
