@@ -293,10 +293,10 @@ func TestSessionFollowAssistantStreamBaseline(t *testing.T) {
 
 // TestSessionFollowStreamsTheAnswerAsAssistantFrames is the operator's report
 // pinned: the answer "appeared all at once". The harness streams model output as
-// durable model.delta events, whose console records are marked ignorable and
-// skipped by the surface, so the client had nothing to render until the step's
-// settlement arrived. The live stream now also mints the console's dense
-// assistant-stream frames from those same events.
+// durable model.delta events, which the served log does not carry as records at
+// all (they are not the console's vocabulary), so the client had nothing to render
+// until the step's settlement arrived. The live stream mints the console's dense
+// assistant-stream frames from those same events instead.
 func TestSessionFollowStreamsTheAnswerAsAssistantFrames(t *testing.T) {
 	f := newFixture(t, Config{})
 	runID := f.startRun(t, "deltas")
@@ -315,8 +315,9 @@ func TestSessionFollowStreamsTheAnswerAsAssistantFrames(t *testing.T) {
 		"attemptId": "attempt-1", "step": 1, "chunkSeq": 1, "offset": 0, "textDelta": "hello",
 	})
 
-	// The attempt opens, the delta is rendered, and the durable record still
-	// follows it: the record is the log, the frames are the surface.
+	// The attempt opens and the delta's block opens with it: two frames, and no
+	// durable record for the delta at all -- an event outside the console's
+	// vocabulary contributes neither a record nor a sequence number (ADR 0117).
 	start := readItem(t, conn, "follow")
 	assertKeys(t, start, "type", "frame")
 	assertField(t, start, "type", "assistant-stream")
@@ -331,25 +332,33 @@ func TestSessionFollowStreamsTheAnswerAsAssistantFrames(t *testing.T) {
 		t.Fatalf("start turn = %d, want 1", got)
 	}
 
+	opened := readItem(t, conn, "follow")
+	assertKeys(t, opened, "type", "frame")
+	assertField(t, opened, "type", "assistant-stream")
+	openedFrame := decodeValueObject(t, opened["frame"])
+	assertKeys(t, openedFrame, "type", "attemptId", "revision", "index", "time", "chunk")
+	assertField(t, openedFrame, "type", "chunk")
+	if got := intField(t, openedFrame, "index"); got != 0 {
+		t.Fatalf("block start frame index = %d, want 0", got)
+	}
+	block := decodeValueObject(t, openedFrame["chunk"])
+	assertKeys(t, block, "type", "index", "blockType")
+	assertField(t, block, "type", "block-start")
+	assertField(t, block, "blockType", "text")
+
 	chunk := readItem(t, conn, "follow")
 	assertKeys(t, chunk, "type", "frame")
 	assertField(t, chunk, "type", "assistant-stream")
 	chunkFrame := decodeValueObject(t, chunk["frame"])
 	assertKeys(t, chunkFrame, "type", "attemptId", "revision", "index", "time", "chunk")
 	assertField(t, chunkFrame, "type", "chunk")
-	if got := intField(t, chunkFrame, "index"); got != 0 {
-		t.Fatalf("chunk index = %d, want 0", got)
+	if got := intField(t, chunkFrame, "index"); got != 1 {
+		t.Fatalf("chunk index = %d, want 1", got)
 	}
 	delta := decodeValueObject(t, chunkFrame["chunk"])
 	assertKeys(t, delta, "type", "index", "text")
 	assertField(t, delta, "type", "text-delta")
 	assertField(t, delta, "text", "hello")
-
-	record := readItem(t, conn, "follow")
-	assertKeys(t, record, "type", "event")
-	if got := recordEventType(t, record); got != string(zenforge.EventModelDelta) {
-		t.Fatalf("event type = %q, want model.delta", got)
-	}
 
 	// The settlement releases the attempt: the client stages that record and
 	// publishes it when the end frame names its sequence and type.
@@ -359,7 +368,30 @@ func TestSessionFollowStreamsTheAnswerAsAssistantFrames(t *testing.T) {
 	if got := recordEventType(t, settled); got != "assistant/message" {
 		t.Fatalf("settlement type = %q, want assistant/message", got)
 	}
-	seq := intField(t, decodeValueObject(t, settled["event"]), "seq")
+	settledEvent := decodeValueObject(t, settled["event"])
+	seq := intField(t, settledEvent, "seq")
+	// The deltas the window no longer carries are byte-exact in the settled
+	// message's compact stream, which is where the trajectory view reads them.
+	data := decodeValueObject(t, settledEvent["data"])
+	var stream []map[string]any
+	if err := json.Unmarshal(data["stream"], &stream); err != nil || len(stream) != 1 {
+		t.Fatalf("settlement stream = %s, want one block timeline", data["stream"])
+	}
+	if texts, ok := stream[0]["texts"].([]any); !ok || len(texts) != 1 || texts[0] != "hello" {
+		t.Fatalf("settlement timeline = %v, want the delta's text", stream[0])
+	}
+	if stream[0]["type"] != "text-chunks" || stream[0]["index"] != float64(0) {
+		t.Fatalf("settlement timeline = %v, want block 0 as text-chunks", stream[0])
+	}
+
+	closed := readItem(t, conn, "follow")
+	assertKeys(t, closed, "type", "frame")
+	assertField(t, closed, "type", "assistant-stream")
+	closedFrame := decodeValueObject(t, closed["frame"])
+	assertKeys(t, closedFrame, "type", "attemptId", "revision", "index", "time", "chunk")
+	closedBlock := decodeValueObject(t, closedFrame["chunk"])
+	assertKeys(t, closedBlock, "type", "index", "block")
+	assertField(t, closedBlock, "type", "block-end")
 
 	end := readItem(t, conn, "follow")
 	assertKeys(t, end, "type", "frame")
@@ -367,8 +399,8 @@ func TestSessionFollowStreamsTheAnswerAsAssistantFrames(t *testing.T) {
 	endFrame := decodeValueObject(t, end["frame"])
 	assertKeys(t, endFrame, "type", "attemptId", "revision", "index", "outcome")
 	assertField(t, endFrame, "type", "end")
-	if got := intField(t, endFrame, "index"); got != 1 {
-		t.Fatalf("end index = %d, want the one chunk it settles", got)
+	if got := intField(t, endFrame, "index"); got != 3 {
+		t.Fatalf("end index = %d, want the three frames it settles", got)
 	}
 	outcome := decodeValueObject(t, endFrame["outcome"])
 	assertKeys(t, outcome, "kind", "eventType", "seq")

@@ -28,9 +28,12 @@
 // is the durable `seq`. That keeps the console's cursor, its `throughSeq` paging
 // and the live tail's `afterSeq` all speaking the log's own sequence, and it
 // keeps sequence numbers contiguous, which the console's session format
-// documents as an invariant. An event that carries no console meaning is passed
-// through as an ignorable record rather than dropped, so the log stays
-// losslessly readable through the wire.
+// documents as an invariant. A durable event that carries no console meaning --
+// this host's own bookkeeping, and the model deltas that feed the dense
+// assistant-stream instead -- produces no record at all, because upstream's
+// session log contains only the console's own vocabulary and a record the
+// console can only skip still costs a window slot and a sequence number
+// (ADR 0117).
 package dshwire
 
 import (
@@ -42,14 +45,14 @@ import (
 )
 
 // Event is the console's SessionWireEvent. Field order and omission matter: the
-// client rejects unexpected fields, allows `ignorable` only as literal true, and
-// allows `surfaceOp` only on the four surface-eligible types.
+// client rejects unexpected fields and allows `surfaceOp` only on the four
+// surface-eligible types. This host never sends `ignorable`: it serves only the
+// console's vocabulary, so every record is one the console must read (ADR 0117).
 type Event struct {
 	Type      string         `json:"type"`
 	Seq       int64          `json:"seq"`
 	Time      int64          `json:"time"`
 	Data      map[string]any `json:"data"`
-	Ignorable bool           `json:"ignorable,omitempty"`
 	SurfaceOp string         `json:"surfaceOp,omitempty"`
 }
 
@@ -66,11 +69,12 @@ type Identity struct {
 	// transcript by this number, so turn 1 and turn 2 must not share it. Zero
 	// means the first turn.
 	Turn int
-	// SeqOffset moves this run's durable sequence into the session's. A session's
-	// served log is the concatenation of its turns (dshwire.Session), so turn k's
-	// wire sequence is its durable sequence shifted past every event of the turns
-	// before it -- which is what keeps the console's cursor monotone across turns
-	// instead of restarting at one.
+	// SeqOffset moves this turn's records into the session's sequence. A session's
+	// served log is the concatenation of its turns (dshwire.Session), so turn k
+	// numbers its records past the records of every turn before it -- which is
+	// what keeps the console's cursor monotone across turns instead of restarting
+	// at one. It counts records, not durable events: the served sequence is the
+	// console's own (ADR 0117).
 	SeqOffset int64
 }
 
@@ -121,6 +125,25 @@ type Projector struct {
 	// and model events but not on tool calls or results, so those inherit the
 	// enclosing step rather than claiming step zero.
 	current int
+	// records counts the console records this turn has produced, which is what
+	// numbers them: an event with no console meaning consumes no sequence number.
+	records int
+	// chunks is the step's streamed timeline in the console's compact form, one
+	// entry per content block, and `blocks`' counterpart: the settled message
+	// carries it as `stream`, which is where the console's trajectory view reads
+	// the byte-exact answer from (ADR 0117).
+	chunks []wireChunks
+}
+
+// wireChunks is one content block's streamed timeline, compacted the way the
+// console stores it inside a settled message: the first chunk's time, the gaps
+// between the chunks that follow, and the chunks themselves
+// (api/session-controller expandAssistantStream text-chunks/reasoning-chunks).
+type wireChunks struct {
+	kind  string
+	time0 int64
+	dt    []int64
+	texts []string
 }
 
 // New returns a projector that stamps assistant messages with the given identity.
@@ -134,10 +157,12 @@ func New(identity Identity) *Projector {
 type Projection struct {
 	projector *Projector
 
-	// Events holds one wire event per durable event, in log order.
+	// Events holds one wire record per console-meaningful durable event, in log
+	// order, numbered by the session sequence.
 	Events []Event
-	// Source holds the durable events the projection was built from, aligned with
-	// Events by index.
+	// Source holds the durable event each record was projected from, aligned with
+	// Events by index. It is not one entry per durable event: events with no
+	// console meaning are absent.
 	Source []zenforge.Event
 }
 
@@ -151,10 +176,15 @@ func Project(events []zenforge.Event, identity Identity) *Projection {
 	return projection
 }
 
-// Append projects more durable events onto the projection, in order.
+// Append projects more durable events onto the projection, in order. An event
+// that projects to no record is consumed and contributes nothing.
 func (p *Projection) Append(events ...zenforge.Event) {
 	for _, event := range events {
-		p.Events = append(p.Events, p.projector.Next(event))
+		record, ok := p.projector.Next(event)
+		if !ok {
+			continue
+		}
+		p.Events = append(p.Events, record)
 		p.Source = append(p.Source, event)
 	}
 }
@@ -168,10 +198,14 @@ func (p *Projection) Window(maxMessages int) ([]Event, bool) {
 	return p.Events[len(p.Events)-maxMessages:], true
 }
 
-// Next projects one durable event.
-func (p *Projector) Next(event zenforge.Event) Event {
+// Next projects one durable event. The second result is false when the event has
+// no console record: either it is this host's bookkeeping or a model delta, or it
+// is a console event this host cannot project truthfully. A record's sequence is
+// this turn's next unused number, which is only committed when a record is
+// produced -- so the served sequence counts records, not durable events.
+func (p *Projector) Next(event zenforge.Event) (Event, bool) {
 	data := payload(event)
-	base := Event{Seq: p.identity.SeqOffset + event.Seq, Time: event.Timestamp, Data: data}
+	base := Event{Seq: p.identity.SeqOffset + int64(p.records) + 1, Time: event.Timestamp, Data: data}
 
 	switch event.Type {
 	case zenforge.EventRunStarted:
@@ -182,7 +216,7 @@ func (p *Projector) Next(event zenforge.Event) Event {
 			// (api/session-controller observeSubmissionEvent, ui-chat
 			// observedRpcIds), and without it the echo stays on screen as a
 			// second copy of the question (ADR 0111).
-			return p.surface(base, "user/message", userMessage(base.Seq, text, promptIdentity(data)))
+			return p.emit(p.surface(base, "user/message", userMessage(base.Seq, text, promptIdentity(data))))
 		}
 	case zenforge.EventRequestSteer:
 		// The harness records a queued turn as `request.steer` with the text
@@ -191,16 +225,16 @@ func (p *Projector) Next(event zenforge.Event) Event {
 		if text, ok := firstStringField(data, "input", "text", "content", "message"); ok {
 			// A queued turn arrives durably as request.steer; the host passes the
 			// prompt's requestId as the steer id, so the same identity is here.
-			return p.surface(base, "user/message", userMessage(base.Seq, text, steerIdentity(data)))
+			return p.emit(p.surface(base, "user/message", userMessage(base.Seq, text, steerIdentity(data))))
 		}
 	case zenforge.EventStepStarted:
 		if step, ok := intField(data, "step"); ok {
 			p.current = step
-			return base.known("step/start", p.turnStep(step))
+			return p.emit(base.known("step/start", p.turnStep(step)))
 		}
 	case zenforge.EventStepDone:
 		if step, ok := intField(data, "step"); ok {
-			return base.known("step/end", p.turnStep(step))
+			return p.emit(base.known("step/end", p.turnStep(step)))
 		}
 	case zenforge.EventModelStarted:
 		// A new attempt starts a fresh stream; a retried step must not carry the
@@ -211,11 +245,11 @@ func (p *Projector) Next(event zenforge.Event) Event {
 		p.resetStep()
 	case zenforge.EventModelDelta:
 		if delta, ok := stringField(data, "textDelta"); ok {
-			p.appendBlock("text", delta)
+			p.appendBlock("text", delta, base.Time)
 		}
 	case zenforge.EventModelReasoning:
 		if delta, ok := stringField(data, "textDelta"); ok {
-			p.appendBlock("reasoning", delta)
+			p.appendBlock("reasoning", delta, base.Time)
 		}
 	case zenforge.EventModelUsage:
 		if usage, ok := mapField(data, "usage"); ok {
@@ -227,13 +261,13 @@ func (p *Projector) Next(event zenforge.Event) Event {
 			step = p.current
 		}
 		p.current = step
-		content, usage := p.takeStep()
+		content, usage, chunks := p.takeStep()
 		if len(content) == 0 {
 			// A step that settled without model-visible content is an attempt,
 			// not a message: the console records it as log-only history.
-			return base.known("assistant/attempt", map[string]any{
+			return p.emit(base.known("assistant/attempt", map[string]any{
 				"turn": p.identity.turn(), "step": step, "stream": []any{},
-			})
+			}))
 		}
 		message := map[string]any{
 			"turn": p.identity.turn(),
@@ -248,12 +282,12 @@ func (p *Projector) Next(event zenforge.Event) Event {
 					"model":    p.identity.Model,
 				},
 			},
-			"stream": []any{},
+			"stream": compactStream(chunks),
 		}
 		if usage != nil {
 			message["usage"] = usage
 		}
-		return p.surface(base, "assistant/message", message)
+		return p.emit(p.surface(base, "assistant/message", message))
 	case zenforge.EventToolCall:
 		callID, _ := stringField(data, "toolCallId")
 		name, _ := stringField(data, "toolName")
@@ -265,13 +299,13 @@ func (p *Projector) Next(event zenforge.Event) Event {
 			step = p.current
 		}
 		p.steps[callID] = step
-		return base.known("tool/call", map[string]any{
+		return p.emit(base.known("tool/call", map[string]any{
 			"turn":      p.identity.turn(),
 			"step":      step,
 			"callId":    callID,
 			"name":      name,
 			"arguments": rawArguments(data["arguments"]),
-		})
+		}))
 	case zenforge.EventToolResult, zenforge.EventToolError:
 		callID, _ := stringField(data, "toolCallId")
 		if callID == "" {
@@ -285,40 +319,47 @@ func (p *Projector) Next(event zenforge.Event) Event {
 		if step == 0 {
 			step = p.current
 		}
-		return p.surface(base, "tool/result", p.toolResult(base.Seq, step, callID, output, event.Type == zenforge.EventToolError))
+		return p.emit(p.surface(base, "tool/result", p.toolResult(base.Seq, step, callID, output, event.Type == zenforge.EventToolError)))
 	case zenforge.EventRunDone:
-		return base.known("turn/end", map[string]any{
+		return p.emit(base.known("turn/end", map[string]any{
 			"turn": p.identity.turn(), "reason": map[string]any{"kind": "completed"},
-		})
+		}))
 	case zenforge.EventRunError:
 		message, _ := firstStringField(data, "error", "message")
 		if message == "" {
 			message = "the run failed"
 		}
-		return base.known("turn/end", map[string]any{
+		return p.emit(base.known("turn/end", map[string]any{
 			"turn": p.identity.turn(),
 			"reason": map[string]any{
 				"kind":  "error",
 				"error": map[string]any{"message": message, "code": "UNKNOWN"},
 			},
-		})
+		}))
 	case zenforge.EventRunCancelled:
-		return base.known("turn/end", map[string]any{
+		return p.emit(base.known("turn/end", map[string]any{
 			"turn":   p.identity.turn(),
 			"reason": map[string]any{"kind": "aborted", "reason": map[string]any{"kind": "user"}},
-		})
+		}))
 	}
-	// Everything else keeps its own name and payload as an ignorable record: the
-	// console cannot interpret it, and the marker is what tells the client that
-	// omitting it from the surface is deliberate. A type the console does know is
-	// never marked ignorable -- it is passed through for the console to read.
-	return Event{
-		Type:      string(event.Type),
-		Seq:       base.Seq,
-		Time:      base.Time,
-		Data:      data,
-		Ignorable: !KnownEventTypes[string(event.Type)],
+	// A type the console knows but this host does not map keeps its own name and
+	// payload, so nothing the console can read is lost. A type outside the
+	// console's vocabulary is not served at all: upstream's session log holds only
+	// the console's vocabulary, and forwarding the rest would put records the
+	// console skips into its window and its sequence (ADR 0117).
+	if !KnownEventTypes[string(event.Type)] {
+		return Event{}, false
 	}
+	return p.emit(Event{Type: string(event.Type), Time: base.Time, Data: data})
+}
+
+// emit commits one record's sequence number. Nothing else may advance the
+// counter: a number the console is served must never be skipped, because its
+// journal stream reads a gap as a carrier failure and reconnects.
+func (p *Projector) emit(event Event) (Event, bool) {
+	p.records++
+	event.Seq = p.identity.SeqOffset + int64(p.records)
+	return event, true
 }
 
 // surface marks an event as a surface append. Only the eligible types reach it.
@@ -341,29 +382,84 @@ func (base Event) known(eventType string, data map[string]any) Event {
 func (p *Projector) resetStep() {
 	p.blocks = nil
 	p.usage = nil
+	p.chunks = nil
 }
 
-func (p *Projector) takeStep() ([]map[string]any, map[string]any) {
-	content, usage := p.blocks, p.usage
+func (p *Projector) takeStep() ([]map[string]any, map[string]any, []wireChunks) {
+	content, usage, chunks := p.blocks, p.usage, p.chunks
 	p.resetStep()
 	if content == nil {
 		content = []map[string]any{}
 	}
-	return content, usage
+	return content, usage, chunks
 }
 
 // appendBlock adds a delta to the step's content, merging into the previous
-// block while it is the same kind so a streamed answer is one block.
-func (p *Projector) appendBlock(kind, text string) {
+// block while it is the same kind so a streamed answer is one block. The same
+// merge keeps the block's compact timeline in step with it: both are consumed by
+// the settled message. A delta whose time is not after the previous one is
+// recorded as no gap, so the timeline the console reads is monotone.
+func (p *Projector) appendBlock(kind, text string, time int64) {
 	if text == "" {
 		return
 	}
 	if count := len(p.blocks); count > 0 && p.blocks[count-1]["type"] == kind {
 		previous, _ := p.blocks[count-1]["text"].(string)
 		p.blocks[count-1]["text"] = previous + text
+		if count := len(p.chunks); count > 0 {
+			block := &p.chunks[count-1]
+			gap := time - (block.time0 + sumInts(block.dt))
+			if gap < 0 {
+				gap = 0
+			}
+			block.dt = append(block.dt, gap)
+			block.texts = append(block.texts, text)
+		}
 		return
 	}
 	p.blocks = append(p.blocks, map[string]any{"type": kind, "text": text})
+	p.chunks = append(p.chunks, wireChunks{kind: kind, time0: time, texts: []string{text}})
+}
+
+// compactStream renders the step's block timelines as the console's compact
+// stream, which is what a settled assistant message carries. The console expands
+// it back into byte-exact timed deltas for the trajectory view
+// (api/session-controller expandAssistantStream).
+func compactStream(chunks []wireChunks) []any {
+	stream := make([]any, 0, len(chunks))
+	for index, block := range chunks {
+		if len(block.texts) == 0 {
+			continue
+		}
+		kind := "text-chunks"
+		if block.kind == "reasoning" {
+			kind = "reasoning-chunks"
+		}
+		gaps := make([]any, 0, len(block.dt))
+		for _, gap := range block.dt {
+			gaps = append(gaps, gap)
+		}
+		texts := make([]any, 0, len(block.texts))
+		for _, text := range block.texts {
+			texts = append(texts, text)
+		}
+		stream = append(stream, map[string]any{
+			"type":  kind,
+			"time0": block.time0,
+			"index": index,
+			"dt":    gaps,
+			"texts": texts,
+		})
+	}
+	return stream
+}
+
+func sumInts(values []int64) int64 {
+	total := int64(0)
+	for _, value := range values {
+		total += value
+	}
+	return total
 }
 
 // wireBlocks renders accumulated content blocks as the JSON array the wire

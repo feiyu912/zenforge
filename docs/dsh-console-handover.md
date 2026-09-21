@@ -543,6 +543,32 @@ wrote an event is omitted, because `session/page` answers not-found for it; and 
 log has no terminal event is recorded as cancelled when it is adopted. Drafts stay
 process-local (ADR 0104).
 
+## Shipped: the session log is the console's log (2026-09-21)
+
+The console offered `Load earlier` after two short questions, and the trajectory
+view's chunk list was empty. Measuring the served window answered both: one prompt,
+one tool call and one answer arrived as **46 records**, of which 40 were this host's
+own durability -- 22 `checkpoint.created`, 16 `model.delta`, plus the model
+lifecycle. Upstream's session log contains none of that; its durable vocabulary *is*
+the console's, and tokens travel only on the dense channel.
+
+`dshwire` now serves a record only for an event whose type the console knows, and
+**numbers records rather than durable events**, so the session sequence stays one
+contiguous line with no number spent on something the console would skip. The wire
+no longer carries `ignorable` at all: a record this host serves is one the console
+must read. The deltas are not lost -- they were never the console's event model --
+they are compacted into the settled message's `stream` (`text-chunks` with
+`time0`/`dt`/`texts`), which is exactly where upstream keeps them and where the
+trajectory view reads them from. The dense frames also now mirror a provider's:
+`block-start` opens a block, its deltas carry that block's index, and `block-end`
+finalizes it before the next one opens (ADR 0117).
+
+The same turn now serves ten records instead of forty-six. Read
+`docs/dsh-console-protocol-recon.md`'s correction before touching the projection or
+the sequence: the "log seq on the wire" assumption is exactly what this replaces,
+and a console page left open across the change may legitimately report that its
+stream resumed behind what it applied (ADR 0108's guard) and reload.
+
 ## Shipped: an approval names the conversation, and the answer streams (2026-09-21)
 
 Two operator reports, one per layer, both reproduced in a real browser against a
@@ -703,8 +729,9 @@ serves `qwen-plus`, and the card shows only what is written on it.
 > audit that no longer claims the browse directory picker is withheld (ADR 0112).
 > Stop reaches the turn that is running (ADR 0113), a follow stream follows the conversation
 > instead of one turn so "Load earlier" actually loads (ADR 0114), an approval names the
-> conversation so a later turn's prompt is answerable (ADR 0115), and the answer streams as
-> assistant-stream frames (ADR 0116). The next chain is "Next up" 1 in the ledger:
+> conversation so a later turn's prompt is answerable (ADR 0115), the answer streams as
+> assistant-stream frames (ADR 0116), and the served log is the console's own vocabulary and
+> numbering rather than the host's durable log (ADR 0117). The next chain is "Next up" 1 in the ledger:
 > `session/openWorkspacePath` and `session/canOpenWorkspacePath`, opening a workspace into a
 > session. If a scratch host is
 > needed, give it `ZENFORGE_CONFIG_DIR` or `--settings-file` under a throwaway directory so

@@ -1,6 +1,7 @@
 package dshwire
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/feiyu912/zenforge"
@@ -65,23 +66,31 @@ func eventTypes(events []Event) []string {
 	return names
 }
 
-// TestProjectionKeepsOneRecordPerEventAndTheDurableSeq is the property every
-// other rule rests on: the console's cursor, its throughSeq paging and the live
-// tail's afterSeq all speak the log's own sequence, and the console's session
-// format documents contiguous sequence numbers as an invariant.
-func TestProjectionKeepsOneRecordPerEventAndTheDurableSeq(t *testing.T) {
+// TestProjectionNumbersTheConsoleSequence is the property every other rule rests
+// on: the console's cursor, its throughSeq paging and the live tail's afterSeq
+// all speak the served sequence, and the console's session format documents
+// contiguous sequence numbers as an invariant. The served sequence counts
+// records, not durable events: a record the console could only skip takes a
+// window slot and a number it never needed (ADR 0117).
+func TestProjectionNumbersTheConsoleSequence(t *testing.T) {
 	events := aTurn()
 	projected := project(t, events)
-	if len(projected) != len(events) {
+	if len(projected) >= len(events) {
 		t.Fatalf("projected %d records for %d durable events: %v", len(projected), len(events), eventTypes(projected))
 	}
-	for index, wire := range projected {
-		if wire.Seq != events[index].Seq {
-			t.Fatalf("record %d has seq %d, want the durable seq %d", index, wire.Seq, events[index].Seq)
+	for index, record := range projected {
+		if record.Seq != int64(index+1) {
+			t.Fatalf("record %d (%s) cites seq %d, want %d", index, record.Type, record.Seq, index+1)
 		}
-		if wire.Time != events[index].Timestamp {
-			t.Fatalf("record %d has time %d, want the durable time %d", index, wire.Time, events[index].Timestamp)
+		if record.Time == 0 {
+			t.Fatalf("record %d (%s) lost its durable time", index, record.Type)
 		}
+	}
+	// A turn that projects to records must still cite the time of the durable
+	// event each record came from.
+	source := Project(events, Identity{}).Source
+	if gone := len(events) - len(source); gone == 0 {
+		t.Fatal("no durable events were dropped, so this case no longer exercises the filter")
 	}
 }
 
@@ -169,10 +178,10 @@ func TestProjectionRendersTheTurnAsAConsoleTranscript(t *testing.T) {
 	}
 }
 
-// TestProjectionMarksOnlySurfaceEventsAndOnlyUnknownNames holds the two wire
-// rules the client enforces: surfaceOp appears exactly on the four
-// message-producing types, and an unknown name carries the ignorable marker.
-func TestProjectionMarksOnlySurfaceEventsAndOnlyUnknownNames(t *testing.T) {
+// TestProjectionMarksOnlySurfaceEvents holds the wire rule the client enforces:
+// surfaceOp appears exactly on the four message-producing types, and every record
+// served is one the console knows.
+func TestProjectionMarksOnlySurfaceEvents(t *testing.T) {
 	for _, projected := range project(t, aTurn()) {
 		eligible := SurfaceEligibleTypes[projected.Type]
 		if eligible && projected.SurfaceOp != "append" {
@@ -181,35 +190,61 @@ func TestProjectionMarksOnlySurfaceEventsAndOnlyUnknownNames(t *testing.T) {
 		if !eligible && projected.SurfaceOp != "" {
 			t.Fatalf("%s is not surface-eligible but carries surfaceOp %q", projected.Type, projected.SurfaceOp)
 		}
-		known := KnownEventTypes[projected.Type]
-		if projected.Ignorable && known {
-			t.Fatalf("%s is a console event but was marked ignorable", projected.Type)
-		}
-		if !known && !projected.Ignorable {
-			t.Fatalf("%s is outside the console's vocabulary but carries no ignorable marker", projected.Type)
-		}
-		if projected.Ignorable && projected.SurfaceOp != "" {
-			t.Fatalf("%s is ignorable and still carries surfaceOp", projected.Type)
+		if !KnownEventTypes[projected.Type] {
+			t.Fatalf("%s is outside the console's vocabulary but was served", projected.Type)
 		}
 	}
 }
 
-// TestProjectionKeepsEveryDurableEventReadable pins that the projection is a
-// projection and not a filter: an event with no console meaning keeps its own
-// name and payload, marked as deliberately skipped, so the wire still carries
-// the whole log.
-func TestProjectionKeepsEveryDurableEventReadable(t *testing.T) {
+// TestProjectionServesTheConsoleItsOwnWindow pins what the operator sees: a
+// turn's window holds the console's events and nothing else. The host's
+// bookkeeping and the model deltas are absent, which is upstream's shape and what
+// keeps a conversation from filling the console's window with records it can only
+// skip (ADR 0117).
+func TestProjectionServesTheConsoleItsOwnWindow(t *testing.T) {
 	projected := project(t, aTurn())
-	checkpoint := findByType(t, projected, string(zenforge.EventCheckpointCreated))
-	if !checkpoint.Ignorable {
-		t.Fatal("a passthrough event is not marked ignorable")
+	want := []string{
+		"user/message", "step/start", "assistant/message", "tool/call",
+		"tool/result", "step/end", "step/start", "assistant/message",
+		"step/end", "turn/end",
 	}
-	if checkpoint.Data["checkpointSeq"] == nil {
-		t.Fatalf("passthrough payload was dropped: %v", checkpoint.Data)
+	if got := eventTypes(projected); !reflect.DeepEqual(got, want) {
+		t.Fatalf("window = %v, want %v", got, want)
 	}
-	delta := findByType(t, projected, string(zenforge.EventModelDelta))
-	if delta.Data["textDelta"] == "" {
-		t.Fatalf("the durable delta lost its text: %v", delta.Data)
+}
+
+// TestProjectionKeepsTheDeltasInTheMessageStream pins that dropping the delta
+// records loses nothing the console reads: the settled message carries the same
+// deltas, byte-exact and timed, in its compact `stream`, which is where the
+// console's trajectory view reads the answer from.
+func TestProjectionKeepsTheDeltasInTheMessageStream(t *testing.T) {
+	message := findByType(t, project(t, aTurn()), "assistant/message")
+	stream, ok := message.Data["stream"].([]any)
+	if !ok || len(stream) != 2 {
+		t.Fatalf("assistant/message stream = %v, want two block timelines", message.Data["stream"])
+	}
+	reasoning := stream[0].(map[string]any)
+	if reasoning["type"] != "reasoning-chunks" || reasoning["index"] != 0 {
+		t.Fatalf("first timeline = %v, want reasoning-chunks at block 0", reasoning)
+	}
+	if got := reasoning["texts"]; !reflect.DeepEqual(got, []any{"thinking"}) {
+		t.Fatalf("reasoning texts = %v, want the reasoning delta", got)
+	}
+	if got := reasoning["dt"]; !reflect.DeepEqual(got, []any{}) {
+		t.Fatalf("reasoning dt = %v, want no gaps for one delta", got)
+	}
+	text := stream[1].(map[string]any)
+	if text["type"] != "text-chunks" || text["index"] != 1 {
+		t.Fatalf("second timeline = %v, want text-chunks at block 1", text)
+	}
+	if got := text["texts"]; !reflect.DeepEqual(got, []any{"Let me ", "check."}) {
+		t.Fatalf("text texts = %v, want both text deltas in order", got)
+	}
+	if got := text["dt"]; !reflect.DeepEqual(got, []any{int64(1)}) {
+		t.Fatalf("text dt = %v, want one gap of 1ms", got)
+	}
+	if text["time0"] != int64(1700000000006) {
+		t.Fatalf("text time0 = %v, want the first delta's time", text["time0"])
 	}
 }
 
@@ -223,8 +258,8 @@ func TestProjectionSettlesAnEmptyStepAsAnAttempt(t *testing.T) {
 		event(4, zenforge.EventModelDone, map[string]any{"step": 1}),
 	})
 	attempt := findByType(t, projected, "assistant/attempt")
-	if attempt.SurfaceOp != "" || attempt.Ignorable {
-		t.Fatalf("assistant/attempt = %+v, want a known, non-surface record", attempt)
+	if attempt.SurfaceOp != "" {
+		t.Fatalf("assistant/attempt = %+v, want a non-surface record", attempt)
 	}
 	if _, ok := attempt.Data["stream"].([]any); !ok {
 		t.Fatalf("assistant/attempt has no stream: %v", attempt.Data)
@@ -252,8 +287,8 @@ func TestProjectionMarksAFailedRunAsATurnError(t *testing.T) {
 	if failure["message"] != "dial tcp: refused" || failure["code"] != "UNKNOWN" {
 		t.Fatalf("turn/end failure = %v, want the host's message and a neutral code", failure)
 	}
-	if end.SurfaceOp != "" || end.Ignorable {
-		t.Fatalf("turn/end = %+v, want a known, non-surface record", end)
+	if end.SurfaceOp != "" {
+		t.Fatalf("turn/end = %+v, want a non-surface record", end)
 	}
 
 	cancelled := project(t, []zenforge.Event{event(1, zenforge.EventRunCancelled, map[string]any{"error": "cancelled"})})
@@ -283,8 +318,13 @@ func TestProjectionContinuesAfterASnapshot(t *testing.T) {
 	if got := firstText(t, assistant.Data); got != "Hello there" {
 		t.Fatalf("assistant text = %q, want the deltas from both halves", got)
 	}
-	if len(projection.Events) != 6 {
-		t.Fatalf("events = %d, want 6", len(projection.Events))
+	// Four records: the prompt, step/start, and the one settled message. The
+	// deltas and the model events between them are not records (ADR 0117).
+	if len(projection.Events) != 3 {
+		t.Fatalf("records = %d, want 3: %v", len(projection.Events), eventTypes(projection.Events))
+	}
+	if assistant.Seq != 3 {
+		t.Fatalf("assistant message cites seq %d, want the third record", assistant.Seq)
 	}
 }
 
@@ -300,8 +340,9 @@ func TestProjectionWindowsTheNewestRecords(t *testing.T) {
 	if len(window) != 3 {
 		t.Fatalf("window = %d records, want 3", len(window))
 	}
-	if window[0].Seq != 16 || window[2].Seq != 18 {
-		t.Fatalf("window seqs = %d..%d, want the newest 16..18", window[0].Seq, window[2].Seq)
+	newest := len(projection.Events)
+	if window[0].Seq != int64(newest-2) || window[2].Seq != int64(newest) {
+		t.Fatalf("window seqs = %d..%d, want the newest %d..%d", window[0].Seq, window[2].Seq, newest-2, newest)
 	}
 	all, hasMore := projection.Window(0)
 	if hasMore || len(all) != len(projection.Events) {
@@ -324,9 +365,10 @@ func firstText(t *testing.T, data map[string]any) string {
 }
 
 // TestProjectionAvoidsTheConsoleVocabularyCollision asserts the assumption the
-// pass-through arm rests on: no zenforge event name is one the console knows, so
-// marking every passthrough record ignorable can never make the console skip an
-// event it is supposed to read.
+// vocabulary filter rests on: no zenforge event name is one the console knows, so
+// a host event can never be served under a name the console reads as its own
+// meaning. A zenforge event whose name collides would need an explicit mapping
+// rather than the pass-through arm.
 func TestProjectionAvoidsTheConsoleVocabularyCollision(t *testing.T) {
 	names := zenforgeEventNames(t)
 	if len(names) < 40 {
@@ -334,7 +376,7 @@ func TestProjectionAvoidsTheConsoleVocabularyCollision(t *testing.T) {
 	}
 	for _, name := range names {
 		if KnownEventTypes[name] {
-			t.Fatalf("zenforge event %q is a console event type; the passthrough arm must not mark it ignorable", name)
+			t.Fatalf("zenforge event %q is a console event type; it must be mapped, not passed through", name)
 		}
 		if SurfaceEligibleTypes[name] {
 			t.Fatalf("zenforge event %q is surface-eligible; it needs an explicit mapping", name)

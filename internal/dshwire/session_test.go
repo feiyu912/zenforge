@@ -49,8 +49,10 @@ func TestSessionLogContinuesTheSequenceAcrossTurns(t *testing.T) {
 	if len(log.Runs) != 2 || log.NewestRun != "run_one~2" || log.NewestTurn != 2 {
 		t.Fatalf("session resolved to %+v, want two turns ending at run_one~2", log)
 	}
-	if len(log.Records) != 36 {
-		t.Fatalf("records = %d, want both turns' 36 events", len(log.Records))
+	// Ten console records per turn, from eighteen durable events each: the served
+	// sequence counts what the console reads (ADR 0117).
+	if len(log.Records) != 20 {
+		t.Fatalf("records = %d, want both turns' 20 records", len(log.Records))
 	}
 	// Strictly increasing and contiguous, across the turn boundary included: the
 	// second turn's own numbering from one is shifted past the first turn.
@@ -60,7 +62,7 @@ func TestSessionLogContinuesTheSequenceAcrossTurns(t *testing.T) {
 			t.Fatalf("record %d has seq %d, want %d", index, record.Seq, want)
 		}
 	}
-	if log.Cursor() != 36 {
+	if log.Cursor() != 20 {
 		t.Fatalf("cursor = %d, want the session's newest sequence", log.Cursor())
 	}
 	// The durable tail of the newest turn is its own sequence, not the session's:
@@ -86,7 +88,7 @@ func TestSessionLogNumbersTheSecondTurnAsATurn(t *testing.T) {
 			continue
 		}
 		want := 1
-		if record.Seq > 18 {
+		if record.Seq > 10 {
 			want = 2
 		}
 		if turn != want {
@@ -110,16 +112,16 @@ func TestSessionLogWindowSpansTurns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Session returned error: %v", err)
 	}
-	window, hasMore := log.Window(24)
-	if !hasMore || len(window) != 24 {
-		t.Fatalf("window = %d records, hasMore = %v, want 24 and true", len(window), hasMore)
+	window, hasMore := log.Window(14)
+	if !hasMore || len(window) != 14 {
+		t.Fatalf("window = %d records, hasMore = %v, want 14 and true", len(window), hasMore)
 	}
 	// The window ends exactly at the cursor the snapshot cites.
 	if window[len(window)-1].Seq != log.Cursor() {
 		t.Fatalf("window ends at %d, want the cursor %d", window[len(window)-1].Seq, log.Cursor())
 	}
-	if window[0].Seq != 13 {
-		t.Fatalf("window starts at %d, want 13 (six records of the first turn)", window[0].Seq)
+	if window[0].Seq != 7 {
+		t.Fatalf("window starts at %d, want 7 (four records of the first turn)", window[0].Seq)
 	}
 	for index := 1; index < len(window); index++ {
 		if window[index].Seq != window[index-1].Seq+1 {
@@ -128,8 +130,8 @@ func TestSessionLogWindowSpansTurns(t *testing.T) {
 	}
 
 	all, hasMore := log.Window(0)
-	if hasMore || len(all) != 36 {
-		t.Fatalf("unbounded window = %d records, hasMore = %v, want all 36 and false", len(all), hasMore)
+	if hasMore || len(all) != 20 {
+		t.Fatalf("unbounded window = %d records, hasMore = %v, want all 20 and false", len(all), hasMore)
 	}
 }
 
@@ -143,25 +145,23 @@ func TestSessionLogPagesBackThroughAnEarlierTurn(t *testing.T) {
 		t.Fatalf("Session returned error: %v", err)
 	}
 	// The console asks for a page below its oldest record, which for a full window
-	// is record 13.
-	page, hasMore := log.Through(12, 0, false, 8)
-	if len(page) != 8 || !hasMore {
-		t.Fatalf("page = %d records, hasMore = %v, want 8 and true", len(page), hasMore)
+	// is record 7.
+	page, hasMore := log.Through(6, 0, false, 8)
+	if len(page) != 6 || hasMore {
+		t.Fatalf("page = %d records, hasMore = %v, want the first turn's 6 and false", len(page), hasMore)
 	}
-	if page[len(page)-1].Seq != 12 {
-		t.Fatalf("page ends at %d, want 12: the console requires it to meet what it has", page[len(page)-1].Seq)
+	if page[len(page)-1].Seq != 6 {
+		t.Fatalf("page ends at %d, want 6: the console requires it to meet what it has", page[len(page)-1].Seq)
 	}
-	if page[0].Seq != 5 {
-		t.Fatalf("page starts at %d, want 5", page[0].Seq)
+	if page[0].Seq != 1 {
+		t.Fatalf("page starts at %d, want the conversation's first record", page[0].Seq)
 	}
 	// beforeSeq is the exclusive upper bound the console uses when it has a
 	// narrower gap to fill.
-	narrow, hasMore := log.Through(36, 30, true, 50)
-	// The page reaches the conversation's first record, so there is no earlier
-	// history left to fetch.
-	if hasMore || len(narrow) != 29 || narrow[0].Seq != 1 || narrow[len(narrow)-1].Seq != 29 {
-		t.Fatalf("narrow page = %d records starting at %d ending at %d, hasMore = %v",
-			len(narrow), narrow[0].Seq, narrow[len(narrow)-1].Seq, hasMore)
+	gap, hasMore := log.Through(20, 9, true, 50)
+	if hasMore || len(gap) != 8 || gap[0].Seq != 1 || gap[len(gap)-1].Seq != 8 {
+		t.Fatalf("gap page = %d records starting at %d ending at %d, hasMore = %v",
+			len(gap), gap[0].Seq, gap[len(gap)-1].Seq, hasMore)
 	}
 }
 
@@ -204,13 +204,13 @@ func TestSessionLogCountsEmptyTurnsWithoutSkippingNumbers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Session returned error: %v", err)
 	}
-	if log.Cursor() != 36 || len(log.Records) != 36 {
-		t.Fatalf("records = %d ending at %d, want 36 events ending at 36", len(log.Records), log.Cursor())
+	if log.Cursor() != 20 || len(log.Records) != 20 {
+		t.Fatalf("records = %d ending at %d, want 20 records ending at 20", len(log.Records), log.Cursor())
 	}
 	if log.NewestTurn != 3 {
 		t.Fatalf("newest turn = %d, want the third turn", log.NewestTurn)
 	}
-	for _, record := range log.Records[18:] {
+	for _, record := range log.Records[10:] {
 		got, ok := intField(record.Data, "turn")
 		if ok && got != 3 {
 			t.Fatalf("seq %d carries turn %d, want 3", record.Seq, got)
@@ -240,10 +240,10 @@ func TestSessionLogIdentifiesMessagesByTheSessionSequence(t *testing.T) {
 		}
 		at[id] = record.Seq
 	}
-	// The identity is the session's own sequence: the two prompts are one turn
-	// apart in their own logs but 18 apart in the conversation.
-	if at["msg-1"] != 1 || at["msg-19"] != 19 {
-		t.Fatalf("message identities = %v, want the two prompts at msg-1 and msg-19", at)
+	// The identity is the session's own sequence: the two prompts are the first
+	// record of their turn, ten records apart in the conversation.
+	if at["msg-1"] != 1 || at["msg-11"] != 11 {
+		t.Fatalf("message identities = %v, want the two prompts at msg-1 and msg-11", at)
 	}
 	// Four per turn: the prompt, one assistant message per settled step with
 	// content, and the tool-result message.

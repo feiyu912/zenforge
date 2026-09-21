@@ -169,9 +169,16 @@ what is experimental, and what remains adapter territory.
   answer renders token by token instead of appearing when its step settles. The
   honest limits: a reconnect in the middle of an answer does not re-baseline the
   open attempt (the partial text appears with its settlement), tool-call arguments
-  do not stream (this harness emits a complete `tool.call`), and the delta records
-  still occupy session-window slots, which is why a long answer can still make
-  `Load earlier` necessary.
+  do not stream (this harness emits a complete `tool.call`), and no `usage` chunk
+  is sent (the accounting rides the settled message).
+- **The served log is the console's log** (ADR 0117): the host's own durable
+  events -- checkpoints, the model lifecycle, every streamed delta -- are not
+  served as records and consume no sequence number, so one ordinary turn occupies
+  ten window slots instead of forty-six and the settled message carries the
+  answer's byte-exact timeline as its compact `stream`. The served sequence
+  therefore numbers records rather than durable events; a console page left open
+  across this change may be told its stream resumed behind what it applied and
+  reload.
 - The sidebar does not mutate live, background-job panels are empty, and there
   are no agent-emit frames: this harness has a per-run event log, no global change
   feed and no job projections. Session lists, event follow, the workspace file
@@ -197,11 +204,9 @@ what is experimental, and what remains adapter territory.
   adapter; no model-selection event is written to the session log; and no model
   exposes a reasoning-effort choice.
   The console *reads* the log through a projection (ADR 0105), not verbatim: the
-  host's own events are mapped onto the console's session vocabulary, and an
-  event with no console meaning travels as an explicitly ignorable record. What
-  the projection does not yet carry: the console's compact timed `stream` inside
-  an assistant message (the text is settled into content blocks, and the
-  trajectory view's byte-exact chunk list is empty), and a
+  host's events are mapped onto the console's session vocabulary, an event with no
+  console meaning produces no record at all, and the records are numbered as the
+  console's own sequence (ADR 0117). What the projection does not yet carry: a
   structured provider failure identity on a tool result (a failed tool states
   `isError` on its block with no console-side name/code envelope). A session that has been created but has not
   started a turn -- the draft the console opens before its first prompt -- is

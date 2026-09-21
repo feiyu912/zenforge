@@ -18,6 +18,32 @@ func deltaEvent(seq int64, text string, attemptID string, step int) zenforge.Eve
 	}
 }
 
+// reasoningEvent is one durable model.reasoning, which carries no attempt id.
+func reasoningEvent(seq int64, text string, step int) zenforge.Event {
+	return zenforge.Event{
+		Seq:       seq,
+		Type:      zenforge.EventModelReasoning,
+		Timestamp: 1000 + seq,
+		Payload:   map[string]any{"textDelta": text, "step": step},
+	}
+}
+
+// blockStartsOf returns the block-start chunks in a run of frames.
+func blockStartsOf(t *testing.T, frames []assistantStreamValue) []assistantBlockStart {
+	t.Helper()
+	starts := []assistantBlockStart{}
+	for _, frame := range frames {
+		chunk, ok := frame.Frame.(assistantChunkFrame)
+		if !ok {
+			continue
+		}
+		if start, ok := chunk.Chunk.(assistantBlockStart); ok {
+			starts = append(starts, start)
+		}
+	}
+	return starts
+}
+
 // framesOf casts one tracker step's frames.
 func framesOf(t *testing.T, frames []any) []assistantStreamValue {
 	t.Helper()
@@ -40,8 +66,8 @@ func TestAssistantTrackerStreamsDeltasAndSettlesThem(t *testing.T) {
 	tracker.startTurn("run-1", 2)
 
 	start := framesOf(t, tracker.onEvent(deltaEvent(1, "hello", "attempt-1", 3)))
-	if len(start) != 2 {
-		t.Fatalf("frames = %d, want a start and a chunk", len(start))
+	if len(start) != 3 {
+		t.Fatalf("frames = %d, want a start, a block start and a chunk", len(start))
 	}
 	opening, ok := start[0].Frame.(assistantStartFrame)
 	if !ok {
@@ -55,16 +81,24 @@ func TestAssistantTrackerStreamsDeltasAndSettlesThem(t *testing.T) {
 	if opening.StartedAfterSeq != 7 {
 		t.Fatalf("startedAfterSeq = %d, want the stream's cursor 7", opening.StartedAfterSeq)
 	}
-	chunk, ok := start[1].Frame.(assistantChunkFrame)
+	// The block opens before its first delta, exactly as a provider streams it.
+	opened, ok := start[1].Frame.(assistantChunkFrame)
 	if !ok {
 		t.Fatalf("second frame %T is not a chunk", start[1].Frame)
 	}
-	if chunk.Index != 0 || chunk.AttemptID != "attempt-1" {
-		t.Fatalf("chunk = %+v, want index 0 of attempt-1", chunk)
+	if block, ok := opened.Chunk.(assistantBlockStart); !ok || block.Type != "block-start" || block.BlockType != assistantTextBlock || block.Index != 0 {
+		t.Fatalf("block start = %+v, want the first text block opened", opened.Chunk)
+	}
+	chunk, ok := start[2].Frame.(assistantChunkFrame)
+	if !ok {
+		t.Fatalf("third frame %T is not a chunk", start[2].Frame)
+	}
+	if chunk.Index != 1 || chunk.AttemptID != "attempt-1" {
+		t.Fatalf("chunk = %+v, want frame index 1 of attempt-1", chunk)
 	}
 	delta, ok := chunk.Chunk.(assistantDeltaChunk)
-	if !ok || delta.Type != "text-delta" || delta.Text != "hello" {
-		t.Fatalf("chunk payload = %+v, want a text delta of hello", chunk.Chunk)
+	if !ok || delta.Type != "text-delta" || delta.Text != "hello" || delta.Index != 0 {
+		t.Fatalf("chunk payload = %+v, want a text delta of hello in block 0", chunk.Chunk)
 	}
 	// The frame's clock is the durable event's own timestamp: a rendered delta is
 	// as old as its log entry, not as old as this read.
@@ -78,8 +112,11 @@ func TestAssistantTrackerStreamsDeltasAndSettlesThem(t *testing.T) {
 		t.Fatalf("frames = %d, want one chunk", len(more))
 	}
 	second, _ := more[0].Frame.(assistantChunkFrame)
-	if second.Index != 1 {
-		t.Fatalf("chunk index = %d, want 1", second.Index)
+	if second.Index != 2 {
+		t.Fatalf("chunk index = %d, want 2", second.Index)
+	}
+	if delta, ok := second.Chunk.(assistantDeltaChunk); !ok || delta.Index != 0 {
+		t.Fatalf("chunk payload = %+v, want the same text block", second.Chunk)
 	}
 
 	// A settlement for another step must not close this attempt: the client binds
@@ -88,21 +125,32 @@ func TestAssistantTrackerStreamsDeltasAndSettlesThem(t *testing.T) {
 		t.Fatalf("a settlement for another step closed the attempt: %+v", frames)
 	}
 
-	// The step's settlement is released with the sequence it has, and the attempt
-	// is closed exactly once.
-	end := framesOf(t, tracker.onRecord(dshwire.Event{Type: "assistant/message", Seq: 41, Data: map[string]any{"step": 3}}))
-	if len(end) != 1 {
-		t.Fatalf("frames = %d, want one end", len(end))
+	// The step's settlement is released with the sequence it has: the block closes
+	// with its final text, and then the attempt is closed exactly once.
+	end := framesOf(t, tracker.onRecord(dshwire.Event{Type: "assistant/message", Seq: 41, Time: 1050, Data: map[string]any{"step": 3}}))
+	if len(end) != 2 {
+		t.Fatalf("frames = %d, want a block end and an end", len(end))
 	}
-	closing, ok := end[0].Frame.(assistantEndFrame)
+	blockEnd, ok := end[0].Frame.(assistantChunkFrame)
+	if !ok {
+		t.Fatalf("first frame %T is not a chunk", end[0].Frame)
+	}
+	if closed, ok := blockEnd.Chunk.(assistantBlockEnd); !ok || closed.Index != 0 {
+		t.Fatalf("block end = %+v, want the text block finalized", blockEnd.Chunk)
+	} else if closed.Block["type"] != "text" || closed.Block["text"] != "hello there" {
+		t.Fatalf("block end block = %v, want the accumulated text", closed.Block)
+	}
+	closing, ok := end[1].Frame.(assistantEndFrame)
 	if !ok {
 		t.Fatalf("frame %T is not an end", end[0].Frame)
 	}
 	if closing.Outcome.Kind != "committed" || closing.Outcome.EventType != "assistant/message" || closing.Outcome.Seq != 41 {
 		t.Fatalf("outcome = %+v, want a committed settlement of 41", closing.Outcome)
 	}
-	if closing.Index != 2 {
-		t.Fatalf("end index = %d, want the two chunks it settles", closing.Index)
+	// Four frames were sent for the two deltas: the block start, both chunks, and
+	// the block end.
+	if closing.Index != 4 {
+		t.Fatalf("end index = %d, want the four frames it settles", closing.Index)
 	}
 	if frames := tracker.onRecord(dshwire.Event{Type: "assistant/message", Seq: 42, Data: map[string]any{"step": 3}}); len(frames) != 0 {
 		t.Fatalf("the closed attempt settled twice: %+v", frames)
@@ -128,8 +176,9 @@ func TestAssistantTrackerAbandonsAnAttemptTheTurnEndsOn(t *testing.T) {
 	if closing.Outcome.EventType != "" || closing.Outcome.Seq != 0 {
 		t.Fatalf("abandoned outcome carries a settlement: %+v", closing.Outcome)
 	}
-	if closing.Index != 1 {
-		t.Fatalf("end index = %d, want the one chunk it abandons", closing.Index)
+	// Two frames were sent for the delta: the block start and the chunk itself.
+	if closing.Index != 2 {
+		t.Fatalf("end index = %d, want the two frames it abandons", closing.Index)
 	}
 	if frames := framesOf(t, tracker.close()); len(frames) != 0 {
 		t.Fatalf("closing twice sent %d frames", len(frames))
@@ -143,8 +192,8 @@ func TestAssistantTrackerAbandonsAnAttemptTheTurnEndsOn(t *testing.T) {
 	if opening.Turn != 2 || opening.AttemptID != "attempt-2" {
 		t.Fatalf("next start = %+v, want attempt-2 of turn 2", opening)
 	}
-	if opening.Revision != closing.Revision+1 {
-		t.Fatalf("revision = %d, want %d", opening.Revision, closing.Revision+1)
+	if opening.Revision <= closing.Revision {
+		t.Fatalf("revision = %d, want one past the abandonment's %d", opening.Revision, closing.Revision)
 	}
 }
 
@@ -174,19 +223,67 @@ func TestAssistantTrackerReplacesAnAttemptOnRestart(t *testing.T) {
 		Seq: 3, Type: zenforge.EventModelReasoning, Timestamp: 1003,
 		Payload: map[string]any{"textDelta": "thinking", "step": 1},
 	}))
-	if len(reasoning) != 2 {
-		t.Fatalf("frames = %d, want a start and a chunk", len(reasoning))
+	if len(reasoning) != 3 {
+		t.Fatalf("frames = %d, want a start, a block start and a chunk", len(reasoning))
 	}
 	opening, _ := reasoning[0].Frame.(assistantStartFrame)
 	if opening.AttemptID != "attempt-2" {
 		t.Fatalf("start = %+v, want the restarted attempt-2", opening)
 	}
-	chunk, _ := reasoning[1].Frame.(assistantChunkFrame)
+	block, _ := reasoning[1].Frame.(assistantChunkFrame).Chunk.(assistantBlockStart)
+	if block.BlockType != assistantReasoningBlock || block.Index != 0 {
+		t.Fatalf("block start = %+v, want the reasoning block opened", block)
+	}
+	chunk, _ := reasoning[2].Frame.(assistantChunkFrame)
 	delta, _ := chunk.Chunk.(assistantDeltaChunk)
-	if delta.Type != "reasoning-delta" || delta.Index != assistantReasoningBlock {
+	if delta.Type != "reasoning-delta" || delta.Index != 0 {
 		t.Fatalf("chunk = %+v, want a reasoning delta in its own block", delta)
 	}
 }
+
+// A block is a run of deltas of one kind. Reasoning then text is two blocks, and
+// the first is finalized before the second opens -- which is what the client's
+// reducer needs to render them apart. A later run of the same kind is a third
+// block rather than a continuation of the first.
+func TestAssistantTrackerOpensAndClosesBlocksAsKindsChange(t *testing.T) {
+	tracker := newAssistantTracker("run-1", 0)
+	tracker.startTurn("run-1", 1)
+
+	first := framesOf(t, tracker.onEvent(reasoningEvent(1, "why", 1)))
+	starts := blockStartsOf(t, first)
+	if len(starts) != 1 || starts[0].BlockType != assistantReasoningBlock || starts[0].Index != 0 {
+		t.Fatalf("reasoning blocks = %+v, want block 0 opened as reasoning", starts)
+	}
+
+	// The kind changes: the reasoning block closes, then the text block opens.
+	second := framesOf(t, tracker.onEvent(deltaEvent(2, "answer", "attempt-1", 1)))
+	if len(second) != 3 {
+		t.Fatalf("frames = %d, want a block end, a block start and a chunk", len(second))
+	}
+	closing, ok := second[0].Frame.(assistantChunkFrame)
+	if !ok {
+		t.Fatalf("first frame %T is not a chunk", second[0].Frame)
+	}
+	if closed, ok := closing.Chunk.(assistantBlockEnd); !ok || closed.Index != 0 || closed.Block["type"] != "reasoning" {
+		t.Fatalf("block end = %+v, want reasoning block 0 finalized", closing.Chunk)
+	}
+	starts = blockStartsOf(t, second)
+	if len(starts) != 1 || starts[0].BlockType != assistantTextBlock || starts[0].Index != 1 {
+		t.Fatalf("text blocks = %+v, want block 1 opened as text", starts)
+	}
+	if delta, _ := second[2].Frame.(assistantChunkFrame).Chunk.(assistantDeltaChunk); delta.Index != 1 {
+		t.Fatalf("delta block = %d, want the text block 1", delta.Index)
+	}
+
+	// Reasoning again is its own block: the reducer merges by index, so reusing
+	// block 0 would append it to the answer instead of keeping it apart.
+	third := framesOf(t, tracker.onEvent(reasoningEvent(3, "again", 1)))
+	starts = blockStartsOf(t, third)
+	if len(starts) != 1 || starts[0].BlockType != assistantReasoningBlock || starts[0].Index != 2 {
+		t.Fatalf("reasoning blocks = %+v, want block 2 opened as reasoning", starts)
+	}
+}
+
 // Every frame of a generation must cite exactly one more revision than the last:
 // the client's session wire throws a carrier failure otherwise, tears the stream
 // down and reopens it, so a wrong counter is a restart loop rather than a
@@ -213,7 +310,9 @@ func TestAssistantTrackerNumbersEveryFrameConsecutively(t *testing.T) {
 	}
 	visit(tracker.onRecord(dshwire.Event{Type: "assistant/message", Seq: 9, Data: map[string]any{"step": 1}}))
 
-	want := []int{1, 2, 3, 4}
+	// Two deltas contribute a start, a block start, two chunks and a block end,
+	// and the settlement closes the attempt.
+	want := []int{1, 2, 3, 4, 5, 6}
 	if !reflect.DeepEqual(revisions, want) {
 		t.Fatalf("frame revisions = %v, want %v", revisions, want)
 	}

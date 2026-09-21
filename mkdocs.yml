@@ -258,6 +258,7 @@ nav:
       - 0114 A follow stream follows the conversation: adr/0114-a-follow-stream-follows-the-conversation.md
       - 0115 An approval names the conversation: adr/0115-an-approval-names-the-conversation.md
       - 0116 The answer streams as assistant-stream frames: adr/0116-the-answer-streams-as-assistant-frames.md
+      - 0117 The session log carries the console vocabulary: adr/0117-the-session-log-carries-the-console-vocabulary.md
 
 extra:
   social:

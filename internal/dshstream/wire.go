@@ -239,6 +239,22 @@ type assistantDeltaChunk struct {
 	Text  string `json:"text"`
 }
 
+// assistantBlockStart opens one content block. The reducer creates the block at
+// the given index with this kind, so deltas that follow land in it.
+type assistantBlockStart struct {
+	Type      string `json:"type"`
+	Index     int    `json:"index"`
+	BlockType string `json:"blockType"`
+}
+
+// assistantBlockEnd finalizes one content block. The block is a core content
+// block ({type, text}), which is what the client converts for rendering.
+type assistantBlockEnd struct {
+	Type  string         `json:"type"`
+	Index int            `json:"index"`
+	Block map[string]any `json:"block"`
+}
+
 // assistantEndFrame closes one attempt. A committed outcome names the durable
 // settlement it releases -- the client stages that record while the attempt is
 // open and publishes it when this frame arrives -- and an abandoned outcome drops

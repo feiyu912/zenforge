@@ -517,6 +517,20 @@ with its settlement.
   `tool/result` with `message`/optional `error`) — no separate channel. The `follow` opening
   snapshot is what makes reconnect resume work: the host must send the full window + cursor.
 
+**Corrected 2026-09-21 (ADR 0117):** the journal's `cursor` counts **records**, and
+upstream's session log holds only the console's own vocabulary — there is no
+`model.delta`, no checkpoint and no host bookkeeping in it, and a token stream is
+not a sequence of events. A host whose durable log is deeper than the console's
+must therefore project *and renumber*: the served sequence is the ordinal of the
+records it serves (`follows(left, right) => right === left + 1` is checked against
+that, not against the log's own seq). Serving the extra events — even marked
+`ignorable` — is not free: they count toward `maxMessages`, so one answer that is a
+single console message can fill the window and force paging. The byte-exact tokens
+belong in the settled `assistant/message`'s compact `stream`
+(`expandAssistantStream`: `text-chunks`/`reasoning-chunks`/`tool-call-chunks`/
+`chunk` records, validated by `validateRecord` + `validateRun` — exact keys,
+`dt` one shorter than the members, safe-integer times).
+
 **`POST /api/session/page`** — backwards history paging, args
 `{address, throughSeq, beforeSeq?, maxMessages?}` → `{records, hasMore}` (`types.ts:441-447,510-513`).
 Caller `client/transport.ts:228`. Needed only for scrolling past the opening window.

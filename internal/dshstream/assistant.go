@@ -31,9 +31,10 @@ const (
 	// Assistant chunks address content blocks, not chunks: the client's reducer
 	// merges deltas that share an index into one block. Text and reasoning are
 	// kept apart so a renderer can show them separately, exactly as the durable
-	// projection keeps them.
-	assistantTextBlock      = 0
-	assistantReasoningBlock = 1
+	// projection keeps them, and a delta that continues the previous block's kind
+	// continues its index rather than opening another one.
+	assistantTextBlock      = "text"
+	assistantReasoningBlock = "reasoning"
 )
 
 // assistantTracker folds one run's durable events into assistant-stream frames.
@@ -66,6 +67,15 @@ type assistantAttempt struct {
 	id   string
 	step int
 	next int
+	// blocks is the attempt's content in arrival order. A chunk's index is the
+	// block's position here, and the block's text is what its block-end names.
+	blocks []assistantBlock
+}
+
+// assistantBlock is one content block of an open attempt.
+type assistantBlock struct {
+	kind string
+	text string
 }
 
 // newAssistantTracker starts tracking one follow stream. cursor is the sequence
@@ -103,9 +113,9 @@ func (t *assistantTracker) onEvent(event zenforge.Event) []any {
 		}
 		return frames
 	case zenforge.EventModelDelta:
-		return t.chunk(event, "text", assistantTextBlock)
+		return t.chunk(event, assistantTextBlock)
 	case zenforge.EventModelReasoning:
-		return t.chunk(event, "reasoning", assistantReasoningBlock)
+		return t.chunk(event, assistantReasoningBlock)
 	}
 	return nil
 }
@@ -127,7 +137,11 @@ func (t *assistantTracker) onRecord(record dshwire.Event) []any {
 	if step, ok := payloadIntValueOK(record.Data, "step"); !ok || step != t.active.step {
 		return nil
 	}
-	frames := []any{assistantStreamValue{Type: "assistant-stream", Frame: assistantEndFrame{
+	// The block the attempt ends inside is finalized before the attempt is
+	// released, which is the order a provider streams them in: the last block-end
+	// carries the block's final text.
+	frames := t.blockEnd(lastBlockIndex(t.active.blocks), record.Time)
+	frames = append(frames, assistantStreamValue{Type: "assistant-stream", Frame: assistantEndFrame{
 		Type:      "end",
 		AttemptID: t.active.id,
 		Revision:  t.nextRevision(),
@@ -137,7 +151,7 @@ func (t *assistantTracker) onRecord(record dshwire.Event) []any {
 			EventType: record.Type,
 			Seq:       record.Seq,
 		},
-	}}}
+	}})
 	t.active = nil
 	t.pending = nil
 	return frames
@@ -151,9 +165,11 @@ func (t *assistantTracker) close() []any {
 	return t.abandon()
 }
 
-// chunk folds one delta into a chunk frame, opening the attempt first when this
-// is its first visible content.
-func (t *assistantTracker) chunk(event zenforge.Event, kind string, block int) []any {
+// chunk folds one delta into a chunk frame, opening the attempt and then the
+// block first when this is their first visible content. The frames mirror a
+// provider's: a block-start opens the block, its deltas follow, and the previous
+// block is closed when the kind changes.
+func (t *assistantTracker) chunk(event zenforge.Event, kind string) []any {
 	text := payloadString(event.Payload, "textDelta")
 	if text == "" {
 		return nil
@@ -182,6 +198,23 @@ func (t *assistantTracker) chunk(event zenforge.Event, kind string, block int) [
 			Step:            step,
 		}})
 	}
+	// The delta lands in the block that was streaming, or opens the next one.
+	block := lastBlockIndex(t.active.blocks)
+	if block < 0 || t.active.blocks[block].kind != kind {
+		frames = append(frames, t.blockEnd(block, event.Timestamp)...)
+		block = len(t.active.blocks)
+		t.active.blocks = append(t.active.blocks, assistantBlock{kind: kind})
+		frames = append(frames, assistantStreamValue{Type: "assistant-stream", Frame: assistantChunkFrame{
+			Type:      "chunk",
+			AttemptID: t.active.id,
+			Revision:  t.nextRevision(),
+			Index:     t.active.next,
+			Time:      event.Timestamp,
+			Chunk:     assistantBlockStart{Type: "block-start", Index: block, BlockType: kind},
+		}})
+		t.active.next++
+	}
+	t.active.blocks[block].text += text
 	frames = append(frames, assistantStreamValue{Type: "assistant-stream", Frame: assistantChunkFrame{
 		Type:      "chunk",
 		AttemptID: t.active.id,
@@ -192,6 +225,36 @@ func (t *assistantTracker) chunk(event zenforge.Event, kind string, block int) [
 	}})
 	t.active.next++
 	return frames
+}
+
+// blockEnd finalizes one block of the open attempt, if there is one. The block
+// carries its final content as a core content block, which is what the client
+// renders in place of the deltas it accumulated.
+func (t *assistantTracker) blockEnd(index int, time int64) []any {
+	if t.active == nil || index < 0 || index >= len(t.active.blocks) {
+		return nil
+	}
+	block := t.active.blocks[index]
+	frame := assistantStreamValue{Type: "assistant-stream", Frame: assistantChunkFrame{
+		Type:      "chunk",
+		AttemptID: t.active.id,
+		Revision:  t.nextRevision(),
+		Index:     t.active.next,
+		Time:      time,
+		Chunk: assistantBlockEnd{
+			Type:  "block-end",
+			Index: index,
+			Block: map[string]any{"type": block.kind, "text": block.text},
+		},
+	}}
+	t.active.next++
+	return []any{frame}
+}
+
+// lastBlockIndex is the index of the block that was streaming, or -1 when the
+// attempt has not streamed one yet.
+func lastBlockIndex(blocks []assistantBlock) int {
+	return len(blocks) - 1
 }
 
 // nextRevision advances the generation's frame counter.

@@ -103,10 +103,11 @@ func Session(ctx context.Context, source Source, sessionID string, identity func
 		stamp.SeqOffset = offset
 		projection := Project(events, stamp)
 		log.Records = append(log.Records, projection.Events...)
-		// The next turn starts where this one's events end, whether or not this
-		// turn produced records: the sequence covers durable events, and a turn
-		// that logged nothing contributes no numbers to skip.
-		offset += int64(len(events))
+		// The next turn starts where this turn's records end, whether or not it
+		// produced any: the served sequence counts the console's records, so a
+		// turn that was nothing but bookkeeping contributes no numbers to skip
+		// (ADR 0117).
+		offset += int64(len(projection.Events))
 		if index == len(runs)-1 {
 			log.Newest = projection
 			log.NewestRun = runID

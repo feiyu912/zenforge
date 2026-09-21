@@ -26,9 +26,9 @@ var (
 )
 
 // TestKnownEventTypesMatchTheVendoredConsole fails when this package's copy of
-// the console's vocabulary drifts from the console's own list. The marker
-// decision depends on it in both directions: an unknown type must be marked
-// ignorable, and a known one must not be.
+// the console's vocabulary drifts from the console's own list. The filter depends
+// on it: a record is served only when its type is in this table, so a type the
+// console adds must be served and one it drops must not be (ADR 0117).
 func TestKnownEventTypesMatchTheVendoredConsole(t *testing.T) {
 	source := readFile(t, consoleClientPath)
 	names := extractNames(t, knownTypesPattern, source, "KNOWN_SESSION_EVENT_TYPES")
@@ -65,10 +65,9 @@ func TestSurfaceEligibleTypesMatchTheVendoredConsole(t *testing.T) {
 
 // TestProjectionIsLegalForTheVendoredConsole re-implements the client's own
 // acceptance check over a projected turn: the envelope allows exactly these
-// fields, `ignorable` is either absent or literally true, and `surfaceOp` is
-// present exactly on the surface-eligible types. A record that fails this would
-// make the page report "Failed to load history" exactly as it did before this
-// package existed.
+// fields, every type is one the console knows, and `surfaceOp` is present exactly
+// on the surface-eligible types. A record that fails this would make the page
+// report "Failed to load history" exactly as it did before this package existed.
 func TestProjectionIsLegalForTheVendoredConsole(t *testing.T) {
 	allowed := map[string]bool{
 		"type": true, "seq": true, "time": true, "data": true,
@@ -96,8 +95,8 @@ func TestProjectionIsLegalForTheVendoredConsole(t *testing.T) {
 		if hasSurfaceOp != SurfaceEligibleTypes[record.Type] {
 			t.Fatalf("%s carries surfaceOp=%v, want %v", record.Type, hasSurfaceOp, SurfaceEligibleTypes[record.Type])
 		}
-		if !record.Ignorable && !KnownEventTypes[record.Type] {
-			t.Fatalf("%s is neither a console type nor ignorable", record.Type)
+		if !KnownEventTypes[record.Type] {
+			t.Fatalf("%s is outside the console's vocabulary and was served anyway", record.Type)
 		}
 	}
 }

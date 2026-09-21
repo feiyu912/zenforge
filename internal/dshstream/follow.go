@@ -283,9 +283,15 @@ func pumpTurn(ctx context.Context, live <-chan zenforge.Event, liveErr <-chan er
 			// Continue the snapshot's projection of this turn rather than starting
 			// a new one: the step being streamed is the same step, its settlement
 			// must carry the deltas the snapshot already counted, and the turn's
-			// sequence offset is what keeps this event one past the cursor the
-			// console holds.
+			// sequence offset is what keeps this record one past the cursor the
+			// console holds. An event with no console record -- the host's own
+			// bookkeeping, and the deltas the dense stream already carried --
+			// advances the projection's state and nothing else (ADR 0117).
+			before := len(tail.Events)
 			tail.Append(event)
+			if len(tail.Events) == before {
+				continue
+			}
 			projected := tail.Events[len(tail.Events)-1]
 			if err := send(eventRecord{Type: "event", Event: projected}); err != nil {
 				return false, err
