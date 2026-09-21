@@ -251,6 +251,7 @@ nav:
       - 0107 Plan-execute plans only when the request needs one: adr/0107-plan-execute-plans-only-when-the-request-needs-one.md
       - 0108 A session's log is one sequence across its turns: adr/0108-a-sessions-log-is-one-sequence-across-its-turns.md
       - 0109 The console host keeps its run registry on disk: adr/0109-the-console-host-keeps-its-run-registry-on-disk.md
+      - 0110 A projected message is identified by the session sequence: adr/0110-a-projected-message-is-identified-by-the-session-sequence.md
 
 extra:
   social:

@@ -176,11 +176,11 @@ func (p *Projector) Next(event zenforge.Event) Event {
 	switch event.Type {
 	case zenforge.EventRunStarted:
 		if text, ok := stringField(data, "input"); ok && text != "" {
-			return p.surface(base, "user/message", userMessage(event.Seq, text))
+			return p.surface(base, "user/message", userMessage(base.Seq, text))
 		}
 	case zenforge.EventRequestSteer:
 		if text, ok := firstStringField(data, "input", "text", "content"); ok {
-			return p.surface(base, "user/message", userMessage(event.Seq, text))
+			return p.surface(base, "user/message", userMessage(base.Seq, text))
 		}
 	case zenforge.EventStepStarted:
 		if step, ok := intField(data, "step"); ok {
@@ -228,7 +228,7 @@ func (p *Projector) Next(event zenforge.Event) Event {
 			"turn": p.identity.turn(),
 			"step": step,
 			"message": map[string]any{
-				"id":      messageID(event.Seq),
+				"id":      messageID(base.Seq),
 				"role":    "assistant",
 				"content": wireBlocks(content),
 				"source": map[string]any{
@@ -372,8 +372,11 @@ func (p *Projector) turnStep(step int) map[string]any {
 }
 
 // messageID names one projected message. The console carries a message identity
-// it only has to keep stable within the session, and the durable sequence is
-// exactly that: unique, stable, and reproduced by any window over the log.
+// it only has to keep stable within the session, and the session's own sequence
+// is exactly that: unique, stable, and reproduced by any window over the log.
+// It is the *session* sequence, not the run's: each turn numbers its durability
+// from one, so a run-local number would name turn one's message and turn two's
+// message identically (ADR 0110).
 func messageID(seq int64) string {
 	return fmt.Sprintf("msg-%d", seq)
 }

@@ -774,6 +774,31 @@ func TestSessionPageServesEveryTurnInOneSequence(t *testing.T) {
 	if len(prompts) != 2 {
 		t.Fatalf("user messages at %v, want one per turn", prompts)
 	}
+	// Each message names itself by the conversation's sequence, not the run's:
+	// the console matches a `user/message` node on `String(data.id)`, so two
+	// turns whose prompt both said `msg-1` rendered as one message and the
+	// operator's second question showed as the first one (ADR 0110).
+	ids := map[string]int64{}
+	for _, record := range value.Records {
+		id := ""
+		if raw, ok := record.Event.Data["id"].(string); ok {
+			id = raw
+		} else if message, ok := record.Event.Data["message"].(map[string]any); ok {
+			if raw, ok := message["id"].(string); ok {
+				id = raw
+			}
+		}
+		if id == "" {
+			continue
+		}
+		if first, seen := ids[id]; seen {
+			t.Fatalf("seq %d and seq %d both carry message id %q", first, record.Event.Seq, id)
+		}
+		ids[id] = record.Event.Seq
+	}
+	if len(ids) == 0 {
+		t.Fatal("the page carries no message identities")
+	}
 
 	// "Load earlier" pages back below the second turn's records and reaches the
 	// first turn, ending exactly where the console's window begins.

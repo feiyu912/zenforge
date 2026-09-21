@@ -217,3 +217,52 @@ func TestSessionLogCountsEmptyTurnsWithoutSkippingNumbers(t *testing.T) {
 		}
 	}
 }
+
+// TestSessionLogIdentifiesMessagesByTheSessionSequence pins the identity the
+// console matches a message node by. The shipped client's `user/message`
+// definition matches on `String(event.data.id)`, so two records that carry the
+// same id are one message: every turn's first prompt used to be `msg-1` (the
+// run's own first event), and the operator's second question rendered as the
+// first one instead of itself (ADR 0110).
+func TestSessionLogIdentifiesMessagesByTheSessionSequence(t *testing.T) {
+	log, err := Session(context.Background(), twoTurnSource(), "run_one", sessionIdentity)
+	if err != nil {
+		t.Fatalf("Session returned error: %v", err)
+	}
+	at := map[string]int64{}
+	for _, record := range log.Records {
+		id := projectedMessageID(record)
+		if id == "" {
+			continue
+		}
+		if first, seen := at[id]; seen {
+			t.Fatalf("seq %d and seq %d both carry message id %q", first, record.Seq, id)
+		}
+		at[id] = record.Seq
+	}
+	// The identity is the session's own sequence: the two prompts are one turn
+	// apart in their own logs but 18 apart in the conversation.
+	if at["msg-1"] != 1 || at["msg-19"] != 19 {
+		t.Fatalf("message identities = %v, want the two prompts at msg-1 and msg-19", at)
+	}
+	// Four per turn: the prompt, one assistant message per settled step with
+	// content, and the tool-result message.
+	if len(at) != 8 {
+		t.Fatalf("message identities = %d, want 8 distinct messages across the two turns", len(at))
+	}
+}
+
+// projectedMessageID reads the identity a projected record names, wherever the
+// console's own definition reads it: `data.id` for a user or steering message,
+// `data.message.id` for the assistant and tool-result shapes.
+func projectedMessageID(record Event) string {
+	if id, ok := stringField(record.Data, "id"); ok {
+		return id
+	}
+	if message, ok := record.Data["message"].(map[string]any); ok {
+		if id, ok := stringField(message, "id"); ok {
+			return id
+		}
+	}
+	return ""
+}

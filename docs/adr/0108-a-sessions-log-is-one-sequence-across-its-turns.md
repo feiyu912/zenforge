@@ -2,6 +2,10 @@
 
 Status: accepted
 
+Corrected by [ADR 0110](0110-a-projected-message-is-identified-by-the-session-sequence.md):
+the message identity is the session sequence's, and the first implementation left it on the
+run's own number.
+
 Closes the gap ADR 0086 recorded ("This host does not yet merge a session's turns into one
 paged log") and relates to
 [ADR 0105](0105-the-durable-log-is-projected-into-the-consoles-vocabulary.md) (the record
@@ -78,9 +82,13 @@ so the offset for every turn is stable and any process rebuilds the same numbers
 new is written to disk, and a session's log stays exactly as durable as its runs.
 
 Turn numbering follows the same rule: the console groups a transcript by `turn`, so turn *k*
-carries `turn: k` rather than every turn claiming turn 1. Message ids (`msg-<seq>`) are
-derived from the session sequence, so they are unique across turns instead of colliding
-between turn 1's first message and turn 2's.
+carries `turn: k` rather than every turn claiming turn 1.
+
+**Corrected by ADR 0110:** a message id must be derived from the session sequence too. The
+first implementation said `msg-<seq>` but passed the run's own seq into `messageID`, so every
+turn's first prompt was `msg-1`; the console matches a `user/message` node on that id, and a
+second question rendered as the first one. Identities now come from the projected sequence
+(`msg-1`, `msg-<offset+1>`, ...).
 
 ## Consequences
 

@@ -578,9 +578,10 @@ serves `qwen-plus`, and the card shows only what is written on it.
 > console's session vocabulary so the transcript renders (ADR 0105), a session is titled
 > by the operator's own task (ADR 0106), a simple question is answered instead of planned
 > (ADR 0107), a second prompt keeps the conversation's cursor so its history loads and an
-> earlier turn is reachable (ADR 0108), and the host keeps its run registry on disk so the
-> sidebar survives a restart and lists the conversations already in the store (ADR 0109);
-> the next item is
+> earlier turn is reachable (ADR 0108), the host keeps its run registry on disk so the
+> sidebar survives a restart and lists the conversations already in the store (ADR 0109), and
+> a second question renders as itself because every message is identified by the session
+> sequence (ADR 0110); the next item is
 > "Next up" 1 in the ledger -- though `docs/limitations.md` now also records a gap found
 > while verifying this window: `session/cancel` only reaches a conversation's first turn,
 > so Stop on a later turn is a no-op while that turn keeps running. That is a small chain
