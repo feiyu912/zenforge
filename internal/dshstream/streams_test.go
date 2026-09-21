@@ -378,9 +378,18 @@ func TestSessionFollowStreamsTheAnswerAsAssistantFrames(t *testing.T) {
 	assertField(t, delta, "type", "text-delta")
 	assertField(t, delta, "text", "hello")
 
-	// The settlement releases the attempt: the client stages that record and
-	// publishes it when the end frame names its sequence and type.
+	// The answer finishes with the provider's finish chunk, which tells the console
+	// whether the step is waiting on tool calls (ADR 0124). It lands before the
+	// settlement, and still counts toward the attempt's index.
 	f.agent.emit(runID, zenforge.EventModelDone, map[string]any{"step": 1})
+	finished := readItem(t, conn, "follow")
+	assertField(t, finished, "type", "assistant-stream")
+	finishFrame := decodeValueObject(t, finished["frame"])
+	assertField(t, finishFrame, "type", "chunk")
+	finishChunk := decodeValueObject(t, finishFrame["chunk"])
+	assertKeys(t, finishChunk, "type", "reason")
+	assertField(t, finishChunk, "type", "finish")
+	assertField(t, decodeValueObject(t, finishChunk["reason"]), "kind", "stop")
 
 	settled := readItem(t, conn, "follow")
 	if got := recordEventType(t, settled); got != "assistant/message" {
@@ -392,8 +401,11 @@ func TestSessionFollowStreamsTheAnswerAsAssistantFrames(t *testing.T) {
 	// message's compact stream, which is where the trajectory view reads them.
 	data := decodeValueObject(t, settledEvent["data"])
 	var stream []map[string]any
-	if err := json.Unmarshal(data["stream"], &stream); err != nil || len(stream) != 1 {
-		t.Fatalf("settlement stream = %s, want one block timeline", data["stream"])
+	if err := json.Unmarshal(data["stream"], &stream); err != nil || len(stream) != 2 {
+		t.Fatalf("settlement stream = %s, want one block timeline and the finish chunk", data["stream"])
+	}
+	if chunkBody, ok := stream[1]["chunk"].(map[string]any); !ok || chunkBody["type"] != "finish" {
+		t.Fatalf("settlement stream = %v, want the finish chunk after the timeline", stream[1])
 	}
 	if texts, ok := stream[0]["texts"].([]any); !ok || len(texts) != 1 || texts[0] != "hello" {
 		t.Fatalf("settlement timeline = %v, want the delta's text", stream[0])
@@ -417,8 +429,10 @@ func TestSessionFollowStreamsTheAnswerAsAssistantFrames(t *testing.T) {
 	endFrame := decodeValueObject(t, end["frame"])
 	assertKeys(t, endFrame, "type", "attemptId", "revision", "index", "outcome")
 	assertField(t, endFrame, "type", "end")
-	if got := intField(t, endFrame, "index"); got != 3 {
-		t.Fatalf("end index = %d, want the three frames it settles", got)
+	// Four chunk frames settle it: block-start, the text delta, the finish chunk and
+	// the block-end.
+	if got := intField(t, endFrame, "index"); got != 4 {
+		t.Fatalf("end index = %d, want the four frames it settles", got)
 	}
 	outcome := decodeValueObject(t, endFrame["outcome"])
 	assertKeys(t, outcome, "kind", "eventType", "seq")

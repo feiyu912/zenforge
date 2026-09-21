@@ -196,6 +196,51 @@ func TestProjectionMarksOnlySurfaceEvents(t *testing.T) {
 	}
 }
 
+// TestProjectionAnswersTheToolCallsAnInterruptedRunLeftOpen pins the fix for a card
+// that could never leave "running": a turn cancelled (or failed) while a tool call
+// was outstanding records no result of its own, so the projection answers it with the
+// console's own interrupted vocabulary, before the turn closes. The console's
+// validator also requires an error to come with isError on the first content block,
+// which is why the block carries both.
+func TestProjectionAnswersTheToolCallsAnInterruptedRunLeftOpen(t *testing.T) {
+	events := []zenforge.Event{
+		event(1, zenforge.EventRunStarted, map[string]any{"input": "hello"}),
+		event(2, zenforge.EventStepStarted, map[string]any{"step": 1}),
+		event(3, zenforge.EventToolCall, map[string]any{"toolCallId": "call-1", "toolName": "run_shell", "arguments": `{"command":"sleep 60"}`}),
+		event(4, zenforge.EventRunCancelled, map[string]any{"reason": "operator"}),
+	}
+	projected := project(t, events)
+	want := []string{"turn/start", "user/message", "step/start", "tool/call", "tool/result", "turn/end"}
+	if got := eventTypes(projected); !reflect.DeepEqual(got, want) {
+		t.Fatalf("window = %v, want %v", got, want)
+	}
+	result := findByType(t, projected, "tool/result")
+	if result.SurfaceOp != "append" {
+		t.Fatalf("tool/result surfaceOp = %q, want append", result.SurfaceOp)
+	}
+	message := result.Data["message"].(map[string]any)
+	content := message["content"].([]any)
+	block := content[0].(map[string]any)
+	if block["isError"] != true {
+		t.Fatalf("tool result block = %v, want it marked as an error", block)
+	}
+	if block["toolCallId"] != "call-1" {
+		t.Fatalf("tool result block = %v, want the call it answers", block)
+	}
+	failure, ok := block["error"].(map[string]any)
+	if !ok || failure["name"] != "Interrupted" || failure["code"] != "interrupted" {
+		t.Fatalf("tool result error = %v, want the console's interrupted vocabulary", block["error"])
+	}
+	// A run that fails leaves its calls open the same way.
+	failed := project(t, []zenforge.Event{
+		event(1, zenforge.EventToolCall, map[string]any{"toolCallId": "call-9", "toolName": "run_shell", "arguments": "{}"}),
+		event(2, zenforge.EventRunError, map[string]any{"error": "boom"}),
+	})
+	if got := eventTypes(failed); !reflect.DeepEqual(got, []string{"tool/call", "tool/result", "turn/end"}) {
+		t.Fatalf("failed window = %v, want the call answered before the close", got)
+	}
+}
+
 // TestProjectionServesTheSystemPromptAndTheRequestHeader pins the two records the
 // console's prompt cards are built from. The prompt card renders the loaded
 // `system/message` nodes -- one per assembled section -- and the request card is
@@ -296,9 +341,27 @@ func TestProjectionServesTheConsoleItsOwnWindow(t *testing.T) {
 // console's trajectory view reads the answer from.
 func TestProjectionKeepsTheDeltasInTheMessageStream(t *testing.T) {
 	message := findByType(t, project(t, aTurn()), "assistant/message")
+	// Two block timelines, then the two chunks a provider sends after its text: the
+	// token accounting and the finish reason (ADR 0124).
 	stream, ok := message.Data["stream"].([]any)
-	if !ok || len(stream) != 2 {
-		t.Fatalf("assistant/message stream = %v, want two block timelines", message.Data["stream"])
+	if !ok || len(stream) != 4 {
+		t.Fatalf("assistant/message stream = %v, want two block timelines and two chunks", message.Data["stream"])
+	}
+	usageChunk := stream[2].(map[string]any)
+	if usageChunk["type"] != "chunk" {
+		t.Fatalf("third stream record = %v, want the usage chunk", usageChunk)
+	}
+	usageBody := usageChunk["chunk"].(map[string]any)
+	if usageBody["type"] != "usage" {
+		t.Fatalf("usage chunk = %v, want a usage chunk", usageBody)
+	}
+	mapped := usageBody["usage"].(map[string]any)
+	if mapped["inputTokens"] != 11 || mapped["outputTokens"] != 7 || mapped["totalTokens"] != 18 {
+		t.Fatalf("usage = %v, want the console's token names", mapped)
+	}
+	finishBody := stream[3].(map[string]any)["chunk"].(map[string]any)
+	if finishBody["type"] != "finish" || finishBody["reason"].(map[string]any)["kind"] != "tool-calls" {
+		t.Fatalf("finish chunk = %v, want the tool-calls reason", finishBody)
 	}
 	reasoning := stream[0].(map[string]any)
 	if reasoning["type"] != "reasoning-chunks" || reasoning["index"] != 0 {

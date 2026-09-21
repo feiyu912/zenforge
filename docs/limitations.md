@@ -157,6 +157,17 @@ what is experimental, and what remains adapter territory.
   the conversation's turns share one sequence, and the follow stream stays open across
   them, so the second prompt loads its history and `Load earlier` reaches the first turn
   instead of being undone by a reconnect.
+- **The live answer's token counts and end state are served** (ADR 0124): an attempt
+  streams a `usage` chunk in the console's own token names and a `finish` chunk whose
+  reason is `stop` or `tool-calls`, and both are also in the compacted stream, so a
+  console that loaded the session reads the same usage pill and end state as one that
+  watched it live. A run cancelled or failed while a tool was running now answers that
+  call with `isError: true` and `error: {name: "Interrupted", code: "interrupted"}` --
+  the console's own vocabulary, which it renders as "stopped" -- instead of leaving the
+  card running forever. What is still missing: a failed tool keeps only `isError: true`
+  (upstream has no execution-failure code to mirror, and inventing one would be a label
+  the console cannot translate), and a tool call's arguments do not stream as
+  `tool-call-delta` records, so they appear at once with `tool/call` rather than typing out.
 - **The chat flow's prompt cards are served** (ADR 0123): a run writes the assembled
   system prompt as a durable `system.prompt` at the step that first sends it, and the
   console renders it from its own `system/message` surface event -- one node per

@@ -66,6 +66,69 @@ func framesOf(t *testing.T, frames []any) []assistantStreamValue {
 	return values
 }
 
+// The console's usage pill and its "waiting on tools" state both come from stream
+// chunks, not from the settlement record: it reads the pill with
+// `lastAssistantStreamChunk(stream, "usage")`, and it treats a `finish` chunk's
+// reason as the response's stop reason (ADR 0124). Both are emitted from the durable
+// events that report them.
+func TestAssistantTrackerStreamsUsageAndFinish(t *testing.T) {
+	tracker := newAssistantTracker("run-1", 7)
+	tracker.startTurn("run-1", 2)
+	framesOf(t, tracker.onEvent(deltaEvent(1, "working", "attempt-1", 3)))
+
+	usage := framesOf(t, tracker.onEvent(zenforge.Event{
+		Seq:       2,
+		Type:      zenforge.EventModelUsage,
+		Timestamp: 1002,
+		Payload: map[string]any{"step": 3, "usage": map[string]any{
+			"promptTokens": 11, "completionTokens": 7, "totalTokens": 18,
+		}},
+	}))
+	if len(usage) != 1 {
+		t.Fatalf("usage frames = %d, want the one chunk", len(usage))
+	}
+	chunk, ok := usage[0].Frame.(assistantChunkFrame)
+	if !ok {
+		t.Fatalf("usage frame %T is not a chunk", usage[0].Frame)
+	}
+	body, ok := chunk.Chunk.(assistantUsageChunk)
+	if !ok {
+		t.Fatalf("usage chunk %T is not a usage chunk", chunk.Chunk)
+	}
+	// The console's own names, and both counts: normalizeUsage returns undefined --
+	// and the pill disappears -- unless inputTokens and outputTokens are present.
+	if body.Type != "usage" || body.Usage["inputTokens"] != 11 || body.Usage["outputTokens"] != 7 || body.Usage["totalTokens"] != 18 {
+		t.Fatalf("usage chunk = %+v, want the console's token names", body)
+	}
+
+	finish := framesOf(t, tracker.onEvent(zenforge.Event{
+		Seq:       3,
+		Type:      zenforge.EventModelDone,
+		Timestamp: 1003,
+		Payload:   map[string]any{"step": 3, "toolCallCount": 1},
+	}))
+	if len(finish) != 1 {
+		t.Fatalf("finish frames = %d, want the one chunk", len(finish))
+	}
+	finishChunk, ok := finish[0].Frame.(assistantChunkFrame)
+	if !ok {
+		t.Fatalf("finish frame %T is not a chunk", finish[0].Frame)
+	}
+	body2, ok := finishChunk.Chunk.(assistantFinishChunk)
+	if !ok || body2.Type != "finish" || body2.Reason["kind"] != "tool-calls" {
+		t.Fatalf("finish chunk = %+v, want the tool-calls reason", finishChunk.Chunk)
+	}
+	// A step with no tool calls stops instead.
+	stop := framesOf(t, tracker.onEvent(zenforge.Event{
+		Seq: 4, Type: zenforge.EventModelDone, Timestamp: 1004,
+		Payload: map[string]any{"step": 3, "toolCallCount": 0},
+	}))
+	stopChunk := stop[0].Frame.(assistantChunkFrame).Chunk.(assistantFinishChunk)
+	if stopChunk.Reason["kind"] != "stop" {
+		t.Fatalf("finish reason = %v, want stop", stopChunk.Reason)
+	}
+}
+
 func TestAssistantTrackerStreamsDeltasAndSettlesThem(t *testing.T) {
 	tracker := newAssistantTracker("run-1", 7)
 	tracker.startTurn("run-1", 2)

@@ -133,8 +133,52 @@ func (t *assistantTracker) onEvent(event zenforge.Event) []any {
 		return t.chunk(event, assistantTextBlock)
 	case zenforge.EventModelReasoning:
 		return t.chunk(event, assistantReasoningBlock)
+	case zenforge.EventModelUsage:
+		// The accounting the console's usage pill renders. Without this chunk the
+		// step shows no token counts at all, even though the settlement record
+		// carries them: the client reads the pill from the stream
+		// (lastAssistantStreamChunk(stream, "usage")).
+		usage, ok := map[string]any(event.Payload)["usage"].(map[string]any)
+		if !ok {
+			return nil
+		}
+		mapped := dshwire.TokenUsage(usage)
+		if mapped == nil {
+			return nil
+		}
+		return t.plainChunk(event.Timestamp, assistantUsageChunk{Type: "usage", Usage: mapped})
+	case zenforge.EventModelDone:
+		// The provider's stop reason, which the console reads to tell a finished
+		// answer from one that is waiting on tool calls.
+		kind := "stop"
+		if payloadIntValue(event.Payload, "toolCallCount") > 0 {
+			kind = "tool-calls"
+		}
+		return t.plainChunk(event.Timestamp, assistantFinishChunk{
+			Type:   "finish",
+			Reason: map[string]any{"kind": kind},
+		})
 	}
 	return nil
+}
+
+// plainChunk appends one non-delta chunk to the open attempt. It is the shape the
+// provider's own usage and finish chunks arrive in: no block is opened or closed,
+// and the chunk still counts toward the attempt's index.
+func (t *assistantTracker) plainChunk(time int64, chunk any) []any {
+	if t.active == nil {
+		return nil
+	}
+	frames := []any{assistantStreamValue{Type: "assistant-stream", Frame: assistantChunkFrame{
+		Type:      "chunk",
+		AttemptID: t.active.id,
+		Revision:  t.nextRevision(),
+		Index:     t.active.next,
+		Time:      time,
+		Chunk:     chunk,
+	}}}
+	t.active.next++
+	return t.keep(frames)
 }
 
 // onRecord releases the settlement one record carries. It must be called after

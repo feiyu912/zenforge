@@ -117,6 +117,13 @@ type Projector struct {
 	// and attached to the step's assistant message. Absent when the adapter
 	// reported none, which is how the console distinguishes "no accounting".
 	usage map[string]any
+	// calls is the tool calls of this turn that have not been answered yet, in the
+	// order they were made. A run that ends before they do leaves the console with
+	// cards stuck in "running" unless they are resolved (see
+	// interruptedToolResults), and the console's own vocabulary for that is
+	// `{name: "Interrupted", code: "interrupted"}`, which it renders as "stopped"
+	// (ui-chat conversation-nodes/tool.ts).
+	calls []string
 	// steps remembers which step each tool call belongs to, so a tool result
 	// carries the step its call opened even when the call sits in a window the
 	// page did not request.
@@ -281,6 +288,15 @@ func (p *Projector) project(event zenforge.Event) []Event {
 				}))
 		}
 		return out
+	case zenforge.EventRunCancelled, zenforge.EventRunError:
+		// The turn's close comes last, after the tool calls it left open have been
+		// answered.
+		out := p.interruptedToolResults(event)
+		record, ok := p.projectOne(event)
+		if ok {
+			out = append(out, record)
+		}
+		return out
 	}
 	record, ok := p.projectOne(event)
 	if ok {
@@ -384,7 +400,7 @@ func (p *Projector) projectOne(event zenforge.Event) (Event, bool) {
 		}
 	case zenforge.EventModelUsage:
 		if usage, ok := mapField(data, "usage"); ok {
-			p.usage = tokenUsage(usage)
+			p.usage = TokenUsage(usage)
 		}
 	case zenforge.EventModelDone:
 		step, ok := intField(data, "step")
@@ -413,7 +429,7 @@ func (p *Projector) projectOne(event zenforge.Event) (Event, bool) {
 					"model":    p.identity.Model,
 				},
 			},
-			"stream": compactStream(chunks),
+			"stream": p.compactStream(chunks, usage, base.Time, toolCallFinishKind(data)),
 		}
 		if usage != nil {
 			message["usage"] = usage
@@ -430,6 +446,7 @@ func (p *Projector) projectOne(event zenforge.Event) (Event, bool) {
 			step = p.current
 		}
 		p.steps[callID] = step
+		p.calls = append(p.calls, callID)
 		return p.emit(base.known("tool/call", map[string]any{
 			"turn":      p.identity.turn(),
 			"step":      step,
@@ -450,7 +467,8 @@ func (p *Projector) projectOne(event zenforge.Event) (Event, bool) {
 		if step == 0 {
 			step = p.current
 		}
-		return p.emit(p.surface(base, "tool/result", p.toolResult(base.Seq, step, callID, output, event.Type == zenforge.EventToolError)))
+		p.resolveCall(callID)
+		return p.emit(p.surface(base, "tool/result", p.toolResult(base.Seq, step, callID, output, event.Type == zenforge.EventToolError, nil)))
 	case zenforge.EventRunDone:
 		return p.emit(base.known("turn/end", map[string]any{
 			"turn": p.identity.turn(), "reason": map[string]any{"kind": "completed"},
@@ -562,7 +580,25 @@ func (p *Projector) appendBlock(kind, text string, time int64) {
 // stream, which is what a settled assistant message carries. The console expands
 // it back into byte-exact timed deltas for the trajectory view
 // (api/session-controller expandAssistantStream).
-func compactStream(chunks []wireChunks) []any {
+// toolCallFinishKind is the reason a response finished, in the console's own union:
+// a response that asked for tool calls is a different end state from one that
+// stopped, and the client reads it from the finish chunk
+// (`{type: "finish", reason: {kind: "stop" | "tool-calls"}}`, the pair upstream's
+// own fixtures use).
+func toolCallFinishKind(data map[string]any) string {
+	if count, ok := intField(data, "toolCallCount"); ok && count > 0 {
+		return "tool-calls"
+	}
+	return "stop"
+}
+
+// compactStream compacts an attempt's text deltas into the records the console
+// expands back into chunks, and appends the two chunks a provider sends after its
+// text: the token accounting and the finish reason. They are verbatim chunk records
+// -- the client's expander passes any `{type: "chunk"}` through untouched -- which is
+// what makes the usage pill readable from a settlement the console loaded rather than
+// streamed (lastAssistantStreamChunk(stream, "usage")).
+func (p *Projector) compactStream(chunks []wireChunks, usage map[string]any, time int64, finish string) []any {
 	stream := make([]any, 0, len(chunks))
 	for index, block := range chunks {
 		if len(block.texts) == 0 {
@@ -588,6 +624,16 @@ func compactStream(chunks []wireChunks) []any {
 			"texts": texts,
 		})
 	}
+	if usage != nil {
+		stream = append(stream, map[string]any{
+			"type": "chunk", "time": time,
+			"chunk": map[string]any{"type": "usage", "usage": usage},
+		})
+	}
+	stream = append(stream, map[string]any{
+		"type": "chunk", "time": time,
+		"chunk": map[string]any{"type": "finish", "reason": map[string]any{"kind": finish}},
+	})
 	return stream
 }
 
@@ -658,7 +704,7 @@ func steerIdentity(data map[string]any) string {
 // the block is the only place failure is stated, which is the shape this host
 // can honestly produce -- it has the tool's exit state, not the console's
 // structured failure identity.
-func (p *Projector) toolResult(seq int64, step int, callID, output string, isError bool) map[string]any {
+func (p *Projector) toolResult(seq int64, step int, callID, output string, isError bool, failure map[string]any) map[string]any {
 	block := map[string]any{
 		"type":       "tool-result",
 		"toolCallId": callID,
@@ -666,6 +712,12 @@ func (p *Projector) toolResult(seq int64, step int, callID, output string, isErr
 	}
 	if isError {
 		block["isError"] = true
+	}
+	if failure != nil {
+		// The console reads the failure off the block, and its own validator
+		// requires an error to be accompanied by isError on the first content block.
+		block["isError"] = true
+		block["error"] = failure
 	}
 	return map[string]any{
 		"turn": p.identity.turn(),
@@ -679,10 +731,52 @@ func (p *Projector) toolResult(seq int64, step int, callID, output string, isErr
 	}
 }
 
-// tokenUsage maps the host's accounting onto the console's TokenUsage, whose
-// names are the model-facing ones. The total is only written when the adapter
-// reported it: the console treats an absent total as "unavailable".
-func tokenUsage(usage map[string]any) map[string]any {
+// resolveCall forgets a tool call that has been answered.
+func (p *Projector) resolveCall(callID string) {
+	for index, pending := range p.calls {
+		if pending == callID {
+			p.calls = append(p.calls[:index], p.calls[index+1:]...)
+			return
+		}
+	}
+}
+
+// interruptedToolResults answers every tool call this turn left open. A run that is
+// cancelled or fails while a tool is running never records its result, and the
+// console renders a call without one as still running -- forever. Upstream answers
+// those calls with an error result of its own (`AbortError` /
+// `ABORTED_BEFORE_DISPATCH`, and `Interrupted` / `interrupted` for the tool node),
+// so the console shows the call as stopped rather than live. This host cannot tell a
+// call that never dispatched from one that was running, so every pending call is
+// reported as interrupted, which is what the console renders as "stopped".
+func (p *Projector) interruptedToolResults(event zenforge.Event) []Event {
+	if len(p.calls) == 0 {
+		return nil
+	}
+	pending := p.calls
+	p.calls = nil
+	out := make([]Event, 0, len(pending))
+	for _, callID := range pending {
+		step := p.steps[callID]
+		if step == 0 {
+			step = p.current
+		}
+		seq := p.nextSeq()
+		out = append(out, p.surface(Event{Seq: seq, Time: event.Timestamp}, "tool/result",
+			p.toolResult(seq, step, callID, "", false, map[string]any{
+				"name": "Interrupted",
+				"code": "interrupted",
+			})))
+	}
+	return out
+}
+
+// TokenUsage maps the host's accounting onto the console's TokenUsage, whose names
+// are the model-facing ones. The total is only written when the adapter reported it:
+// the console treats an absent total as "unavailable", and it renders the usage pill
+// only from a stream chunk carrying both counts (ui-chat normalizeUsage requires
+// inputTokens and outputTokens).
+func TokenUsage(usage map[string]any) map[string]any {
 	mapped := map[string]any{}
 	if value, ok := intField(usage, "promptTokens"); ok {
 		mapped["inputTokens"] = value

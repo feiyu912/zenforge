@@ -276,6 +276,23 @@ type assistantChunkFrame struct {
 	Chunk     any    `json:"chunk"`
 }
 
+// assistantUsageChunk is the step's token accounting as a stream chunk. The
+// console's reducer stores chunk.usage as the step's usage, and its pill only
+// appears when the mapped counts are present (ui-chat normalizeUsage).
+type assistantUsageChunk struct {
+	Type  string         `json:"type"`
+	Usage map[string]any `json:"usage"`
+}
+
+// assistantFinishChunk closes a response the way a provider does: the reason says
+// whether more tool calls are coming, which is what the console reads to decide
+// whether the step is waiting on tools. Upstream's own fixtures use exactly these
+// two reason kinds.
+type assistantFinishChunk struct {
+	Type   string         `json:"type"`
+	Reason map[string]any `json:"reason"`
+}
+
 // assistantDeltaChunk is one streamed delta in the client's StreamChunk
 // vocabulary. The reducer reads index and, per type, text; nothing else.
 type assistantDeltaChunk struct {

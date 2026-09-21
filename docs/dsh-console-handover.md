@@ -546,6 +546,32 @@ wrote an event is omitted, because `session/page` answers not-found for it; and 
 log has no terminal event is recorded as cancelled when it is adopted. Drafts stay
 process-local (ADR 0104).
 
+## Shipped: the stream chunks and the interrupted tool call (2026-09-21)
+
+Three things the console renders were missing from the served stream (ADR 0124). The usage
+pill reads its counts from the **compacted stream** (`lastAssistantStreamChunk(stream,
+"usage")`, then `normalizeUsage`, which needs `inputTokens` and `outputTokens`), and this
+host only ever put them on the settlement record -- so the counts were on the wire and the
+pill still never appeared. There was no `finish` chunk, which is what tells a finished
+answer from one waiting on tools. And a run cancelled while a tool was running left that
+call unanswered, so the console showed the card as running forever.
+
+The live attempt now streams a `usage` chunk (the console's token names) and a `finish`
+chunk whose reason is `stop` or `tool-calls` from the durable `toolCallCount`, and both are
+appended to the compacted stream as verbatim chunk records -- the shape the client's own
+expander passes through, so a loaded session reads the same pill as a live one. A cancelled
+or failed run answers each outstanding call with `isError: true` and
+`error: {name: "Interrupted", code: "interrupted"}`, upstream's own pair, which the console
+renders as "stopped".
+
+Live: a real qwen-plus turn that ran a shell tool served a stream the bundle's own
+`expandAssistantStream` expands to `text-delta ×7, usage, finish` with `normalizeUsage`
+reporting the pill renders, and a turn cancelled during `sleep 45` served the interrupted
+tool result; `validateSessionEventData` accepted all twelve records.
+
+Not done: a failed tool keeps only `isError: true` (upstream has no execution-failure code to
+mirror), and tool-call deltas are still not streamed.
+
 ## Shipped: the prompt cards (2026-09-21)
 
 The chat flow's two prompt cards were empty. `system/message` is surface-eligible and was
