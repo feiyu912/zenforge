@@ -256,6 +256,8 @@ nav:
       - 0112 The coverage ledger's gaps are a dated audit: adr/0112-the-coverage-ledgers-gaps-are-a-dated-audit.md
       - 0113 Cancel reaches the turn that is running: adr/0113-cancel-reaches-the-turn-that-is-running.md
       - 0114 A follow stream follows the conversation: adr/0114-a-follow-stream-follows-the-conversation.md
+      - 0115 An approval names the conversation: adr/0115-an-approval-names-the-conversation.md
+      - 0116 The answer streams as assistant-stream frames: adr/0116-the-answer-streams-as-assistant-frames.md
 
 extra:
   social:

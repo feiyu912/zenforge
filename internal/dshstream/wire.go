@@ -198,6 +198,68 @@ type assistantBaseline struct {
 	Revision int `json:"revision"`
 }
 
+// assistantStreamValue is one dense assistant-stream item:
+// {type:"assistant-stream", frame} (session-controller/src/client/assistant-stream.ts).
+// It rides the session/follow connection next to the durable event records and is
+// how the console renders an answer as it arrives.
+type assistantStreamValue struct {
+	Type  string `json:"type"`
+	Frame any    `json:"frame"`
+}
+
+// assistantStartFrame opens one model attempt. The client accepts a start frame
+// only when no attempt is open and no settlement is staged, and it binds the
+// attempt to the turn and step its settlement will name.
+type assistantStartFrame struct {
+	Type            string `json:"type"`
+	AttemptID       string `json:"attemptId"`
+	Revision        int    `json:"revision"`
+	StartedAfterSeq int64  `json:"startedAfterSeq"`
+	Turn            int    `json:"turn"`
+	Step            int    `json:"step"`
+}
+
+// assistantChunkFrame carries one content delta. index is the frame's own
+// position in the attempt and must be exactly the next one the client expects;
+// the chunk inside addresses the block the reducer merges it into.
+type assistantChunkFrame struct {
+	Type      string `json:"type"`
+	AttemptID string `json:"attemptId"`
+	Revision  int    `json:"revision"`
+	Index     int    `json:"index"`
+	Time      int64  `json:"time"`
+	Chunk     any    `json:"chunk"`
+}
+
+// assistantDeltaChunk is one streamed delta in the client's StreamChunk
+// vocabulary. The reducer reads index and, per type, text; nothing else.
+type assistantDeltaChunk struct {
+	Type  string `json:"type"`
+	Index int    `json:"index"`
+	Text  string `json:"text"`
+}
+
+// assistantEndFrame closes one attempt. A committed outcome names the durable
+// settlement it releases -- the client stages that record while the attempt is
+// open and publishes it when this frame arrives -- and an abandoned outcome drops
+// the attempt's live text.
+type assistantEndFrame struct {
+	Type      string           `json:"type"`
+	AttemptID string           `json:"attemptId"`
+	Revision  int              `json:"revision"`
+	Index     int              `json:"index"`
+	Outcome   assistantOutcome `json:"outcome"`
+}
+
+// assistantOutcome is the end frame's union: {kind:"abandoned"} exactly, or
+// {kind:"committed", eventType, seq}. The omitempty tags are what keeps the
+// abandoned arm from carrying keys the client's schema does not allow.
+type assistantOutcome struct {
+	Kind      string `json:"kind"`
+	EventType string `json:"eventType,omitempty"`
+	Seq       int64  `json:"seq,omitempty"`
+}
+
 // eventRecord is one SessionHistoryRecord: a durable event wrapped in the
 // {type:"event", event} envelope used by both the snapshot records and the
 // live event items.

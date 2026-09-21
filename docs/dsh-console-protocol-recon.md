@@ -475,6 +475,32 @@ Stream items (`SessionFollowFrame`, `types.ts:516-527`):
     "chunk": { "type":"text-delta", "index":0, "text":"Hel" } } }
 ```
 
+**Corrected 2026-09-21 (ADR 0116):** the frames are not optional decoration — they
+are the only channel the chat surface renders live prose from, and three of their
+rules are load-bearing (all read from the shipped client, then confirmed against a
+real answer in a browser):
+
+- **`revision` counts frames, not attempts.** `session-wire.ts` computes
+  `expected = (assistantRevision ?? 0) + 1` for *every* frame and throws
+  `session assistant stream skipped a revision` as a
+  `RemoteStreamCarrierError` when a frame does not match — which the transport
+  answers by tearing the stream down and reopening it, so a per-attempt counter is
+  a silent ~100 ms restart loop, not an error the operator can see. The counter
+  starts at the snapshot baseline's `revision` (0).
+- **`index` counts chunks within the attempt**, from 0, contiguous: the client
+  rebaselines (restarts the stream) on a gap, and a frame whose `attemptId` does not
+  match the open attempt is dropped silently.
+- **The settlement is staged, not published.** The durable
+  `assistant/message`/`assistant/attempt` record is held while its attempt is open
+  (matched by `data.turn` and `data.step`) and released only by
+  `end.outcome = {kind:"committed", eventType, seq}` naming that record. A
+  committed end with no staged settlement, or with the wrong `eventType`/`seq`,
+  rebaselines. An `end` with `{kind:"abandoned"}` drops the attempt's text, and is
+  the right close for a retried step or a turn that ends mid-attempt.
+
+A host that never sends these frames is not broken, just slow: the answer appears
+with its settlement.
+
 - `SessionWireEvent` envelope (`types.ts:428-438`): `{type:string, seq:number, time:number,
   data:JsonValue, ignorable?:true, sourceEventSeqs?:JsonValue, surfaceOp?:JsonValue}`.
   The client rejects **unexpected fields** and requires `seq`/`time` safe integers
@@ -549,6 +575,14 @@ There is **no `approval` RPC namespace**. It is the forwarded waterfall
   receives `next`/`rejected` outcome kinds must fail closed.
 - The client only answers when the request is scoped to a session it knows
   (`ui-approval/src/client/index.ts:42-43`); `next()` delegates onward.
+
+  **Correction 2026-09-21 (ADR 0115):** that scoping reads `agentId` through
+  `ctx.sessions.scopeOf(owner)`, so `agentId` must be the **session id the console
+  has open** — which is the id `session/list` and the sidebar use, not a
+  conversation's later turn's `<session>~<turn>` run id. A waterfall that named the
+  turn was delivered and dropped, and the turn waited for an answer it could not
+  be given (the operator's `Waiting for approval` with no panel). The answer still
+  routes back by `clientId` + `eventId`.
 
 The zenforge side already has `approval.PendingBroker` / `EventApprovalRequested` /
 `EventApprovalResolved` (`events.go:57-59`, `server/harnesshttp/handler.go:503,565`), so this maps

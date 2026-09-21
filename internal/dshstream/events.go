@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/feiyu912/zenforge/approval"
+	"github.com/feiyu912/zenforge/internal/dshsession"
 )
 
 // runEvents serves the $events logical stream.
@@ -109,11 +110,18 @@ func (h *Handler) deliverApprovals(ctx context.Context, send func(any) error, de
 		}
 		delivered[id] = struct{}{}
 		request := current[id]
+		// The console scopes an approval by the session it belongs to: its
+		// approval panel resolves the event's agent to a session it has open and
+		// drops the request ("next()") when it cannot. A conversation's later turn
+		// runs under "<session>~<turn>" (ADR 0108), which is not an id the console
+		// knows, so the waterfall names the conversation. The answer still routes
+		// by eventId and clientId, and the request id names the turn it belongs to.
+		sessionID, _ := dshsession.Base(request.RunID)
 		if err := send(waterfallValue{
 			Type:    "waterfall",
 			Event:   "approval/request",
 			EventID: request.ID,
-			AgentID: request.RunID,
+			AgentID: sessionID,
 			Request: approvalRequestPayload(request),
 		}); err != nil {
 			return err

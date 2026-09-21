@@ -39,7 +39,9 @@ does not serve the remaining **53**.
 | **client methods total** | **109** |
 
 The WebSocket mux also mounts `$events`, which is not part of the client's
-method list.
+method list: its opening frame is `ready`, and it delivers one `approval/request`
+waterfall per pending approval, naming the **conversation** so the console can
+attach the prompt to the session it has open (ADR 0115).
 
 ## Served methods
 
@@ -83,7 +85,7 @@ method list.
 | `workspaceFiles/readBytes` | served | Read a byte range of a file. |
 | `workspaceFiles/stat` | served | Stat a workspace path. |
 | `session/control` | stream | The control stream: job and model-selection projections. |
-| `session/follow` | stream | The follow stream: a session's durable event log, projected into the console's vocabulary. A draft's stream opens empty and waits for its first turn (ADR 0104, ADR 0105). A resumed stream cites a cursor ahead of the one the console already applied, so a second prompt does not break history loading (ADR 0108). A turn ending does not end the stream: it waits for the conversation's next turn and continues the same sequence, because the client treats a clean end after the snapshot as a carrier failure and reconnects over whatever `Load earlier` fetched (ADR 0114). |
+| `session/follow` | stream | The follow stream: a session's durable event log, projected into the console's vocabulary. A draft's stream opens empty and waits for its first turn (ADR 0104, ADR 0105). A resumed stream cites a cursor ahead of the one the console already applied, so a second prompt does not break history loading (ADR 0108). A turn ending does not end the stream: it waits for the conversation's next turn and continues the same sequence, because the client treats a clean end after the snapshot as a carrier failure and reconnects over whatever `Load earlier` fetched (ADR 0114). The answer streams: the same durable deltas are minted into the console's dense `assistant-stream` frames (start/chunk/end, a per-frame revision, the settlement released by the end frame that names it), so prose renders as it arrives instead of at the step's settlement (ADR 0116). |
 | `workspace/follow` | stream | The workspace stream: every registration and the archived set. |
 
 ## Refused by name

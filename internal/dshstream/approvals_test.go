@@ -6,7 +6,36 @@ import (
 	"time"
 
 	"github.com/feiyu912/zenforge/approval"
+	"github.com/feiyu912/zenforge/internal/dshsession"
 )
+
+// A conversation's later turn runs under "<session>~<turn>" (ADR 0108), but the
+// console only shows an approval for a session it has open: its panel resolves
+// the event's agent through ctx.sessions.scopeOf and delegates onward ("next()")
+// when that fails. A waterfall that named the turn was therefore delivered and
+// dropped, and the turn waited for an answer nobody could give.
+func TestApprovalWaterfallNamesTheSessionNotTheTurn(t *testing.T) {
+	f := newFixture(t, Config{})
+	sessionID := f.startRun(t, "scoped")
+	turnRunID := dshsession.ContinuationRunID(sessionID, 2)
+	request := newApprovalRequest("approval-scoped", turnRunID)
+	pendingDecision(t, f.broker, request)
+	<-f.broker.Requests()
+
+	conn := f.mustDial(t)
+	openEventsStream(t, conn, "events")
+	waterfall := readItem(t, conn, "events")
+	assertField(t, waterfall, "type", "waterfall")
+
+	agentID, _ := stringField(t, waterfall, "agentId")
+	if agentID != sessionID {
+		t.Fatalf("agentId = %q, want the session id %q", agentID, sessionID)
+	}
+	eventID, _ := stringField(t, waterfall, "eventId")
+	if eventID != request.ID {
+		t.Fatalf("eventId = %q, want %q so the answer still routes", eventID, request.ID)
+	}
+}
 
 func TestEventsResultAllowsOnce(t *testing.T) {
 	f := newFixture(t, Config{})

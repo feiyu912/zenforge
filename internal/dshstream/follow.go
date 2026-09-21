@@ -122,6 +122,14 @@ func (h *Handler) runFollow(ctx context.Context, payload []byte, send func(any) 
 	// (api/gateway/src/client/journal-stream.ts assertPageThrough + follows +
 	// opening). A session-wide sequence is what makes all four hold across turns.
 	cursor := log.Cursor()
+	// The console renders the answer from dense assistant-stream frames, not from
+	// the ignorable records its deltas project to, so the tail mints them from the
+	// same durable events. Only a client that asked for the stream's baseline gets
+	// them: the frames and the baseline are one capability.
+	var assistant *assistantTracker
+	if request.assistantStream {
+		assistant = newAssistantTracker(runID, cursor)
+	}
 	window, hasMore := log.Window(request.maxMessages)
 	records := make([]eventRecord, 0, len(window))
 	for _, event := range window {
@@ -175,6 +183,9 @@ func (h *Handler) runFollow(ctx context.Context, payload []byte, send func(any) 
 		// events to project yet; its first event creates the record.
 		tail = dshwire.Project(nil, turnIdentity(draftTurn))
 	}
+	if assistant != nil {
+		assistant.startTurn(runID, draftTurn)
+	}
 	for {
 		if draft {
 			if err := h.awaitDraftRun(ctx, runID); err != nil {
@@ -190,7 +201,7 @@ func (h *Handler) runFollow(ctx context.Context, payload []byte, send func(any) 
 			}
 			return streamFail(codeInternal, "follow session: "+err.Error(), nil)
 		}
-		ended, failure := pumpTurn(ctx, live, liveErr, tail, send)
+		ended, failure := pumpTurn(ctx, live, liveErr, tail, assistant, send)
 		if failure != nil {
 			return failure
 		}
@@ -216,6 +227,9 @@ func (h *Handler) runFollow(ctx context.Context, payload []byte, send func(any) 
 		// identity is where its own durable sequence moves onto the session's, so
 		// the first frame it projects is one past the cursor the console holds.
 		tail = dshwire.Project(nil, nextLog.NewestIdentity)
+		if assistant != nil {
+			assistant.startTurn(runID, nextLog.NewestTurn)
+		}
 	}
 }
 
@@ -223,7 +237,28 @@ func (h *Handler) runFollow(ctx context.Context, payload []byte, send func(any) 
 // turn's log ends, the client goes away or the stream fails. ended reports that
 // the turn reached the end of its log normally: the caller continues the
 // conversation with its next turn instead of ending the stream.
-func pumpTurn(ctx context.Context, live <-chan zenforge.Event, liveErr <-chan error, tail *dshwire.Projection, send func(any) error) (bool, error) {
+//
+// Each durable event is sent twice over the same connection: its console record,
+// and (for a client that asked for the assistant stream) the dense frames its
+// model deltas and settlement produce. The frames are minted before the record
+// and its settlement's end frame after it, because the client stages a settlement
+// while its attempt is open and publishes it when the end frame names its
+// sequence.
+func pumpTurn(ctx context.Context, live <-chan zenforge.Event, liveErr <-chan error, tail *dshwire.Projection, assistant *assistantTracker, send func(any) error) (bool, error) {
+	// A turn that ends with an attempt still open -- cancelled mid-answer, or a log
+	// that stops between attempts -- leaves the console rendering text that will
+	// never settle. Closing it is what keeps the next turn's start frame from
+	// making the client rebaseline.
+	defer func() {
+		if assistant == nil {
+			return
+		}
+		for _, frame := range assistant.close() {
+			if err := send(frame); err != nil {
+				return
+			}
+		}
+	}()
 	for {
 		select {
 		case <-ctx.Done():
@@ -238,6 +273,13 @@ func pumpTurn(ctx context.Context, live <-chan zenforge.Event, liveErr <-chan er
 			if !ok {
 				return true, nil
 			}
+			if assistant != nil {
+				for _, frame := range assistant.onEvent(event) {
+					if err := send(frame); err != nil {
+						return false, err
+					}
+				}
+			}
 			// Continue the snapshot's projection of this turn rather than starting
 			// a new one: the step being streamed is the same step, its settlement
 			// must carry the deltas the snapshot already counted, and the turn's
@@ -247,6 +289,13 @@ func pumpTurn(ctx context.Context, live <-chan zenforge.Event, liveErr <-chan er
 			projected := tail.Events[len(tail.Events)-1]
 			if err := send(eventRecord{Type: "event", Event: projected}); err != nil {
 				return false, err
+			}
+			if assistant != nil {
+				for _, frame := range assistant.onRecord(projected) {
+					if err := send(frame); err != nil {
+						return false, err
+					}
+				}
 			}
 		}
 	}

@@ -543,6 +543,38 @@ wrote an event is omitted, because `session/page` answers not-found for it; and 
 log has no terminal event is recorded as cancelled when it is adopted. Drafts stay
 process-local (ADR 0104).
 
+## Shipped: an approval names the conversation, and the answer streams (2026-09-21)
+
+Two operator reports, one per layer, both reproduced in a real browser against a
+real model.
+
+**"Waiting for approval" with no panel.** A turn sat at `approval.requested` forever
+while the console showed `Running / Tool call / shell · go build ./...`. The host was
+delivering the waterfall; the panel dropped it, because the client attaches an
+approval to a session it has open through the waterfall's `agentId` and this host
+wrote the **turn's** run id into it. A first turn is its own session id, so its
+approvals had always rendered; a later turn runs under `<session>~<turn>` and its
+requests went nowhere. The waterfall now names the conversation
+(`dshsession.Base`), the answer still routes by `clientId`/`eventId`, and the
+regression is pinned by a test that fails on the old value with
+`agentId = "run_…~2", want the session id "run_…"` (ADR 0115). Verified live: turn 1's
+panel appears and "Allow once" runs the command; turn 2's panel appears too and
+answering it finishes the turn (`2 turns 3 steps`).
+
+**"Why isn't it streaming?"** The model's tokens were already durable as
+`model.delta`, but their console records are marked ignorable and the surface skips
+them, and the channel the console renders live prose from — `assistant-stream`
+items (start/chunk/end) — was never sent. The follow stream now mints those frames
+from the same durable events (ADR 0116). The trap that cost the most time: the
+client requires `revision` to increment on **every frame**, not once per attempt,
+and a mismatch is a *carrier failure* — the stream is torn down and reopened, so the
+first implementation produced a silent ~100 ms restart loop with a fresh generation
+per chunk. Measured after the fix, one answer:
+`{start: 1, chunk: 16, end: 1}`, revisions `1…18` in order, one committed end naming
+the settlement's sequence, and the page's rendered text growing in six visible
+steps. Both corrections are recorded in the recon, which is where a future window
+should read them before touching these frames.
+
 ## Shipped: a follow stream follows the conversation (2026-09-21)
 
 The operator asked a second question and reported that "Load earlier" appeared and then could
@@ -669,10 +701,12 @@ serves `qwen-plus`, and the card shows only what is written on it.
 > sequence (ADR 0110), a submitted question is on screen exactly once because the run
 > records the caller's prompt identity (ADR 0111), and the ledger's "Next up" list is a dated
 > audit that no longer claims the browse directory picker is withheld (ADR 0112).
-> Stop reaches the turn that is running (ADR 0113) and a follow stream follows the conversation
-> instead of one turn, so "Load earlier" actually loads (ADR 0114). The next chain is "Next up" 1
-> in the ledger: `session/openWorkspacePath` and `session/canOpenWorkspacePath`, opening a
-> workspace into a session. If a scratch host is
+> Stop reaches the turn that is running (ADR 0113), a follow stream follows the conversation
+> instead of one turn so "Load earlier" actually loads (ADR 0114), an approval names the
+> conversation so a later turn's prompt is answerable (ADR 0115), and the answer streams as
+> assistant-stream frames (ADR 0116). The next chain is "Next up" 1 in the ledger:
+> `session/openWorkspacePath` and `session/canOpenWorkspacePath`, opening a workspace into a
+> session. If a scratch host is
 > needed, give it `ZENFORGE_CONFIG_DIR` or `--settings-file` under a throwaway directory so
 > it cannot rewrite the operator's document, and its own `--checkpoint-dir` too, because the
 > event store and the run registry are derived from it: a scratch host started in `/tmp`

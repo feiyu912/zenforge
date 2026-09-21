@@ -143,3 +143,5 @@ and what the adapter answers today is
 | [0112](0112-the-coverage-ledgers-gaps-are-a-dated-audit.md) | The coverage ledger's gaps are a dated audit |
 | [0113](0113-cancel-reaches-the-turn-that-is-running.md) | Cancel reaches the turn that is running |
 | [0114](0114-a-follow-stream-follows-the-conversation.md) | A follow stream follows the conversation, not one turn |
+| [0115](0115-an-approval-names-the-conversation.md) | An approval names the conversation, not the turn |
+| [0116](0116-the-answer-streams-as-assistant-frames.md) | The answer streams as assistant-stream frames |

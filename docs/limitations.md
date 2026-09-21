@@ -164,12 +164,19 @@ what is experimental, and what remains adapter territory.
   host was killed mid-turn is listed as finished and can be continued, because a
   record whose lease expired is not reported as running. A session that never
   started a turn is still process-local (ADR 0104).
-- The sidebar does not mutate live, background-job panels are empty, and
-  assistant prose does not stream through the console's delta channel: this
-  harness has a per-run event log, no global change feed, no job projections and
-  no console-shaped delta protocol. Session lists, event follow, the workspace
-  file sidebar, commands, the model/settings panels and approvals do work. See
-  ADR 0083.
+- **Assistant prose streams** (ADR 0116): the follow stream mints the console's
+  dense `assistant-stream` frames from the harness's own durable deltas, so an
+  answer renders token by token instead of appearing when its step settles. The
+  honest limits: a reconnect in the middle of an answer does not re-baseline the
+  open attempt (the partial text appears with its settlement), tool-call arguments
+  do not stream (this harness emits a complete `tool.call`), and the delta records
+  still occupy session-window slots, which is why a long answer can still make
+  `Load earlier` necessary.
+- The sidebar does not mutate live, background-job panels are empty, and there
+  are no agent-emit frames: this harness has a per-run event log, no global change
+  feed and no job projections. Session lists, event follow, the workspace file
+  sidebar, commands, the model/settings panels, approvals and streamed answers do
+  work. See ADR 0083.
 - Every namespace a shipped panel calls is served or refused by name
   (ADR 0084-0097). Methods this host does not implement -- `terminal`,
   `subagents`, `officeToPdf`, session forks, search, attachments -- answer a bare
@@ -194,8 +201,7 @@ what is experimental, and what remains adapter territory.
   event with no console meaning travels as an explicitly ignorable record. What
   the projection does not yet carry: the console's compact timed `stream` inside
   an assistant message (the text is settled into content blocks, and the
-  trajectory view's byte-exact chunk list is empty), live token streaming (the
-  answer appears when the step settles rather than token by token), and a
+  trajectory view's byte-exact chunk list is empty), and a
   structured provider failure identity on a tool result (a failed tool states
   `isError` on its block with no console-side name/code envelope). A session that has been created but has not
   started a turn -- the draft the console opens before its first prompt -- is
