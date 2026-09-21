@@ -546,6 +546,27 @@ wrote an event is omitted, because `session/page` answers not-found for it; and 
 log has no terminal event is recorded as cancelled when it is adopted. Drafts stay
 process-local (ADR 0104).
 
+## Shipped: the prompt cards (2026-09-21)
+
+The chat flow's two prompt cards were empty. `system/message` is surface-eligible and was
+never emitted, and `request/header` had no anchor at all -- while the assembled prompt
+existed only as **messages in the checkpoint**, which a projection cannot read.
+
+A run now writes one durable `system.prompt` at the step that first sends the prompt, and
+the projector turns its sections into one appended `system/message` per section, stamped
+with the turn and step the harness assembled them for (ADR 0123). Each attempt that opens a
+request emits `request/header` with `{header:{config:{provider,model}}}` and its reason --
+omitting `header.system`, which the console's validator rejects outright, and empty `tools`.
+A second step on the same route mints no second card, matching upstream's "only when the
+request changed" rule.
+
+Live: one real qwen-plus turn served 11 records including both `system/message` sections
+(one persona, one environment context) and the header, and the console bundle's own
+`validateSessionEventData` accepted all eleven.
+
+Not done, and said so in the ADR: `request/context` has no consumer in the shipped console
+and this host records no per-request context window.
+
 ## Shipped: the built-in provider routes are editable (2026-09-21)
 
 The Models page could not edit the routes this host is built to serve. The console

@@ -133,6 +133,12 @@ type Projector struct {
 	// carries it as `stream`, which is where the console's trajectory view reads
 	// the byte-exact answer from (ADR 0117).
 	chunks []wireChunks
+	// headerConfig is the provider/model of the last request header this run
+	// logged. The console's request-prompt card is anchored on the header event,
+	// and upstream logs one only when the model-visible request changes -- the
+	// first request of a series, or a different provider/model (agent-loop
+	// buildRequest) -- so an unchanged request must not mint a second card.
+	headerConfig string
 	// pending holds the records the last durable event produced beyond the first,
 	// in order. One durable event can need more than one console record, and the
 	// console renders them in this order.
@@ -252,6 +258,29 @@ func (p *Projector) project(event zenforge.Event) []Event {
 				userMessage(seq, text, promptIdentity(data))))
 		}
 		return out
+	case zenforge.EventSystemPrompt:
+		// One system node per section, which is how the prompt is assembled: the
+		// console keeps the loaded system nodes in surface order and reads the last
+		// non-empty one as the prompt in force (ui-conversation
+		// contract/system-prompt.ts inspectSystemPrompt).
+		step, _ := intField(payload(event), "step")
+		sections, _ := payload(event)["sections"].([]any)
+		for _, raw := range sections {
+			text, ok := raw.(string)
+			if !ok || text == "" {
+				continue
+			}
+			seq := p.nextSeq()
+			out = append(out, p.surface(Event{Seq: seq, Time: event.Timestamp}, "system/message",
+				map[string]any{
+					"turn": p.identity.turn(),
+					"step": step,
+					"message": map[string]any{
+						"content": []any{map[string]any{"type": "text", "text": text}},
+					},
+				}))
+		}
+		return out
 	}
 	record, ok := p.projectOne(event)
 	if ok {
@@ -319,10 +348,32 @@ func (p *Projector) projectOne(event zenforge.Event) (Event, bool) {
 	case zenforge.EventModelStarted:
 		// A new attempt starts a fresh stream; a retried step must not carry the
 		// failed attempt's text into its settlement.
-		if step, ok := intField(data, "step"); ok {
-			p.current = step
-		}
+		step, _ := intField(data, "step")
+		p.current = step
 		p.resetStep()
+		// The request itself, which is what the console's request-prompt card and
+		// its context meter are built from. The provider/model are the run's own
+		// identity: the host does not record them per attempt, because they are the
+		// route the run was started on.
+		config := p.identity.Provider + "\x00" + p.identity.Model
+		if config != p.headerConfig {
+			reason := "change"
+			if p.headerConfig == "" {
+				reason = "initial"
+			}
+			p.headerConfig = config
+			return p.emit(base.known("request/header", map[string]any{
+				"turn":   p.identity.turn(),
+				"step":   step,
+				"reason": reason,
+				"header": map[string]any{
+					"config": map[string]any{
+						"provider": p.identity.Provider,
+						"model":    p.identity.Model,
+					},
+				},
+			}))
+		}
 	case zenforge.EventModelDelta:
 		if delta, ok := stringField(data, "textDelta"); ok {
 			p.appendBlock("text", delta, base.Time)

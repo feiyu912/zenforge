@@ -151,3 +151,4 @@ and what the adapter answers today is
 | [0120](0120-the-file-surfaces-the-console-reads.md) | The file surfaces the console reads |
 | [0121](0121-the-turn-and-step-boundaries-the-console-reads.md) | The turn and step boundaries the console reads |
 | [0122](0122-the-built-in-routes-are-editable-cards.md) | The built-in routes are editable cards |
+| [0123](0123-the-prompt-cards-the-console-renders.md) | The prompt cards the console renders |

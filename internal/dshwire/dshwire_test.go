@@ -196,6 +196,80 @@ func TestProjectionMarksOnlySurfaceEvents(t *testing.T) {
 	}
 }
 
+// TestProjectionServesTheSystemPromptAndTheRequestHeader pins the two records the
+// console's prompt cards are built from. The prompt card renders the loaded
+// `system/message` nodes -- one per assembled section -- and the request card is
+// anchored on `request/header`, whose payload must not carry the system text (the
+// console rejects a header that does: "must omit header.system; use system/message")
+// and must omit an empty tool list (ADR 0123).
+func TestProjectionServesTheSystemPromptAndTheRequestHeader(t *testing.T) {
+	events := []zenforge.Event{
+		event(1, zenforge.EventRunStarted, map[string]any{"input": "hello"}),
+		event(2, zenforge.EventStepStarted, map[string]any{"step": 1}),
+		event(3, zenforge.EventSystemPrompt, map[string]any{"step": 1, "sections": []any{"you are an agent", "project rules"}}),
+		event(4, zenforge.EventModelStarted, map[string]any{"step": 1}),
+		event(5, zenforge.EventModelDelta, map[string]any{"step": 1, "textDelta": "hi"}),
+		event(6, zenforge.EventModelDone, map[string]any{"step": 1}),
+		event(7, zenforge.EventStepDone, map[string]any{"step": 1}),
+	}
+	identity := Identity{Provider: "openai", Model: "qwen-plus"}
+	projected := Project(events, identity)
+	want := []string{
+		"turn/start", "user/message", "step/start", "system/message", "system/message",
+		"request/header", "assistant/message", "step/end",
+	}
+	if got := eventTypes(projected.Events); !reflect.DeepEqual(got, want) {
+		t.Fatalf("window = %v, want %v", got, want)
+	}
+	var texts []string
+	for _, record := range projected.Events {
+		if record.Type != "system/message" {
+			continue
+		}
+		if record.SurfaceOp != "append" {
+			t.Fatalf("system/message surfaceOp = %q, want append", record.SurfaceOp)
+		}
+		if record.Data["turn"] != 1 || record.Data["step"] != 1 {
+			t.Fatalf("system/message turn/step = %v/%v, want 1/1", record.Data["turn"], record.Data["step"])
+		}
+		message, ok := record.Data["message"].(map[string]any)
+		if !ok {
+			t.Fatalf("system/message message = %v, want an object", record.Data["message"])
+		}
+		content, ok := message["content"].([]any)
+		if !ok || len(content) != 1 {
+			t.Fatalf("system/message content = %v, want one block", message["content"])
+		}
+		block, _ := content[0].(map[string]any)
+		if block["type"] != "text" {
+			t.Fatalf("system/message block = %v, want a text block", block)
+		}
+		text, _ := block["text"].(string)
+		texts = append(texts, text)
+	}
+	if !reflect.DeepEqual(texts, []string{"you are an agent", "project rules"}) {
+		t.Fatalf("system prompt sections = %v, want both sections in order", texts)
+	}
+	header := findByType(t, projected.Events, "request/header")
+	if header.Data["turn"] != 1 || header.Data["step"] != 1 || header.Data["reason"] != "initial" {
+		t.Fatalf("request/header = %v, want step 1 of turn 1 with the initial reason", header.Data)
+	}
+	payloadOf, ok := header.Data["header"].(map[string]any)
+	if !ok {
+		t.Fatalf("request/header header = %v, want an object", header.Data["header"])
+	}
+	if _, present := payloadOf["system"]; present {
+		t.Fatal("request/header carries header.system; the console rejects it and reads the system prompt from system/message")
+	}
+	if _, present := payloadOf["tools"]; present {
+		t.Fatal("request/header carries tools; the console rejects an empty tool list")
+	}
+	config, ok := payloadOf["config"].(map[string]any)
+	if !ok || config["provider"] != "openai" || config["model"] != "qwen-plus" {
+		t.Fatalf("request/header config = %v, want the run's route", payloadOf["config"])
+	}
+}
+
 // TestProjectionServesTheConsoleItsOwnWindow pins what the operator sees: a
 // turn's window holds the console's events and nothing else. The host's
 // bookkeeping and the model deltas are absent, which is upstream's shape and what
@@ -204,9 +278,12 @@ func TestProjectionMarksOnlySurfaceEvents(t *testing.T) {
 func TestProjectionServesTheConsoleItsOwnWindow(t *testing.T) {
 	projected := project(t, aTurn())
 	want := []string{
-		"turn/start", "user/message", "step/start", "assistant/message", "tool/call",
-		"tool/result", "step/end", "step/start", "assistant/message",
-		"step/end", "turn/end",
+		"turn/start", "user/message", "step/start", "request/header", "assistant/message",
+		// One header for the run: a second step on the same route does not change the
+		// model-visible request, and upstream logs a header only when it does
+		// (ADR 0123).
+		"tool/call", "tool/result", "step/end", "step/start",
+		"assistant/message", "step/end", "turn/end",
 	}
 	if got := eventTypes(projected); !reflect.DeepEqual(got, want) {
 		t.Fatalf("window = %v, want %v", got, want)
@@ -318,14 +395,14 @@ func TestProjectionContinuesAfterASnapshot(t *testing.T) {
 	if got := firstText(t, assistant.Data); got != "Hello there" {
 		t.Fatalf("assistant text = %q, want the deltas from both halves", got)
 	}
-	// Four records: the turn's opening marker, the prompt, step/start and the one
-	// settled message. The deltas and the model events between them are not records
-	// (ADR 0117).
-	if len(projection.Events) != 4 {
-		t.Fatalf("records = %d, want 4: %v", len(projection.Events), eventTypes(projection.Events))
+	// Five records: the turn's opening marker, the prompt, step/start, the request
+	// header its attempt opened, and the one settled message. The deltas and the
+	// other model events between them are not records (ADR 0117, 0123).
+	if len(projection.Events) != 5 {
+		t.Fatalf("records = %d, want 5: %v", len(projection.Events), eventTypes(projection.Events))
 	}
-	if assistant.Seq != 4 {
-		t.Fatalf("assistant message cites seq %d, want the fourth record", assistant.Seq)
+	if assistant.Seq != 5 {
+		t.Fatalf("assistant message cites seq %d, want the fifth record", assistant.Seq)
 	}
 }
 

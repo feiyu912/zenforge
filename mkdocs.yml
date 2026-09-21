@@ -264,6 +264,7 @@ nav:
       - 0120 The file surfaces the console reads: adr/0120-the-file-surfaces-the-console-reads.md
       - 0121 The turn and step boundaries the console reads: adr/0121-the-turn-and-step-boundaries-the-console-reads.md
       - 0122 The built-in routes are editable cards: adr/0122-the-built-in-routes-are-editable-cards.md
+      - 0123 The prompt cards the console renders: adr/0123-the-prompt-cards-the-console-renders.md
 
 extra:
   social:

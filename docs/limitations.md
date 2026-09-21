@@ -157,6 +157,15 @@ what is experimental, and what remains adapter territory.
   the conversation's turns share one sequence, and the follow stream stays open across
   them, so the second prompt loads its history and `Load earlier` reaches the first turn
   instead of being undone by a reconnect.
+- **The chat flow's prompt cards are served** (ADR 0123): a run writes the assembled
+  system prompt as a durable `system.prompt` at the step that first sends it, and the
+  console renders it from its own `system/message` surface event -- one node per
+  assembled section, in the order the model received them -- with the request header
+  (`provider`, `model`, and why it was logged) anchored beside it. The prompt is the one
+  the model actually received, not a reconstruction from the flags the host holds. What
+  is still missing: `request/context` (the context window and prompt-update record) is
+  not emitted, because the shipped console has no consumer for it and this host records
+  no per-request context window.
 - **The sidebar survives a restart** (ADR 0109): `zenforge serve` keeps a SQLite
   run registry in its state directory (`<checkpoint-dir>/run-registry.sqlite`), so
   the console lists the conversations this install served after the host restarts,

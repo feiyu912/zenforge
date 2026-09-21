@@ -21,10 +21,15 @@ const (
 	// EventRunReverted marks an append-only rewind: the run's newest
 	// checkpoint is the state at the marker's checkpointSeq, and the log
 	// retains every event of the abandoned branch.
-	EventRunReverted        EventType = "run.reverted"
-	EventRequestSteer       EventType = "request.steer"
-	EventStepStarted        EventType = "step.started"
-	EventStepDone           EventType = "step.done"
+	EventRunReverted  EventType = "run.reverted"
+	EventRequestSteer EventType = "request.steer"
+	EventStepStarted  EventType = "step.started"
+	EventStepDone     EventType = "step.done"
+	// EventSystemPrompt carries the assembled system prompt for a run. It is this
+	// host's own durable record, not a console event: the console renders the
+	// prompt from its `system/message` surface event, and a projection reads
+	// events, so the text has to be on the log rather than only in a checkpoint.
+	EventSystemPrompt       EventType = "system.prompt"
 	EventModelStarted       EventType = "model.started"
 	EventModelDelta         EventType = "model.delta"
 	EventModelDone          EventType = "model.done"

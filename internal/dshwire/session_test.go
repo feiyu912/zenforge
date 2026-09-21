@@ -49,11 +49,12 @@ func TestSessionLogContinuesTheSequenceAcrossTurns(t *testing.T) {
 	if len(log.Runs) != 2 || log.NewestRun != "run_one~2" || log.NewestTurn != 2 {
 		t.Fatalf("session resolved to %+v, want two turns ending at run_one~2", log)
 	}
-	// Eleven console records per turn, from eighteen durable events each: the served
-	// sequence counts what the console reads, and the turn's own opening marker is
-	// one of them (ADR 0117, 0121).
-	if len(log.Records) != 22 {
-		t.Fatalf("records = %d, want both turns' 22 records", len(log.Records))
+	// Twelve console records per turn -- the eleven the console's transcript is made
+	// of plus the request header its attempt opens (ADR 0117, 0121, 0123): the
+	// served sequence counts what the console reads, and the turn's own opening
+	// marker is one of them.
+	if len(log.Records) != 24 {
+		t.Fatalf("records = %d, want both turns' 24 records", len(log.Records))
 	}
 	// Strictly increasing and contiguous, across the turn boundary included: the
 	// second turn's own numbering from one is shifted past the first turn.
@@ -63,7 +64,7 @@ func TestSessionLogContinuesTheSequenceAcrossTurns(t *testing.T) {
 			t.Fatalf("record %d has seq %d, want %d", index, record.Seq, want)
 		}
 	}
-	if log.Cursor() != 22 {
+	if log.Cursor() != 24 {
 		t.Fatalf("cursor = %d, want the session's newest sequence", log.Cursor())
 	}
 	// The durable tail of the newest turn is its own sequence, not the session's:
@@ -89,7 +90,7 @@ func TestSessionLogNumbersTheSecondTurnAsATurn(t *testing.T) {
 			continue
 		}
 		want := 1
-		if record.Seq > 11 {
+		if record.Seq > 12 {
 			want = 2
 		}
 		if turn != want {
@@ -121,10 +122,10 @@ func TestSessionLogWindowSpansTurns(t *testing.T) {
 	if window[len(window)-1].Seq != log.Cursor() {
 		t.Fatalf("window ends at %d, want the cursor %d", window[len(window)-1].Seq, log.Cursor())
 	}
-	if window[0].Seq != 9 {
-		// The newest 14 of the conversation's 22 records reach back into the first
+	if window[0].Seq != 11 {
+		// The newest 14 of the conversation's 24 records reach back into the first
 		// turn, which is the point: a window is not turn-aligned.
-		t.Fatalf("window starts at %d, want 9 (a record of the first turn)", window[0].Seq)
+		t.Fatalf("window starts at %d, want 11 (a record of the first turn)", window[0].Seq)
 	}
 	for index := 1; index < len(window); index++ {
 		if window[index].Seq != window[index-1].Seq+1 {
@@ -133,8 +134,8 @@ func TestSessionLogWindowSpansTurns(t *testing.T) {
 	}
 
 	all, hasMore := log.Window(0)
-	if hasMore || len(all) != 22 {
-		t.Fatalf("unbounded window = %d records, hasMore = %v, want all 22 and false", len(all), hasMore)
+	if hasMore || len(all) != 24 {
+		t.Fatalf("unbounded window = %d records, hasMore = %v, want all 24 and false", len(all), hasMore)
 	}
 }
 
@@ -207,10 +208,10 @@ func TestSessionLogCountsEmptyTurnsWithoutSkippingNumbers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Session returned error: %v", err)
 	}
-	if log.Cursor() != 22 || len(log.Records) != 22 {
-		// Two real turns of five records each, and the empty middle turn numbers
-		// its own opening marker without skipping a number.
-		t.Fatalf("records = %d ending at %d, want 22 records ending at 22", len(log.Records), log.Cursor())
+	if log.Cursor() != 24 || len(log.Records) != 24 {
+		// Two real turns and an empty middle turn that numbers its own opening marker
+		// without skipping a number.
+		t.Fatalf("records = %d ending at %d, want 24 records ending at 24", len(log.Records), log.Cursor())
 	}
 	if log.NewestTurn != 3 {
 		t.Fatalf("newest turn = %d, want the third turn", log.NewestTurn)
@@ -263,8 +264,8 @@ func TestSessionLogIdentifiesMessagesByTheSessionSequence(t *testing.T) {
 	}
 	// The identity is the session's own sequence: each prompt is its turn's second
 	// record, right behind the turn's opening marker.
-	if at["msg-2"] != 2 || at["msg-13"] != 13 {
-		t.Fatalf("message identities = %v, want the two prompts at msg-2 and msg-13", at)
+	if at["msg-2"] != 2 || at["msg-14"] != 14 {
+		t.Fatalf("message identities = %v, want the two prompts at msg-2 and msg-14", at)
 	}
 	// Four messages per turn: the prompt, one assistant message per settled step
 	// with content, and the tool-result message.

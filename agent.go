@@ -1003,6 +1003,7 @@ func (a *Agent) runHarnessLoop(ctx context.Context, out chan<- Event, state harn
 		}
 	}
 
+	systemPromptLogged := false
 	runner := harness.Runner{
 		MaxSteps: a.config.MaxSteps,
 		Mode:     string(runStateMode(state, a.config)),
@@ -1010,8 +1011,36 @@ func (a *Agent) runHarnessLoop(ctx context.Context, out chan<- Event, state harn
 			if err := emit(EventType(eventType), data); err != nil {
 				return err
 			}
-			if EventType(eventType) == EventRunStarted {
+			switch EventType(eventType) {
+			case EventRunStarted:
 				return a.publishSessionTitle(emit, sessionTitleInput(state))
+			case EventStepStarted:
+				// The console's prompt card is built from its `system/message`
+				// surface event, and the assembled prompt is otherwise only in the
+				// checkpoint's message list -- which a projection cannot read. It is
+				// written once per run, at the step that first sends it, so the card
+				// carries the step it belongs to instead of a guessed one.
+				if systemPromptLogged {
+					return nil
+				}
+				sections, err := a.assembleSystemPrefix(state)
+				if err != nil {
+					// The prompt was validated before the loop started; a failure here
+					// is not worth failing a run that is already answering.
+					return nil
+				}
+				texts := make([]any, 0, len(sections))
+				for _, section := range sections {
+					if strings.TrimSpace(section.Content) == "" {
+						continue
+					}
+					texts = append(texts, section.Content)
+				}
+				if len(texts) == 0 {
+					return nil
+				}
+				systemPromptLogged = true
+				return emit(EventSystemPrompt, map[string]any{"step": stepOf(data), "sections": texts})
 			}
 			return nil
 		},
@@ -3161,6 +3190,21 @@ func (a *Agent) assembleSystemPrefix(state harness.RunState) ([]model.Message, e
 		messages = append(messages, model.Message{Role: "system", Content: section.Text})
 	}
 	return messages, nil
+}
+
+// stepOf reads the step number a runtime event reports. The runner passes it as
+// an int; a replayed or decoded payload may carry it as another numeric type, and
+// zero is the honest answer when it carries none.
+func stepOf(data map[string]any) int {
+	switch value := data["step"].(type) {
+	case int:
+		return value
+	case int64:
+		return int(value)
+	case float64:
+		return int(value)
+	}
+	return 0
 }
 
 // validatePrompt fails fast when the prompt cannot be assembled, before
