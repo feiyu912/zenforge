@@ -282,6 +282,10 @@ func (h *Handler) method(endpoint string) (methodFunc, bool) {
 			return h.workspaceCreate, true
 		case "rename":
 			return h.workspaceRename, true
+		case "insertBefore":
+			return h.workspaceInsertBefore, true
+		case "insertSessionBefore":
+			return h.workspaceInsertSessionBefore, true
 		case "delete":
 			return h.workspaceDelete, true
 		case "archiveSession":

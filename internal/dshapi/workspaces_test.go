@@ -24,6 +24,12 @@ type stubWorkspaces struct {
 	renameErr error
 	deleteErr error
 	attachErr error
+	insertErr error
+	moveErr   error
+
+	// moves records the manual-order calls the handlers made, so a test can pin
+	// the arguments the console's wire actually produced.
+	moves []string
 }
 
 func newStubWorkspaces(root string) *stubWorkspaces {
@@ -91,6 +97,54 @@ func (s *stubWorkspaces) Workspace(workspaceID string) (dshstream.WorkspaceView,
 	return view, ok
 }
 
+func (s *stubWorkspaces) InsertBefore(workspaceID, beforeWorkspaceID string) ([]string, error) {
+	s.moves = append(s.moves, "workspace "+workspaceID+" before "+beforeWorkspaceID)
+	if s.insertErr != nil {
+		return nil, s.insertErr
+	}
+	order := []string{"ws-host", "ws-other"}
+	if _, ok := s.views[workspaceID]; !ok {
+		return nil, notFound(workspaceID)
+	}
+	if beforeWorkspaceID != "" {
+		if _, ok := s.views[beforeWorkspaceID]; !ok {
+			return nil, notFound(beforeWorkspaceID)
+		}
+	}
+	without := make([]string, 0, len(order))
+	for _, id := range order {
+		if id != workspaceID {
+			without = append(without, id)
+		}
+	}
+	if beforeWorkspaceID == "" {
+		return append(without, workspaceID), nil
+	}
+	moved := []string{}
+	for _, id := range without {
+		if id == beforeWorkspaceID {
+			moved = append(moved, workspaceID)
+		}
+		moved = append(moved, id)
+	}
+	return moved, nil
+}
+
+func (s *stubWorkspaces) InsertSessionBefore(workspaceID, sessionID, beforeSessionID string) (dshstream.WorkspaceView, error) {
+	s.moves = append(s.moves, "session "+sessionID+" before "+beforeSessionID+" in "+workspaceID)
+	if s.moveErr != nil {
+		return dshstream.WorkspaceView{}, s.moveErr
+	}
+	view, ok := s.views[workspaceID]
+	if !ok {
+		return dshstream.WorkspaceView{}, notFound(workspaceID)
+	}
+	view.SessionIDs = append([]string{sessionID}, view.SessionIDs...)
+	view.UpdatedAt = "2026-01-02T00:00:00Z"
+	s.views[workspaceID] = view
+	return view, nil
+}
+
 func (s *stubWorkspaces) Root() string { return s.root }
 
 func (s *stubWorkspaces) AttachSession(workspaceID, sessionID string) error {
@@ -133,6 +187,8 @@ func TestWorkspaceNamespaceRefusesWithoutARegistry(t *testing.T) {
 		{"workspace/create", `{"path":"/srv/host"}`},
 		{"workspace/rename", `{"workspaceId":"ws-1","title":"x"}`},
 		{"workspace/delete", `{"workspaceId":"ws-1"}`},
+		{"workspace/insertBefore", `{"workspaceId":"ws-1","beforeWorkspaceId":"ws-2"}`},
+		{"workspace/insertSessionBefore", `{"workspaceId":"ws-1","sessionId":"run-1","beforeSessionId":"run-2"}`},
 		{"workspace/archiveSession", `{"sessionId":"run-1"}`},
 		{"workspace/unarchiveSession", `{"sessionId":"run-1"}`},
 	}
@@ -308,4 +364,131 @@ func TestSessionCreateReportsAnUnattachableSessionAsInternal(t *testing.T) {
 	recorder := f.post(t, "/api/session/create",
 		rpcBody(t, "rpc-1", "session/create", `{"workspaceId":"ws-host"}`))
 	assertMethodFailure(t, recorder, codeInternal)
+}
+
+// The workspace reorder answers the complete order, appends when no anchor is
+// named, and keeps the anchor's meaning: a request the console cannot render is a
+// regression the result shape catches.
+func TestWorkspaceInsertBeforeReturnsTheWholeOrder(t *testing.T) {
+	f, stub := withWorkspaces(t)
+
+	recorder := f.post(t, "/api/workspace/insertBefore",
+		rpcBody(t, "rpc-1", "workspace/insertBefore", `{"workspaceId":"ws-other","beforeWorkspaceId":"ws-host"}`))
+	var value struct {
+		WorkspaceIDs []string `json:"workspaceIds"`
+	}
+	decodeValue(t, recorder, &value)
+	if !sameStrings(value.WorkspaceIDs, []string{"ws-other", "ws-host"}) {
+		t.Fatalf("workspaceIds = %v, want the moved row before its anchor", value.WorkspaceIDs)
+	}
+
+	recorder = f.post(t, "/api/workspace/insertBefore",
+		rpcBody(t, "rpc-2", "workspace/insertBefore", `{"workspaceId":"ws-other"}`))
+	value.WorkspaceIDs = nil
+	decodeValue(t, recorder, &value)
+	if !sameStrings(value.WorkspaceIDs, []string{"ws-host", "ws-other"}) {
+		t.Fatalf("workspaceIds = %v, want the appended order when no anchor is named", value.WorkspaceIDs)
+	}
+	if len(stub.moves) != 2 || stub.moves[1] != "workspace ws-other before " {
+		t.Fatalf("moves = %v, want the absent anchor passed through as empty", stub.moves)
+	}
+}
+
+// The session reorder answers the updated row, and the arguments the console
+// sends are unpacked from the request object it wraps them in.
+func TestWorkspaceInsertSessionBeforeReturnsTheRow(t *testing.T) {
+	f, _ := withWorkspaces(t)
+	recorder := f.post(t, "/api/workspace/insertSessionBefore",
+		rpcBody(t, "rpc-1", "workspace/insertSessionBefore",
+			`{"request":{"workspaceId":"ws-host","sessionId":"run-2","beforeSessionId":"run-1"}}`))
+	var value struct {
+		Workspace dshstream.WorkspaceView `json:"workspace"`
+	}
+	decodeValue(t, recorder, &value)
+	if value.Workspace.WorkspaceID != "ws-host" || len(value.Workspace.SessionIDs) == 0 ||
+		value.Workspace.SessionIDs[0] != "run-2" {
+		t.Fatalf("workspace = %+v, want the row carrying the moved session", value.Workspace)
+	}
+}
+
+// Every refusal the registry names reaches the console unchanged, and a move the
+// registry cannot perform is upstream's move-invalid with its details.
+func TestWorkspaceMoveRefusals(t *testing.T) {
+	f, stub := withWorkspaces(t)
+
+	cases := []struct {
+		method string
+		args   string
+		code   string
+		detail string
+	}{
+		{"workspace/insertBefore", `{"workspaceId":"ws-gone"}`, dshstream.WorkspaceCodeNotFound, "workspaceId"},
+		{"workspace/insertBefore", `{}`, codeArgumentsInvalid, "argument"},
+		{"workspace/insertBefore", `{"workspaceId":"ws-host","anchor":"ws-other"}`, codeArgumentsInvalid, "argument"},
+		{"workspace/insertSessionBefore", `{"workspaceId":"ws-host"}`, codeArgumentsInvalid, "argument"},
+		{"workspace/insertSessionBefore", `{"workspaceId":"ws-host","sessionId":"run-1","extra":true}`, codeArgumentsInvalid, "argument"},
+	}
+	for _, testCase := range cases {
+		recorder := f.post(t, "/api/"+testCase.method, rpcBody(t, "rpc-1", testCase.method, testCase.args))
+		envelope := assertMethodFailure(t, recorder, testCase.code)
+		if _, present := envelope.Result.Error.Details[testCase.detail]; !present {
+			t.Fatalf("%s %s: details %v lack %q", testCase.method, testCase.args,
+				envelope.Result.Error.Details, testCase.detail)
+		}
+	}
+
+	// A session the workspace does not account is move-invalid, carrying the ids
+	// the console needs to say which move it refused.
+	stub.moveErr = &dshstream.WorkspaceError{
+		Code:    dshstream.WorkspaceCodeMoveInvalid,
+		Message: `cannot move session "run-1" in workspace "/srv/host": the session is not accounted`,
+		Details: map[string]any{"workspaceId": "ws-host", "sessionId": "run-1", "beforeSessionId": "run-2"},
+	}
+	recorder := f.post(t, "/api/workspace/insertSessionBefore",
+		rpcBody(t, "rpc-1", "workspace/insertSessionBefore",
+			`{"workspaceId":"ws-host","sessionId":"run-1","beforeSessionId":"run-2"}`))
+	envelope := assertMethodFailure(t, recorder, dshstream.WorkspaceCodeMoveInvalid)
+	if envelope.Result.Error.Message != stub.moveErr.(*dshstream.WorkspaceError).Message {
+		t.Fatalf("message = %q, want the registry's own sentence", envelope.Result.Error.Message)
+	}
+	if envelope.Result.Error.Details["beforeSessionId"] != "run-2" {
+		t.Fatalf("details = %v, want the anchor named", envelope.Result.Error.Details)
+	}
+}
+
+// Both methods' request and result shapes are the vendored console's, re-derived
+// from the bundle rather than restated.
+func TestWorkspaceMoveEnvelopesMatchTheVendoredConsole(t *testing.T) {
+	console := vendoredBundle{
+		source: readSource(t, goalRemotePath),
+		pkg:    "@deepseek-ai/dsh-api-workspace-controller",
+		ns:     "workspace",
+	}
+	cases := []struct {
+		method      string
+		wires       []string
+		requestKeys []string
+		resultKeys  []string
+	}{
+		{"insertBefore", []string{"request"}, []string{"beforeWorkspaceId", "workspaceId"}, []string{"workspaceIds"}},
+		{"insertSessionBefore", []string{"request"},
+			[]string{"beforeSessionId", "sessionId", "workspaceId"}, []string{"workspace"}},
+	}
+	for _, testCase := range cases {
+		descriptor := console.descriptor(t, testCase.method)
+		if wires := console.wireNames(t, descriptor, testCase.method); !sameStrings(wires, testCase.wires) {
+			t.Fatalf("%s wires = %v, want %v", testCase.method, wires, testCase.wires)
+		}
+		objects := console.objectParameters(t, testCase.method)
+		if len(objects) != 1 {
+			t.Fatalf("%s object parameters = %v, want one request object", testCase.method, objects)
+		}
+		if keys := sortedKeys(objects[0]); !sameStrings(keys, testCase.requestKeys) {
+			t.Fatalf("%s request keys = %v, want %v", testCase.method, keys, testCase.requestKeys)
+		}
+		result := console.schemaExpression(t, testCase.method, "result")
+		if keys := sortedKeys(topLevelKeys(t, result)); !sameStrings(keys, testCase.resultKeys) {
+			t.Fatalf("%s result keys = %v, want %v", testCase.method, keys, testCase.resultKeys)
+		}
+	}
 }

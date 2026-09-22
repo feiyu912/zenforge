@@ -546,6 +546,100 @@ wrote an event is omitted, because `session/page` answers not-found for it; and 
 log has no terminal event is recorded as cancelled when it is adopted. Drafts stay
 process-local (ADR 0104).
 
+## Shipped: the workspace list carries two manual orders (2026-09-22)
+
+`workspace/insertBefore` and `workspace/insertSessionBefore` are served (ADR 0132),
+so both drag-and-drop gestures work: reordering the sidebar's workspaces, and
+reordering a session row inside one. The data was already there -- the registry
+held `order []string` and each row's `sessionIDs`, and the follow stream's
+vocabulary already declared an `order` frame that nothing published -- so the chain
+was the mutation, its two refusals and the frame:
+
+- **The registry owns both orders.** `InsertBefore` returns the complete resulting
+  order (the client replaces its list, so a delta would be unrepairable) and
+  `InsertSessionBefore` returns the whole row (the console renders `sessionIds` in
+  the row's own order).
+- **The splice is the reference's.** Remove the moved id first, find the anchor in
+  what remains, insert: that is what makes a downward drag behave, because an anchor
+  that sat after the moved row keeps its meaning once the row is gone. An absent
+  anchor appends; an anchor naming the moved row is a no-op that publishes nothing.
+- **The refusals are upstream's.** Either id being unknown is `workspace/not-found`
+  (the reference's mapping for a reorder it cannot perform), and a session or anchor
+  that workspace does not account is `workspace/move-invalid` with
+  `cannot move session "…" in workspace "…": the session is not accounted` and
+  `{workspaceId, sessionId, beforeSessionId?}` -- the anchor key omitted when none
+  was sent.
+- **The frame exists now.** An accepted workspace move publishes the new order on
+  `workspace/follow`, so a second tab sees the reorder instead of a stale list.
+
+Two deviations are recorded in the ADR and in `docs/limitations.md`: a freshly
+accounted session is appended where upstream prepends it, and the order is as
+process-local as the registry itself (ADR 0094), so a restart returns to the host's
+own directory first and to sessions in accounting order.
+
+Live evidence ran with the console's `workspace/follow` stream open: the baseline
+listed three registrations, the move returned the new `workspaceIds` **and** the
+stream delivered `{"type": "order", "workspaceIds": [...]}`, an unknown row and
+anchor both answered `workspace/not-found`, an unaccounted session answered
+`workspace/move-invalid` with its two ids, and an unaccounted anchor answered the
+anchor sentence with all three.
+
+The ledger reads **51 served / 4 streams / 17 refused / 37 unserved** of 109.
+
+## Next: the feedback store, the `@` picker, then one refusal sweep
+
+Two reads remain that this host can answer truthfully, and both are already sized
+by reconnaissance against the vendored schemas.
+
+**1. The feedback cluster** (`messageFeedback/put`, `list`, `delete`,
+`sessionFeedback/record` — 4 rows). The machinery is present: message ids exist and
+are published (`msg-<seq>`), the event vocabulary already reserves
+`feedback/message-put`, `feedback/message-delete` and `feedback/record`, and
+`dshapi/session.go`'s `appendTitle` is the exact pattern for a host-authored,
+sequence-numbered session event with version compare-and-set. Two things to verify
+from the bundle before writing code, because guessing either would be a wire bug:
+the results carry **in-value** failures (`{ok:false, error:{code:
+"session-not-found" | "version-conflict"}}`) rather than the method-level error
+envelope every other namespace uses, and `ifVersion` is a string-or-null
+compare-and-set token whose source (the stored row's `version`) has to be read off
+the same schema.
+
+**2. `fileReferences/list`** (1 row) — the console's `@` picker. With it unserved
+the whole `@` menu fails, not just its file section, because the source's
+`Promise.all` has no catch. `workspaceFileScope` resolves the scope and
+`tools/workspace/glob.go`'s walker already bounds a recursive scan with the limits
+a picker wants.
+
+**3. Then one refusal sweep, as a single chain and one ADR.** Every remaining row is
+a namespace whose capability this host does not have; refusal is the honest answer,
+and batching them keeps the ledger's story readable:
+
+- **`terminal/*` (11 rows)** — no attachment layer, no runtime resize (the PTY
+  master is not exposed and nothing calls `pty.Setsize`), no screen model for
+  `follow` (no VT emulator, and the job buffer is lossy where a gapless sequence is
+  required), no shell discovery.
+- **`subagents/*` (3 rows)** — no child-session plane: children are one-shot runs
+  inside the parent run, streamed off the agent rather than registered, and both
+  `session/page` and `session/follow` refuse the `subagent` address arm on purpose.
+- **`sessionReferenceResolver/candidates` (1 row)** — candidates are derivable, but
+  nothing parses or expands an `@`-mention, so a picked row would reach the model as
+  literal text.
+- **`fileUploads/upload` (1 row)** — the same missing attachment store as the refused
+  `session/attachment`; reuse that sentence verbatim.
+- **`officeToPdf/*` (2), `agentTeams/*` (3), `dynamicCordisRunner/*` (12)** — no
+  converter or PDF library, no agent-team feature, no dynamic plugin runtime. Note
+  for the ledger: these three families' consumer bundles are dropped from the
+  console build (`DROP_PLUGINS` in `scripts/build-console.sh`: `ui-sidebar-documentpreview`,
+  `experimental/client-ui-agent-team`, `cordis-client-runner`, with `extensions/ui-cordis`
+  blocked in the roster), so parts of this group have no live consumer on this page
+  at all — the rows should say that, the way `session/workspaceDesktop` says it is
+  absent from the pinned bundle.
+
+**Carried debt, still open.** The pending queue remains process state (ADR 0130);
+closing it means queue, claim and clear events in the run's log plus a projection
+fold over them, so a queued message outlives its run and a restarted host can
+restore it.
+
 ## Shipped: the skill catalog is one catalog (2026-09-22)
 
 `skills/list` is served (ADR 0131), so the console's skills panel works. The
@@ -592,7 +686,7 @@ rows, `operator` with `"modelInvocable": false`.
 
 The ledger reads **49 served / 4 streams / 17 refused / 39 unserved** of 109.
 
-## Next: two reads this host can serve, and the namespaces it should refuse
+## Next at the time: two reads this host can serve, and the namespaces it should refuse
 
 The ledger's remaining 39 rows split cleanly now that both clusters have been
 reconnoitred against the vendored schemas and this host's machinery. Three of them

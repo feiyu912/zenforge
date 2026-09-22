@@ -44,9 +44,13 @@ type WorkspaceUpdate struct {
 // (api/workspace-controller/lib/types/types.d.ts RemoteErrorDetailsMap);
 // WorkspaceCodeRootImmutable is this host's own, explained where it is raised.
 const (
-	WorkspaceCodeInvalidPath   = "workspace/invalid-path"
-	WorkspaceCodeNameConflict  = "workspace/name-conflict"
-	WorkspaceCodeNotFound      = "workspace/not-found"
+	WorkspaceCodeInvalidPath  = "workspace/invalid-path"
+	WorkspaceCodeNameConflict = "workspace/name-conflict"
+	WorkspaceCodeNotFound     = "workspace/not-found"
+	// WorkspaceCodeMoveInvalid is upstream's detail code for a manual-order move
+	// whose session or anchor is not accounted to the workspace
+	// (api/workspace-controller/lib/types/types.d.ts RemoteErrorDetailsMap).
+	WorkspaceCodeMoveInvalid   = "workspace/move-invalid"
 	WorkspaceCodeRootImmutable = "workspace/root-immutable"
 )
 

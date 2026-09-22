@@ -586,6 +586,16 @@ different question from a preference worth restoring. So a restart starts the
 workspace list from the host's own directory again. A session's transcript and its
 workspace files are unaffected: those live in the run logs and on disk.
 
+The two manual orders are process state for the same reason (ADR 0132). A
+registration order set by dragging rows and a session order set by dragging a
+session are held in the registry, so a restart returns to the host's own directory
+first and to sessions in the order they were accounted. The mutation itself is
+served and the console sees it immediately -- including a second tab, which reads
+the `order` frame off the workspace stream -- but nothing writes the order to disk.
+A newly accounted session is also appended to its workspace rather than prepended
+the way the reference does, so a fresh row reads last here until an operator moves
+it.
+
 ## The goal dock is served, but its own creation path is not
 
 The seven `goals/*` methods are served, and so are the `goal` projection and the

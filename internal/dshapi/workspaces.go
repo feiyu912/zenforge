@@ -57,6 +57,14 @@ type WorkspaceRegistry interface {
 	// calls it for every session it creates, so a session the console opens is
 	// visible under the workspace that was selected for it.
 	AttachSession(workspaceID, sessionID string) error
+	// InsertBefore moves one registration within the display order and returns
+	// the complete resulting order. The console's drag-to-reorder on the
+	// workspace list calls it with an anchor, and with none to append.
+	InsertBefore(workspaceID, beforeWorkspaceID string) ([]string, error)
+	// InsertSessionBefore moves one accounted session within a workspace's
+	// manual order and returns the updated row, which is what the console
+	// renders after a session row is dragged.
+	InsertSessionBefore(workspaceID, sessionID, beforeSessionID string) (dshstream.WorkspaceView, error)
 }
 
 // SetWorkspaces installs the workspace registry after New, like the other
@@ -173,6 +181,76 @@ func (h *Handler) workspaceDelete(_ context.Context, args map[string]json.RawMes
 		return nil, workspaceFailure(err)
 	}
 	return map[string]any{"deleted": true}, nil
+}
+
+// workspaceInsertBefore answers POST /api/workspace/insertBefore: move one
+// registration within the display order. The answer is the complete order, not
+// a delta, which is what the protocol's value carries -- the console replaces
+// its list rather than applying an edit it would have to merge.
+func (h *Handler) workspaceInsertBefore(_ context.Context, args map[string]json.RawMessage) (any, *methodError) {
+	workspaces := h.workspaceRegistry()
+	if failure := workspaceRPC(workspaces); failure != nil {
+		return nil, failure
+	}
+	if failure := rejectUnknownArguments(args, "workspaceId", "beforeWorkspaceId"); failure != nil {
+		return nil, failure
+	}
+	workspaceID, _, failure := stringArg(args, "workspaceId")
+	if failure != nil {
+		return nil, failure
+	}
+	if strings.TrimSpace(workspaceID) == "" {
+		return nil, fail(codeArgumentsInvalid, "workspace/insertBefore needs a workspaceId", map[string]any{"argument": "workspaceId"})
+	}
+	// An absent anchor appends, which is the reference's own reading of the
+	// optional field; a present but non-string one is a malformed request.
+	beforeWorkspaceID, _, failure := stringArg(args, "beforeWorkspaceId")
+	if failure != nil {
+		return nil, failure
+	}
+	order, err := workspaces.InsertBefore(workspaceID, beforeWorkspaceID)
+	if err != nil {
+		return nil, workspaceFailure(err)
+	}
+	if order == nil {
+		order = []string{}
+	}
+	return map[string]any{"workspaceIds": order}, nil
+}
+
+// workspaceInsertSessionBefore answers POST /api/workspace/insertSessionBefore:
+// move one accounted session within a workspace's manual order.
+func (h *Handler) workspaceInsertSessionBefore(_ context.Context, args map[string]json.RawMessage) (any, *methodError) {
+	workspaces := h.workspaceRegistry()
+	if failure := workspaceRPC(workspaces); failure != nil {
+		return nil, failure
+	}
+	if failure := rejectUnknownArguments(args, "workspaceId", "sessionId", "beforeSessionId"); failure != nil {
+		return nil, failure
+	}
+	workspaceID, _, failure := stringArg(args, "workspaceId")
+	if failure != nil {
+		return nil, failure
+	}
+	if strings.TrimSpace(workspaceID) == "" {
+		return nil, fail(codeArgumentsInvalid, "workspace/insertSessionBefore needs a workspaceId", map[string]any{"argument": "workspaceId"})
+	}
+	sessionID, _, failure := stringArg(args, "sessionId")
+	if failure != nil {
+		return nil, failure
+	}
+	if strings.TrimSpace(sessionID) == "" {
+		return nil, fail(codeArgumentsInvalid, "workspace/insertSessionBefore needs a sessionId", map[string]any{"argument": "sessionId"})
+	}
+	beforeSessionID, _, failure := stringArg(args, "beforeSessionId")
+	if failure != nil {
+		return nil, failure
+	}
+	view, err := workspaces.InsertSessionBefore(workspaceID, sessionID, beforeSessionID)
+	if err != nil {
+		return nil, workspaceFailure(err)
+	}
+	return map[string]any{"workspace": view}, nil
 }
 
 // workspaceArchiveSession answers POST /api/workspace/archiveSession, and

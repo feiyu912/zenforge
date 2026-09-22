@@ -28,14 +28,14 @@ methods are the remaining work, in priority order at the end of this page.
 
 This host answers **47** of the client's **109** methods, mounts
 **4** of them as logical streams, refuses **17** by name, and
-does not serve the remaining **39**.
+does not serve the remaining **37**.
 
 | State | Count |
 | --- | --- |
-| served | 49 |
+| served | 51 |
 | stream | 4 |
 | refused | 17 |
-| unserved | 39 |
+| unserved | 37 |
 | **client methods total** | **109** |
 
 The WebSocket mux also mounts `$events`, which is not part of the client's
@@ -88,6 +88,8 @@ attach the prompt to the session it has open (ADR 0115).
 | `skills/list` | served | The skills an operator may invoke in a conversation, read from this host's skill catalog: the workspace's own `.zenforge/skills` and the per-user directory, with the workspace layer winning by name (ADR 0131). Each row carries the skill's name, its description and the routing guidance the skill declares, plus whether the model may pick it up on its own -- a skill hidden from the model stays listed with that badge, while the model-facing catalog and loader leave it out. The catalog is read per request, so a package dropped in while the host runs appears without a restart, and the session named in the request is validated first, because the panel is per conversation. | |
 | `workspace/archiveSession` | served | Move a session into a workspace's archived list. |
 | `workspace/create` | served | Register a directory as a workspace. |
+| `workspace/insertBefore` | served | Move one registration within the workspace order, which is what the console's drag-to-reorder sends. The answer is the complete resulting order, not a delta: the console replaces its list. An absent anchor appends, an anchor naming the moved row is a no-op that publishes nothing, and either id being unknown is the namespace's not-found. The order is process-local console state like the rest of the registry (ADR 0094), so a restart begins from the host's own workspace (ADR 0132). |
+| `workspace/insertSessionBefore` | served | Move one accounted session within a workspace's manual order, which is what dragging a session row inside a workspace sends. The updated row comes back, because the console renders the row's `sessionIds` order directly. A session or anchor that workspace does not account is `workspace/move-invalid` with the ids the console shows; an absent anchor appends (ADR 0132). |
 | `workspace/delete` | served | Remove a registration; the host's own workspace is refused by name. |
 | `workspace/rename` | served | Retitle a workspace. |
 | `workspace/unarchiveSession` | served | Restore an archived session. |
@@ -164,8 +166,6 @@ attach the prompt to the session it has open (ADR 0115).
 | `terminal/retain` | unserved | no embedded terminal in this host |
 | `terminal/shells` | unserved | no embedded terminal in this host |
 | `terminal/write` | unserved | no embedded terminal in this host |
-| `workspace/insertBefore` | unserved | no workspace organizer (archive, rename, order) |
-| `workspace/insertSessionBefore` | unserved | no workspace organizer (archive, rename, order) |
 
 ## Next up
 
@@ -183,13 +183,13 @@ in the order they block the page, from what the console asks first.
 2. **`terminal/*`** — an embedded terminal, which this host does not claim: the
    job manager runs a command under a PTY, but there is no attachment layer, no
    runtime resize, no screen model for `follow` and no shell discovery.
-3. **`workspace/insertBefore`, `workspace/insertSessionBefore`** — the manual
-   row order inside the workspace list. Registrations, titles, deletion and the
-   archived set are served (ADR 0101); only the drag-to-reorder mutations are
-   left.
-4. **`messageFeedback/*`, `sessionFeedback/*`, `fileReferences/list`,
-   `fileUploads/upload`, `officeToPdf/*`, `agentTeams/*`, `sessionReferenceResolver/candidates`,
-   `dynamicCordisRunner/*`** — page features with no host-side counterpart yet.
+3. **`messageFeedback/*`, `sessionFeedback/*`, `fileReferences/list`** — the
+   feedback cluster's store and the console's `@` picker, all three answerable
+   from machinery this host has (durable session events, the file scope walker).
+4. **`fileUploads/upload`, `officeToPdf/*`, `agentTeams/*`,
+   `sessionReferenceResolver/candidates`, `dynamicCordisRunner/*`,
+   `terminal/*`, `subagents/*`** — namespaces whose capability this host does not
+   have; each is refused by name, naming the missing subsystem.
 
 The directory-picker family, which used to head this list, is no longer a gap: the browse
 half is loaded from the roster and its bundle is served, so the workspace control's add

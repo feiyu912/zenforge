@@ -331,3 +331,160 @@ func TestConsoleWorkspacesSubscribeStops(t *testing.T) {
 		t.Fatalf("updates after unsubscribe = %+v, want none", updates)
 	}
 }
+
+// The workspace order is the operator's after the first drag: appending when no
+// anchor is named, landing immediately before the anchor otherwise, and leaving
+// the list alone when the anchor is the moved row itself. Every accepted move
+// publishes the whole new order, because the console replaces its list rather
+// than merging a delta.
+func TestConsoleWorkspacesReorderRows(t *testing.T) {
+	workspaces, root := newTestWorkspaces(t)
+	second := t.TempDir()
+	other, created, err := workspaces.Create(second)
+	if err != nil || !created {
+		t.Fatalf("Create: %v created=%v", err, created)
+	}
+	row, ok := workspaces.Workspace(workspaces.Baseline().Items[0].WorkspaceID)
+	if !ok {
+		t.Fatal("the host workspace vanished")
+	}
+	log := &updateLog{}
+	defer workspaces.Subscribe(log.observe)()
+
+	order, err := workspaces.InsertBefore(other.WorkspaceID, row.WorkspaceID)
+	if err != nil {
+		t.Fatalf("InsertBefore: %v", err)
+	}
+	if len(order) != 2 || order[0] != other.WorkspaceID || order[1] != row.WorkspaceID {
+		t.Fatalf("order = %v, want the created row before the host's", order)
+	}
+	updates := log.take()
+	if len(updates) != 1 || updates[0].Kind != "order" ||
+		len(updates[0].WorkspaceIDs) != 2 || updates[0].WorkspaceIDs[0] != other.WorkspaceID {
+		t.Fatalf("updates = %+v, want one order frame carrying the new order", updates)
+	}
+
+	// The anchor naming the moved row is the console's own no-op, and it must not
+	// publish a frame the client would treat as a change.
+	order, err = workspaces.InsertBefore(other.WorkspaceID, other.WorkspaceID)
+	if err != nil {
+		t.Fatalf("InsertBefore onto itself: %v", err)
+	}
+	if len(order) != 2 || order[0] != other.WorkspaceID {
+		t.Fatalf("order = %v, want it unchanged", order)
+	}
+	if updates := log.take(); len(updates) != 0 {
+		t.Fatalf("updates = %+v, want none for a no-op move", updates)
+	}
+
+	// No anchor appends, which is what a drop below the last row sends.
+	if order, err = workspaces.InsertBefore(other.WorkspaceID, ""); err != nil {
+		t.Fatalf("InsertBefore to the end: %v", err)
+	}
+	if len(order) != 2 || order[1] != other.WorkspaceID {
+		t.Fatalf("order = %v, want the moved row appended", order)
+	}
+
+	// Either id being unknown is the namespace's not-found: the reference maps a
+	// reorder it cannot perform onto the same code a missing row gets.
+	if _, err := workspaces.InsertBefore("ws-gone", ""); workspaceErrorCode(t, err) != dshstream.WorkspaceCodeNotFound {
+		t.Fatalf("unknown row code = %q", workspaceErrorCode(t, err))
+	}
+	if _, err := workspaces.InsertBefore(other.WorkspaceID, "ws-gone"); workspaceErrorCode(t, err) != dshstream.WorkspaceCodeNotFound {
+		t.Fatalf("unknown anchor code = %q", workspaceErrorCode(t, err))
+	}
+	if !strings.HasPrefix(row.Path, root) {
+		t.Fatalf("host row path = %q, want it under %q", row.Path, root)
+	}
+}
+
+// The session order inside a workspace is the operator's too, and a session that
+// workspace does not account is refused by name with the ids the console shows.
+func TestConsoleWorkspacesReorderSessions(t *testing.T) {
+	workspaces, _ := newTestWorkspaces(t)
+	hostRow := workspaces.Baseline().Items[0]
+	for _, id := range []string{"run-1", "run-2", "run-3"} {
+		if err := workspaces.AttachSession(hostRow.WorkspaceID, id); err != nil {
+			t.Fatalf("AttachSession %s: %v", id, err)
+		}
+	}
+	log := &updateLog{}
+	defer workspaces.Subscribe(log.observe)()
+
+	view, err := workspaces.InsertSessionBefore(hostRow.WorkspaceID, "run-3", "run-1")
+	if err != nil {
+		t.Fatalf("InsertSessionBefore: %v", err)
+	}
+	if !sameSessionOrder(view.SessionIDs, []string{"run-3", "run-1", "run-2"}) {
+		t.Fatalf("sessionIds = %v, want run-3 before its anchor", view.SessionIDs)
+	}
+	updates := log.take()
+	if len(updates) != 1 || updates[0].Kind != "upsert" || updates[0].Workspace == nil ||
+		!sameSessionOrder(updates[0].Workspace.SessionIDs, []string{"run-3", "run-1", "run-2"}) {
+		t.Fatalf("updates = %+v, want one upsert carrying the row", updates)
+	}
+
+	// A drop onto the moved row is a no-op, and no anchor appends.
+	if view, err = workspaces.InsertSessionBefore(hostRow.WorkspaceID, "run-3", "run-3"); err != nil {
+		t.Fatalf("onto itself: %v", err)
+	}
+	if !sameSessionOrder(view.SessionIDs, []string{"run-3", "run-1", "run-2"}) {
+		t.Fatalf("sessionIds = %v, want them unchanged", view.SessionIDs)
+	}
+	if updates := log.take(); len(updates) != 0 {
+		t.Fatalf("updates = %+v, want none for a no-op move", updates)
+	}
+	if view, err = workspaces.InsertSessionBefore(hostRow.WorkspaceID, "run-3", ""); err != nil {
+		t.Fatalf("to the end: %v", err)
+	}
+	if !sameSessionOrder(view.SessionIDs, []string{"run-1", "run-2", "run-3"}) {
+		t.Fatalf("sessionIds = %v, want the moved session appended", view.SessionIDs)
+	}
+
+	// The refusals carry the sentence and the ids the console needs.
+	_, err = workspaces.InsertSessionBefore(hostRow.WorkspaceID, "run-unknown", "")
+	refusal := assertMoveInvalid(t, err, `cannot move session "run-unknown" in workspace `)
+	if refusal.Details["sessionId"] != "run-unknown" || refusal.Details["workspaceId"] != hostRow.WorkspaceID {
+		t.Fatalf("details = %v, want both ids", refusal.Details)
+	}
+	if _, present := refusal.Details["beforeSessionId"]; present {
+		t.Fatalf("details = %v, want no anchor key when none was sent", refusal.Details)
+	}
+	_, err = workspaces.InsertSessionBefore(hostRow.WorkspaceID, "run-1", "run-unknown")
+	refusal = assertMoveInvalid(t, err, `cannot move session "run-1" before "run-unknown" in workspace `)
+	if refusal.Details["beforeSessionId"] != "run-unknown" {
+		t.Fatalf("details = %v, want the anchor named", refusal.Details)
+	}
+	if _, err := workspaces.InsertSessionBefore("ws-gone", "run-1", ""); workspaceErrorCode(t, err) != dshstream.WorkspaceCodeNotFound {
+		t.Fatalf("unknown workspace code = %q", workspaceErrorCode(t, err))
+	}
+}
+
+// sameSessionOrder compares two session orders.
+func sameSessionOrder(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for index := range got {
+		if got[index] != want[index] {
+			return false
+		}
+	}
+	return true
+}
+
+// assertMoveInvalid pins a move refusal's code and sentence prefix.
+func assertMoveInvalid(t *testing.T, err error, prefix string) *dshstream.WorkspaceError {
+	t.Helper()
+	if code := workspaceErrorCode(t, err); code != dshstream.WorkspaceCodeMoveInvalid {
+		t.Fatalf("code = %q, want %q", code, dshstream.WorkspaceCodeMoveInvalid)
+	}
+	var refusal *dshstream.WorkspaceError
+	if !errors.As(err, &refusal) {
+		t.Fatalf("error %v is not a WorkspaceError", err)
+	}
+	if !strings.HasPrefix(refusal.Message, prefix) {
+		t.Fatalf("message = %q, want it to start with %q", refusal.Message, prefix)
+	}
+	return refusal
+}

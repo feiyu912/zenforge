@@ -249,6 +249,106 @@ func (w *consoleWorkspaces) AttachSession(workspaceID, sessionID string) error {
 	return nil
 }
 
+// InsertBefore moves one registration within the display order and returns the
+// complete resulting order, which is what the protocol's value carries: the
+// console replaces its order instead of applying a delta, so the answer cannot
+// drift from the host. An empty anchor appends, an anchor naming the moved row
+// is a no-op, and either id being unknown is the namespace's not-found -- the
+// reference's own mapping for a reorder it cannot perform
+// (api/workspace-controller/lib/index.js:247-253).
+func (w *consoleWorkspaces) InsertBefore(workspaceID, beforeWorkspaceID string) ([]string, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if _, ok := w.rows[workspaceID]; !ok {
+		return nil, workspaceNotFound(workspaceID)
+	}
+	if beforeWorkspaceID != "" {
+		if _, ok := w.rows[beforeWorkspaceID]; !ok {
+			return nil, workspaceNotFound(beforeWorkspaceID)
+		}
+	}
+	if beforeWorkspaceID == workspaceID {
+		return append([]string(nil), w.order...), nil
+	}
+	w.order = movedBefore(w.order, workspaceID, beforeWorkspaceID)
+	w.notifyLocked(dshstream.WorkspaceUpdate{Kind: "order", WorkspaceIDs: append([]string(nil), w.order...)})
+	return append([]string(nil), w.order...), nil
+}
+
+// InsertSessionBefore moves one accounted session within a workspace's manual
+// order and returns the updated row. The console's session list renders the
+// row's sessionIds in order, so this is what drag-to-reorder inside a workspace
+// calls. A session or anchor that is not accounted to that workspace is
+// upstream's move-invalid, with its sentence and details; an empty anchor
+// appends.
+func (w *consoleWorkspaces) InsertSessionBefore(workspaceID, sessionID, beforeSessionID string) (dshstream.WorkspaceView, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	row, ok := w.rows[workspaceID]
+	if !ok {
+		return dshstream.WorkspaceView{}, workspaceNotFound(workspaceID)
+	}
+	if !hasString(row.sessionIDs, sessionID) {
+		return dshstream.WorkspaceView{}, sessionMoveInvalid(row.path, workspaceID, sessionID, beforeSessionID,
+			fmt.Sprintf("cannot move session %q in workspace %q: the session is not accounted", sessionID, row.path))
+	}
+	if beforeSessionID != "" && !hasString(row.sessionIDs, beforeSessionID) {
+		return dshstream.WorkspaceView{}, sessionMoveInvalid(row.path, workspaceID, sessionID, beforeSessionID,
+			fmt.Sprintf("cannot move session %q before %q in workspace %q: the anchor session is not accounted",
+				sessionID, beforeSessionID, row.path))
+	}
+	if beforeSessionID == sessionID {
+		return w.viewLocked(row), nil
+	}
+	row.sessionIDs = movedBefore(row.sessionIDs, sessionID, beforeSessionID)
+	row.updatedAt = time.Now().UTC()
+	view := w.viewLocked(row)
+	w.notifyLocked(dshstream.WorkspaceUpdate{Kind: "upsert", Workspace: &view})
+	return view, nil
+}
+
+// movedBefore splices one id immediately before another, appending when no
+// anchor is named. It is the reference's own move
+// (dsh-workspace/lib/index.js:409-428): the id leaves the list first, so an
+// anchor that sat after it keeps its meaning, and an id already in place
+// produces the same list.
+func movedBefore(ids []string, id, beforeID string) []string {
+	without := make([]string, 0, len(ids))
+	for _, current := range ids {
+		if current != id {
+			without = append(without, current)
+		}
+	}
+	at := len(without)
+	if beforeID != "" {
+		for index, current := range without {
+			if current == beforeID {
+				at = index
+				break
+			}
+		}
+	}
+	moved := make([]string, 0, len(ids))
+	moved = append(moved, without[:at]...)
+	moved = append(moved, id)
+	moved = append(moved, without[at:]...)
+	return moved
+}
+
+// sessionMoveInvalid builds the refusal for a session move the workspace cannot
+// perform, carrying the details upstream publishes for the code.
+func sessionMoveInvalid(path, workspaceID, sessionID, beforeSessionID, message string) error {
+	details := map[string]any{"workspaceId": workspaceID, "sessionId": sessionID}
+	if beforeSessionID != "" {
+		details["beforeSessionId"] = beforeSessionID
+	}
+	return &dshstream.WorkspaceError{
+		Code:    dshstream.WorkspaceCodeMoveInvalid,
+		Message: message,
+		Details: details,
+	}
+}
+
 // Workspace looks one row up by id.
 func (w *consoleWorkspaces) Workspace(workspaceID string) (dshstream.WorkspaceView, bool) {
 	w.mu.Lock()
