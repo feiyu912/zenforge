@@ -213,10 +213,11 @@ what is experimental, and what remains adapter territory.
   work. See ADR 0083.
 - Every namespace a shipped panel calls is served or refused by name
   (ADR 0084-0097). Methods this host does not implement -- `terminal`,
-  `subagents`, `officeToPdf`, session forks, search, attachments -- answer a bare
-  404 or a named capability error, which is the intended per-feature degradation
-  rather than a console failure, and the host logs the endpoint that was asked
-  for, which is how the remaining ones get prioritised.
+  `subagents`, `officeToPdf`, session forks -- answer a bare 404 or a named
+  capability error, which is the intended per-feature degradation rather than a
+  console failure, and the host logs the endpoint that was asked for, which is how
+  the remaining ones get prioritised. Attachments are refused by name instead of
+  left to a 404, because the panel that would ask for one exists (ADR 0128).
 - **The model picker works, and a declared provider can be run on** (ADR 0096).
   `session/modelCatalog` lists the configured route and every declared provider's
   models, `session/selectModel` accepts a selection and refuses one this host
@@ -641,3 +642,18 @@ query therefore costs more than it would against the reference's
 the answer does mirror is the contract the sidebar renders: one row per
 conversation, the reference's twenty-result cap with `hasMore`, its 240-code-point
 excerpt bound, and its own refusals for a blank, over-long or NUL-bearing query.
+
+## Attachments cannot be sent or read
+
+The console ships its attachment panel, so the composer offers an attach
+affordance, but nothing behind it can work here: the upload route
+(`fileUploads/upload`) is not served, a prompt whose content carries an image or
+file part is refused by name -- this host accepts text parts only, and the run
+manager has no attachment intake -- and the read half, `session/attachment`,
+refuses by name for the same reason rather than answering a not-found for an id
+that could never exist (ADR 0128). The working substitute is the workspace: a file
+put in the host's directory can be read by the agent's own file tools, and its
+content can then be discussed in the conversation. Serving attachments properly is
+a subsystem, not a route: it needs an upload path, a store with the metadata the
+console renders (`mediaType`, `bytes`, `width`, `height`), and the prompt path that
+carries a reference into the run.

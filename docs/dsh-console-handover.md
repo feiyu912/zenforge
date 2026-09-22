@@ -546,6 +546,82 @@ wrote an event is omitted, because `session/page` answers not-found for it; and 
 log has no terminal event is recorded as cancelled when it is adopted. Drafts stay
 process-local (ADR 0104).
 
+## Shipped: the attachment read is refused (2026-09-22)
+
+`session/attachment` is routed and refused by name (ADR 0128). The console's
+read half asks for an attachment's image metadata **and** its `data` bytes, and
+this host can never have one: `session/prompt` already refuses a prompt whose
+content carries an image or file part ("prompt content part \"image\" is not
+supported: this host accepts text parts only"), the command surface refuses
+submitted attachments, and `fileUploads/upload` is not served, so no id can come
+into existence. The refusal names the missing store and the working substitute --
+put the file in the workspace and ask the agent's own file tools to read it --
+while the method's declared `sessionId`/`attachmentId` are still validated first,
+so a typo is reported as a typo. Live:
+
+```
+$ session/attachment {"sessionId":"run_…","attachmentId":"att-1"}
+{"…","error":{"code":"unimplemented","message":"this host has no attachment store: a prompt's
+image and file parts are refused when they are submitted, so there is no attachment to read;
+put the file in the workspace and ask the agent to read it","details":{"capability":"an
+attachment store"}}}}
+$ session/attachment {"sessionId":"run_…","attachmentId":"att-1","mediaType":"image/png"}
+{"…","error":{"code":"gateway/arguments-invalid","message":"unexpected argument \"mediaType\""}}
+$ session/prompt … content [text, {type:image}] …
+{"…","error":{"code":"session/unsupported-content","message":"prompt content part \"image\" is
+not supported: this host accepts text parts only"}}
+$ curl -o /dev/null -w '%{http_code}' -X POST …/api/fileUploads/upload
+404
+```
+
+The ledger now reads **46 served / 4 streams / 17 refused / 42 unserved** of 109,
+and `docs/limitations.md` says plainly that the composer's attach affordance
+cannot work here and why (its older bullet listing "search, attachments" among the
+bare-404 namespaces was corrected: one is served, the other refused by name).
+
+## Next: the two session-management methods left, sized
+
+The ledger's next-up item is now `session/fork` then `session/updateQueue`, and
+both were surveyed while landing the attachment refusal, so the next window does
+not have to re-derive them.
+
+**`session/fork` is the larger one** and needs a mechanism this host does not
+have. The reference (`@deepseek-ai/dsh-api-session-controller`, `ApiSessionList.fork`)
+does exactly this:
+
+- validate `atSeq` as a non-negative safe integer, else `gateway/bad-request`
+  "atSeq must be a non-negative safe integer";
+- observe the source session; a missing one is `session/not-found` with
+  `{sessionId}`;
+- find the boundary: the first `turn/end` at or after `atSeq`, or -- when `atSeq`
+  is absent or past the log -- the **last** `turn/end`; no boundary is
+  `session/fork-unavailable` with either "has not completed the turn containing
+  event N" or "has no completed turn to fork from";
+- cut at `boundary + 1`, advanced forward to the next `turn/start`;
+- mint a child id and create it with the parent's events `[0, cut)` as a **seed**
+  (`agents.create({sessionId, seed, inheritedEventCount: cut, meta: {cwd,
+  parentSession, isSeeded, agentPreset}})`), attach it to the source's workspace
+  (failure is `session/workspace-attach-failed` with `{sessionId, workspaceId}`),
+  and answer `{sessionId}`.
+
+This host's sessions are runs in an event store with no seeded-log creation path,
+so forking is a chain of its own: a durable fork descriptor plus a way to
+materialize the child's prefix (the child's first turn would have to start from
+the parent's prefix messages, which is what `session/prompt`'s continuation path
+already builds from a log). `atSeq` here is the **console** sequence the page
+serves, not the durable event sequence, so the boundary rule has to be applied to
+the projected records.
+
+**`session/updateQueue`** edits the pending queue: `{sessionId, itemId, action}`
+where the action union carries at least `{kind: "edit", content: [...]}` and
+`{kind: "steer"}`, answering `{accepted: true}`; the client calls it from
+`ui-conversation`'s `steerQueue` (which reads the rows from the `inbox` face's
+`next-turn` list) and expects the host's own `session/steer-unavailable` and
+`session/queue-item-not-found` codes. This host's control baseline publishes an
+empty `queues` map by design -- `sessionQueuedItem`'s comment says "no queue
+mirror yet" -- so the queue projection has to be fed before the mutation means
+anything; `session/prompt`'s steer path is the existing half of that model.
+
 ## Shipped: the sidebar's search reads the logs the list shows (2026-09-22)
 
 `session/search` is served (ADR 0127), so the workspace browser's search box has a
@@ -1105,9 +1181,11 @@ serves `qwen-plus`, and the card shows only what is written on it.
 > desktop question is answered `false` while the desktop open is refused by name because
 > this host implements no desktop carrier (ADR 0126), and the sidebar's search reads the
 > conversations the list already shows, with the reference's own cap, excerpt bound and
-> query refusals (ADR 0127). The next chain is "Next up" 1 in the ledger:
-> `session/fork`, `session/attachment` and `session/updateQueue` -- forking a
-> conversation at a message, fetching an attached image, and editing the pending queue. If a scratch host is
+> query refusals (ADR 0127), and the attachment read is refused by name because this host
+> has no attachment store and no upload path to fill one (ADR 0128). The next chain is
+> "Next up" 1 in the ledger: `session/fork` -- forking a conversation at a message, which
+> the handover's own section sizes (the reference's turn-boundary rule, its seeded child
+> session, and why this host needs a mechanism first) -- and then `session/updateQueue`. If a scratch host is
 > needed, give it `ZENFORGE_CONFIG_DIR` or `--settings-file` under a throwaway directory so
 > it cannot rewrite the operator's document, and its own `--checkpoint-dir` too, because the
 > event store and the run registry are derived from it: a scratch host started in `/tmp`

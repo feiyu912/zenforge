@@ -27,15 +27,15 @@ methods are the remaining work, in priority order at the end of this page.
 ## Summary
 
 This host answers **46** of the client's **109** methods, mounts
-**4** of them as logical streams, refuses **16** by name, and
-does not serve the remaining **43**.
+**4** of them as logical streams, refuses **17** by name, and
+does not serve the remaining **42**.
 
 | State | Count |
 | --- | --- |
 | served | 46 |
 | stream | 4 |
-| refused | 16 |
-| unserved | 43 |
+| refused | 17 |
+| unserved | 42 |
 | **client methods total** | **109** |
 
 The WebSocket mux also mounts `$events`, which is not part of the client's
@@ -114,6 +114,7 @@ attach the prompt to the session it has open (ADR 0115).
 | `pluginManager/setBundleEnabled` | refused | this host ships a fixed set of console bundles and has no loader, so it cannot install, enable, disable or remove a plugin |
 | `pluginManager/setPluginEnabled` | refused | this host ships a fixed set of console bundles and has no loader, so it cannot install, enable, disable or remove a plugin |
 | `session/openWorkspacePath` | refused | this host serves the console in a browser and has no desktop carrier to open a path on; workspaceFiles/list and workspaceFiles/read show a file inside the session instead |
+| `session/attachment` | refused | this host has no attachment store: a prompt's image and file parts are refused when they are submitted, so there is no attachment to read; put the file in the workspace and ask the agent to read it |
 | `settings/openAgentPresetDirectory` | refused | this host has no native editor to open a settings document or a preset directory in; configure the host with --base-url, --model, --api-key or the settings panel instead |
 | `settings/openSettingsDocument` | refused | this host has no native editor to open a settings document or a preset directory in; configure the host with --base-url, --model, --api-key or the settings panel instead |
 | `workspaceFiles/changes` | stream | The subscription a file resource opens before it stats anything: the `ready` frame unblocks the tab, and this host sends no `change` frames because it watches no files (ADR 0120). |
@@ -145,7 +146,6 @@ attach the prompt to the session it has open (ADR 0115).
 | `messageFeedback/put` | unserved | no message-feedback store |
 | `officeToPdf/generation` | unserved | no document conversion in this host |
 | `officeToPdf/render` | unserved | no document conversion in this host |
-| `session/attachment` | unserved | no attachment store |
 | `session/fork` | unserved | no session fork |
 | `session/updateQueue` | unserved | no queue editing |
 | `sessionFeedback/record` | unserved | no session-feedback store |
@@ -176,9 +176,12 @@ live `zenforge serve` whose boot graph and every advertised bundle were fetched.
 that has shipped is removed rather than left to mislead the next window; the gaps below are
 in the order they block the page, from what the console asks first.
 
-1. **`session/fork`, `session/attachment`, `session/updateQueue`** — session
-   management the sidebar offers: forking a conversation at a message, fetching an
-   attached image, and editing the pending queue.
+1. **`session/fork`, `session/updateQueue`** — session management the sidebar
+   offers: forking a conversation at a message, and editing the pending queue.
+   Forking is the larger of the two: the reference seeds a child session with the
+   parent's events up to a completed turn boundary, and this host's sessions are
+   runs, so forking needs a seeded-log mechanism before the method can be
+   honored.
 2. **`skills/list`, `subagents/list`, `subagents/prompt`, `subagents/interruptByParent`**
    — framework features that are not exposed to the console yet.
 3. **`terminal/*`** — an embedded terminal, which this host does not claim.

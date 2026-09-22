@@ -366,6 +366,8 @@ func (h *Handler) method(endpoint string) (methodFunc, bool) {
 			return h.sessionSelectModel, true
 		case "search":
 			return h.sessionSearch, true
+		case "attachment":
+			return h.sessionAttachment, true
 		case "canOpenWorkspacePath":
 			return h.sessionCanOpenWorkspacePath, true
 		case "openWorkspacePath":

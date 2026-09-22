@@ -269,6 +269,7 @@ nav:
       - 0125 The goal dock reads the framework's goal state: adr/0125-the-goal-dock-reads-the-frameworks-goal-state.md
       - 0126 A desktop capability is answered, not built: adr/0126-a-desktop-capability-is-answered-not-built.md
       - 0127 The sidebar's search reads the logs the list shows: adr/0127-the-sidebars-search-reads-the-logs-the-list-shows.md
+      - 0128 The attachment read is refused: adr/0128-the-attachment-read-is-refused.md
 
 extra:
   social:
