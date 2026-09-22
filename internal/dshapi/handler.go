@@ -368,6 +368,8 @@ func (h *Handler) method(endpoint string) (methodFunc, bool) {
 			return h.sessionSearch, true
 		case "attachment":
 			return h.sessionAttachment, true
+		case "fork":
+			return h.sessionFork, true
 		case "canOpenWorkspacePath":
 			return h.sessionCanOpenWorkspacePath, true
 		case "openWorkspacePath":

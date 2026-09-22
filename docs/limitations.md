@@ -657,3 +657,18 @@ content can then be discussed in the conversation. Serving attachments properly 
 a subsystem, not a route: it needs an upload path, a store with the metadata the
 console renders (`mediaType`, `bytes`, `width`, `height`), and the prompt path that
 carries a reference into the run.
+
+## A forked conversation is a snapshot
+
+Forking works, and what it produces is a copy rather than a view (ADR 0129). The
+child's turns are materialized from the source's completed turns at the moment of
+the fork: continuing the source afterwards does not appear in the child, and
+deleting the source leaves the child whole. The cut lands on a completed turn --
+forking "at" a message keeps that message's turn and everything before it, never a
+half-finished one -- so a `session/fork-unavailable` for a message inside a
+running turn is the honest answer rather than a child with a dangling turn. The
+copied records keep the times they happened at, while the child's own newest
+record is stamped with the fork's moment so it sorts as the most recent
+conversation. A forked conversation inherits its source's title, which is why the
+console renames it to an increased one, and it runs on the host's *default* model
+rather than the source's selected one, exactly as the reference composes it.

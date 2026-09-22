@@ -32,6 +32,12 @@ const (
 	codeSessionConflict    = "session/conflict"
 	codeUnsupportedContent = "session/unsupported-content"
 	codeTitleInvalid       = "session/title-invalid"
+	// codeForkUnavailable and codeWorkspaceAttachFailed are the reference's own
+	// codes for the two ways a fork can fail after its argument checks. The
+	// console reads the second one's details to open the child even though the
+	// attachment failed (api/session-controller: workspaceAttachSessionId).
+	codeForkUnavailable       = "session/fork-unavailable"
+	codeWorkspaceAttachFailed = "session/workspace-attach-failed"
 )
 
 // maxRequestBodyBytes bounds one unary request. Console envelopes and text

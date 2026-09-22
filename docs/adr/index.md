@@ -157,3 +157,4 @@ and what the adapter answers today is
 | [0126](0126-a-desktop-capability-is-answered-not-built.md) | A desktop capability is answered, not built |
 | [0127](0127-the-sidebars-search-reads-the-logs-the-list-shows.md) | The sidebar's search reads the logs the list already shows |
 | [0128](0128-the-attachment-read-is-refused.md) | The attachment read is refused, because the write half does not exist |
+| [0129](0129-a-fork-copies-the-sources-completed-turns.md) | A fork copies the source's completed turns into a child of its own |

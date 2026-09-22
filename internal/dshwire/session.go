@@ -59,6 +59,23 @@ type SessionLog struct {
 	// carry SeqOffset(k) added to their durable sequence, so the sequence is
 	// strictly increasing across turns and contiguous within them.
 	Records []Event
+	// ParentSessionID is the conversation this one was forked from, when it was
+	// forked at all. It is read from the *first* turn's opening event, because a
+	// fork is a copy of another conversation's turns and the copy is where the
+	// lineage lives -- this host has no session-metadata plane, and the console
+	// reads the link from the list row to nest a fork under its source
+	// (api-session-controller: flattenLineage). Empty for a conversation nobody
+	// forked.
+	ParentSessionID string
+	// TurnRecords is how many records each turn contributed, parallel to Runs:
+	// turn k's records are Records[sum(TurnRecords[:k-1])] through the next
+	// TurnRecords[k-1] entries. The served sequence alone cannot name the turn a
+	// record belongs to, because a turn that contributed no records repeats the
+	// continuation point of the one before it -- its own records start where the
+	// previous turn's ended either way (ADR 0117) -- so a caller that has to map a
+	// console sequence back to a turn (session/fork's boundary rule) reads it
+	// here instead of re-deriving the offsets.
+	TurnRecords []int
 	// Newest is the newest turn's projection, continued by a live tail. It is nil
 	// when the session has no turns yet.
 	Newest *Projection
@@ -131,8 +148,17 @@ func Session(ctx context.Context, source Source, sessionID string, identity func
 		stamp := identity(turn)
 		stamp.Turn = turn
 		stamp.SeqOffset = offset
+		if index == 0 {
+			for _, event := range events {
+				if parent, ok := event.Payload["parentSessionId"].(string); ok && parent != "" {
+					log.ParentSessionID = parent
+					break
+				}
+			}
+		}
 		projection := Project(events, stamp)
 		log.Records = append(log.Records, projection.Events...)
+		log.TurnRecords = append(log.TurnRecords, len(projection.Events))
 		// The next turn starts where this turn's records end, whether or not it
 		// produced any: the served sequence counts the console's records, so a
 		// turn that was nothing but bookkeeping contributes no numbers to skip
@@ -150,6 +176,24 @@ func Session(ctx context.Context, source Source, sessionID string, identity func
 		}
 	}
 	return log, nil
+}
+
+// TurnContaining returns the one-based turn whose records contain Records[index],
+// or zero when the index is outside the log. It is the inverse of the served
+// sequence: a console sequence identifies a record, and a turn is what a caller
+// inheriting whole turns has to count in.
+func (l *SessionLog) TurnContaining(index int) int {
+	if index < 0 || index >= len(l.Records) {
+		return 0
+	}
+	seen := 0
+	for turn, count := range l.TurnRecords {
+		seen += count
+		if index < seen {
+			return turn + 1
+		}
+	}
+	return 0
 }
 
 // Cursor is the session's newest sequence number, or -1 for a session with no

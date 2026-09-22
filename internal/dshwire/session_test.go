@@ -288,3 +288,75 @@ func projectedMessageID(record Event) string {
 	}
 	return ""
 }
+
+// The turn a record belongs to is what a fork counts in, and a turn that
+// contributed nothing is the case the served sequence cannot express: its own
+// records start where the previous turn's ended, so only the per-turn counts
+// name it.
+func TestSessionLogNamesTheTurnOfARecord(t *testing.T) {
+	source := stubSource{
+		turns: []string{"run_one", "run_empty", "run_one~3"},
+		runs: map[string][]zenforge.Event{
+			"run_one": aTurn(),
+			// A turn whose events produce no console records at all.
+			"run_empty": nil,
+			// Its own numbering, shifted past both turns before it.
+			"run_one~3": aTurn(),
+		},
+	}
+	log, err := Session(context.Background(), source, "run_one", sessionIdentity)
+	if err != nil {
+		t.Fatalf("Session returned error: %v", err)
+	}
+	if len(log.TurnRecords) != 3 {
+		t.Fatalf("turn records = %v, want one count per turn", log.TurnRecords)
+	}
+	if log.TurnRecords[0] != 12 || log.TurnRecords[1] != 0 || log.TurnRecords[2] != 12 {
+		t.Fatalf("turn records = %v, want 12, 0, 12", log.TurnRecords)
+	}
+	for index, record := range log.Records {
+		want := 1
+		if index >= 12 {
+			want = 3
+		}
+		if got := log.TurnContaining(index); got != want {
+			t.Fatalf("record %d (seq %d) is in turn %d, want %d", index, record.Seq, got, want)
+		}
+	}
+	if got := log.TurnContaining(len(log.Records)); got != 0 {
+		t.Fatalf("an index past the log is turn %d, want 0", got)
+	}
+	if got := log.TurnContaining(-1); got != 0 {
+		t.Fatalf("a negative index is turn %d, want 0", got)
+	}
+}
+
+// A fork records the conversation it came from on the child's first turn, which
+// is where this host keeps the lineage: there is no session-metadata plane, and
+// the console nests a fork under its source by reading it off the list row.
+func TestSessionLogReadsTheForkLineage(t *testing.T) {
+	child := aTurn()
+	child[0].Payload["parentSessionId"] = "run_source"
+	// A later turn carrying the same field must not matter: the lineage is the
+	// child's own, stated where its history begins.
+	later := aTurn()
+	later[0].Payload["parentSessionId"] = "run_someone_else"
+	source := stubSource{
+		turns: []string{"run_child", "run_child~2"},
+		runs:  map[string][]zenforge.Event{"run_child": child, "run_child~2": later},
+	}
+	log, err := Session(context.Background(), source, "run_child", sessionIdentity)
+	if err != nil {
+		t.Fatalf("Session returned error: %v", err)
+	}
+	if log.ParentSessionID != "run_source" {
+		t.Fatalf("parent = %q, want the first turn's source", log.ParentSessionID)
+	}
+	plain, err := Session(context.Background(), twoTurnSource(), "run_one", sessionIdentity)
+	if err != nil {
+		t.Fatalf("Session returned error: %v", err)
+	}
+	if plain.ParentSessionID != "" {
+		t.Fatalf("parent = %q, want none for a conversation nobody forked", plain.ParentSessionID)
+	}
+}

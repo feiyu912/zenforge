@@ -686,6 +686,85 @@ func (m *RunManager) Forget(runID string) error {
 	return nil
 }
 
+// Record adds the terminal record of a run this host materialized instead of
+// executed: a forked session's inherited turns are copies of another run's log,
+// so nothing ran them here, yet the console's session list is built from run
+// records -- Get and List are how it decides which conversations exist -- and a
+// conversation the host holds but does not list is one the sidebar cannot show
+// (session/fork).
+//
+// The record is the same one a stored run gets at boot: a claim and an immediate
+// release, which is what makes it durable and terminal without a live lease. With
+// no registry it lives in this manager's map, where Get and List read it exactly
+// as a finished run. A run id this host already knows is refused rather than
+// overwritten, so recording can never rewrite the history of a run that ran.
+func (m *RunManager) Record(ctx context.Context, info RunInfo) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := contextErr(ctx); err != nil {
+		return err
+	}
+	runID := strings.TrimSpace(info.RunID)
+	if runID == "" {
+		return ErrInvalidRunID
+	}
+	// Only what already happened can be recorded: a nonterminal record would
+	// claim a lease this host does not hold.
+	if !terminal(info.Status) {
+		return ErrRunActive
+	}
+	info.RunID = runID
+	info.OwnerID = ""
+	info.LeaseUntil = nil
+	if m.opts.Registry != nil && !nilRunRegistry(m.opts.Registry) {
+		if _, err := m.opts.Registry.Get(ctx, runID); err == nil {
+			return ErrRunExists
+		} else if !errors.Is(err, ErrRunNotFound) {
+			return err
+		}
+		// The claim is a starting one -- a registry refuses a terminal claim, and
+		// it is the release below that publishes the terminal status this record
+		// actually has, exactly as the boot adoption of stored runs does it. The
+		// lease only spans that release.
+		lease, err := m.opts.Registry.Claim(ctx, RunClaim{
+			RunID: runID, OwnerID: m.registryOwnerID(), Status: RunStarting,
+			LeaseUntil: time.Now().UTC().Add(m.opts.LeaseDuration),
+			StartedAt:  info.StartedAt, UpdatedAt: info.UpdatedAt,
+		})
+		if err != nil {
+			return err
+		}
+		if err := m.opts.Registry.Release(ctx, lease, info); err != nil {
+			return err
+		}
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return ErrManagerClosed
+	}
+	if _, ok := m.runs[runID]; ok {
+		return ErrRunExists
+	}
+	run := &managedRun{info: info}
+	m.runs[runID] = run
+	// A recorded run is terminal, so it ages out of this process the same way a
+	// run that reached a terminal status does. What outlives it is the durable
+	// part: the registry record above and the events it was materialized from.
+	if m.opts.TerminalRetention >= 0 {
+		retention := m.opts.TerminalRetention
+		run.timer = time.AfterFunc(retention, func() {
+			m.mu.Lock()
+			defer m.mu.Unlock()
+			if current := m.runs[runID]; current == run {
+				delete(m.runs, runID)
+			}
+		})
+	}
+	return nil
+}
+
 // Close rejects new work, cancels active runs, and waits for all drainers.
 func (m *RunManager) Close(ctx context.Context) error {
 	if ctx == nil {

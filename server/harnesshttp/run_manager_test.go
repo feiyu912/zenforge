@@ -1112,3 +1112,92 @@ func TestRunInfoLiveTreatsAnExpiredLeaseAsNotRunning(t *testing.T) {
 		}
 	}
 }
+
+// A run this host materialized rather than executed is a run the console must
+// still be able to see: forking a session copies another run's log, and a
+// conversation missing from the session list is one the sidebar cannot show.
+func TestRunManagerRecordMaterializedRun(t *testing.T) {
+	store := eventlogmemory.New()
+	bus := eventlog.NewBus()
+	manager := NewRunManager(newManagerTestAgent(store), eventlog.NewFanoutStore(store, bus), bus,
+		RunManagerOptions{TerminalRetention: -1})
+	defer closeManager(t, manager)
+
+	started := time.Now().UTC().Add(-time.Minute)
+	updated := time.Now().UTC()
+	for _, runID := range []string{"fork_source", "fork_source~2"} {
+		if err := manager.Record(context.Background(), RunInfo{
+			RunID: runID, Status: RunCompleted, StartedAt: started, UpdatedAt: updated,
+		}); err != nil {
+			t.Fatalf("Record(%s) = %v", runID, err)
+		}
+		info, err := manager.Get(runID)
+		if err != nil {
+			t.Fatalf("Get(%s) = %v", runID, err)
+		}
+		if info.Status != RunCompleted || info.LeaseUntil != nil || info.Live(time.Now()) {
+			t.Fatalf("%s = %+v, want a terminal record with no lease", runID, info)
+		}
+		if info.StartedAt != started || info.UpdatedAt != updated {
+			t.Fatalf("%s times = %s..%s, want the recorded ones", runID, info.StartedAt, info.UpdatedAt)
+		}
+	}
+	infos, err := manager.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(infos) != 2 {
+		t.Fatalf("List = %+v, want both recorded runs", infos)
+	}
+
+	// Recording never rewrites a run this host already knows, and only what
+	// already happened can be recorded.
+	if err := manager.Record(context.Background(), RunInfo{RunID: "fork_source", Status: RunCompleted}); !errors.Is(err, ErrRunExists) {
+		t.Fatalf("second Record = %v, want %v", err, ErrRunExists)
+	}
+	if err := manager.Record(context.Background(), RunInfo{RunID: "fork_live", Status: RunRunning}); !errors.Is(err, ErrRunActive) {
+		t.Fatalf("Record(running) = %v, want %v", err, ErrRunActive)
+	}
+	if err := manager.Record(context.Background(), RunInfo{RunID: "  ", Status: RunCompleted}); !errors.Is(err, ErrInvalidRunID) {
+		t.Fatalf("Record(no id) = %v, want %v", err, ErrInvalidRunID)
+	}
+}
+
+// The record is durable: another manager reading the same registry sees the
+// materialized run as a finished one, which is what a restart would do.
+func TestRunManagerRecordReachesTheRegistry(t *testing.T) {
+	registry := NewMemoryRunRegistry()
+	store := eventlogmemory.New()
+	bus := eventlog.NewBus()
+	manager := NewRunManager(newManagerTestAgent(store), eventlog.NewFanoutStore(store, bus), bus,
+		RunManagerOptions{Registry: registry, OwnerID: "owner_1", TerminalRetention: -1})
+	defer closeManager(t, manager)
+
+	now := time.Now().UTC()
+	if err := manager.Record(context.Background(), RunInfo{
+		RunID: "forked_run", Status: RunCompleted, StartedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("Record = %v", err)
+	}
+	stored, err := registry.Get(context.Background(), "forked_run")
+	if err != nil {
+		t.Fatalf("registry Get = %v", err)
+	}
+	if stored.Status != RunCompleted || stored.LeaseUntil != nil || stored.Live(time.Now()) {
+		t.Fatalf("registry record = %+v, want a released terminal record", stored)
+	}
+
+	other := NewRunManager(newManagerTestAgent(store), eventlog.NewFanoutStore(store, eventlog.NewBus()), eventlog.NewBus(),
+		RunManagerOptions{Registry: registry, OwnerID: "owner_2", TerminalRetention: -1})
+	defer closeManager(t, other)
+	infos, err := other.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(infos) != 1 || infos[0].RunID != "forked_run" || infos[0].Status != RunCompleted {
+		t.Fatalf("second manager List = %+v, want the recorded run", infos)
+	}
+	if err := other.Record(context.Background(), RunInfo{RunID: "forked_run", Status: RunCompleted}); !errors.Is(err, ErrRunExists) {
+		t.Fatalf("Record over a registry record = %v, want %v", err, ErrRunExists)
+	}
+}

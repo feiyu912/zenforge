@@ -145,9 +145,11 @@ func (h *Handler) sessionList(ctx context.Context, args map[string]json.RawMessa
 }
 
 // listableSession maps one RunInfo to a SessionSummary, and reports whether the
-// console can actually open it. origin and parentSessionId are omitted: the run
-// manager has no subagent lineage to report, and an omitted optional field is
-// honest where a fabricated one is not.
+// console can actually open it. origin is omitted: the run manager has no
+// subagent lineage to report, and an omitted optional field is honest where a
+// fabricated one is not. parentSessionId is served when the conversation was
+// forked -- a fork writes its source into the child's first turn -- and omitted
+// otherwise, for the same reason.
 //
 // A record whose run never wrote an event is a start that failed before the
 // transcript began. The console answers not-found for such a session, so
@@ -193,6 +195,13 @@ func (h *Handler) listableSession(ctx context.Context, sessionID string, info ha
 				"asOfSeq": seq,
 				"values":  map[string]any{dshwire.TitleProjection: title},
 			}
+		}
+		// A forked conversation names the one it came from, which is how the
+		// console nests it under its source (flattenLineage) instead of showing it
+		// as a root row. The field is absent -- not empty -- for a conversation
+		// nobody forked.
+		if log.ParentSessionID != "" {
+			item["parentSessionId"] = log.ParentSessionID
 		}
 	}
 	return item, log, true

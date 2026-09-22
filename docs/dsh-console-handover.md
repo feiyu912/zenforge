@@ -546,6 +546,96 @@ wrote an event is omitted, because `session/page` answers not-found for it; and 
 log has no terminal event is recorded as cancelled when it is adopted. Drafts stay
 process-local (ADR 0104).
 
+## Shipped: a fork copies the source's completed turns (2026-09-22)
+
+`session/fork` is served (ADR 0129), so both console affordances work: the
+sidebar's "fork" on a session row and a message's "fork from here" (which sends
+`atSeq`, the console sequence of that message).
+
+The reference seeds a child session with a slice of the source's events
+(`agents.create({seed, inheritedEventCount})`); this host has no seeded-session
+path, so a fork is a **copy**: the source's turn logs up to the boundary are
+written into the child's own run chain, and the child then owns its history. Three
+pieces made that possible, and each is reusable:
+
+- **`dshwire.SessionLog.TurnRecords`** (with `TurnContaining`) names the turn a
+  projected record belongs to. The served sequence cannot: a turn that contributed
+  no records repeats the continuation point of the one before it (ADR 0117). The
+  boundary rule needs the turn, because a fork inherits **whole turns** -- turns
+  are runs here, which is where the reference's "cut, then advance to the next
+  `turn/start`" lands too.
+- **`RunManager.Record`** adds a terminal run record for a run this host
+  materialized instead of executed. The console's session list is built from run
+  records, and a conversation the host holds but does not list is one the sidebar
+  cannot show; the record uses the same claim-and-release the boot adoption of
+  stored runs uses, so it is durable in the registry (proved by a restart test).
+- **The lineage travels in the log.** The reference keeps `parentSessionId` in
+  session metadata; this host has no such plane, so the child's first turn opens by
+  naming its source, `SessionLog.ParentSessionID` reads it, and `session/list`
+  serves it -- the field the console's `flattenLineage` nests a child under its
+  source with.
+
+The boundary rule and its refusals are the reference's, word for word: the first
+`turn/end` at or after `atSeq`, else the last `turn/end`; no boundary is
+`session/fork-unavailable` with either "has not completed the turn containing
+event N" or "has no completed turn to fork from"; an unknown session is
+`session/not-found`; a bad `atSeq` is `gateway/bad-request` "atSeq must be a
+non-negative safe integer"; and a workspace attach failure is
+`session/workspace-attach-failed` carrying the child's id, which the console reads
+out of the error to open the child anyway. Two deviations are in the ADR: the child
+gets an ordinary `run_<nanos>` id (collision-probed) rather than
+`session-<uuid>`, and the fork is a snapshot whose copied records keep their
+original times while the child's own record is stamped with the fork's moment.
+
+Live on a scratch host with no model credentials (the prompt is recorded and the
+failed turn still ends, so a fork is provable without a provider):
+
+```
+$ session/prompt A "the quarterly report discusses the harbor crane budget"
+$ session/fork {"sessionId":"run_…643975000"}          # the source
+{"…","result":{"ok":true,"value":{"sessionId":"run_…719713319000"}}}
+$ session/page child
+  seq 1 turn/start   seq 2 user/message "the quarterly report …"   seq 9 turn/end
+$ session/list
+   run_…719713319000 updatedAt=… parent=run_…643975000
+   run_…643975000    updatedAt=… parent=None
+$ session/prompt child "a follow-up question"          # continues the inherited conversation
+$ session/page child
+  seq 1 turn/start … seq 9 turn/end | seq 10 turn/start seq 11 user/message "a follow-up" seq 18 turn/end
+$ session/fork {"sessionId":child,"atSeq":2}           # a two-turn source, cut inside turn 1
+  → a child whose page holds turn 1 alone (9 records, no follow-up)
+$ session/fork {"sessionId":<draft>}
+{"…","error":{"code":"session/fork-unavailable","message":"session \"run_…\" has no completed turn to fork from"}}
+$ session/fork {"sessionId":child,"atSeq":-1}
+{"…","error":{"code":"gateway/bad-request","message":"atSeq must be a non-negative safe integer","details":{}}}
+$ session/fork {"sessionId":"run-missing"}
+{"…","error":{"code":"session/not-found","message":"session \"run-missing\" not found","details":{"sessionId":"run-missing"}}}
+```
+
+The ledger reads **47 served / 4 streams / 17 refused / 41 unserved** of 109, and
+the next-up list is down to one item: `session/updateQueue`.
+
+## Next: the pending queue, the last item in next-up 1
+
+**`session/updateQueue`** edits the messages the console has queued for a
+conversation's next turn: `{sessionId, itemId, action}`, where the action union
+carries at least `{kind: "edit", content: [...]}` and `{kind: "steer"}`, answering
+`{accepted: true}`; the client calls it from `ui-conversation`'s `steerQueue`,
+which reads the rows from the `inbox` face's `next-turn` list, and expects the
+host's own `session/steer-unavailable` and `session/queue-item-not-found` codes.
+
+What is missing is the projection, not the route. This host's control baseline
+publishes an empty `queues` map **by design** -- `sessionQueuedItem`'s comment says
+"no queue mirror yet" -- and the baseline's `Queues` key must stay present even
+while empty, because the client's `replaceControlBaseline` throws on an absent key
+and discards the whole baseline (ADR 0119). The queue's existing half is the prompt
+path: a `queue` or `steer` prompt for an active run goes through
+`RunManager.Steer`, whose message is already projected (ADR 0111). A chain that
+serves this method therefore has to (a) mirror the pending items into the control
+baseline and the follow snapshot, with the `id` and `placement` the client renders,
+(b) map an `itemId` back to the queue entry, and (c) refuse an item it cannot find
+with the client's own code rather than editing the wrong message.
+
 ## Shipped: the attachment read is refused (2026-09-22)
 
 `session/attachment` is routed and refused by name (ADR 0128). The console's
@@ -1182,10 +1272,12 @@ serves `qwen-plus`, and the card shows only what is written on it.
 > this host implements no desktop carrier (ADR 0126), and the sidebar's search reads the
 > conversations the list already shows, with the reference's own cap, excerpt bound and
 > query refusals (ADR 0127), and the attachment read is refused by name because this host
-> has no attachment store and no upload path to fill one (ADR 0128). The next chain is
-> "Next up" 1 in the ledger: `session/fork` -- forking a conversation at a message, which
-> the handover's own section sizes (the reference's turn-boundary rule, its seeded child
-> session, and why this host needs a mechanism first) -- and then `session/updateQueue`. If a scratch host is
+> has no attachment store and no upload path to fill one (ADR 0128), and a fork copies the
+> source's completed turns into a child of its own, with the reference's boundary rule and
+> refusals and the lineage the sidebar nests it by (ADR 0129). The next chain is "Next up"
+> 1 in the ledger, and it is the last one there: `session/updateQueue` -- the pending queue,
+> whose projection the control baseline currently publishes empty on purpose. The handover
+> section above says what that chain has to build. If a scratch host is
 > needed, give it `ZENFORGE_CONFIG_DIR` or `--settings-file` under a throwaway directory so
 > it cannot rewrite the operator's document, and its own `--checkpoint-dir` too, because the
 > event store and the run registry are derived from it: a scratch host started in `/tmp`

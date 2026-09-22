@@ -26,16 +26,16 @@ methods are the remaining work, in priority order at the end of this page.
 
 ## Summary
 
-This host answers **46** of the client's **109** methods, mounts
+This host answers **47** of the client's **109** methods, mounts
 **4** of them as logical streams, refuses **17** by name, and
-does not serve the remaining **42**.
+does not serve the remaining **41**.
 
 | State | Count |
 | --- | --- |
-| served | 46 |
+| served | 47 |
 | stream | 4 |
 | refused | 17 |
-| unserved | 42 |
+| unserved | 41 |
 | **client methods total** | **109** |
 
 The WebSocket mux also mounts `$events`, which is not part of the client's
@@ -71,6 +71,7 @@ attach the prompt to the session it has open (ADR 0115).
 | `session/canOpenWorkspacePath` | served | Whether this host can hand a workspace path to a native desktop: `false`, as the reference's own bare boolean, because this host serves the browser carrier and implements no desktop carrier (ADR 0126). |
 | `session/cancel` | served | Stop the conversation's newest turn. The console names the session it has open (the first turn's id) while a multi-turn conversation runs `<session>~<k>`, so cancel resolves the chain ADR 0108 already builds and cancels the newest turn, accepting it idempotently and answering a conflict that names the turn it refused (ADR 0113). |
 | `session/create` | served | Create a session. It exists before its first turn: its history is empty, not missing (ADR 0104). |
+| `session/fork` | served | Fork a conversation at a message: the child's turns are materialized from the source's turn logs up to the reference's completed-turn boundary and then own themselves, so the child continues the inherited exchange and appears in the session list like any other conversation (ADR 0129). |
 | `session/list` | served | List sessions. The list is the host's durable run registry, so it survives a restart and does not expire at the terminal retention; a record whose run never wrote an event is omitted because the console cannot open it (ADR 0109). A planning session is listed by the operator's own task; the plan-execute preset's appended instruction never reaches the title (ADR 0106). |
 | `session/modelCatalog` | served | The models the page may offer, grouped per provider. |
 | `session/page` | served | A page of a session's events, projected into the console's vocabulary. A created session with no turns answers an empty page (ADR 0104, ADR 0105). A session's turns share one sequence, so `Load earlier` reaches an earlier prompt (ADR 0108), and every message is identified by that sequence, so a second question renders as itself instead of matching the first question's node (ADR 0110). |
@@ -146,7 +147,6 @@ attach the prompt to the session it has open (ADR 0115).
 | `messageFeedback/put` | unserved | no message-feedback store |
 | `officeToPdf/generation` | unserved | no document conversion in this host |
 | `officeToPdf/render` | unserved | no document conversion in this host |
-| `session/fork` | unserved | no session fork |
 | `session/updateQueue` | unserved | no queue editing |
 | `sessionFeedback/record` | unserved | no session-feedback store |
 | `sessionReferenceResolver/candidates` | unserved | no reference resolver |
@@ -176,12 +176,11 @@ live `zenforge serve` whose boot graph and every advertised bundle were fetched.
 that has shipped is removed rather than left to mislead the next window; the gaps below are
 in the order they block the page, from what the console asks first.
 
-1. **`session/fork`, `session/updateQueue`** — session management the sidebar
-   offers: forking a conversation at a message, and editing the pending queue.
-   Forking is the larger of the two: the reference seeds a child session with the
-   parent's events up to a completed turn boundary, and this host's sessions are
-   runs, so forking needs a seeded-log mechanism before the method can be
-   honored.
+1. **`session/updateQueue`** — editing the pending queue: reordering, editing or
+   dropping a message the console has queued for the next turn. This host's
+   control baseline publishes an empty `queues` map by design (`sessionQueuedItem`
+   says "no queue mirror yet"), so the queue projection has to be fed from the
+   prompt path's steer handling before the mutation means anything.
 2. **`skills/list`, `subagents/list`, `subagents/prompt`, `subagents/interruptByParent`**
    — framework features that are not exposed to the console yet.
 3. **`terminal/*`** — an embedded terminal, which this host does not claim.

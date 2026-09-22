@@ -30,6 +30,9 @@ type listItem struct {
 		AsOfSeq int64          `json:"asOfSeq"`
 		Values  map[string]any `json:"values"`
 	} `json:"projections"`
+	// ParentSessionID is the conversation this one was forked from, which the
+	// console reads to nest a fork under its source (flattenLineage).
+	ParentSessionID string `json:"parentSessionId"`
 }
 
 // title is the name the console would render for this row.
