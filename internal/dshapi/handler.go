@@ -172,14 +172,18 @@ func New(manager *harnesshttp.RunManager, events eventlog.Store, cfg Config) (*H
 	if events == nil || nilInterface(events) {
 		return nil, fmt.Errorf("event store is required")
 	}
-	return &Handler{
+	handler := &Handler{
 		manager:      manager,
 		events:       events,
 		cfg:          cfg,
 		modelDefault: cfg.ModelDefault,
 		pending:      make(map[string]pendingSession),
-		queues:       newQueueStore(manager),
-	}, nil
+	}
+	// The durable inbox folds the session's own log (ADR 0136), so the store is
+	// handed the handler's readers rather than a cache it would have to keep in
+	// step with them.
+	handler.queues = newQueueStore(manager, handler.queueEvents, handler.queueRuns, handler.queueAppend)
+	return handler, nil
 }
 
 // ServeHTTP dispatches one POST /api/<namespace>/<method> request. Requests

@@ -378,6 +378,11 @@ func (h *Handler) sessionPrompt(ctx context.Context, args map[string]json.RawMes
 			_ = h.rememberPending(sessionID)
 			return nil, startFailure(sessionID, err)
 		}
+		// A turn is running, so input the durable inbox still holds -- queued for
+		// an earlier turn that ended before its boundary, or restored after this
+		// host restarted -- is handed to it now (ADR 0136). The rows stay pending
+		// until this run claims them.
+		h.queues.restore(sessionID, sessionID)
 		return map[string]any{"accepted": true}, nil
 	}
 
@@ -392,15 +397,20 @@ func (h *Handler) sessionPrompt(ctx context.Context, args map[string]json.RawMes
 	info, err := h.manager.Get(current)
 	switch {
 	case err == nil && info.Live(time.Now()):
+		// Input the durable inbox still holds is handed to this run first, so a
+		// message restored after a restart is delivered ahead of the new one
+		// (ADR 0136).
+		h.queues.restore(sessionID, current)
 		steered, err := h.manager.Steer(current, strings.TrimSpace(requestID), text)
 		if err == nil {
-			// The run queue is the truth about what is pending; this store only
-			// remembers which half of the console's queue the message belongs in,
-			// keyed by the identity the run manager ended up using (it mints one
-			// when the console sent none). Recording it republishes the cell, so
-			// the row the console drew as its own echo is replaced by the host's
-			// row immediately (ADR 0130).
-			h.queues.enqueue(sessionID, current, mode, steered.SteerID)
+			// The acceptance is durable: the message is spliced into the session's
+			// own log, and the cell is derived from that. The id is the identity the
+			// run manager ended up using (it mints one when the console sent none),
+			// so the log holds the id the console's queue mutations address (ADR
+			// 0130, ADR 0136).
+			if failure := h.queues.enqueue(sessionID, mode, steered.SteerID, text); failure != nil {
+				return nil, failure
+			}
 		}
 		if err != nil {
 			// Get found the run, so Steer's not-found here means this manager
@@ -441,6 +451,10 @@ func (h *Handler) sessionPrompt(ctx context.Context, args map[string]json.RawMes
 	if _, err := h.manager.Start(ctx, task); err != nil {
 		return nil, startFailure(continuationID, err)
 	}
+	// The new turn is handed whatever the durable inbox still holds: input queued
+	// for an earlier turn whose boundary never came, restored here rather than
+	// carried to a turn nobody will run (ADR 0136).
+	h.queues.restore(sessionID, continuationID)
 	return map[string]any{"accepted": true}, nil
 }
 

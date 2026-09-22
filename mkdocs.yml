@@ -277,6 +277,7 @@ nav:
       - 0133 Message feedback is folded out of the session's own log: adr/0133-message-feedback-is-folded-out-of-the-log.md
       - 0134 The @ picker is served from the directory the host serves: adr/0134-the-at-picker-is-served-from-the-directory-the-host-serves.md
       - 0135 The remaining console namespaces are refused by name: adr/0135-the-remaining-namespaces-are-refused-by-name.md
+      - 0136 The pending queue is folded out of the session log: adr/0136-the-pending-queue-is-folded-out-of-the-session-log.md
 
 extra:
   social:

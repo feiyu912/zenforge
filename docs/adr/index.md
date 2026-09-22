@@ -164,3 +164,4 @@ and what the adapter answers today is
 | [0133](0133-message-feedback-is-folded-out-of-the-log.md) | Message feedback is folded out of the session's own log |
 | [0134](0134-the-at-picker-is-served-from-the-directory-the-host-serves.md) | The `@` picker is served from the directory the host serves |
 | [0135](0135-the-remaining-namespaces-are-refused-by-name.md) | The remaining console namespaces are refused by name |
+| [0136](0136-the-pending-queue-is-folded-out-of-the-session-log.md) | The pending queue is folded out of the session log |

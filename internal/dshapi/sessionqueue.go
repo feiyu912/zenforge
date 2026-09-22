@@ -61,20 +61,28 @@ func (h *Handler) sessionUpdateQueue(ctx context.Context, args map[string]json.R
 		return nil, fail(codeQueueItemNotFound, "queued item is no longer pending",
 			map[string]any{"itemId": itemID})
 	}
+	// The row's run is the session's newest turn: that is the queue the message was
+	// handed to, whether it was queued in this process or restored from the log by
+	// a host that restarted (ADR 0136).
+	runID := h.currentRun(ctx, sessionID)
 	switch action.kind {
 	case "edit":
-		if err := h.manager.EditSteer(item.RunID, itemID, action.text); err != nil {
+		if err := h.manager.EditSteer(runID, itemID, action.text); err != nil {
 			return nil, queueEditFailure(itemID, err)
 		}
-		// The row the console holds is derived from the run queue, so a client
-		// learns about the edit from a republished cell -- not from this answer,
-		// which only acknowledges that it was applied.
-		h.queues.refresh(sessionID)
+		// The row the console holds is a fold over the session's own log, so the
+		// edit is recorded there and the cell is republished from it -- not
+		// answered here, where only the acceptance is known.
+		if failure := h.queues.replace(sessionID, itemID, action.text); failure != nil {
+			return nil, failure
+		}
 	case "remove":
-		if err := h.manager.DropSteer(item.RunID, itemID); err != nil {
+		if err := h.manager.DropSteer(runID, itemID); err != nil {
 			return nil, queueEditFailure(itemID, err)
 		}
-		h.queues.refresh(sessionID)
+		if failure := h.queues.discard(sessionID, itemID); failure != nil {
+			return nil, failure
+		}
 	case "steer":
 		// Steering is "hand this to the running turn now", which only a queued
 		// turn can be asked for. A message already awaiting the next step boundary
@@ -84,7 +92,9 @@ func (h *Handler) sessionUpdateQueue(ctx context.Context, args map[string]json.R
 			return nil, fail(codeSteerUnavailable, "current turn no longer accepts steering",
 				map[string]any{"itemId": itemID})
 		}
-		h.queues.promote(sessionID, itemID)
+		if failure := h.queues.promote(sessionID, itemID); failure != nil {
+			return nil, failure
+		}
 	}
 	return map[string]any{"accepted": true}, nil
 }

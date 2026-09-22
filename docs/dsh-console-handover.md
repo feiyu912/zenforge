@@ -546,6 +546,75 @@ wrote an event is omitted, because `session/page` answers not-found for it; and 
 log has no terminal event is recorded as cancelled when it is adopted. Drafts stay
 process-local (ADR 0104).
 
+## Shipped: the pending queue is folded out of the session log (2026-09-22)
+
+The queue stopped being process state. Every acceptance, edit, removal, promotion and
+delivery is now one `agent/inbox/spliced` event in the session's own log -- the reference
+loop's own event type and payload, which the pinned console already knows and reads -- and
+the `inbox` projection cell is a fold over those events (ADR 0136). ADR 0130's deviation 2
+is closed rather than renamed.
+
+What the change actually consists of:
+
+- **Acceptance is durable.** `session/prompt` appends an append-splice to `next-turn`
+  (mode `queue`) or `next-step` (mode `steer`) *before* the cell is derived, so the row the
+  console draws as its own echo is the host's durable row from the first frame.
+- **The run queue is consulted only for delivery.** A folded row the live run no longer
+  holds was handed to the agent, and the store records that as a claim (a removal with no
+  `outcome` -- a delivery is not a cancellation). A run this process no longer holds proves
+  nothing, so its rows stay pending.
+- **`sessionUpdateQueue` records what the operator asked for**, not an inference. The run
+  queue is mutated first (so a refusal is still the reference's own), and then the splice is
+  written from a fold that does not infer delivery -- otherwise dropping a row would look
+  like the agent receiving it, and the log would owe a cancellation but record a claim.
+- **A restored row is handed to the session's next turn.** `session/prompt` steers every
+  pending row the run does not hold into it, under the console's own id, including on the
+  continuation branch. This covers a restart, a lease that expired with the process that
+  held it, and a run that ended before its boundary.
+
+The fold is the reference's `apply`, validations included (a splice whose range leaves its
+list is rejected; an id pending in both lists at once is rejected), and the payload omits
+`removedCount` when nothing was removed and adds `outcome` only on a cancellation, exactly
+as the reference writes them.
+
+Live, on a real host over a real jsonl log: a message queued behind a live turn appeared in
+the follow snapshot's `inbox.next-turn` and as an `agent/inbox/spliced` event; the host was
+stopped mid-turn, so the run and every byte of process memory were gone; a fresh host over
+the same directory -- which never held the run -- served the row back from the log alone;
+and after the adopted run's 30-second lease expired, the next prompt was accepted, the row
+was delivered as a `user/message` in the new turn, and the claim splice
+(`removedCount: 1`, no `outcome`) landed in that turn's log, after which the cell was empty.
+
+One liveness difference is deliberate and recorded in the ADR: a restored row waits for the
+session's next prompt instead of starting a turn of its own. The console shows it pending
+either way, so nothing it renders is untrue.
+
+## Next: only host capabilities are left
+
+**Nothing the served console declares is unserved.** The ledger reads 56 served / 4 streams
+/ 46 refused / 0 unserved of 106 methods, the queue is durable, and every remaining gap is a
+capability this host does not have rather than console work it has not done. Each refusal
+names its own gap, so the next window can pick from the ledger's `## Next up` directly:
+
+1. **An embeddable terminal** -- the console-facing half of the PTY the host already runs:
+   an attachment layer, a runtime resize and a screen model for `terminal/follow`.
+2. **A child-session plane** -- children are one-shot runs inside the parent's run today;
+   listing, prompting and interrupting them needs them registered as sessions.
+3. **An attachment store** -- both the prompt's image parts and the upload route refuse with
+   one shared sentence until an intake exists.
+4. **An `@`-mention parser and expander** -- so a picked conversation reference reaches the
+   model as a reference instead of as literal text.
+5. **An Office converter and PDF renderer** -- the document preview's byte arm
+   (`workspaceFiles/readAll`) is what works today.
+
+Two smaller pieces of debt are worth naming rather than losing:
+
+- The console's `queues` baseline mirror stays empty on purpose (ADR 0130's deviation 4):
+  it is a second shape of the same rows that the pinned bundle never reads.
+- Promotion remains two splices (cancel in `next-turn`, append to `next-step`) because this
+  host delivers both halves at the same boundary (ADR 0111); if a real two-boundary delivery
+  ever lands, the log already has the vocabulary for it.
+
 ## Shipped: the last unserved rows are refused by name (2026-09-22)
 
 The console's coverage ledger now has **no unserved row**: every one of the 106
@@ -593,7 +662,7 @@ sentence and capability (`terminal/create`, `terminal/resize`, `subagents/list`,
 The ledger reads **56 served / 4 streams / 46 refused / 0 unserved** of 106 declared
 methods.
 
-## Next: the durable inbox fold
+## Next at the time: the durable inbox fold
 
 **One piece of host work is left on this page, and it is carried debt rather than a
 console gap.** The pending queue is process state (ADR 0130): a message queued for a

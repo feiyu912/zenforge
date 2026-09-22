@@ -791,3 +791,11 @@ operator can act on. They are worth listing in one place:
   bytes (`workspaceFiles/readAll`) is what works.
 - **No dynamic plugins.** Plugins are compiled into this host, so nothing in the
   dynamic runner's namespace could be run, inspected or settled.
+
+The console's pending queue is no longer on this list. It used to be process
+state: a message queued for a run that ended before its model-turn boundary was
+dropped with the run, and a restarted host could not restore it. It is now durable
+session-log state and the `inbox` cell is a fold over it (ADR 0136), so a queued
+message outlives its run and is handed to the session's next turn. One liveness
+difference remains, and it is deliberate: a restored row waits for the next prompt
+rather than starting a turn of its own.
