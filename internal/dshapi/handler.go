@@ -108,6 +108,11 @@ type Handler struct {
 	skillsMu sync.RWMutex
 	skills   SkillSource
 
+	// fileReferences is the injected `@` candidate source, installed by
+	// SetFileReferences after New.
+	fileReferencesMu sync.RWMutex
+	fileReferences   FileReferenceSource
+
 	// plugins is the injected plugin inventory, installed by SetPluginInventory
 	// after New.
 	pluginsMu sync.RWMutex
@@ -404,6 +409,11 @@ func (h *Handler) method(endpoint string) (methodFunc, bool) {
 		switch name {
 		case "record":
 			return h.sessionFeedbackRecord, true
+		}
+	case "fileReferences":
+		switch name {
+		case "list":
+			return h.fileReferencesList, true
 		}
 	case "skills":
 		switch name {

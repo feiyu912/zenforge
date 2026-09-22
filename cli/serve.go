@@ -499,9 +499,12 @@ func newServeApp(ctx context.Context, opts *options, ioStreams IO, config serveC
 		ModelSelections:  selections,
 		Presets:          consolePresets(opts),
 		WorkspaceFiles:   consoleFileFace(opts),
-		Commands:         consoleCommandCatalog(opts),
-		Workspaces:       workspaceRegistry,
-		Goals:            consoleGoalStore,
+		// The console's `@` menu reads the same directory the file browser does
+		// (ADR 0134), so a path it offers is a path the host can read.
+		FileReferences: consoleFileReferences(opts.workspace),
+		Commands:       consoleCommandCatalog(opts),
+		Workspaces:     workspaceRegistry,
+		Goals:          consoleGoalStore,
 		// The skills panel reads the same catalog the runs advertise (ADR 0131),
 		// so the panel cannot list a skill the agent would not be able to load.
 		Skills: consoleSkillCatalog(*opts),

@@ -162,3 +162,4 @@ and what the adapter answers today is
 | [0131](0131-the-skill-catalog-is-one-catalog.md) | The skill catalog is one catalog, seen by the panel and by the model |
 | [0132](0132-the-workspace-list-carries-two-manual-orders.md) | The workspace list carries two manual orders: registrations and sessions |
 | [0133](0133-message-feedback-is-folded-out-of-the-log.md) | Message feedback is folded out of the session's own log |
+| [0134](0134-the-at-picker-is-served-from-the-directory-the-host-serves.md) | The `@` picker is served from the directory the host serves |

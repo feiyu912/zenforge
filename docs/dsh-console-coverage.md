@@ -28,14 +28,14 @@ methods are the remaining work, in priority order at the end of this page.
 
 This host answers **47** of the client's **109** methods, mounts
 **4** of them as logical streams, refuses **17** by name, and
-does not serve the remaining **33**.
+does not serve the remaining **32**.
 
 | State | Count |
 | --- | --- |
-| served | 55 |
+| served | 56 |
 | stream | 4 |
 | refused | 17 |
-| unserved | 33 |
+| unserved | 32 |
 | **client methods total** | **109** |
 
 The WebSocket mux also mounts `$events`, which is not part of the client's
@@ -144,7 +144,7 @@ attach the prompt to the session it has open (ADR 0115).
 | `dynamicCordisRunner/stopFromPanel` | unserved | no dynamic plugin runtime in this host |
 | `dynamicCordisRunner/syncInspectManifest` | unserved | no dynamic plugin runtime in this host |
 | `dynamicCordisRunner/undefineFromPanel` | unserved | no dynamic plugin runtime in this host |
-| `fileReferences/list` | unserved | no file-reference index |
+| `fileReferences/list` | served | The console's `@` picker: ranked path candidates for one session's query. A query with no slash searches the tree and ranks matches the way the reference provider does (exact name, prefix, name substring, path substring, subsequence; directories win ties, then shorter paths, then lexicographic); a query with a slash -- or an empty one -- lists that directory's entries by the fragment that follows it. Hidden entries appear only when the query names a dot, the reference provider's skip list is skipped, symlinks are never listed or traversed, and both the walk and the answer are bounded (50000 entries, 20 rows). The answer is a bare `[{path, kind}]` array, which is the schema's own result shape (ADR 0134). |
 | `fileUploads/upload` | unserved | the console cannot upload files to this host |
 | `messageFeedback/delete` | served | Remove one message's judgment, against the version the console observed. Deleting what is already gone succeeds without an event, and a stale version is a `version-conflict` carrying the item it lost against (ADR 0133). |
 | `messageFeedback/list` | served | Every current judgment of one conversation, folded out of that session's own log: `feedback/message-put` sets an item, `feedback/message-delete` removes it, and the answer is the surviving set in first-recorded order (ADR 0133). |
@@ -183,9 +183,7 @@ in the order they block the page, from what the console asks first.
 2. **`terminal/*`** — an embedded terminal, which this host does not claim: the
    job manager runs a command under a PTY, but there is no attachment layer, no
    runtime resize, no screen model for `follow` and no shell discovery.
-3. **`fileReferences/list`** — the console's `@` picker, answerable from the
-   workspace file scope and the bounded walker.
-4. **`fileUploads/upload`, `officeToPdf/*`, `agentTeams/*`,
+3. **`fileUploads/upload`, `officeToPdf/*`, `agentTeams/*`,
    `sessionReferenceResolver/candidates`, `dynamicCordisRunner/*`,
    `terminal/*`, `subagents/*`** — namespaces whose capability this host does not
    have; each is refused by name, naming the missing subsystem.

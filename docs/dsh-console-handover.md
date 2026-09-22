@@ -546,6 +546,81 @@ wrote an event is omitted, because `session/page` answers not-found for it; and 
 log has no terminal event is recorded as cancelled when it is adopted. Drafts stay
 process-local (ADR 0104).
 
+## Shipped: the `@` picker reads the directory the host serves (2026-09-22)
+
+`fileReferences/list` is served (ADR 0134), so the console's `@` menu works: its
+file section answers, and the `Promise.all` in `ui-reference/client.js:164` that used
+to reject whole no longer does. The chain followed the seam pattern the skill catalog
+established (ADR 0131): `dshapi.FileReferenceSource` is the adapter's contract,
+`cli/filereferences.go` is the walk over the directory `zenforge serve` was started
+with, and `dshmount.Config.FileReferences` connects them.
+
+What the vendored schema decided, and what the reference provider specified:
+
+- **The wire is not the usual one.** Scope is `{context: "agent", wire: "agentId"}`
+  (the same scope the goals namespace is served under), the parameters are `agentId`
+  and `query` with no `request` object, and the result is a **bare array** of
+  `{path, kind}` -- no union, no items wrapper.
+- **The ranking is the reference's five bands**: exact name, name prefix, name
+  substring, path substring, subsequence, with a 25-point directory bonus and ties
+  broken by kind, shorter path, then lexicographic order; at most 20 rows.
+- **A slash means "list this directory"**, no slash means "search the tree", hidden
+  entries need a query that names a dot, the reference provider's skip list is
+  skipped, and symlinks are neither listed nor traversed (each directory segment is
+  `lstat`ed, and an escaping path answers nothing).
+- **Both bounds are the reference's defaults**: 50000 entries into the walk, 20 rows
+  out; this host adds a depth cap of 64.
+- A read failure answers no candidates; an unopenable workspace leaves the seam nil
+  so the namespace answers `unimplemented` naming `FileReferenceSource`.
+
+Two deviations are recorded in the ADR and in `docs/limitations.md`: every call walks
+the tree (the reference keeps a background-rebuilt index and answers a bare query
+from the stale copy), and every session sees the one directory the host serves (the
+reference composes a provider per workspace root).
+
+Live evidence came from a host over a crafted tree (nested `internal/dshapi/`, hidden
+`.github/workflows/`, a `node_modules/` and a symlinked `linkdocs`): the empty query
+listed the root's own entries with the excluded and symlinked ones absent;
+`internal/dshapi/` listed its files; `main` searched the tree; `dshapi` put the
+directory above its files; `fg` found `feedback.go` by subsequence; `.github/` and a
+bare `.` reached the hidden entries; `../`, `linkdocs/` and an absent directory all
+answered `[]`; an unknown scope answered `session/not-found`, a missing query and an
+extra argument answered `gateway/arguments-invalid`.
+
+The ledger reads **56 served / 4 streams / 17 refused / 32 unserved** of 109.
+
+## Next: one refusal sweep, then the inbox fold
+
+**1. One refusal sweep, one ADR -- every remaining row is a namespace whose
+capability this host does not have.** Refusal is the honest answer, and batching
+keeps the ledger's story readable. The rows, with the reason each needs:
+
+- **`terminal/*` (11 rows)** -- no attachment layer, no runtime resize (the PTY
+  master is not exposed and nothing calls `pty.Setsize`), no screen model for
+  `follow` (no VT emulator, and the job buffer is lossy where a gapless sequence is
+  required), no shell discovery, and `--jobs` defaults false.
+- **`subagents/*` (3 rows)** -- no child-session plane: children are one-shot runs
+  inside the parent run (`<parentRunID>_sub_<taskID>`), streamed off the agent rather
+  than registered, absent from `RunManager` and from `session/list`, and both
+  `session/page` and `session/follow` refuse the `subagent` address arm on purpose.
+- **`sessionReferenceResolver/candidates` (1 row)** -- nothing in Go parses or expands
+  an `@`-mention, so a picked row would reach the model as literal text.
+- **`fileUploads/upload` (1 row)** -- the same missing attachment store as the
+  refused `session/attachment`; reuse that sentence verbatim.
+- **`officeToPdf/*` (2), `agentTeams/*` (3), `dynamicCordisRunner/*` (12)** -- no
+  converter or PDF library, no agent-team feature, no dynamic plugin runtime. Note
+  for the ledger: these families' consumer bundles are dropped from the console build
+  (`DROP_PLUGINS` in `scripts/build-console.sh`: `ui-sidebar-documentpreview`,
+  `experimental/client-ui-agent-team`, `cordis-client-runner`, with
+  `extensions/ui-cordis` blocked in the roster), and `agentTeams/*` is not declared
+  in the vendored client at all -- the rows should say that, the way
+  `session/workspaceDesktop` says it is absent from the pinned bundle.
+
+**2. Carried debt: the durable inbox fold.** The pending queue remains process state
+(ADR 0130). Closing it means queue, claim and clear events in the run's log plus a
+projection fold over them, so a queued message outlives its run and a restarted host
+can restore it.
+
 ## Shipped: message feedback is the session's own log (2026-09-22)
 
 `messageFeedback/put`, `messageFeedback/list`, `messageFeedback/delete` and
@@ -598,7 +673,7 @@ feedback/message-delete, feedback/record, feedback/record`.
 
 The ledger reads **55 served / 4 streams / 17 refused / 33 unserved** of 109.
 
-## Next: the `@` picker, then one refusal sweep, then the inbox fold
+## Next at the time: the `@` picker, then one refusal sweep, then the inbox fold
 
 One read and one sweep remain before the ledger has no unserved row, and both are
 already sized.

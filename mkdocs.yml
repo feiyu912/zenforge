@@ -275,6 +275,7 @@ nav:
       - 0131 The skill catalog is one catalog: adr/0131-the-skill-catalog-is-one-catalog.md
       - 0132 The workspace list carries two manual orders: adr/0132-the-workspace-list-carries-two-manual-orders.md
       - 0133 Message feedback is folded out of the session's own log: adr/0133-message-feedback-is-folded-out-of-the-log.md
+      - 0134 The @ picker is served from the directory the host serves: adr/0134-the-at-picker-is-served-from-the-directory-the-host-serves.md
 
 extra:
   social:

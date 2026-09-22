@@ -89,6 +89,10 @@ type Config struct {
 	// unimplemented, which is the honest answer for a host whose serve command
 	// installed no skill catalog.
 	Skills dshapi.SkillSource
+	// FileReferences answers the console's `@` menu. Without it the namespace
+	// answers unimplemented, which is the honest answer for a host with no
+	// readable workspace.
+	FileReferences dshapi.FileReferenceSource
 }
 
 // Mux is the assembled console host. It is immutable after New, which is what
@@ -154,6 +158,9 @@ func New(manager *harnesshttp.RunManager, events eventlog.Store, cfg Config) (*M
 	}
 	if cfg.Skills != nil {
 		api.SetSkills(cfg.Skills)
+	}
+	if cfg.FileReferences != nil {
+		api.SetFileReferences(cfg.FileReferences)
 	}
 	if cfg.WorkspaceFiles != nil {
 		api.SetWorkspaceFiles(cfg.WorkspaceFiles)

@@ -747,3 +747,20 @@ are worth knowing before relying on it:
 - The note limit is bytes, not characters. 8192 bytes is the reference host's own
   policy (`maxNoteBytes: 8192`), so a note of multibyte text can be refused well
   before it looks long.
+
+## The `@` picker walks the tree on every keystroke
+
+The console's `@` menu is served (ADR 0134), and what it offers is what the host can
+actually read: the directory the server was started with, with the reference
+provider's skip list, hidden entries only when the query names a dot, and symlinks
+neither listed nor followed. Two limits are worth knowing:
+
+- Every query walks. The reference keeps a per-workspace index that keeps answering
+  while it rebuilds in the background; this host has no cache, so a bare query (one
+  without a slash) walks the tree up to 50000 entries before it answers. A very
+  large workspace makes each keystroke's request cost a tree walk; narrowing the
+  query with a path (`internal/`) turns it back into a single directory read.
+- Every session sees the one directory the host serves. The reference composes a
+  provider per workspace, so a session in another workspace sees that workspace;
+  this host runs every session in its own workspace directory, so the picker is the
+  same for all of them. A path it offers is always a path this host can read.
