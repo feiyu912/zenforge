@@ -26,16 +26,16 @@ methods are the remaining work, in priority order at the end of this page.
 
 ## Summary
 
-This host answers **37** of the client's **109** methods, mounts
-**3** of them as logical streams, refuses **16** by name, and
-does not serve the remaining **53**.
+This host answers **44** of the client's **109** methods, mounts
+**4** of them as logical streams, refuses **15** by name, and
+does not serve the remaining **46**.
 
 | State | Count |
 | --- | --- |
-| served | 37 |
+| served | 44 |
 | stream | 4 |
 | refused | 15 |
-| unserved | 53 |
+| unserved | 46 |
 | **client methods total** | **109** |
 
 The WebSocket mux also mounts `$events`, which is not part of the client's
@@ -56,6 +56,13 @@ attach the prompt to the session it has open (ADR 0115).
 | `credentials/unset` | served | Clear the stored credential. |
 | `directoryPicker/createDirectory` | served | Create one child directory under an existing parent. |
 | `directoryPicker/list` | served | One directory level with its ancestry, for the in-app browser. |
+| `goals/clear` | served | Remove the session's current goal. The answer is the ref that was removed, and the store drops the document rather than tombstoning it (ADR 0125). |
+| `goals/complete` | served | Finish the current goal at one exact revision. |
+| `goals/create` | served | Set a session's goal from its objective and an optional round cap. The id is the host's to mint, and the answer is the `{id, revision}` a following mutation compare-and-sets against (ADR 0125). |
+| `goals/edit` | served | Change the objective and/or the round cap at one exact revision. |
+| `goals/get` | served | The session's current goal, or no value at all when it has none — a null would reach the dock as a goal (ADR 0125). |
+| `goals/pause` | served | Pause the current goal, keeping it and its round count. |
+| `goals/resume` | served | Resume a paused goal at one exact revision. |
 | `llm/discoverModels` | served | Interrogate a draft endpoint, or answer from a declared profile. |
 | `llm/listConfigurableProviders` | served | The provider directory: declared profiles and configurable families. |
 | `llm/listProviders` | served | The registered provider routes. |
@@ -130,13 +137,6 @@ attach the prompt to the session it has open (ADR 0115).
 | `dynamicCordisRunner/undefineFromPanel` | unserved | no dynamic plugin runtime in this host |
 | `fileReferences/list` | unserved | no file-reference index |
 | `fileUploads/upload` | unserved | the console cannot upload files to this host |
-| `goals/clear` | unserved | the framework has a goal registry; it is not exposed here yet |
-| `goals/complete` | unserved | the framework has a goal registry; it is not exposed here yet |
-| `goals/create` | unserved | the framework has a goal registry; it is not exposed here yet |
-| `goals/edit` | unserved | the framework has a goal registry; it is not exposed here yet |
-| `goals/get` | unserved | the framework has a goal registry; it is not exposed here yet |
-| `goals/pause` | unserved | the framework has a goal registry; it is not exposed here yet |
-| `goals/resume` | unserved | the framework has a goal registry; it is not exposed here yet |
 | `messageFeedback/delete` | unserved | no message-feedback store |
 | `messageFeedback/list` | unserved | no message-feedback store |
 | `messageFeedback/put` | unserved | no message-feedback store |
@@ -169,7 +169,7 @@ attach the prompt to the session it has open (ADR 0115).
 
 ## Next up
 
-Audited **2026-09-21**. The list is a dated reading, not a description that stays true
+Audited **2026-09-22**. The list is a dated reading, not a description that stays true
 by itself: it was re-derived from the host's routing table (`method` in
 `internal/dshapi/handler.go`), the plugin roster (`internal/dshmount/roster.json`), and a
 live `zenforge serve` whose boot graph and every advertised bundle were fetched. An item
@@ -180,16 +180,14 @@ in the order they block the page, from what the console asks first.
    workspace into a session, the other half of selection.
 2. **`session/search`, `session/fork`, `session/attachment`, `session/updateQueue`**
    — session management the sidebar offers.
-3. **`goals/*`** — the goal panel. The framework has a goal registry
-   (`goals/`); this is wiring, not new capability.
-4. **`skills/list`, `subagents/list`, `subagents/prompt`, `subagents/interruptByParent`**
+3. **`skills/list`, `subagents/list`, `subagents/prompt`, `subagents/interruptByParent`**
    — framework features that are not exposed to the console yet.
-5. **`terminal/*`** — an embedded terminal, which this host does not claim.
-6. **`workspace/insertBefore`, `workspace/insertSessionBefore`** — the manual
+4. **`terminal/*`** — an embedded terminal, which this host does not claim.
+5. **`workspace/insertBefore`, `workspace/insertSessionBefore`** — the manual
    row order inside the workspace list. Registrations, titles, deletion and the
    archived set are served (ADR 0101); only the drag-to-reorder mutations are
    left.
-7. **`messageFeedback/*`, `sessionFeedback/*`, `fileReferences/list`,
+6. **`messageFeedback/*`, `sessionFeedback/*`, `fileReferences/list`,
    `fileUploads/upload`, `officeToPdf/*`, `agentTeams/*`, `sessionReferenceResolver/candidates`,
    `dynamicCordisRunner/*`** — page features with no host-side counterpart yet.
 

@@ -50,6 +50,17 @@ func (h *Handler) sessionProjectionBaseline(sessionID string, cursor int64, titl
 		}
 		values[modelSelectionProjectionKey] = state.Projection
 	}
+	if h.cfg.Goals != nil {
+		// The goal cell travels with the opening snapshot, and it has to: the
+		// client's seed clears every cell the block omits as of the cut, so a
+		// reconnected console would lose the goal it was rendering. The block's
+		// watermark stays the session cursor -- the kinetics of the title and
+		// selection cells depend on that -- while the cell itself is current. The
+		// goal's own sequence, which is what orders its live frames, is written
+		// above any session cursor, so a later mutation is never mistaken for an
+		// older value.
+		values[goalProjectionKey] = goalCell(h.cfg.Goals(sessionID))
+	}
 	return projectionBaseline{AsOfSeq: cursor, Values: values}
 }
 

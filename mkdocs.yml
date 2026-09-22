@@ -266,6 +266,7 @@ nav:
       - 0122 The built-in routes are editable cards: adr/0122-the-built-in-routes-are-editable-cards.md
       - 0123 The prompt cards the console renders: adr/0123-the-prompt-cards-the-console-renders.md
       - 0124 The chunks and errors the console reads off a stream: adr/0124-the-chunks-and-errors-the-console-reads-off-a-stream.md
+      - 0125 The goal dock reads the framework's goal state: adr/0125-the-goal-dock-reads-the-frameworks-goal-state.md
 
 extra:
   social:

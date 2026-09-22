@@ -546,44 +546,87 @@ wrote an event is omitted, because `session/page` answers not-found for it; and 
 log has no terminal event is recorded as cancelled when it is adopted. Drafts stay
 process-local (ADR 0104).
 
-## Next: `goals/*` -- the exact wiring, already surveyed (2026-09-21)
+## Shipped: the goal dock reads the framework's goal state (2026-09-22)
 
-The goal dock is dead because all seven methods are unserved
-(`docs/dsh-console-coverage.md` lists `goals/clear|complete|create|edit|get|pause|resume` as
-`unserved`). The framework half already exists, so this is wiring -- but it is wiring with
-three parts, and this section records what was surveyed so the next round does not re-derive
-it.
+The seven `goals/*` methods, the `goal` projection cell and
+`goal/activation-changed` are served (ADR 0125), so the composer's goal bar is
+live: it renders the phase and objective and pauses, resumes, edits and clears
+the current goal. The rules are the framework's own -- `goals.Create/Edit/Pause/
+Resume/Complete` over the durable state in `<checkpoint-dir>/goals`, the same
+directory `zenforge goal` and the goal tools use -- and the console's half is the
+envelope vocabulary, which the store adapter translates in `cli/consolergoals.go`
+plus `internal/dshapi/goals.go`.
 
-**The console half.** The vendored client plugin is in this repo
-(`webui/dsh/plugins/client/ui-goal/client.js`). It declares required services
-`remote` and `remote.goals` and calls, against a session id:
+Two things the earlier survey had wrong, worth recording so the next window does
+not repeat them:
 
-- `ctx.remote.goals.get(sessionId)` for the current projection,
-- `ctx.remote.goals.edit(sessionId, ref, {objective})`, `.pause(sessionId, ref)`,
-  `.resume(sessionId, ref)`, `.clear(sessionId, ref)`,
-- `ctx.remote.$on("goal/activation-changed", ...)` for live activation, and
-- it reads `projection.goal.phase` (only `"active"` arms the dock) and
-  `projection.activation`, comparing `{id, revision, activation}` snapshots by value.
+- **The projection carries no activation.** Upstream's `GoalProjection` is
+  `{goal, roundsStarted, createdAt, updatedAt}` ("activation is process-local
+  and deliberately absent"), and `useProjection("goal")` is `GoalProjection |
+  null`. Activation arrives separately, from `goals.get` and from the
+  `goal/activation-changed` emit, and the dock matches it **per `{id, revision}`**
+  -- so an activation for a superseded revision renders as none and the bar loses
+  its pause/resume buttons. Both carriers are therefore load-bearing, and they
+  ride one change feed so they cannot disagree.
+- **`clear` is a tombstone in the *checkpoint state*, not in the projection.**
+  Upstream's state is `{current, seenGoalIds, failure}`: the cell goes to `null`
+  while the identities are retained to refuse reuse. This host deletes the state
+  document instead, so id reuse and a pre-clear ref both report
+  `GOAL_NOT_FOUND`. The dock cannot tell, and the deviation is in ADR 0125.
 
-The typed `remote.goals` surface is upstream's `@deepseek-ai/dsh-goal/remote`, whose domain is
-`packages/goal/goal/src/domain.ts`: operations `create | edit | pause | resume | complete |
-clear`, a `GoalRef` of `{id, revision}`, and a projection carrying the current goal plus the
-latest mutation ref, where `clear` is a **tombstone** (`{operation: "clear", cleared,
-clearedAt}`) rather than an absent goal. The exact request/response envelopes come from that
-remote type -- read it before writing the routes.
+The projection needed a sequence of its own and that is the subtle part. A
+baseline block in `session/control` and the history seed in `session/follow` each
+carry **one** watermark for every cell in the block, and the client discards a
+value numbered at or below the watermark it already holds
+(`api/session-controller`, `ProjectionValueStore.apply`/`seed`). The
+model-selection cell is numbered by its own store's sequence, so folding a goal
+into the control baseline would raise that block's watermark above the model
+picker's own frames and freeze it. The goal cell therefore travels with the
+session's own follow snapshot -- which also keeps the client's seed from clearing
+it -- and later values arrive as control frames numbered by a wall-clock-anchored
+monotone counter that outranks any session cursor. Had the frames been numbered
+below the cursor, a `resume` would be discarded and `activeRef` would keep seeing
+a paused projection: the dock would never re-read activation and the goal would
+look stuck. The live probe confirms the shape:
+`{"type":"projection","key":"goal",…,"seq":1790044141036}` with no activation in
+the cell, and `{"type":"emit","event":"goal/activation-changed","args":[
+{"sessionId":…,"goal":{"id":…,"revision":3,"activation":"armed"}}]}`; a cleared
+goal emits `{"sessionId":…}` with no goal at all.
 
-**The host half.** `goals/goal.go` is a pure state machine over `goals.State`:
-`Create(State, CreateOptions)`, `Edit(State, EditOptions)`, `Pause/Resume/Complete(State,
-time.Time)`, `Block(State, BlockReason, time.Time)` and `AdmitRound`, with `State.Revision()`
-and `State.Armed()`. It maps onto the console's domain nearly one to one: our `Block` has no
-console operation (it is the blocked phase), and the console's `clear` is our state emptied
-plus a tombstone that reports the ref it cleared.
+Live RPC evidence on a scratch host (`--addr 127.0.0.1:8799`, throwaway
+`--checkpoint-dir` and `--settings-file`), one session, walking the whole
+lifecycle:
 
-**What is still open, to check first:** where a session's goal state is persisted today
-(`cli/goal.go` drives the CLI and writes round reports; whether the state itself lives on the
-run registry, in checkpoint metadata, or only in the CLI's process is the first thing to
-establish), and whether the projection rides `session/page`'s projections or a stream of its
-own. Neither the activation event nor the projection cell has been built.
+```
+$ curl -s -X POST http://127.0.0.1:8799/api/goals/get -d …args {"agentId":"run_…"}…
+{"type":"server-response","rpcId":"p","result":{"ok":true}}
+$ curl -s … /api/goals/create … {"agentId":"run_…","objective":"document the goal dock","maxGoalRounds":4}
+…"value":{"ref":{"id":"goal-1790044153281347000","revision":1}}}
+$ curl -s … /api/goals/pause … {"agentId":"run_…","ref":{"id":"goal-1790044153281347000","revision":1}}
+…"ok":false,"error":{"code":"GOAL_STALE_REVISION","message":"goals/pause: goal goal-… is at revision 2, not 1"…
+$ curl -s … /api/goals/clear … ref revision 1 of the second goal
+…"value":{"id":"goal-1790044153364217000","revision":1}}
+$ curl -s … /api/goals/get …
+{"type":"server-response","rpcId":"p","result":{"ok":true}}
+```
+
+The no-goal read answers **no `value` key at all**, which is the reference's own
+`undefined` arm and the only safe shape: the client's transport passes
+`result.value` through and the activation source tests `goal === void 0`, so a
+JSON `null` would reach `goal.id` and throw inside its `.then`. Live evidence also
+caught a bug in id minting -- the first version suffixed every goal after the
+first one (`goal-<nanos>-1`) because it tested the suffixed candidate and never
+the free base -- now fixed and pinned by
+`TestConsoleGoalIdentifiersSuffixOnlyOnCollision`.
+
+**What is still open in this panel** (also in `docs/limitations.md`): the
+composer's `/goal` command is a built-in *host* command
+(`@deepseek-ai/dsh-command-goal`) this host does not register, so the dock cannot
+create; a goal is created host-side (`serve --goals` and the `create_goal` tool,
+the command line, or the state document). `goals/complete` is served but the
+shipped dock never calls it. Activation is derived from durable state
+(`armed` = active with budget left) rather than from a live scheduler, because
+`zenforge serve` does not run the framework's goal-continuation loop.
 
 ## Shipped: the stream chunks and the interrupted tool call (2026-09-21)
 
@@ -926,9 +969,14 @@ serves `qwen-plus`, and the card shows only what is written on it.
 > conversation so a later turn's prompt is answerable (ADR 0115), the answer streams as
 > assistant-stream frames (ADR 0116), the served log is the console's own vocabulary and
 > numbering rather than the host's durable log (ADR 0117), and a reconnect mid-answer
-> resumes the attempt instead of restarting it (ADR 0118). The next chain is "Next up" 1 in the ledger:
-> `session/openWorkspacePath` and `session/canOpenWorkspacePath`, opening a workspace into a
-> session. If a scratch host is
+> resumes the attempt instead of restarting it (ADR 0118), the console's baselines are complete
+> (ADR 0119), the file surfaces the console reads are served (ADR 0120), the turn and step
+> boundaries are projected (ADR 0121), the built-in provider routes are editable cards
+> (ADR 0122), the prompt cards render (ADR 0123), the stream carries the usage and finish
+> chunks and answers a cancelled run's open tool calls (ADR 0124), and the goal dock reads
+> and mutates the framework's durable goal state (ADR 0125). The next chain is still
+> "Next up" 1 in the ledger: `session/openWorkspacePath` and
+> `session/canOpenWorkspacePath`, opening a workspace into a session. If a scratch host is
 > needed, give it `ZENFORGE_CONFIG_DIR` or `--settings-file` under a throwaway directory so
 > it cannot rewrite the operator's document, and its own `--checkpoint-dir` too, because the
 > event store and the run registry are derived from it: a scratch host started in `/tmp`

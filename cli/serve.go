@@ -20,6 +20,7 @@ import (
 	"github.com/feiyu912/zenforge"
 	"github.com/feiyu912/zenforge/approval"
 	"github.com/feiyu912/zenforge/eventlog"
+	"github.com/feiyu912/zenforge/goals"
 	"github.com/feiyu912/zenforge/internal/dshapi"
 	"github.com/feiyu912/zenforge/internal/dshmount"
 	"github.com/feiyu912/zenforge/internal/dshstream"
@@ -441,6 +442,11 @@ func newServeApp(ctx context.Context, opts *options, ioStreams IO, config serveC
 	// own endpoint and model instead of an invented one; an unconfigured host
 	// returns an empty catalog and the console says so.
 	modelCatalog := models.Catalog
+	// The console's goal dock reads and mutates a session's goal through the
+	// goals/* namespace. The state is the framework's own goal store, in the same
+	// directory the command line and the goal tools use, so a goal is the same
+	// goal whichever surface created it (ADR 0125).
+	consoleGoalStore := newConsoleGoals(goals.NewFileStore(goalStorePath(opts.checkpointDir)))
 	// The Models page loads its provider directory before it renders any card,
 	// so a missing answer is not a missing nicety: the page reports that loading
 	// the directory failed and shows nothing. The live half is the route this
@@ -495,6 +501,7 @@ func newServeApp(ctx context.Context, opts *options, ioStreams IO, config serveC
 		WorkspaceFiles:   consoleFileFace(opts),
 		Commands:         consoleCommandCatalog(opts),
 		Workspaces:       workspaceRegistry,
+		Goals:            consoleGoalStore,
 	})
 	if err != nil {
 		return nil, err
@@ -519,6 +526,11 @@ func newServeApp(ctx context.Context, opts *options, ioStreams IO, config serveC
 		// (the session's choice first) so the transcript reads the same live and
 		// after a reload.
 		ModelDefault: modelDefault,
+		// The goal dock's two live carriers: the control stream's projection
+		// frames and the `goal/activation-changed` emit both ride this change
+		// feed, so the two cannot disagree about a commit.
+		Goals:       consoleGoalStore.Projection,
+		GoalUpdates: consoleGoalStore.Updates,
 	})
 	if err != nil {
 		return nil, err

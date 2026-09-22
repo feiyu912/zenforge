@@ -14,9 +14,10 @@ import (
 // The first item is the ready frame, which binds later POST /api/$events/result
 // answers to this generation (stream-protocol.ts RemoteEventReadyFrame;
 // api/gateway/src/index.ts openRemoteEvents yields it before anything else).
-// After that the stream delivers the forwarded event this host can honestly
-// produce: an approval waterfall for every pending approval.Inbox request, and
-// a cancellation frame when one stops being pending.
+// After that the stream delivers the forwarded events this host can honestly
+// produce: an approval waterfall for every pending approval.Inbox request, a
+// cancellation frame when one stops being pending, and a
+// `goal/activation-changed` emit for every committed goal mutation.
 //
 // It does not deliver emit frames for the api-session/* family. Upstream gets
 // those from a host-wide Cordis event bus; this repository's eventlog.Bus is
@@ -25,6 +26,12 @@ import (
 // still lists sessions from POST /api/session/list and follows a run's events
 // from session/follow; what it loses is live sidebar mutation. That gap is
 // deliberate and reported rather than papered over.
+//
+// The goal emit is a different case and is why it is here: the goal store is a
+// host-side store with a real change feed (the same one the control stream's
+// projection frames ride), so the dock's activation hook can be told the exact
+// current `{id, revision, activation}` instead of only discovering it when it
+// asks for a read.
 func (h *Handler) runEvents(ctx context.Context, payload []byte, send func(any) error) error {
 	args, failure := endpointArgs(payload)
 	if failure != nil {
@@ -39,6 +46,28 @@ func (h *Handler) runEvents(ctx context.Context, payload []byte, send func(any) 
 	clientID := newClientID()
 	h.registerClient(clientID)
 	defer h.unregisterClient(clientID)
+
+	// Subscribe before the ready frame, so a mutation that commits while the
+	// stream is opening is delivered rather than lost in the gap, and coalesce
+	// per session: only the latest activation of a session matters, and a client
+	// that missed one reads the current value instead.
+	pending := map[string]GoalUpdate{}
+	signal := make(chan struct{}, 1)
+	var unsubscribe func()
+	if h.cfg.GoalUpdates != nil {
+		unsubscribe = h.cfg.GoalUpdates(func(update GoalUpdate) {
+			h.mu.Lock()
+			pending[update.SessionID] = update
+			h.mu.Unlock()
+			select {
+			case signal <- struct{}{}:
+			default:
+			}
+		})
+	}
+	if unsubscribe != nil {
+		defer unsubscribe()
+	}
 
 	if err := send(readyValue{
 		Type:     "ready",
@@ -55,10 +84,46 @@ func (h *Handler) runEvents(ctx context.Context, payload []byte, send func(any) 
 		if err := h.deliverApprovals(ctx, send, delivered); err != nil {
 			return err
 		}
+		if err := h.deliverGoalActivations(send, pending); err != nil {
+			return err
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
+		case <-signal:
+			// A goal mutation committed: deliver it now instead of waiting for the
+			// next approval poll, which exists for a different carrier.
+		}
+	}
+}
+
+// deliverGoalActivations drains the coalesced goal mutations into
+// `goal/activation-changed` emit frames, oldest sequence first so a client sees
+// them in the order they happened rather than in Go's map order.
+func (h *Handler) deliverGoalActivations(send func(any) error, pending map[string]GoalUpdate) error {
+	for {
+		h.mu.Lock()
+		oldest := ""
+		var chosen GoalUpdate
+		for sessionID, update := range pending {
+			if oldest == "" || update.Seq < chosen.Seq {
+				oldest, chosen = sessionID, update
+			}
+		}
+		if oldest != "" {
+			delete(pending, oldest)
+		}
+		h.mu.Unlock()
+		if oldest == "" {
+			return nil
+		}
+		if err := send(emitValue{
+			Type:  "emit",
+			Event: "goal/activation-changed",
+			Args:  []any{chosen.activationChanged()},
+		}); err != nil {
+			return err
 		}
 	}
 }

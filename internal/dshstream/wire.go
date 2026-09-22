@@ -108,7 +108,12 @@ type hostInfo struct {
 	Home string `json:"home"`
 }
 
-// emitValue is a forwarded notification (RemoteEventEmitFrame).
+// emitValue is a forwarded notification (RemoteEventEmitFrame): one forwarded
+// event and its arguments, delivered to whatever registered a `ctx.remote.$on`
+// listener for the name (stream-protocol.ts:44-70). The client spreads `args`
+// into the listener, so a one-payload event crosses as a one-element array.
+// Exact keys only: the client's validator rejects an emit frame with anything
+// else.
 type emitValue struct {
 	Type  string `json:"type"`
 	Event string `json:"event"`

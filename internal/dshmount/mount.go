@@ -81,6 +81,9 @@ type Config struct {
 	// workspace namespace answers unimplemented and the console's "choose
 	// workspace" flow has nowhere to land.
 	Workspaces dshapi.WorkspaceRegistry
+	// Goals answers the console's goal dock: the seven goals/* methods. Without
+	// it the namespace answers unimplemented and the dock never appears.
+	Goals dshapi.GoalStore
 }
 
 // Mux is the assembled console host. It is immutable after New, which is what
@@ -140,6 +143,9 @@ func New(manager *harnesshttp.RunManager, events eventlog.Store, cfg Config) (*M
 	}
 	if cfg.Presets != nil {
 		api.SetPresets(cfg.Presets)
+	}
+	if cfg.Goals != nil {
+		api.SetGoals(cfg.Goals)
 	}
 	if cfg.WorkspaceFiles != nil {
 		api.SetWorkspaceFiles(cfg.WorkspaceFiles)

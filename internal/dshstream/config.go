@@ -37,6 +37,20 @@ type Config struct {
 	// because the session stream has no projection frame.
 	ModelSelectionUpdates func(observe func(ModelSelectionUpdate)) (unsubscribe func())
 
+	// Goals, when set, reports one session's goal projection cell: the follow
+	// snapshot publishes it, and it is the null arm for a session with no current
+	// goal. Nil reports no capability, which is what a host with no goal store
+	// should say. It is not part of the control baseline; control.go explains
+	// why the goal cell travels with the session's own snapshot instead.
+	Goals func(sessionID string) *GoalProjection
+
+	// GoalUpdates, when set, delivers later goal mutations until the returned
+	// function is called. Two live carriers carry them: the control stream sends
+	// the projection frame (`goal`), and the forwarded-event stream emits
+	// `goal/activation-changed` so the dock's activation hook tracks the same
+	// commit.
+	GoalUpdates func(observe func(GoalUpdate)) (unsubscribe func())
+
 	// Workspaces, when set, reports the console's workspace registry: the
 	// workspace/follow baseline publishes it and later changes arrive through
 	// WorkspaceUpdates. Nil reports none, which is what a host with no

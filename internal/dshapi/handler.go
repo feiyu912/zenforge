@@ -128,6 +128,10 @@ type Handler struct {
 	// SetWorkspaces after New.
 	workspacesMu sync.RWMutex
 	workspaces   WorkspaceRegistry
+
+	// goals is the injected goal store, installed by SetGoals after New.
+	goalsMu sync.RWMutex
+	goals   GoalStore
 }
 
 // pendingSession is a session id allocated by session/create that has not
@@ -360,6 +364,23 @@ func (h *Handler) method(endpoint string) (methodFunc, bool) {
 			return h.sessionModelCatalog, true
 		case "selectModel":
 			return h.sessionSelectModel, true
+		}
+	case "goals":
+		switch name {
+		case "get":
+			return h.goalsGet, true
+		case "create":
+			return h.goalsCreate, true
+		case "edit":
+			return h.goalsEdit, true
+		case "pause":
+			return h.goalsPause, true
+		case "resume":
+			return h.goalsResume, true
+		case "complete":
+			return h.goalsComplete, true
+		case "clear":
+			return h.goalsClear, true
 		}
 	}
 	return nil, false

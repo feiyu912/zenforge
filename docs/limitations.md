@@ -582,3 +582,30 @@ deliberately left out of that change -- a registered directory this host cannot 
 different question from a preference worth restoring. So a restart starts the
 workspace list from the host's own directory again. A session's transcript and its
 workspace files are unaffected: those live in the run logs and on disk.
+
+## The goal dock is served, but its own creation path is not
+
+The seven `goals/*` methods are served, and so are the `goal` projection and the
+`goal/activation-changed` forward (ADR 0125): a session's goal is the framework's
+durable goal state in `<checkpoint-dir>/goals`, so the composer's goal bar
+renders the phase and objective, pauses, resumes, edits and clears it. Two
+honest gaps remain in that panel:
+
+- **The composer's `/goal` command is not implemented.** It is a built-in *host*
+  command (`@deepseek-ai/dsh-command-goal`) with a client face the console
+  renders, and `commands/execute` here resolves the workspace's file commands
+  only -- so typing `/goal …` is refused as an unknown command, and the dock's
+  own creation path is absent. A goal is created host-side instead: `zenforge
+  serve --goals` registers the `create_goal` tool (the model can set one), and
+  the durable document can be written by the command line and the goal tools.
+  The dock then renders and mutates what exists.
+- **`goals/clear` leaves no tombstone.** The reference retains the cleared goal's
+  identity and the set of identities a session has used, so reusing an id or
+  mutating with a pre-clear ref is refused as duplicate or stale. This host
+  removes the state document, so both are `GOAL_NOT_FOUND`. The dock cannot
+  observe the difference, and ADR 0125 records the deviation.
+- **Activation is derived, not scheduled.** `armed` means an active phase with
+  round budget left, computed from the durable state. This host's served runs do
+  not run the framework's goal-continuation loop, so the bar reports eligibility
+  rather than a live scheduler, and a goal does not continue by itself under
+  `zenforge serve`; `zenforge goal` is the surface that iterates one.
