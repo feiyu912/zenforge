@@ -573,30 +573,70 @@ The recipe's environment-dependent part is written down in the discipline list a
 a sandboxed shell cannot allocate a PTY, so the `tools/jobs` and `jobs` PTY tests fail
 locally with `operation not permitted` while CI runs them green.
 
-## Next: the console's attachment store
+## Next: the console's attachment store, in the order the contracts allow
 
-The composer's paperclip is the largest genuinely-dead control in the served console.
-`client/file-upload` and `client/ui-conversation` are both staged in this build, so the
-UI is there and calls a host that refuses: `fileUploads/upload` answers
-`unimplemented`, `session/attachment` likewise, and `session/prompt` refuses any
-non-text content block. The pieces, now that the contracts are read:
+The composer's paperclip is the largest genuinely-dead control in the served console:
+`client/file-upload` and `client/ui-conversation` are both staged in this build, the UI
+calls the host, and the host refuses. The contracts have now been read end to end --
+from the pinned client's own code and from the reference host packages
+(`@deepseek-ai/dsh-api-session-controller`, `@deepseek-ai/dsh-attachment`) -- and they
+split the work into two chains that must not be collapsed:
 
-- **Two upload entry points, one store.** The bundle uses a raw-byte route
-  (`POST` with `application/octet-stream` and `?sessionId=&name=`) when it is handed a
-  `Blob`/stream, and the RPC `fileUploads/upload` with base64 `{data, name?}` when it is
-  handed bytes -- answering `{receiptId, file: {attachmentId, name, bytes}}`. The
-  composer passes a file the user picked, so the raw route is the primary one.
-- **`session/attachment {sessionId, attachmentId}`** answers
+**What the console actually sends** (from `ui-conversation`'s `sendSession` and
+`serializeDraftAttachments`, which is authoritative over the descriptor table):
+
+- an **image** travels *inline in the prompt*: `{type: "image", mediaType, data: base64,
+  name?}`. It is never uploaded first, so no store is needed to admit one.
+- a **file** is uploaded first and the prompt cites only the receipt:
+  `{type: "file", receiptId}`.
+- the upload has **two entry points**: the raw-byte route
+  `POST /api/session/uploadFileBinary?sessionId=&name=` with an
+  `application/octet-stream` body (used when the bundle holds a `Blob`/stream, which is
+  the case for a file the operator picked), and the RPC `fileUploads/upload` with
+  `{data: base64, name?}` answering `{receiptId, file: {attachmentId, name, bytes}}`.
+- `session/attachment {sessionId, attachmentId}` answers
   `{attachment: {attachmentId, mediaType, bytes, width, height, name?}, data}` -- the
-  descriptor requires real dimensions, which means decrypting image headers
+  descriptor requires real dimensions, which means reading image headers
   (`image.DecodeConfig` covers PNG/JPEG/GIF; WebP needs its own reader or a named
   refusal).
-- **The prompt side already exists.** `model.Message.Images` and
-  `model.Image{MediaType, Data}` carry images to every adapter, `zenforge.Task` accepts
-  `InitialMessages`, and `tools/viewimage` already detects a media type from bytes --
-  so an `image` content block becomes a real model input without a framework change.
-  A `file` block reaches the model as images only, so it stays refused by name unless
-  something can carry it.
+
+**What the reference host does with them** (`commands.js` and `dsh-attachment`):
+
+- an image is checked against the **selected model's input modalities** first, and a
+  model without image input is refused with `session/attachment-invalid` "Model "X"
+  does not support image input." `{reason: "MODEL_DOES_NOT_SUPPORT_IMAGES"}`;
+- a `file` receipt is resolved against the upload store, and an un-staged receipt is
+  `session/attachment-invalid` "File was not uploaded for this session."
+  `{reason: "FILE_NOT_STAGED"}`;
+- `admitPromptContent` turns each inline image into a **durable reference**
+  (`{type: "image", attachment}`) and passes text and file references through
+  unchanged -- so upstream's message carries references, not bytes.
+
+**Chain 18a: an image prompt end to end.** This host's model path already carries
+images (`model.Message.Images`, `model.Image{MediaType, Data, Path}`,
+`model.MaxImageBytes`, `model.SupportedImageMediaType`, and both adapters render
+them), so the work is the admission path, not the model: decode the inline base64,
+refuse a media type or size the model path cannot take, and hand the images to the run.
+Two framework facts decide the shape: `Task.Input` is a string and `newTaskRunState`
+appends it as its own user message *after* `InitialMessages`, and `RunManager.Steer`
+carries text only. So an image prompt can start a turn (through a small `Task.Images`
+addition attached to that same user message, which the harness `MessageState` meta
+already knows how to checkpoint) but **cannot be queued or steered into a live run** --
+that refusal names the text-only queue rather than pretending. The projected
+`user/message` also needs the image block the console renders (`dshwire` builds user
+messages from text today), which is what makes the transcript show what the model saw.
+
+**Chain 18b: the store, receipts and retrieval.** The store (bytes under the checkpoint
+directory, content-addressed), both upload routes, the receipt resolution a `file`
+prompt part needs, and `session/attachment` with real dimensions. A `file` prompt part
+still has no way to reach the model -- upstream keeps a durable reference, and this
+host's model path carries images only -- so that part stays refused by name until
+something can carry it, and the refusal must say so rather than cite a missing store.
+
+Doing 18b first would let the UI upload and display attachments while the prompt path
+still refuses them; doing 18a first makes images work with no store at all. The
+order above is the one where each chain leaves the console more capable than it found
+it, with no half-served step in between.
 
 ## Shipped: the pending queue is folded out of the session log (2026-09-22)
 
