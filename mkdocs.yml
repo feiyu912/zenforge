@@ -274,6 +274,7 @@ nav:
       - 0130 The pending queue is the console's inbox cell: adr/0130-the-pending-queue-is-the-consoles-inbox-cell.md
       - 0131 The skill catalog is one catalog: adr/0131-the-skill-catalog-is-one-catalog.md
       - 0132 The workspace list carries two manual orders: adr/0132-the-workspace-list-carries-two-manual-orders.md
+      - 0133 Message feedback is folded out of the session's own log: adr/0133-message-feedback-is-folded-out-of-the-log.md
 
 extra:
   social:

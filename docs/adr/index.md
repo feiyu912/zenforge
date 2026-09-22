@@ -161,3 +161,4 @@ and what the adapter answers today is
 | [0130](0130-the-pending-queue-is-the-consoles-inbox-cell.md) | The pending queue is projected as the console's own inbox cell |
 | [0131](0131-the-skill-catalog-is-one-catalog.md) | The skill catalog is one catalog, seen by the panel and by the model |
 | [0132](0132-the-workspace-list-carries-two-manual-orders.md) | The workspace list carries two manual orders: registrations and sessions |
+| [0133](0133-message-feedback-is-folded-out-of-the-log.md) | Message feedback is folded out of the session's own log |

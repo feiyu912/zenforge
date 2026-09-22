@@ -722,3 +722,28 @@ knowing before relying on the panel:
   a run that started with that catalog refuse to resume, naming the missing
   bundle. Add a skill and the new run picks it up; the old run's checkpoint is
   pinned to the set it ran with.
+
+## Message feedback is the session's log, not a sidecar of its own
+
+The console's Like/Dislike pair and its feedback dialog work, and what they record
+is durable (ADR 0133): each judgment is a `feedback/message-put` or
+`feedback/message-delete` event in the conversation's own run logs, and each read
+replays that session's events. A restart therefore loses nothing. Four properties
+are worth knowing before relying on it:
+
+- A read is a full replay. `list`, `put` and `delete` each walk every turn's events
+  before they answer, so the cost of a rating grows with the length of the
+  conversation. There is no index and no cached item set; the log is the state.
+- A rating needs a finalized assistant message in the log. A step that settled
+  without model-visible content is logged as an `assistant/attempt`, which has no
+  message id to rate, so `put` answers `target-not-found` for it -- the same thing
+  the reference does.
+- A remark can be recorded for a conversation whose run has ended. The reference
+  requires a *live* session for `sessionFeedback/record`; this host has no
+  live-session object, only the durable log, so `record` accepts any session it
+  knows and appends to that session's newest turn. The remark is durable either way,
+  but a host that wants upstream's stricter rule would have to refuse a session with
+  no running turn.
+- The note limit is bytes, not characters. 8192 bytes is the reference host's own
+  policy (`maxNoteBytes: 8192`), so a note of multibyte text can be refused well
+  before it looks long.

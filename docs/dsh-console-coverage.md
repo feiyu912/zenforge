@@ -28,14 +28,14 @@ methods are the remaining work, in priority order at the end of this page.
 
 This host answers **47** of the client's **109** methods, mounts
 **4** of them as logical streams, refuses **17** by name, and
-does not serve the remaining **37**.
+does not serve the remaining **33**.
 
 | State | Count |
 | --- | --- |
-| served | 51 |
+| served | 55 |
 | stream | 4 |
 | refused | 17 |
-| unserved | 37 |
+| unserved | 33 |
 | **client methods total** | **109** |
 
 The WebSocket mux also mounts `$events`, which is not part of the client's
@@ -146,12 +146,12 @@ attach the prompt to the session it has open (ADR 0115).
 | `dynamicCordisRunner/undefineFromPanel` | unserved | no dynamic plugin runtime in this host |
 | `fileReferences/list` | unserved | no file-reference index |
 | `fileUploads/upload` | unserved | the console cannot upload files to this host |
-| `messageFeedback/delete` | unserved | no message-feedback store |
-| `messageFeedback/list` | unserved | no message-feedback store |
-| `messageFeedback/put` | unserved | no message-feedback store |
+| `messageFeedback/delete` | served | Remove one message's judgment, against the version the console observed. Deleting what is already gone succeeds without an event, and a stale version is a `version-conflict` carrying the item it lost against (ADR 0133). |
+| `messageFeedback/list` | served | Every current judgment of one conversation, folded out of that session's own log: `feedback/message-put` sets an item, `feedback/message-delete` removes it, and the answer is the surviving set in first-recorded order (ADR 0133). |
+| `messageFeedback/put` | served | Store or replace the Like/Dislike on a finalized assistant message, with an optional note and category. The target must be an assistant message the session actually logged, `ifVersion` is the concurrency token, a write that changes nothing appends nothing, and every refusal is one of the five arms the schema declares: `session-not-found`, `target-not-found`, `version-conflict` (with the current item), `note-blank` and `note-too-large` (with the 8192-byte policy). All four outcomes ride inside the value union, which is what the console reads (ADR 0133). |
 | `officeToPdf/generation` | unserved | no document conversion in this host |
 | `officeToPdf/render` | unserved | no document conversion in this host |
-| `sessionFeedback/record` | unserved | no session-feedback store |
+| `sessionFeedback/record` | served | Record one remark about the conversation itself as a `feedback/record` event, trimming surrounding whitespace and recording an entry with neither text nor category as the bare event the reference's `/feedback` command writes (ADR 0133). |
 | `sessionReferenceResolver/candidates` | unserved | no reference resolver |
 | `subagents/interruptByParent` | unserved | subagent tools exist in the framework, not exposed here |
 | `subagents/list` | unserved | subagent tools exist in the framework, not exposed here |
@@ -183,9 +183,8 @@ in the order they block the page, from what the console asks first.
 2. **`terminal/*`** — an embedded terminal, which this host does not claim: the
    job manager runs a command under a PTY, but there is no attachment layer, no
    runtime resize, no screen model for `follow` and no shell discovery.
-3. **`messageFeedback/*`, `sessionFeedback/*`, `fileReferences/list`** — the
-   feedback cluster's store and the console's `@` picker, all three answerable
-   from machinery this host has (durable session events, the file scope walker).
+3. **`fileReferences/list`** — the console's `@` picker, answerable from the
+   workspace file scope and the bounded walker.
 4. **`fileUploads/upload`, `officeToPdf/*`, `agentTeams/*`,
    `sessionReferenceResolver/candidates`, `dynamicCordisRunner/*`,
    `terminal/*`, `subagents/*`** — namespaces whose capability this host does not

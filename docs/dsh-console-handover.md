@@ -546,6 +546,102 @@ wrote an event is omitted, because `session/page` answers not-found for it; and 
 log has no terminal event is recorded as cancelled when it is adopted. Drafts stay
 process-local (ADR 0104).
 
+## Shipped: message feedback is the session's own log (2026-09-22)
+
+`messageFeedback/put`, `messageFeedback/list`, `messageFeedback/delete` and
+`sessionFeedback/record` are served (ADR 0133), so the console's Like/Dislike pair
+works and its feedback dialog can record a remark. Reconnaissance had already
+established the shape that made this chain cheap: the reference keeps the state as
+**session-log events folded on read**, and this host's vocabulary already reserved
+`feedback/message-put`, `feedback/message-delete` and `feedback/record` -- so no
+store was added, and `appendTitle`'s tail-retry append was the pattern for writing.
+
+Three things about the chain are worth carrying forward:
+
+- **The outcome rides inside the value.** These four methods *succeed* and answer
+  `{ok: true, value: …}` or `{ok: false, error: {code: …}}`; the console reads the
+  union (`carried.ok`, then `result.ok`, then `result.error.code`). A business
+  refusal sent as a method-level error envelope would be a shape its schema does not
+  admit, so `feedbackValue` is the only way these handlers answer. A malformed
+  request is still a method error: a rating outside the two literals, a category
+  outside the seven, a missing `ifVersion` and an unknown argument are all
+  `gateway/arguments-invalid`.
+- **The fold reads the raw log, not the projected window.** A feedback event
+  projects to a console record no transcript renders, so `sessionEvents` walks every
+  turn's durable events -- and checks each event's own `sessionId`, so another
+  session's events cannot contribute.
+- **The version is the concurrency token.** `ifVersion: null` means "observed
+  nothing"; a mismatch is `version-conflict` carrying the live item so the client
+  reconciles without a second read; a write that repeats the stored judgment keeps
+  the version and appends **no** event (the Like button is idempotent); deleting what
+  is already gone succeeds without an event. The note policy is the reference host's
+  own: 8192 bytes (`maxNoteBytes: 8192`), whitespace-only is `note-blank`, oversize
+  reports `maxBytes` and `actualBytes`, and the stored note keeps the operator's
+  whitespace.
+
+Two deviations are recorded in the ADR: appends land on the session's newest turn
+(the host has no live-session object, and the item is the session's either way --
+which also means a remark about a finished conversation is accepted where upstream
+refuses it), and the v4 UUID version is minted here from `crypto/rand`.
+
+Live evidence came from a `zenforge serve` whose provider was a local scripted
+endpoint, so a turn really produced a finalized assistant message (`msg-9`): the
+empty list, a put with note and category, a replace against the observed version
+(new version, same `createdAt`), a stale-version `version-conflict` carrying the live
+item, `target-not-found` for `msg-9999`, `note-blank`, `note-too-large`
+(`maxBytes: 8192`, `actualBytes: 8193`), `session-not-found` for an unknown session,
+the method-level `gateway/arguments-invalid` for a bad rating, delete →
+`{absent: true}` twice over, delete's own `version-conflict`, and
+`sessionFeedback/record` → `{recorded: true}` with and without text. The session's
+log then read `… turn/end, feedback/message-put, feedback/message-put,
+feedback/message-delete, feedback/record, feedback/record`.
+
+The ledger reads **55 served / 4 streams / 17 refused / 33 unserved** of 109.
+
+## Next: the `@` picker, then one refusal sweep, then the inbox fold
+
+One read and one sweep remain before the ledger has no unserved row, and both are
+already sized.
+
+**1. `fileReferences/list` (1 row)** -- the console's `@` picker. With it unserved the
+whole `@` menu fails, not just its file section, because the source's `Promise.all`
+has no catch (`ui-reference/client.js:164-166`). `workspaceFileScope`
+(`internal/dshapi/workspacefiles.go:164`) resolves the scope the reference method
+takes, and `tools/workspace/glob.go:133`'s walker already bounds a recursive scan
+with the limits a picker wants. Copy the request/result envelope from
+`@deepseek-ai/dsh-api-workspace-controller`'s `fileReferences/list` before writing
+code.
+
+**2. One refusal sweep, one ADR -- every remaining row is a namespace whose
+capability this host does not have.** Refusal is the honest answer, and batching
+keeps the ledger's story readable:
+
+- **`terminal/*` (11 rows)** -- no attachment layer, no runtime resize (the PTY
+  master is not exposed and nothing calls `pty.Setsize`), no screen model for
+  `follow` (no VT emulator, and the job buffer is lossy where a gapless sequence is
+  required), no shell discovery, and `--jobs` defaults false.
+- **`subagents/*` (3 rows)** -- no child-session plane: children are one-shot runs
+  inside the parent run (`<parentRunID>_sub_<taskID>`), streamed off the agent rather
+  than registered, absent from `RunManager` and from `session/list`, and both
+  `session/page` and `session/follow` refuse the `subagent` address arm on purpose.
+- **`sessionReferenceResolver/candidates` (1 row)** -- nothing in Go parses or expands
+  an `@`-mention, so a picked row would reach the model as literal text.
+- **`fileUploads/upload` (1 row)** -- the same missing attachment store as the
+  refused `session/attachment`; reuse that sentence verbatim.
+- **`officeToPdf/*` (2), `agentTeams/*` (3), `dynamicCordisRunner/*` (12)** -- no
+  converter or PDF library, no agent-team feature, no dynamic plugin runtime. Note
+  for the ledger: these families' consumer bundles are dropped from the console
+  build (`DROP_PLUGINS` in `scripts/build-console.sh`:
+  `ui-sidebar-documentpreview`, `experimental/client-ui-agent-team`,
+  `cordis-client-runner`, with `extensions/ui-cordis` blocked in the roster), and
+  `agentTeams/*` is not declared in the vendored client at all -- the rows should say
+  that, the way `session/workspaceDesktop` says it is absent from the pinned bundle.
+
+**3. Carried debt: the durable inbox fold.** The pending queue remains process state
+(ADR 0130). Closing it means queue, claim and clear events in the run's log plus a
+projection fold over them, so a queued message outlives its run and a restarted host
+can restore it.
+
 ## Shipped: the workspace list carries two manual orders (2026-09-22)
 
 `workspace/insertBefore` and `workspace/insertSessionBefore` are served (ADR 0132),
@@ -586,7 +682,7 @@ anchor sentence with all three.
 
 The ledger reads **51 served / 4 streams / 17 refused / 37 unserved** of 109.
 
-## Next: the feedback store, the `@` picker, then one refusal sweep
+## Next at the time: the feedback store, the `@` picker, then one refusal sweep
 
 Two reads remain that this host can answer truthfully, and both are already sized
 by reconnaissance against the vendored schemas.

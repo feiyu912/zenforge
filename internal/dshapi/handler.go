@@ -391,6 +391,20 @@ func (h *Handler) method(endpoint string) (methodFunc, bool) {
 		case "openWorkspacePath":
 			return h.sessionOpenWorkspacePath, true
 		}
+	case "messageFeedback":
+		switch name {
+		case "put":
+			return h.messageFeedbackPut, true
+		case "list":
+			return h.messageFeedbackList, true
+		case "delete":
+			return h.messageFeedbackDelete, true
+		}
+	case "sessionFeedback":
+		switch name {
+		case "record":
+			return h.sessionFeedbackRecord, true
+		}
 	case "skills":
 		switch name {
 		case "list":
