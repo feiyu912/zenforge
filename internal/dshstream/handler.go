@@ -103,6 +103,13 @@ func (h *Handler) runStream(ctx context.Context, endpoint string, payload json.R
 		return h.runWorkspaceFollow(ctx, payload, send)
 	case "workspaceFiles/changes":
 		return h.runWorkspaceFileChanges(ctx, payload, send)
+	case "terminal/follow":
+		// The only terminal method that is a stream rather than a unary call, and
+		// the one a terminal panel would hold open. This host has no embeddable
+		// terminal to attach to, so the arm refuses by name rather than leaving
+		// the generic "stream endpoint not found" (ADR 0135).
+		return streamFail(codeUnimplemented, "terminal/follow needs an embeddable terminal: this host has no attachment layer, no runtime resize and no screen model",
+			map[string]any{"endpoint": endpoint, "capability": "an embedded terminal"})
 	default:
 		return streamFail(codeInvocationUnavailable, "stream endpoint not found: "+endpoint,
 			map[string]any{"endpoint": endpoint})

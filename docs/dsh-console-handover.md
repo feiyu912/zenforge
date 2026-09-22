@@ -546,6 +546,74 @@ wrote an event is omitted, because `session/page` answers not-found for it; and 
 log has no terminal event is recorded as cancelled when it is adopted. Drafts stay
 process-local (ADR 0104).
 
+## Shipped: the last unserved rows are refused by name (2026-09-22)
+
+The console's coverage ledger now has **no unserved row**: every one of the 106
+methods the served client declares is answered, mounted as a stream, or refused with
+the capability it is missing (ADR 0135). Twenty-nine methods across six families were
+routed to one refusal handler per family -- the shape `pluginManagerUnsupported`
+already used -- and the three `agentTeams/*` rows were *removed*, because the served
+client does not declare them at all:
+
+- **`terminal/*` (10)** -- the host does run commands under a PTY, which is exactly
+  why the sentence is precise: what is missing is the console-facing half (an
+  attachment layer, a runtime resize, a screen model for `follow`), not the ability
+  to run a command. The terminal panel is also dropped from this build.
+- **`dynamicCordisRunner/*` (12)** -- no dynamic plugin runtime; plugins are compiled
+  in, the same reason the plugin-manager namespace refuses.
+- **`subagents/*` (3)** -- no child-session plane; the follow stream already refuses
+  the subagent address arm, and the sentence says so.
+- **`officeToPdf/*` (2)** -- no converter or PDF renderer, and the preview panel is
+  dropped; `workspaceFiles/readAll` is the substitute named.
+- **`fileUploads/upload` (1)** -- reuses the attachment sentence **verbatim**, because
+  it and `session/attachment` are the same missing store.
+- **`sessionReferenceResolver/candidates` (1)** -- nothing parses an `@`-mention, and
+  the file half of the same menu is the substitute.
+
+Two things beyond the routing are worth keeping:
+
+- **`terminal/follow` is the sweep's only stream**, so the mux gained an explicit arm:
+  it answers `unimplemented` with the reason and the capability instead of the generic
+  "stream endpoint not found" the default arm gives.
+- **The ledger now checks its rows against the client's own descriptor table in both
+  directions** (`TestConsoleCoverageLedgerListsExactlyWhatTheClientDeclares`): a row
+  for a method no client declares fails, and so does a declared method with no row.
+  That is the check that would have caught `agentTeams/*`, which came from a different
+  upstream revision and survived a whole window. The ledger's header prose (which had
+  said 47 served of 109) is corrected with it.
+
+Live evidence: one refused method per family answered `unimplemented` with its own
+sentence and capability (`terminal/create`, `terminal/resize`, `subagents/list`,
+`sessionReferenceResolver/candidates`, `fileUploads/upload`, `officeToPdf/render`,
+`dynamicCordisRunner/runHostHalf`), a method the client does not declare
+(`terminal/detach`) still answered **404**, and the `terminal/follow` stream opened on
+`/api/remote.mux` the way the console opens it answered `{"type":"error",
+"code":"unimplemented", "capability":"an embedded terminal"}`.
+
+The ledger reads **56 served / 4 streams / 46 refused / 0 unserved** of 106 declared
+methods.
+
+## Next: the durable inbox fold
+
+**One piece of host work is left on this page, and it is carried debt rather than a
+console gap.** The pending queue is process state (ADR 0130): a message queued for a
+run that ends before the model-turn boundary -- the turn was cancelled, or it failed
+-- is dropped with the run rather than delivered to a later turn the operator did not
+aim it at, and a restarted host has no queue to restore. The console is told the truth
+in both cases (the row leaves the `inbox` cell), but the queue is not durable.
+
+Closing it means the queue stops being a map in the adapter and becomes log state:
+`queue`, `claim` and `clear` events in the run's own log, plus a projection fold over
+them (the same shape the feedback fold just used, and the same shape `session/title`
+uses), so a queued message outlives its run, a claim records which turn consumed it,
+and a restarted host restores what was still pending. The console's two lists are
+already the `inbox` cell's `next-turn` and `next-step` arrays, so the projection half
+is a fold that fills them from the log instead of from the manager's map.
+
+Everything a *future* window might want to build instead is now named by a refusal:
+each of the six refused families says what it would take, and the ledger's `## Next
+up` lists them in one place.
+
 ## Shipped: the `@` picker reads the directory the host serves (2026-09-22)
 
 `fileReferences/list` is served (ADR 0134), so the console's `@` menu works: its
@@ -589,7 +657,7 @@ extra argument answered `gateway/arguments-invalid`.
 
 The ledger reads **56 served / 4 streams / 17 refused / 32 unserved** of 109.
 
-## Next: one refusal sweep, then the inbox fold
+## Next at the time: one refusal sweep, then the inbox fold
 
 **1. One refusal sweep, one ADR -- every remaining row is a namespace whose
 capability this host does not have.** Refusal is the honest answer, and batching

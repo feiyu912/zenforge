@@ -102,6 +102,45 @@ func TestConsoleCoverageLedgerMatchesTheRoutingTable(t *testing.T) {
 	}
 }
 
+// vendoredClientMethods is every remote method the *served* console client
+// declares, read from the generated descriptor table rather than from a list kept
+// by hand. The ledger's rows are checked against it, because a row for a method no
+// client declares describes work that cannot be asked for: three such rows
+// (`agentTeams/*`, taken from a different upstream revision) survived a whole
+// window before this check existed.
+func vendoredClientMethods(t *testing.T) map[string]bool {
+	t.Helper()
+	source := readSource(t, goalRemotePath)
+	declaration := regexp.MustCompile(`namespace: "([^"]+)",\s*\n\s*method: "([^"]+)"`)
+	methods := map[string]bool{}
+	for _, match := range declaration.FindAllStringSubmatch(source, -1) {
+		methods[match[1]+"/"+match[2]] = true
+	}
+	if len(methods) < 100 {
+		t.Fatalf("parsed only %d declared methods; the console client declares its whole surface here", len(methods))
+	}
+	return methods
+}
+
+// TestConsoleCoverageLedgerListsExactlyWhatTheClientDeclares pins the ledger's row
+// set to the client's own descriptor table in both directions: a row without a
+// declared method is a gap that cannot be reached, and a declared method without a
+// row is a method the ledger is silent about.
+func TestConsoleCoverageLedgerListsExactlyWhatTheClientDeclares(t *testing.T) {
+	states, _ := readLedger(t)
+	declared := vendoredClientMethods(t)
+	for method := range states {
+		if !declared[method] {
+			t.Errorf("ledger lists %q, but the served client declares no such method", method)
+		}
+	}
+	for method := range declared {
+		if _, listed := states[method]; !listed {
+			t.Errorf("the served client declares %q, but the ledger has no row for it", method)
+		}
+	}
+}
+
 // nextUpItem matches one numbered item of the ledger's "Next up" list, whose
 // backticked tokens name the methods and plugins the gap is about.
 var nextUpItem = regexp.MustCompile("^\\d+\\. ")

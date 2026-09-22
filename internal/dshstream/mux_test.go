@@ -386,3 +386,22 @@ func newTestManager(t *testing.T, store eventlog.Store, bus *eventlog.Bus) *harn
 func newTestBroker() *approval.PendingBroker {
 	return approval.NewPendingBroker(1)
 }
+
+// The terminal's follow arm is a stream, not a unary call, and the panel that
+// would hold it open is dropped from this build: the arm refuses by name rather
+// than leaving the generic "stream endpoint not found" a client cannot act on.
+func TestTerminalFollowStreamRefusesByName(t *testing.T) {
+	f := newFixture(t, Config{})
+	conn := f.mustDial(t)
+	openStream(t, conn, "term", "terminal/follow", `{"request":{"agentId":"run-1"}}`)
+	kind, failure := readStreamEnd(t, conn, "term")
+	if kind != "error" {
+		t.Fatalf("terminal frame = %q, want error", kind)
+	}
+	assertField(t, failure, "code", codeUnimplemented)
+	details, err := decodeJSONObject(failure["details"])
+	if err != nil {
+		t.Fatalf("details is not an object: %v", err)
+	}
+	assertField(t, details, "capability", "an embedded terminal")
+}

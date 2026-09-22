@@ -764,3 +764,30 @@ neither listed nor followed. Two limits are worth knowing:
   provider per workspace, so a session in another workspace sees that workspace;
   this host runs every session in its own workspace directory, so the picker is the
   same for all of them. A path it offers is always a path this host can read.
+
+## What the console cannot do here, and why each one says so
+
+Every method the served console client declares now has an answer (ADR 0135): the
+host either does the work, mounts it as a stream, or refuses it by name. The refusals
+are deliberate and each one is *specific*, because "not available" is not something an
+operator can act on. They are worth listing in one place:
+
+- **No embedded terminal.** The host runs commands under a PTY for its own tools, but
+  the console's terminal needs an attachment layer, a runtime resize and a screen
+  model it does not have -- and the terminal panel is dropped from this build, so
+  nothing on this page asks for it. The agent's own shell and job tools are the
+  substitute.
+- **No child sessions.** Subagents run as tasks inside the parent's own run, so there
+  is no child to list, prompt or interrupt, and the follow stream refuses a subagent
+  address for the same reason.
+- **No attachments.** A prompt's image and file parts are refused when submitted, and
+  so is the console's upload route, with one shared sentence: put the file in the
+  workspace and ask the agent to read it.
+- **No conversation references in the `@` menu.** Nothing parses or expands an
+  `@`-mention, so a picked conversation row would reach the model as literal text.
+  The file half of the same menu does work.
+- **No document conversion.** There is no Office converter or PDF renderer here, and
+  the panel that would show the result is dropped from the build; reading the file's
+  bytes (`workspaceFiles/readAll`) is what works.
+- **No dynamic plugins.** Plugins are compiled into this host, so nothing in the
+  dynamic runner's namespace could be run, inspected or settled.

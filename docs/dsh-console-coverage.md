@@ -26,17 +26,18 @@ methods are the remaining work, in priority order at the end of this page.
 
 ## Summary
 
-This host answers **47** of the client's **109** methods, mounts
-**4** of them as logical streams, refuses **17** by name, and
-does not serve the remaining **32**.
+This host answers **56** of the client's **106** methods, mounts
+**4** of them as logical streams, refuses **46** by name, and
+serves no row by doing nothing at all: every method the client declares is either
+answered, mounted as a stream, or refused with the reason it is missing.
 
 | State | Count |
 | --- | --- |
 | served | 56 |
 | stream | 4 |
-| refused | 17 |
-| unserved | 32 |
-| **client methods total** | **109** |
+| refused | 46 |
+| unserved | 0 |
+| **client methods total** | **106** |
 
 The WebSocket mux also mounts `$events`, which is not part of the client's
 method list: its opening frame is `ready`, and it delivers one `approval/request`
@@ -56,6 +57,7 @@ attach the prompt to the session it has open (ADR 0115).
 | `credentials/unset` | served | Clear the stored credential. |
 | `directoryPicker/createDirectory` | served | Create one child directory under an existing parent. |
 | `directoryPicker/list` | served | One directory level with its ancestry, for the in-app browser. |
+| `fileReferences/list` | served | The console's `@` picker: ranked path candidates for one session's query. A query with no slash searches the tree and ranks matches the way the reference provider does (exact name, prefix, name substring, path substring, subsequence; directories win ties, then shorter paths, then lexicographic); a query with a slash -- or an empty one -- lists that directory's entries by the fragment that follows it. Hidden entries appear only when the query names a dot, the reference provider's skip list is skipped, symlinks are never listed or traversed, and both the walk and the answer are bounded (50000 entries, 20 rows). The answer is a bare `[{path, kind}]` array, which is the schema's own result shape (ADR 0134). |
 | `goals/clear` | served | Remove the session's current goal. The answer is the ref that was removed, and the store drops the document rather than tombstoning it (ADR 0125). |
 | `goals/complete` | served | Finish the current goal at one exact revision. |
 | `goals/create` | served | Set a session's goal from its objective and an optional round cap. The id is the host's to mint, and the answer is the `{id, revision}` a following mutation compare-and-sets against (ADR 0125). |
@@ -66,6 +68,9 @@ attach the prompt to the session it has open (ADR 0115).
 | `llm/discoverModels` | served | Interrogate a draft endpoint, or answer from a declared profile. |
 | `llm/listConfigurableProviders` | served | The provider directory: declared profiles and configurable families. |
 | `llm/listProviders` | served | The registered provider routes. |
+| `messageFeedback/delete` | served | Remove one message's judgment, against the version the console observed. Deleting what is already gone succeeds without an event, and a stale version is a `version-conflict` carrying the item it lost against (ADR 0133). |
+| `messageFeedback/list` | served | Every current judgment of one conversation, folded out of that session's own log: `feedback/message-put` sets an item, `feedback/message-delete` removes it, and the answer is the surviving set in first-recorded order (ADR 0133). |
+| `messageFeedback/put` | served | Store or replace the Like/Dislike on a finalized assistant message, with an optional note and category. The target must be an assistant message the session actually logged, `ifVersion` is the concurrency token, a write that changes nothing appends nothing, and every refusal is one of the five arms the schema declares: `session-not-found`, `target-not-found`, `version-conflict` (with the current item), `note-blank` and `note-too-large` (with the 8192-byte policy). All four outcomes ride inside the value union, which is what the console reads (ADR 0133). |
 | `permissionPresets/catalog` | served | The permission presets the host's own settings offer. |
 | `pluginInventory/list` | served | The console bundles and plugins this host ships. |
 | `session/canOpenWorkspacePath` | served | Whether this host can hand a workspace path to a native desktop: `false`, as the reference's own bare boolean, because this host serves the browser carrier and implements no desktop carrier (ADR 0126). |
@@ -80,6 +85,7 @@ attach the prompt to the session it has open (ADR 0115).
 | `session/search` | served | Search the conversations the list shows for a literal phrase, answering one row per session with the newest matching message quoted and the reference's own twenty-result cap and `hasMore` flag, plus its own query refusals (ADR 0127). |
 | `session/updateQueue` | served | Edit, drop or steer one message the console has queued but the run has not been given yet. The pending rows are projected as the `inbox` cell -- the console's own two lists, split by the prompt mode each message was queued with -- and a row that leaves the run queue leaves the cell on the next read, which is how a delivery retires it. An edit carrying anything but text, an edit with no text, a row the queue no longer holds and a steer of something that is not a queued turn answer with the reference's own codes and sentences (ADR 0130). |
 | `session/selectModel` | served | Choose the provider and model a session runs on. The choice is restored on the next start (ADR 0103). |
+| `sessionFeedback/record` | served | Record one remark about the conversation itself as a `feedback/record` event, trimming surrounding whitespace and recording an entry with neither text nor category as the bare event the reference's `/feedback` command writes (ADR 0133). |
 | `settings/canOpenAgentPresetDirectory` | served | Whether a native editor can be opened here (it cannot). |
 | `settings/describe` | served | The settings namespaces, their schema, their resolved values, the section the console itself wrote, and whether a document holds them (ADR 0102, ADR 0103). |
 | `settings/mutate` | served | Apply settings operations. |
@@ -125,85 +131,69 @@ attach the prompt to the session it has open (ADR 0115).
 | `workspaceFiles/changes` | stream | The subscription a file resource opens before it stats anything: the `ready` frame unblocks the tab, and this host sends no `change` frames because it watches no files (ADR 0120). |
 | `workspaceFiles/readRelated` | refused | this host does not read a file relative to another; read the file by its own path |
 
-## Not served
+| `dynamicCordisRunner/getClientCode` | refused | this host ships a fixed set of console bundles and has no dynamic plugin runtime, so nothing in this namespace could be run, inspected or settled |
+| `dynamicCordisRunner/inventory` | refused | this host ships a fixed set of console bundles and has no dynamic plugin runtime, so nothing in this namespace could be run, inspected or settled |
+| `dynamicCordisRunner/invoke` | refused | this host ships a fixed set of console bundles and has no dynamic plugin runtime, so nothing in this namespace could be run, inspected or settled |
+| `dynamicCordisRunner/reportClientGuardFailure` | refused | this host ships a fixed set of console bundles and has no dynamic plugin runtime, so nothing in this namespace could be run, inspected or settled |
+| `dynamicCordisRunner/reportRenderFailure` | refused | this host ships a fixed set of console bundles and has no dynamic plugin runtime, so nothing in this namespace could be run, inspected or settled |
+| `dynamicCordisRunner/resolveInspectQuery` | refused | this host ships a fixed set of console bundles and has no dynamic plugin runtime, so nothing in this namespace could be run, inspected or settled |
+| `dynamicCordisRunner/resolveRequestRun` | refused | this host ships a fixed set of console bundles and has no dynamic plugin runtime, so nothing in this namespace could be run, inspected or settled |
+| `dynamicCordisRunner/runHostHalf` | refused | this host ships a fixed set of console bundles and has no dynamic plugin runtime, so nothing in this namespace could be run, inspected or settled |
+| `dynamicCordisRunner/settleUserRun` | refused | this host ships a fixed set of console bundles and has no dynamic plugin runtime, so nothing in this namespace could be run, inspected or settled |
+| `dynamicCordisRunner/stopFromPanel` | refused | this host ships a fixed set of console bundles and has no dynamic plugin runtime, so nothing in this namespace could be run, inspected or settled |
+| `dynamicCordisRunner/syncInspectManifest` | refused | this host ships a fixed set of console bundles and has no dynamic plugin runtime, so nothing in this namespace could be run, inspected or settled |
+| `dynamicCordisRunner/undefineFromPanel` | refused | this host ships a fixed set of console bundles and has no dynamic plugin runtime, so nothing in this namespace could be run, inspected or settled |
+| `fileUploads/upload` | refused | this host has no attachment store: a prompt's image and file parts are refused when they are submitted, so there is no attachment to read; put the file in the workspace and ask the agent to read it |
+| `officeToPdf/generation` | refused | this host has no Office document converter and no PDF renderer, and the console bundle that would display the result is dropped from this build; workspaceFiles/readAll serves the document preview's byte arm instead |
+| `officeToPdf/render` | refused | this host has no Office document converter and no PDF renderer, and the console bundle that would display the result is dropped from this build; workspaceFiles/readAll serves the document preview's byte arm instead |
+| `sessionReferenceResolver/candidates` | refused | this host does not parse or expand an @-mention, so a picked conversation reference would reach the model as literal text; the file section of the same menu is served by fileReferences/list |
+| `subagents/interruptByParent` | refused | this host runs subagents as tasks inside the parent's own run and registers no child session, so there is no child to list, prompt or interrupt; session/follow refuses subagent addresses for the same reason |
+| `subagents/list` | refused | this host runs subagents as tasks inside the parent's own run and registers no child session, so there is no child to list, prompt or interrupt; session/follow refuses subagent addresses for the same reason |
+| `subagents/prompt` | refused | this host runs subagents as tasks inside the parent's own run and registers no child session, so there is no child to list, prompt or interrupt; session/follow refuses subagent addresses for the same reason |
+| `terminal/close` | refused | this host runs commands under a PTY for its own tools, but it has no terminal attachment layer, no runtime resize and no screen model, so an embedded terminal cannot be served; use the agent's own shell and job tools instead |
+| `terminal/create` | refused | this host runs commands under a PTY for its own tools, but it has no terminal attachment layer, no runtime resize and no screen model, so an embedded terminal cannot be served; use the agent's own shell and job tools instead |
+| `terminal/environment` | refused | this host runs commands under a PTY for its own tools, but it has no terminal attachment layer, no runtime resize and no screen model, so an embedded terminal cannot be served; use the agent's own shell and job tools instead |
+| `terminal/follow` | refused | this host runs commands under a PTY for its own tools, but it has no terminal attachment layer, no runtime resize and no screen model, so an embedded terminal cannot be served; use the agent's own shell and job tools instead |
+| `terminal/list` | refused | this host runs commands under a PTY for its own tools, but it has no terminal attachment layer, no runtime resize and no screen model, so an embedded terminal cannot be served; use the agent's own shell and job tools instead |
+| `terminal/rename` | refused | this host runs commands under a PTY for its own tools, but it has no terminal attachment layer, no runtime resize and no screen model, so an embedded terminal cannot be served; use the agent's own shell and job tools instead |
+| `terminal/resize` | refused | this host runs commands under a PTY for its own tools, but it has no terminal attachment layer, no runtime resize and no screen model, so an embedded terminal cannot be served; use the agent's own shell and job tools instead |
+| `terminal/retain` | refused | this host runs commands under a PTY for its own tools, but it has no terminal attachment layer, no runtime resize and no screen model, so an embedded terminal cannot be served; use the agent's own shell and job tools instead |
+| `terminal/shells` | refused | this host runs commands under a PTY for its own tools, but it has no terminal attachment layer, no runtime resize and no screen model, so an embedded terminal cannot be served; use the agent's own shell and job tools instead |
+| `terminal/write` | refused | this host runs commands under a PTY for its own tools, but it has no terminal attachment layer, no runtime resize and no screen model, so an embedded terminal cannot be served; use the agent's own shell and job tools instead |
 
-| Method | State | Why the panel stays empty |
-| --- | --- | --- |
-| `agentTeams/createTask` | unserved | no agent-team feature in this host |
-| `agentTeams/updateTask` | unserved | no agent-team feature in this host |
-| `agentTeams/view` | unserved | no agent-team feature in this host |
-| `dynamicCordisRunner/getClientCode` | unserved | no dynamic plugin runtime in this host |
-| `dynamicCordisRunner/inventory` | unserved | no dynamic plugin runtime in this host |
-| `dynamicCordisRunner/invoke` | unserved | no dynamic plugin runtime in this host |
-| `dynamicCordisRunner/reportClientGuardFailure` | unserved | no dynamic plugin runtime in this host |
-| `dynamicCordisRunner/reportRenderFailure` | unserved | no dynamic plugin runtime in this host |
-| `dynamicCordisRunner/resolveInspectQuery` | unserved | no dynamic plugin runtime in this host |
-| `dynamicCordisRunner/resolveRequestRun` | unserved | no dynamic plugin runtime in this host |
-| `dynamicCordisRunner/runHostHalf` | unserved | no dynamic plugin runtime in this host |
-| `dynamicCordisRunner/settleUserRun` | unserved | no dynamic plugin runtime in this host |
-| `dynamicCordisRunner/stopFromPanel` | unserved | no dynamic plugin runtime in this host |
-| `dynamicCordisRunner/syncInspectManifest` | unserved | no dynamic plugin runtime in this host |
-| `dynamicCordisRunner/undefineFromPanel` | unserved | no dynamic plugin runtime in this host |
-| `fileReferences/list` | served | The console's `@` picker: ranked path candidates for one session's query. A query with no slash searches the tree and ranks matches the way the reference provider does (exact name, prefix, name substring, path substring, subsequence; directories win ties, then shorter paths, then lexicographic); a query with a slash -- or an empty one -- lists that directory's entries by the fragment that follows it. Hidden entries appear only when the query names a dot, the reference provider's skip list is skipped, symlinks are never listed or traversed, and both the walk and the answer are bounded (50000 entries, 20 rows). The answer is a bare `[{path, kind}]` array, which is the schema's own result shape (ADR 0134). |
-| `fileUploads/upload` | unserved | the console cannot upload files to this host |
-| `messageFeedback/delete` | served | Remove one message's judgment, against the version the console observed. Deleting what is already gone succeeds without an event, and a stale version is a `version-conflict` carrying the item it lost against (ADR 0133). |
-| `messageFeedback/list` | served | Every current judgment of one conversation, folded out of that session's own log: `feedback/message-put` sets an item, `feedback/message-delete` removes it, and the answer is the surviving set in first-recorded order (ADR 0133). |
-| `messageFeedback/put` | served | Store or replace the Like/Dislike on a finalized assistant message, with an optional note and category. The target must be an assistant message the session actually logged, `ifVersion` is the concurrency token, a write that changes nothing appends nothing, and every refusal is one of the five arms the schema declares: `session-not-found`, `target-not-found`, `version-conflict` (with the current item), `note-blank` and `note-too-large` (with the 8192-byte policy). All four outcomes ride inside the value union, which is what the console reads (ADR 0133). |
-| `officeToPdf/generation` | unserved | no document conversion in this host |
-| `officeToPdf/render` | unserved | no document conversion in this host |
-| `sessionFeedback/record` | served | Record one remark about the conversation itself as a `feedback/record` event, trimming surrounding whitespace and recording an entry with neither text nor category as the bare event the reference's `/feedback` command writes (ADR 0133). |
-| `sessionReferenceResolver/candidates` | unserved | no reference resolver |
-| `subagents/interruptByParent` | unserved | subagent tools exist in the framework, not exposed here |
-| `subagents/list` | unserved | subagent tools exist in the framework, not exposed here |
-| `subagents/prompt` | unserved | subagent tools exist in the framework, not exposed here |
-| `terminal/close` | unserved | no embedded terminal in this host |
-| `terminal/create` | unserved | no embedded terminal in this host |
-| `terminal/environment` | unserved | no embedded terminal in this host |
-| `terminal/follow` | unserved | no embedded terminal in this host |
-| `terminal/list` | unserved | no embedded terminal in this host |
-| `terminal/rename` | unserved | no embedded terminal in this host |
-| `terminal/resize` | unserved | no embedded terminal in this host |
-| `terminal/retain` | unserved | no embedded terminal in this host |
-| `terminal/shells` | unserved | no embedded terminal in this host |
-| `terminal/write` | unserved | no embedded terminal in this host |
 
 ## Next up
 
 Audited **2026-09-22**. The list is a dated reading, not a description that stays true
 by itself: it was re-derived from the host's routing table (`method` in
 `internal/dshapi/handler.go`), the plugin roster (`internal/dshmount/roster.json`), and a
-live `zenforge serve` whose boot graph and every advertised bundle were fetched. An item
-that has shipped is removed rather than left to mislead the next window; the gaps below are
-in the order they block the page, from what the console asks first.
+live `zenforge serve` whose boot graph and every advertised bundle were fetched.
 
-1. **`subagents/list`, `subagents/prompt`, `subagents/interruptByParent`**
-   — live child sessions of a parent conversation: this host runs subagents as
-   tasks inside the parent's own run, so the three need a child-session plane
-   before they mean anything.
-2. **`terminal/*`** — an embedded terminal, which this host does not claim: the
-   job manager runs a command under a PTY, but there is no attachment layer, no
-   runtime resize, no screen model for `follow` and no shell discovery.
-3. **`fileUploads/upload`, `officeToPdf/*`, `agentTeams/*`,
-   `sessionReferenceResolver/candidates`, `dynamicCordisRunner/*`,
-   `terminal/*`, `subagents/*`** — namespaces whose capability this host does not
-   have; each is refused by name, naming the missing subsystem.
+**No console method is unserved any more.** Every method the served client declares is
+answered, mounted as a stream, or refused by name (ADR 0135), and the ledger is now
+checked against the client's own descriptor table in both directions, so a row for a
+method no client declares can no longer survive -- and neither can a declared method the
+ledger is silent about. What remains is host work the refusals name, not console gaps:
 
-The directory-picker family, which used to head this list, is no longer a gap: the browse
-half is loaded from the roster and its bundle is served, so the workspace control's add
-action has a dialog behind it. `directoryPicker/pick` stays refused by name — this host has
-no operator display — and the native sibling is the roster's `blocked` entry, withheld with
-the reason it actually needs (ADR 0100). Which plugins are withheld or omitted is the
-roster's own answer, and it is the only place that claim is made:
-
-```
-$ curl -s http://127.0.0.1:8787/ | grep -o '__DSH_BOOT__.*'   # the served graph
-53 entries, including @deepseek-ai/dsh-client-ui-directory-picker-browse
-$ curl -s -o /dev/null -w '%{http_code}\n' \
-    'http://127.0.0.1:8787/plugins/??@deepseek-ai/dsh-client-ui-directory-picker-browse/client.js'
-200
-$ python3 -c 'import json; r=json.load(open("internal/dshmount/roster.json")); print([b["dir"] for b in r["blocked"]])'
-['client/ui-directory-picker-native', 'extensions/ui-cordis']
-```
+1. **The durable inbox fold (ADR 0130).** The pending queue is process state: a message
+   queued for a run that ends before the model-turn boundary is dropped with the run, and
+   a restarted host has no queue to restore. Closing it means queue, claim and clear
+   events in the run's log plus a projection fold over them, so a queued message
+   outlives its run.
+2. **An embeddable terminal**, if the console's terminal panel is ever staged again.
+   It would need an attachment layer, a runtime resize (the PTY master is not exposed and
+   nothing calls `pty.Setsize`) and a screen model for the follow stream (there is no VT
+   emulator here, and the job buffer is lossy where a gapless sequence of screen updates
+   is required). The panel itself is dropped from this build, so nothing on this page
+   asks for it today.
+3. **A child-session plane**, if the subagent panel is ever wanted. Children are one-shot
+   runs inside the parent's own run, streamed off the agent rather than registered, and
+   the follow stream refuses the subagent address arm on purpose.
+4. **An attachment store.** A prompt's image and file parts cannot be submitted and
+   no upload route exists, so both halves of that seam refuse with one sentence; an
+   attachment intake would have to land before either can be served.
+5. **An `@`-mention parser and expander**, so a picked conversation reference reaches the
+   model as a reference rather than as literal text.
 
 ## Regenerating this ledger
 

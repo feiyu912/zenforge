@@ -410,6 +410,41 @@ func (h *Handler) method(endpoint string) (methodFunc, bool) {
 		case "record":
 			return h.sessionFeedbackRecord, true
 		}
+	case "terminal":
+		// The panel that would call these is dropped from this build, and the
+		// capability behind them does not exist here: every method is the same
+		// refusal, stated once (ADR 0135).
+		switch name {
+		case "close", "create", "environment", "follow", "list", "rename",
+			"resize", "retain", "shells", "write":
+			return h.terminalUnsupported, true
+		}
+	case "subagents":
+		switch name {
+		case "list", "prompt", "interruptByParent":
+			return h.subagentsUnsupported, true
+		}
+	case "sessionReferenceResolver":
+		if name == "candidates" {
+			return h.sessionReferenceResolverUnsupported, true
+		}
+	case "officeToPdf":
+		switch name {
+		case "generation", "render":
+			return h.officeToPdfUnsupported, true
+		}
+	case "dynamicCordisRunner":
+		switch name {
+		case "getClientCode", "inventory", "invoke", "reportClientGuardFailure",
+			"reportRenderFailure", "resolveInspectQuery", "resolveRequestRun",
+			"runHostHalf", "settleUserRun", "stopFromPanel", "syncInspectManifest",
+			"undefineFromPanel":
+			return h.dynamicCordisRunnerUnsupported, true
+		}
+	case "fileUploads":
+		if name == "upload" {
+			return h.fileUploadsUnsupported, true
+		}
 	case "fileReferences":
 		switch name {
 		case "list":

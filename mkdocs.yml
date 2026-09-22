@@ -276,6 +276,7 @@ nav:
       - 0132 The workspace list carries two manual orders: adr/0132-the-workspace-list-carries-two-manual-orders.md
       - 0133 Message feedback is folded out of the session's own log: adr/0133-message-feedback-is-folded-out-of-the-log.md
       - 0134 The @ picker is served from the directory the host serves: adr/0134-the-at-picker-is-served-from-the-directory-the-host-serves.md
+      - 0135 The remaining console namespaces are refused by name: adr/0135-the-remaining-namespaces-are-refused-by-name.md
 
 extra:
   social:
