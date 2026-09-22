@@ -165,3 +165,4 @@ and what the adapter answers today is
 | [0134](0134-the-at-picker-is-served-from-the-directory-the-host-serves.md) | The `@` picker is served from the directory the host serves |
 | [0135](0135-the-remaining-namespaces-are-refused-by-name.md) | The remaining console namespaces are refused by name |
 | [0136](0136-the-pending-queue-is-folded-out-of-the-session-log.md) | The pending queue is folded out of the session log |
+| [0137](0137-the-verification-recipe-is-enforced.md) | The verification recipe is enforced, and its environment-dependent part is named |

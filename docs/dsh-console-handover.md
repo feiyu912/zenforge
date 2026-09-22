@@ -82,6 +82,18 @@ artifact tree excludes `.map` and `dist/preview/`.
 - Never `git add -A` while an agent is writing: stage exact paths.
 - Tests must use `t.TempDir()`; an earlier batch committed stray run files from a
   test that used the default checkpoint directory.
+- **A sandboxed shell cannot run the PTY tests.** `tools/jobs` and `jobs` start a
+  real pseudo-terminal, and a sandbox that withholds PTY allocation fails them at
+  `creack/pty`'s start with `start pty: operation not permitted`, which then reads
+  as `write_stdin returned error: job job_1 has already finished`. The tests are
+  correct and CI (unprivileged, unsandboxed) runs them green: a local red *only* in
+  the PTY cases is the environment, so verify with
+  `go test ./internal/... ./server/... ./cli/ ./docs/` and let CI cover `./tools/jobs/`.
+- **Formatting is now a test, not a habit.** `TestGoSourcesAreFormatted` in `docs/`
+  walks the module and fails on any file `gofmt` would rewrite, so the third line of
+  every ADR's verification recipe is enforced by the `go test ./docs/...` step CI
+  already runs (ADR 0137). Run `gofmt -w` on what you touch; the test names the file
+  and the command if you forget.
 
 ## State at the end of the first planning window (round 40)
 
@@ -546,6 +558,46 @@ wrote an event is omitted, because `session/page` answers not-found for it; and 
 log has no terminal event is recorded as cancelled when it is adopted. Drafts stay
 process-local (ADR 0104).
 
+## Shipped: the verification recipe is enforced (2026-09-22)
+
+The third line of every ADR's verification recipe -- `gofmt -l` -- was never run by
+anything, and `main` carried a file it would rewrite through several green CI runs.
+It is now `TestGoSourcesAreFormatted` in `docs/`: a walking test that compares every
+Go file against `go/format` (the implementation `gofmt` wraps, so no external binary
+and no shell), refuses to pass vacuously, names the file and the exact `gofmt -w`
+command, and is enforced by the `go test ./docs/...` step CI already runs -- the same
+placement the console boundary rule chose (ADR 0099, ADR 0137). The one unformatted
+file is fixed.
+
+The recipe's environment-dependent part is written down in the discipline list above:
+a sandboxed shell cannot allocate a PTY, so the `tools/jobs` and `jobs` PTY tests fail
+locally with `operation not permitted` while CI runs them green.
+
+## Next: the console's attachment store
+
+The composer's paperclip is the largest genuinely-dead control in the served console.
+`client/file-upload` and `client/ui-conversation` are both staged in this build, so the
+UI is there and calls a host that refuses: `fileUploads/upload` answers
+`unimplemented`, `session/attachment` likewise, and `session/prompt` refuses any
+non-text content block. The pieces, now that the contracts are read:
+
+- **Two upload entry points, one store.** The bundle uses a raw-byte route
+  (`POST` with `application/octet-stream` and `?sessionId=&name=`) when it is handed a
+  `Blob`/stream, and the RPC `fileUploads/upload` with base64 `{data, name?}` when it is
+  handed bytes -- answering `{receiptId, file: {attachmentId, name, bytes}}`. The
+  composer passes a file the user picked, so the raw route is the primary one.
+- **`session/attachment {sessionId, attachmentId}`** answers
+  `{attachment: {attachmentId, mediaType, bytes, width, height, name?}, data}` -- the
+  descriptor requires real dimensions, which means decrypting image headers
+  (`image.DecodeConfig` covers PNG/JPEG/GIF; WebP needs its own reader or a named
+  refusal).
+- **The prompt side already exists.** `model.Message.Images` and
+  `model.Image{MediaType, Data}` carry images to every adapter, `zenforge.Task` accepts
+  `InitialMessages`, and `tools/viewimage` already detects a media type from bytes --
+  so an `image` content block becomes a real model input without a framework change.
+  A `file` block reaches the model as images only, so it stays refused by name unless
+  something can carry it.
+
 ## Shipped: the pending queue is folded out of the session log (2026-09-22)
 
 The queue stopped being process state. Every acceptance, edit, removal, promotion and
@@ -589,7 +641,7 @@ One liveness difference is deliberate and recorded in the ADR: a restored row wa
 session's next prompt instead of starting a turn of its own. The console shows it pending
 either way, so nothing it renders is untrue.
 
-## Next: only host capabilities are left
+## Next at the time: only host capabilities are left
 
 **Nothing the served console declares is unserved.** The ledger reads 56 served / 4 streams
 / 46 refused / 0 unserved of 106 methods, the queue is durable, and every remaining gap is a
