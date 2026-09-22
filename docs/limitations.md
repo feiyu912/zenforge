@@ -213,11 +213,13 @@ what is experimental, and what remains adapter territory.
   work. See ADR 0083.
 - Every namespace a shipped panel calls is served or refused by name
   (ADR 0084-0097). Methods this host does not implement -- `terminal`,
-  `subagents`, `officeToPdf`, session forks -- answer a bare 404 or a named
-  capability error, which is the intended per-feature degradation rather than a
-  console failure, and the host logs the endpoint that was asked for, which is how
-  the remaining ones get prioritised. Attachments are refused by name instead of
-  left to a 404, because the panel that would ask for one exists (ADR 0128).
+  `subagents`, `officeToPdf`, the pending queue's editor -- answer a bare 404 or a
+  named capability error, which is the intended per-feature degradation rather
+  than a console failure, and the host logs the endpoint that was asked for, which
+  is how the remaining ones get prioritised. Attachments are refused by name
+  instead of left to a 404, because the panel that would ask for one exists
+  (ADR 0128); forking is served by copying the source's completed turns
+  (ADR 0129); and the desktop half is answered rather than built (ADR 0126).
 - **The model picker works, and a declared provider can be run on** (ADR 0096).
   `session/modelCatalog` lists the configured route and every declared provider's
   models, `session/selectModel` accepts a selection and refuses one this host
