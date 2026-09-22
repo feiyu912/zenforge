@@ -558,6 +558,60 @@ wrote an event is omitted, because `session/page` answers not-found for it; and 
 log has no terminal event is recorded as cancelled when it is adopted. Drafts stay
 process-local (ADR 0104).
 
+## Shipped: the console's attachments are stored, and images reach the model (2026-09-22)
+
+The upload path, the store and the read half are served, and an image prompt is
+delivered to the model (ADR 0138). What the live host showed:
+
+- the raw-byte route (`POST /api/session/uploadFileBinary?sessionId=&name=`, body
+  `application/octet-stream`) and the RPC (`fileUploads/upload`) both answered
+  `{receiptId, file: {attachmentId, name, bytes}}`, and the *same* bytes through
+  either route produced one content-addressed id;
+- `session/attachment` answered `{attachment: {attachmentId: ..., mediaType:
+  "image/png", bytes: 73, width: 4, height: 3, name: "picked.png"}, data}` -- the
+  dimensions read from the PNG header -- and the decoded data equalled the
+  uploaded bytes; an id the session never stored answered
+  `session/attachment-invalid` with `reason: ATTACHMENT_NOT_FOUND`;
+- a WebP stored and was refused on read with `reason: DIMENSIONS_UNREADABLE`,
+  naming `image/webp`, rather than described with a guessed size;
+- a `{type: "file", receiptId}` prompt part was refused with
+  `session/unsupported-content`, naming the missing carrier and the workspace
+  substitute;
+- an image prompt was accepted, and the scripted endpoint's own request log shows
+  the model received an `image_url` data URI carrying the submitted PNG.
+
+The ledger moved two rows: **58 served / 4 streams / 44 refused / 0 unserved** of
+106. `zenforge.Task` grew `Images []model.Image`, attached by `newTaskRunState` to
+the input message the run appends (the metadata slot tool results already use);
+that is the only framework change.
+
+## Next: the prompt's image in the durable transcript, then WebP dimensions
+
+Two gaps ADR 0138 records as deviations, in the order the console notices them:
+
+1. **The projected user message carries no image block.** `dshwire` builds it from
+   `run.started`'s `input` (one text block), so once the console retires its local
+   echo the transcript shows the prompt's text and not the image, although the
+   model received it -- verified above: the live `run.started` payload holds
+   `input`, `promptId`, `mode`, `preset` and nothing else. The descriptor the block
+   needs (`attachmentId`, `mediaType`, `bytes`, `width`, `height`, `name`) is
+   already produced at prompt time and the store already serves its bytes, so the
+   work is a seam from the adapter to the projector. `Task.Meta` is checkpointed
+   with the run and `dshwire.New` takes only an identity, so choose between a
+   narrow projector input (a run-metadata provider the mount can supply) and a
+   host-authored durable event that the projection folds into the message. An
+   earlier draft put `Task.Meta` into `run.started`'s payload and was reverted when
+   nothing read it: do not land a log field without its reader in the same chain.
+2. **A WebP cannot be read back**, because its dimensions are needed and this host
+   links no WebP header reader. It can already be *sent* in a prompt. Either add a
+   bounded VP8/VP8L/VP8X header reader (dimensions only, no pixel decode) or leave
+   the named refusal in place -- refusing was the honest choice over a guessed
+   `0x0`.
+
+Then, further out: a **carrier for a non-image file** in a prompt (upstream keeps a
+durable reference; this host's model path carries images only), and the terminal
+and child-session planes, which remain refused by name.
+
 ## Shipped: the verification recipe is enforced (2026-09-22)
 
 The third line of every ADR's verification recipe -- `gofmt -l` -- was never run by
@@ -573,7 +627,7 @@ The recipe's environment-dependent part is written down in the discipline list a
 a sandboxed shell cannot allocate a PTY, so the `tools/jobs` and `jobs` PTY tests fail
 locally with `operation not permitted` while CI runs them green.
 
-## Next: the console's attachment store, in the order the contracts allow
+## Next at the time: the console's attachment store, in the order the contracts allow
 
 The composer's paperclip is the largest genuinely-dead control in the served console:
 `client/file-upload` and `client/ui-conversation` are both staged in this build, the UI

@@ -93,6 +93,11 @@ type Config struct {
 	// answers unimplemented, which is the honest answer for a host with no
 	// readable workspace.
 	FileReferences dshapi.FileReferenceSource
+	// Attachments is the console's attachment store: it backs both upload routes
+	// and `session/attachment`. Without it the whole family answers unimplemented
+	// naming the missing store, which is the honest answer for a host that cannot
+	// write attachments anywhere (ADR 0138).
+	Attachments dshapi.AttachmentStore
 }
 
 // Mux is the assembled console host. It is immutable after New, which is what
@@ -161,6 +166,9 @@ func New(manager *harnesshttp.RunManager, events eventlog.Store, cfg Config) (*M
 	}
 	if cfg.FileReferences != nil {
 		api.SetFileReferences(cfg.FileReferences)
+	}
+	if cfg.Attachments != nil {
+		api.SetAttachments(cfg.Attachments)
 	}
 	if cfg.WorkspaceFiles != nil {
 		api.SetWorkspaceFiles(cfg.WorkspaceFiles)

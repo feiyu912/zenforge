@@ -69,11 +69,3 @@ func (h *Handler) dynamicCordisRunnerUnsupported(_ context.Context, _ map[string
 	return nil, fail(codeUnimplemented, DynamicCordisRunnerRefusal,
 		map[string]any{"capability": "a dynamic plugin runtime"})
 }
-
-// fileUploadsUnsupported refuses the console's upload route with the attachment
-// sentence the read half already uses, verbatim: the two are the same missing
-// store, and a caller that met one must not meet a different story at the other.
-func (h *Handler) fileUploadsUnsupported(_ context.Context, _ map[string]json.RawMessage) (any, *methodError) {
-	return nil, fail(codeUnimplemented, attachmentRefusal,
-		map[string]any{"capability": "an attachment store"})
-}

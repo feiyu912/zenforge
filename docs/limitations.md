@@ -655,20 +655,29 @@ the answer does mirror is the contract the sidebar renders: one row per
 conversation, the reference's twenty-result cap with `hasMore`, its 240-code-point
 excerpt bound, and its own refusals for a blank, over-long or NUL-bearing query.
 
-## Attachments cannot be sent or read
+## Attachments: images work, files cannot be sent yet
 
-The console ships its attachment panel, so the composer offers an attach
-affordance, but nothing behind it can work here: the upload route
-(`fileUploads/upload`) is not served, a prompt whose content carries an image or
-file part is refused by name -- this host accepts text parts only, and the run
-manager has no attachment intake -- and the read half, `session/attachment`,
-refuses by name for the same reason rather than answering a not-found for an id
-that could never exist (ADR 0128). The working substitute is the workspace: a file
-put in the host's directory can be read by the agent's own file tools, and its
-content can then be discussed in the conversation. Serving attachments properly is
-a subsystem, not a route: it needs an upload path, a store with the metadata the
-console renders (`mediaType`, `bytes`, `width`, `height`), and the prompt path that
-carries a reference into the run.
+The upload path and the store are served (ADR 0138): a picked file uploads through
+`fileUploads/upload` or the raw-byte route `/api/session/uploadFileBinary`, is
+stored under the checkpoint directory with the metadata the console renders
+(`mediaType`, `bytes`, `width`, `height`), and can be read back with
+`session/attachment`. What is missing is a *carrier* for a non-image file:
+
+- a prompt that cites a receipt (`{type: "file", receiptId}`) is refused by name,
+  because this host's model path carries images only, so there is nothing to
+  deliver the file to. The workspace remains the substitute: a file put in the
+  host's directory can be read by the agent's own file tools;
+- an **image** prompt works: it travels inline in the prompt and is delivered to
+  the run the prompt starts, so the model answers about the image. Two limits are
+  named rather than hidden: an image cannot be queued or steered into a run that is
+  already answering (those paths carry the next turn's text), and a WebP can be
+  *sent* but not *read back*, because this host has no reader for its dimensions
+  and `session/attachment`'s descriptor requires them. Storing one under a guessed
+  0x0 would have been worse than refusing it;
+- the durable transcript does not yet render the prompt's image: the projected
+  user message is built from `run.started`'s input text, so after the console
+  retires its local echo the image is no longer shown, even though the model
+  received it (ADR 0138, deviation 1).
 
 ## A forked conversation is a snapshot
 
@@ -780,9 +789,10 @@ operator can act on. They are worth listing in one place:
 - **No child sessions.** Subagents run as tasks inside the parent's own run, so there
   is no child to list, prompt or interrupt, and the follow stream refuses a subagent
   address for the same reason.
-- **No attachments.** A prompt's image and file parts are refused when submitted, and
-  so is the console's upload route, with one shared sentence: put the file in the
-  workspace and ask the agent to read it.
+- **No file attachments in a prompt.** The upload route and the store are served, but a
+  prompt that cites a file receipt is refused by name: the model path carries images
+  only. Images in a prompt do work (see "Attachments" above), with the queue and
+  WebP limits named there.
 - **No conversation references in the `@` menu.** Nothing parses or expands an
   `@`-mention, so a picked conversation row would reach the model as literal text.
   The file half of the same menu does work.

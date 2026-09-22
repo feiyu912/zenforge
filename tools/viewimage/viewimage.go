@@ -5,12 +5,10 @@
 package viewimage
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"path/filepath"
 	"strings"
 
@@ -123,21 +121,11 @@ func (o Output) ToolMetadata() map[string]any {
 // detectMediaType sniffs the supported formats from their magic bytes.
 // http.DetectContentType is used first, then corrected for WebP, which it
 // reports as application/octet-stream.
+// detectMediaType is the model package's sniffer: the console's attachment
+// admission uses the same one (ADR 0138), so a type this tool would accept and a
+// type the console would store cannot disagree.
 func detectMediaType(raw []byte) string {
-	if len(raw) == 0 {
-		return ""
-	}
-	detected := strings.TrimSpace(strings.Split(http.DetectContentType(raw), ";")[0])
-	if detected == "image/webp" {
-		return detected
-	}
-	if len(raw) >= 12 && bytes.Equal(raw[0:4], []byte("RIFF")) && bytes.Equal(raw[8:12], []byte("WEBP")) {
-		return "image/webp"
-	}
-	if model.SupportedImageMediaType(detected) {
-		return detected
-	}
-	return ""
+	return model.DetectImageMediaType(raw)
 }
 
 // MarshalJSON keeps the metadata out of the model-visible JSON: the image

@@ -26,16 +26,16 @@ methods are the remaining work, in priority order at the end of this page.
 
 ## Summary
 
-This host answers **56** of the client's **106** methods, mounts
-**4** of them as logical streams, refuses **46** by name, and
+This host answers **58** of the client's **106** methods, mounts
+**4** of them as logical streams, refuses **44** by name, and
 serves no row by doing nothing at all: every method the client declares is either
 answered, mounted as a stream, or refused with the reason it is missing.
 
 | State | Count |
 | --- | --- |
-| served | 56 |
+| served | 58 |
 | stream | 4 |
-| refused | 46 |
+| refused | 44 |
 | unserved | 0 |
 | **client methods total** | **106** |
 
@@ -80,7 +80,7 @@ attach the prompt to the session it has open (ADR 0115).
 | `session/list` | served | List sessions. The list is the host's durable run registry, so it survives a restart and does not expire at the terminal retention; a record whose run never wrote an event is omitted because the console cannot open it (ADR 0109). A planning session is listed by the operator's own task; the plan-execute preset's appended instruction never reaches the title (ADR 0106). |
 | `session/modelCatalog` | served | The models the page may offer, grouped per provider. |
 | `session/page` | served | A page of a session's events, projected into the console's vocabulary. A created session with no turns answers an empty page (ADR 0104, ADR 0105). A session's turns share one sequence, so `Load earlier` reaches an earlier prompt (ADR 0108), and every message is identified by that sequence, so a second question renders as itself instead of matching the first question's node (ADR 0110). |
-| `session/prompt` | served | Send a turn into a session. Under the plan-execute preset a question is answered in the plan stage and never reaches an execute or summary stage (ADR 0107). Every turn the host starts records the prompt's `requestId` as the run's `PromptID`, and the projected message publishes it as `source.rpcId`, which is what retires the console's local submission echo; a queued turn's text is projected from `request.steer`'s `message` (ADR 0111). |
+| `session/prompt` | served | Send a turn into a session. An `image` part travels inline in the prompt and is delivered to the run the prompt starts; a `file` part is refused by name because this host’s model path carries images only, and an image into a run that is already answering is refused because the queue and steer paths carry the next turn’s text (ADR 0138). Under the plan-execute preset a question is answered in the plan stage and never reaches an execute or summary stage (ADR 0107). Every turn the host starts records the prompt's `requestId` as the run's `PromptID`, and the projected message publishes it as `source.rpcId`, which is what retires the console's local submission echo; a queued turn's text is projected from `request.steer`'s `message` (ADR 0111). |
 | `session/rename` | served | Rename a session. |
 | `session/search` | served | Search the conversations the list shows for a literal phrase, answering one row per session with the newest matching message quoted and the reference's own twenty-result cap and `hasMore` flag, plus its own query refusals (ADR 0127). |
 | `session/updateQueue` | served | Edit, drop or steer one message the console has queued but the run has not been given yet. The pending rows are projected as the `inbox` cell -- the console's own two lists, split by the prompt mode each message was queued with -- and a row that leaves the run queue leaves the cell on the next read, which is how a delivery retires it. An edit carrying anything but text, an edit with no text, a row the queue no longer holds and a steer of something that is not a queued turn answer with the reference's own codes and sentences (ADR 0130). |
@@ -107,6 +107,8 @@ attach the prompt to the session it has open (ADR 0115).
 | `session/control` | stream | The control stream: job and model-selection projections. |
 | `session/follow` | stream | The follow stream: a session's durable event log, projected into the console's vocabulary. A draft's stream opens empty and waits for its first turn (ADR 0104, ADR 0105). A resumed stream cites a cursor ahead of the one the console already applied, so a second prompt does not break history loading (ADR 0108). A turn ending does not end the stream: it waits for the conversation's next turn and continues the same sequence, because the client treats a clean end after the snapshot as a carrier failure and reconnects over whatever `Load earlier` fetched (ADR 0114). The answer streams: the same durable deltas are minted into the console's dense `assistant-stream` frames (start/block-start/chunk/block-end/end, a per-frame revision, the settlement released by the end frame that names it), so prose renders as it arrives instead of at the step's settlement (ADR 0116). The window holds the console's events alone -- the host's bookkeeping and the deltas produce no records and consume no sequence numbers -- and the served sequence numbers records rather than durable events, so a conversation of several turns fits the window (ADR 0117). A reconnect in the middle of an answer is handed the attempt that is still streaming (`assistantStream.activeAttempt`, with the compact prefix of its chunks), and the live tail continues it instead of announcing a second start (ADR 0118); the snapshot cites the accumulator's real frame counter and publishes the conversation's `title` projection (ADR 0119). |
 | `workspace/follow` | stream | The workspace stream: every registration and the archived set. |
+| `fileUploads/upload` | served | stores the bytes and answers `{receiptId, file: {attachmentId, name, bytes}}`; the raw-byte route `/api/session/uploadFileBinary` writes into the same store (ADR 0138) |
+| `session/attachment` | served | answers `{attachment: {attachmentId, mediaType, bytes, width, height, name?}, data}` from the attachment store (ADR 0138), with real dimensions read from the image header; an id this session never stored, bytes that are not an image, or a WebP whose dimensions this host cannot read is refused by name |
 
 ## Refused by name
 
@@ -125,7 +127,6 @@ attach the prompt to the session it has open (ADR 0115).
 | `pluginManager/setBundleEnabled` | refused | this host ships a fixed set of console bundles and has no loader, so it cannot install, enable, disable or remove a plugin |
 | `pluginManager/setPluginEnabled` | refused | this host ships a fixed set of console bundles and has no loader, so it cannot install, enable, disable or remove a plugin |
 | `session/openWorkspacePath` | refused | this host serves the console in a browser and has no desktop carrier to open a path on; workspaceFiles/list and workspaceFiles/read show a file inside the session instead |
-| `session/attachment` | refused | this host has no attachment store: a prompt's image and file parts are refused when they are submitted, so there is no attachment to read; put the file in the workspace and ask the agent to read it |
 | `settings/openAgentPresetDirectory` | refused | this host has no native editor to open a settings document or a preset directory in; configure the host with --base-url, --model, --api-key or the settings panel instead |
 | `settings/openSettingsDocument` | refused | this host has no native editor to open a settings document or a preset directory in; configure the host with --base-url, --model, --api-key or the settings panel instead |
 | `workspaceFiles/changes` | stream | The subscription a file resource opens before it stats anything: the `ready` frame unblocks the tab, and this host sends no `change` frames because it watches no files (ADR 0120). |
@@ -143,7 +144,6 @@ attach the prompt to the session it has open (ADR 0115).
 | `dynamicCordisRunner/stopFromPanel` | refused | this host ships a fixed set of console bundles and has no dynamic plugin runtime, so nothing in this namespace could be run, inspected or settled |
 | `dynamicCordisRunner/syncInspectManifest` | refused | this host ships a fixed set of console bundles and has no dynamic plugin runtime, so nothing in this namespace could be run, inspected or settled |
 | `dynamicCordisRunner/undefineFromPanel` | refused | this host ships a fixed set of console bundles and has no dynamic plugin runtime, so nothing in this namespace could be run, inspected or settled |
-| `fileUploads/upload` | refused | this host has no attachment store: a prompt's image and file parts are refused when they are submitted, so there is no attachment to read; put the file in the workspace and ask the agent to read it |
 | `officeToPdf/generation` | refused | this host has no Office document converter and no PDF renderer, and the console bundle that would display the result is dropped from this build; workspaceFiles/readAll serves the document preview's byte arm instead |
 | `officeToPdf/render` | refused | this host has no Office document converter and no PDF renderer, and the console bundle that would display the result is dropped from this build; workspaceFiles/readAll serves the document preview's byte arm instead |
 | `sessionReferenceResolver/candidates` | refused | this host does not parse or expand an @-mention, so a picked conversation reference would reach the model as literal text; the file section of the same menu is served by fileReferences/list |

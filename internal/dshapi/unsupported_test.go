@@ -9,6 +9,10 @@ import (
 // refusal rather than a 404, so the console's own control says what is missing
 // instead of looking like a transport failure. This test is the one place the
 // routing and the sentences are checked together.
+//
+// The attachment family left this table when the store landed (ADR 0138): it is
+// now served, and a host without a store still answers the same sentence, which
+// the attachment family's own test pins.
 func TestUnsupportedNamespacesRefuseByName(t *testing.T) {
 	f := newFixture(t, Config{})
 	cases := []struct {
@@ -44,7 +48,6 @@ func TestUnsupportedNamespacesRefuseByName(t *testing.T) {
 		{"dynamicCordisRunner/stopFromPanel", "a dynamic plugin runtime", DynamicCordisRunnerRefusal},
 		{"dynamicCordisRunner/syncInspectManifest", "a dynamic plugin runtime", DynamicCordisRunnerRefusal},
 		{"dynamicCordisRunner/undefineFromPanel", "a dynamic plugin runtime", DynamicCordisRunnerRefusal},
-		{"fileUploads/upload", "an attachment store", attachmentRefusal},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.method, func(t *testing.T) {
@@ -60,20 +63,11 @@ func TestUnsupportedNamespacesRefuseByName(t *testing.T) {
 	}
 }
 
-// The upload route and the attachment read are the same missing store, so a caller
-// that meets one must meet the same sentence at the other.
-func TestFileUploadsRefusesWithTheAttachmentSentence(t *testing.T) {
-	f := newFixture(t, Config{})
-	sessionID := f.createSession(t)
-
-	upload := assertMethodFailure(t, f.post(t, "/api/fileUploads/upload",
-		rpcBody(t, "rpc-upload", "fileUploads/upload", `{}`)), codeUnimplemented)
-	read := assertMethodFailure(t, f.post(t, "/api/session/attachment",
-		rpcBody(t, "rpc-read", "session/attachment",
-			`{"sessionId":`+mustJSON(t, sessionID)+`,"attachmentId":"att-1"}`)), codeUnimplemented)
-	if upload.Result.Error.Message != read.Result.Error.Message {
-		t.Fatalf("upload = %q, read = %q, want one sentence", upload.Result.Error.Message, read.Result.Error.Message)
-	}
+// The upload route and the attachment read are the same store, so a host without
+// one answers both with the same sentence -- which is what the attachment family
+// test pins, args and all. What this file still owns is that the *terminal*
+// refusal names the missing half rather than the missing PTY.
+func TestTerminalRefusalNamesTheMissingHalf(t *testing.T) {
 	if !strings.Contains(TerminalRefusal, "no terminal attachment layer") {
 		t.Fatal("the terminal refusal must name the missing half, not the missing PTY")
 	}

@@ -183,7 +183,7 @@ func TestAgentInitialMessagesReachModelAndCheckpointResumeWithoutDuplication(t *
 	}
 
 	checkpoints := checkpointmemory.New()
-	state := newTaskRunState("run_history_resume", "current query", "", history, nil)
+	state := newTaskRunState("run_history_resume", "current query", "", history, nil, nil)
 	state.Phase = harness.RunPhaseModel
 	state.Control.Status = harness.RunStatusModelStreaming
 	if err := checkpoints.Save(context.Background(), checkpoint.Checkpoint{
@@ -3455,7 +3455,7 @@ func TestAgentPlanExecuteResumeKeepsCheckpointedHistoryOnce(t *testing.T) {
 	checkpoints := checkpointmemory.New()
 	history := []model.Message{{Role: "user", Content: "earlier request"}, {Role: "assistant", Content: "earlier response"}}
 	planInput := "current request\n\n" + planner.PlanPrompt
-	state := newTaskRunState("run_plan_history_resume", planInput, "", history, planExecuteMeta(nil, "current request", planExecuteStagePlan))
+	state := newTaskRunState("run_plan_history_resume", planInput, "", history, nil, planExecuteMeta(nil, "current request", planExecuteStagePlan))
 	state.Mode = string(ModePlanExecute)
 	state.Phase = harness.RunPhaseModel
 	state.Control.Status = harness.RunStatusModelStreaming
@@ -4547,7 +4547,7 @@ func TestAgentForkBranchesFromParentCheckpoint(t *testing.T) {
 	checkpoints := checkpointmemory.New()
 	events := &runEventStore{}
 	parentID := "run_parent"
-	state := newTaskRunState(parentID, "parent task", "", nil, nil)
+	state := newTaskRunState(parentID, "parent task", "", nil, nil, nil)
 	state.Phase = harness.RunPhaseModel
 	state.Messages = []harness.MessageState{{Role: "user", Content: "parent task"}}
 	state.Meta = map[string]any{"planning.preset": "plan_execute", "planning.input": "parent task"}
@@ -4607,7 +4607,7 @@ func TestAgentRevertRewindsAndResumeContinuesFromIt(t *testing.T) {
 	checkpoints := checkpointmemory.New()
 	events := &runEventStore{}
 	runID := "run_revert"
-	base := newTaskRunState(runID, "task", "", nil, nil)
+	base := newTaskRunState(runID, "task", "", nil, nil, nil)
 
 	// Two checkpoints: the later one is the abandoned branch.
 	early := base

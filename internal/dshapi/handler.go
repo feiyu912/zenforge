@@ -113,6 +113,12 @@ type Handler struct {
 	fileReferencesMu sync.RWMutex
 	fileReferences   FileReferenceSource
 
+	// attachments is the injected attachment store behind both upload routes and
+	// `session/attachment`, installed by SetAttachments after New. Nil leaves the
+	// whole family answering `unimplemented` with the dependency named.
+	attachmentsMu sync.RWMutex
+	attachments   AttachmentStore
+
 	// plugins is the injected plugin inventory, installed by SetPluginInventory
 	// after New.
 	pluginsMu sync.RWMutex
@@ -192,6 +198,15 @@ func New(manager *harnesshttp.RunManager, events eventlog.Store, cfg Config) (*H
 // every method-level failure can be reported as a result envelope.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !h.fence(w, r) {
+		return
+	}
+	// The console's raw-byte upload route is dispatched before the envelope is
+	// parsed: its body is the file itself rather than a JSON request, and it has
+	// no `rpcId` to answer with. Everything else about it -- the fence above, the
+	// session check and the store -- is the unary upload route's own path
+	// (attachments.go).
+	if r.URL.Path == rawFileUploadPath {
+		h.serveRawFileUpload(w, r)
 		return
 	}
 	if r.Method != http.MethodPost {
@@ -447,7 +462,7 @@ func (h *Handler) method(endpoint string) (methodFunc, bool) {
 		}
 	case "fileUploads":
 		if name == "upload" {
-			return h.fileUploadsUnsupported, true
+			return h.fileUploadsUpload, true
 		}
 	case "fileReferences":
 		switch name {

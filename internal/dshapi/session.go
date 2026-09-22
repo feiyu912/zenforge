@@ -12,6 +12,7 @@ import (
 	"github.com/feiyu912/zenforge"
 	"github.com/feiyu912/zenforge/internal/dshsession"
 	"github.com/feiyu912/zenforge/internal/dshwire"
+	"github.com/feiyu912/zenforge/model"
 	"github.com/feiyu912/zenforge/server/harnesshttp"
 	"github.com/feiyu912/zenforge/sessiontitle"
 )
@@ -351,7 +352,7 @@ func (h *Handler) sessionPrompt(ctx context.Context, args map[string]json.RawMes
 	if !ok {
 		return nil, argumentRequired("content")
 	}
-	text, failure := decodePromptContent(rawContent)
+	text, promptImages, failure := decodePromptContent(rawContent)
 	if failure != nil {
 		return nil, failure
 	}
@@ -372,6 +373,10 @@ func (h *Handler) sessionPrompt(ctx context.Context, args map[string]json.RawMes
 			RunID:    sessionID,
 			Input:    text,
 			PromptID: strings.TrimSpace(requestID),
+			// The turn's own images ride on the message this run starts with, so
+			// the model sees them exactly once and every later request of the
+			// conversation replays them (zenforge.Task.Images).
+			Images: promptImages,
 		}); err != nil {
 			// The allocation survives a start that never happened, so the
 			// console can retry the prompt without re-creating the session.
@@ -397,6 +402,16 @@ func (h *Handler) sessionPrompt(ctx context.Context, args map[string]json.RawMes
 	info, err := h.manager.Get(current)
 	switch {
 	case err == nil && info.Live(time.Now()):
+		// A run is answering, so the only way in is the queue: a queued message
+		// becomes the next turn's input text, and a steer is a text message the
+		// running turn lifts. Neither carries bytes, so an image is refused here
+		// by name rather than dropped -- the operator would otherwise have no way
+		// to know the prompt it sent lost its attachment.
+		if len(promptImages) > 0 {
+			return nil, fail(codeUnsupportedContent,
+				"an image cannot be delivered to a run that is already answering: this host's queue and steer paths carry the next turn's text, so wait for the turn to finish and send the image with the prompt that starts the next one",
+				map[string]any{"part": "image", "mode": mode, "sessionId": sessionID})
+		}
 		// Input the durable inbox still holds is handed to this run first, so a
 		// message restored after a restart is delivered ahead of the new one
 		// (ADR 0136).
@@ -440,8 +455,9 @@ func (h *Handler) sessionPrompt(ctx context.Context, args map[string]json.RawMes
 		return nil, failure
 	}
 	task := zenforge.Task{
-		RunID: continuationID,
-		Input: text,
+		RunID:  continuationID,
+		Input:  text,
+		Images: promptImages,
 		// Every turn carries the identity of the prompt that started it: the
 		// console retires one echo per submission, so a continuation's prompt
 		// needs its own identity just as the first turn's does (ADR 0111).
@@ -478,59 +494,81 @@ func (h *Handler) applyModelSelection(sessionID string) *methodError {
 // a run takes. Image and file parts are refused by name: the run manager has
 // no attachment intake, and accepting them while dropping the bytes would be
 // a lie the user only discovers later.
-func decodePromptContent(raw json.RawMessage) (string, *methodError) {
+// decodePromptContent reads the console's prompt content parts into the text the
+// run is prompted with and the images it carries.
+//
+// Text is joined in order, as before. An `image` part is admitted into model
+// images (attachments.go) because the run path carries them; a `file` part is
+// refused by name, with the reason a file cannot be delivered rather than the
+// missing-store sentence a host without one used. Both are read here rather than
+// stored, because an image travels inline in the prompt and a file part cites a
+// receipt: neither is read back from this host before the run starts.
+//
+// A prompt with no text part at all is refused: the run's input is the text it
+// is prompted with, and a message that is only an attachment has nothing to
+// answer, which is the same rule the console's composer enforces.
+func decodePromptContent(raw json.RawMessage) (string, []model.Image, *methodError) {
 	var parts []json.RawMessage
 	if err := json.Unmarshal(raw, &parts); err != nil {
-		return "", fail(codeArgumentsInvalid, `"content" must be an array of content parts`,
+		return "", nil, fail(codeArgumentsInvalid, `"content" must be an array of content parts`,
 			map[string]any{"argument": "content"})
 	}
 	if len(parts) == 0 {
-		return "", fail(codeArgumentsInvalid, `"content" must contain at least one part`,
+		return "", nil, fail(codeArgumentsInvalid, `"content" must contain at least one part`,
 			map[string]any{"argument": "content"})
 	}
 	texts := make([]string, 0, len(parts))
+	images := make([]model.Image, 0, len(parts))
 	for _, rawPart := range parts {
 		part, err := decodeJSONObject(rawPart)
 		if err != nil {
-			return "", fail(codeArgumentsInvalid, `each "content" part must be a JSON object`,
+			return "", nil, fail(codeArgumentsInvalid, `each "content" part must be a JSON object`,
 				map[string]any{"argument": "content"})
 		}
 		rawType, ok := part["type"]
 		if !ok {
-			return "", fail(codeArgumentsInvalid, `each "content" part requires a "type"`,
+			return "", nil, fail(codeArgumentsInvalid, `each "content" part requires a "type"`,
 				map[string]any{"argument": "content"})
 		}
 		var partType string
 		if err := json.Unmarshal(rawType, &partType); err != nil {
-			return "", fail(codeArgumentsInvalid, `content part "type" must be a string`,
+			return "", nil, fail(codeArgumentsInvalid, `content part "type" must be a string`,
 				map[string]any{"argument": "content"})
 		}
 		switch partType {
 		case "text":
 			rawText, ok := part["text"]
 			if !ok {
-				return "", fail(codeArgumentsInvalid, `a "text" content part requires "text"`,
+				return "", nil, fail(codeArgumentsInvalid, `a "text" content part requires "text"`,
 					map[string]any{"argument": "content"})
 			}
 			var value string
 			if err := json.Unmarshal(rawText, &value); err != nil {
-				return "", fail(codeArgumentsInvalid, `content part "text" must be a string`,
+				return "", nil, fail(codeArgumentsInvalid, `content part "text" must be a string`,
 					map[string]any{"argument": "content"})
 			}
 			if value = strings.TrimSpace(value); value != "" {
 				texts = append(texts, value)
 			}
+		case "image":
+			admitted, failure := decodePromptContentImages([]json.RawMessage{rawPart})
+			if failure != nil {
+				return "", nil, failure
+			}
+			images = append(images, admitted...)
+		case "file":
+			return "", nil, decodeFilePromptPart(part)
 		default:
-			return "", fail(codeUnsupportedContent,
-				fmt.Sprintf("prompt content part %q is not supported: this host accepts text parts only", partType),
+			return "", nil, fail(codeUnsupportedContent,
+				fmt.Sprintf("prompt content part %q is not supported: this host accepts text and image parts", partType),
 				map[string]any{"part": partType})
 		}
 	}
 	if len(texts) == 0 {
-		return "", fail(codeArgumentsInvalid, `"content" must contain at least one non-whitespace text part`,
+		return "", nil, fail(codeArgumentsInvalid, `"content" must contain at least one non-whitespace text part`,
 			map[string]any{"argument": "content"})
 	}
-	return strings.Join(texts, "\n\n"), nil
+	return strings.Join(texts, "\n\n"), images, nil
 }
 
 // sessionCancel answers POST /api/session/cancel. Cancel is idempotent for an

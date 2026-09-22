@@ -279,6 +279,7 @@ nav:
       - 0135 The remaining console namespaces are refused by name: adr/0135-the-remaining-namespaces-are-refused-by-name.md
       - 0136 The pending queue is folded out of the session log: adr/0136-the-pending-queue-is-folded-out-of-the-session-log.md
       - 0137 The verification recipe is enforced: adr/0137-the-verification-recipe-is-enforced.md
+      - 0138 The console's attachments are stored: adr/0138-the-console-attachments-are-stored.md
 
 extra:
   social:

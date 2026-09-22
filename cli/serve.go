@@ -502,9 +502,12 @@ func newServeApp(ctx context.Context, opts *options, ioStreams IO, config serveC
 		// The console's `@` menu reads the same directory the file browser does
 		// (ADR 0134), so a path it offers is a path the host can read.
 		FileReferences: consoleFileReferences(opts.workspace),
-		Commands:       consoleCommandCatalog(opts),
-		Workspaces:     workspaceRegistry,
-		Goals:          consoleGoalStore,
+		// The console's attachments live in the host's own state tree, next to the
+		// sessions that refer to them (cli/attachments.go).
+		Attachments: consoleAttachments(opts.checkpointDir),
+		Commands:    consoleCommandCatalog(opts),
+		Workspaces:  workspaceRegistry,
+		Goals:       consoleGoalStore,
 		// The skills panel reads the same catalog the runs advertise (ADR 0131),
 		// so the panel cannot list a skill the agent would not be able to load.
 		Skills: consoleSkillCatalog(*opts),

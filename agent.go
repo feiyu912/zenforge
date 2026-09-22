@@ -228,7 +228,7 @@ func (a *Agent) Stream(ctx context.Context, task Task) (<-chan Event, error) {
 		return events, nil
 	}
 
-	state := newTaskRunState(runID, task.Input, task.PromptID, task.InitialMessages, task.Meta)
+	state := newTaskRunState(runID, task.Input, task.PromptID, task.InitialMessages, task.Images, task.Meta)
 	state.Mode = string(mode)
 	events := make(chan Event, 32)
 	go func() {
@@ -518,7 +518,7 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 		return a.emit(ctx, out, eventType, runID, data)
 	})
 	finish := func(stage string, todos []planner.Todo, eventType EventType, err error) error {
-		state := newTaskRunState(runID, task.Input, task.PromptID, task.InitialMessages, planExecuteMeta(task.Meta, task.Input, stage))
+		state := newTaskRunState(runID, task.Input, task.PromptID, task.InitialMessages, task.Images, planExecuteMeta(task.Meta, task.Input, stage))
 		state.Mode = string(ModePlanExecute)
 		loadCtx := ctx
 		if ctx.Err() != nil {
@@ -604,7 +604,7 @@ func (a *Agent) runPlanExecute(ctx context.Context, out chan<- Event, runID stri
 	planAnswer := ""
 	if len(todos) == 0 {
 		planInput := task.Input + "\n\n" + planner.PlanPrompt
-		planState := newTaskRunState(runID, planInput, task.PromptID, task.InitialMessages, planExecuteMeta(task.Meta, task.Input, planExecuteStagePlan))
+		planState := newTaskRunState(runID, planInput, task.PromptID, task.InitialMessages, task.Images, planExecuteMeta(task.Meta, task.Input, planExecuteStagePlan))
 		resumedPlan := resumeState != nil && planExecuteStage(resumeState.Meta) == planExecuteStagePlan
 		if resumedPlan {
 			planState = *resumeState
@@ -808,7 +808,7 @@ func plannerTodosFromState(todos []harness.TodoState) []planner.Todo {
 }
 
 func newRunState(runID, input, promptID string, meta map[string]any) harness.RunState {
-	return newTaskRunState(runID, input, promptID, nil, meta)
+	return newTaskRunState(runID, input, promptID, nil, nil, meta)
 }
 
 // promptStartPayload is run.started's data: the prompt, and the caller's
@@ -823,13 +823,20 @@ func promptStartPayload(input, promptID string) map[string]any {
 	return payload
 }
 
-func newTaskRunState(runID, input, promptID string, initial []model.Message, meta map[string]any) harness.RunState {
+func newTaskRunState(runID, input, promptID string, initial []model.Message, images []model.Image, meta map[string]any) harness.RunState {
 	now := time.Now().UTC()
 	messages := make([]harness.MessageState, 0, len(initial)+1)
 	for _, message := range initial {
 		messages = append(messages, modelMessageToHarness(message))
 	}
-	messages = append(messages, harness.MessageState{Role: "user", Content: input})
+	inputMessage := harness.MessageState{Role: "user", Content: input}
+	// The turn's own images ride on the message the run just built, in the
+	// metadata slot tool results already use, so every later request replays
+	// them exactly as the provider first saw them (metaMessageImages).
+	if len(images) > 0 {
+		inputMessage.Meta = map[string]any{metaMessageImages: append([]model.Image(nil), images...)}
+	}
+	messages = append(messages, inputMessage)
 	return harness.RunState{
 		Version:   harness.RunStateVersion,
 		RunID:     runID,

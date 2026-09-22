@@ -9,6 +9,13 @@ type Task struct {
 	RunID           string
 	Input           string
 	InitialMessages []model.Message
+	// Images are the images this turn's own prompt carries, delivered on the
+	// user message the run starts with. They are separate from InitialMessages
+	// because the run appends that message itself: a caller that put them in
+	// InitialMessages would produce two consecutive user messages, which some
+	// providers reject and the rest read in the wrong order. Empty for a run
+	// started without images, such as a CLI run.
+	Images []model.Image
 	// PromptID is the caller's identity for the prompt that starts this run --
 	// the console's `requestId`, which it also sends on the prompt RPC and uses
 	// to match the durable message with the submission it echoed locally. It is

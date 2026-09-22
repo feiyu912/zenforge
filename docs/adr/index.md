@@ -166,3 +166,4 @@ and what the adapter answers today is
 | [0135](0135-the-remaining-namespaces-are-refused-by-name.md) | The remaining console namespaces are refused by name |
 | [0136](0136-the-pending-queue-is-folded-out-of-the-session-log.md) | The pending queue is folded out of the session log |
 | [0137](0137-the-verification-recipe-is-enforced.md) | The verification recipe is enforced, and its environment-dependent part is named |
+| [0138](0138-the-console-attachments-are-stored.md) | The console's attachments are stored, images reach the model, and files are refused for the reason they cannot |
