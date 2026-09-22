@@ -271,6 +271,7 @@ nav:
       - 0127 The sidebar's search reads the logs the list shows: adr/0127-the-sidebars-search-reads-the-logs-the-list-shows.md
       - 0128 The attachment read is refused: adr/0128-the-attachment-read-is-refused.md
       - 0129 A fork copies the source's completed turns: adr/0129-a-fork-copies-the-sources-completed-turns.md
+      - 0130 The pending queue is the console's inbox cell: adr/0130-the-pending-queue-is-the-consoles-inbox-cell.md
 
 extra:
   social:

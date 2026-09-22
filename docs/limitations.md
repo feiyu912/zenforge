@@ -674,3 +674,18 @@ record is stamped with the fork's moment so it sorts as the most recent
 conversation. A forked conversation inherits its source's title, which is why the
 console renames it to an increased one, and it runs on the host's *default* model
 rather than the source's selected one, exactly as the reference composes it.
+
+## A queued message lives with the run it was queued for
+
+The console's queue dock works: the messages waiting for the running turn are
+projected as the `inbox` cell, and each row can be edited, dropped or steered
+(ADR 0130). What the queue is not is durable. Upstream folds pending input out of
+the session's own events, so its inbox survives a restart and carries a message
+into whatever turn comes next; here the pending messages are the live run
+controller's, so they exist only while the run does. Two consequences are worth
+knowing before relying on them: a message queued for a run that ends before the
+model-turn boundary -- the turn was cancelled, or it failed -- is dropped with the
+run rather than delivered to a later turn the operator did not aim it at, and a
+host that restarts has no queue to restore. In both cases the console is told the
+truth (the row leaves the cell), and the durable fold is a piece of work this host
+has not built.

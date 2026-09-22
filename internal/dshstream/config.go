@@ -51,6 +51,20 @@ type Config struct {
 	// commit.
 	GoalUpdates func(observe func(GoalUpdate)) (unsubscribe func())
 
+	// Queue, when set, reports one session's pending queue: the follow snapshot
+	// publishes the `inbox` cell, and the control stream's projection frames
+	// carry every later value. Nil reports no capability, which is what a host
+	// whose prompts are never queued should say -- a console then simply never
+	// renders a pending row. Like the goal cell, it is not part of the control
+	// baseline; control.go explains why a cell that is not a session-log event
+	// travels with the session's own snapshot.
+	Queue func(sessionID string) QueueState
+
+	// QueueUpdates, when set, delivers later queue changes until the returned
+	// function is called. The control stream is where they are sent, because a
+	// projection frame is what the console's queue rows are folded from.
+	QueueUpdates func(observe func(QueueUpdate)) (unsubscribe func())
+
 	// Workspaces, when set, reports the console's workspace registry: the
 	// workspace/follow baseline publishes it and later changes arrive through
 	// WorkspaceUpdates. Nil reports none, which is what a host with no

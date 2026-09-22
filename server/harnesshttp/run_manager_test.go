@@ -883,7 +883,7 @@ type managerTestAgent struct {
 	mu      sync.Mutex
 	streams map[string]chan zenforge.Event
 	ctxs    map[string]context.Context
-	steers  map[string][]string
+	steers  map[string][]harness.SteerState
 	store   eventlog.Store
 }
 
@@ -900,7 +900,7 @@ func newManagerTestAgent(store eventlog.Store) *managerTestAgent {
 	return &managerTestAgent{
 		streams: make(map[string]chan zenforge.Event),
 		ctxs:    make(map[string]context.Context),
-		steers:  make(map[string][]string),
+		steers:  make(map[string][]harness.SteerState),
 		store:   store,
 	}
 }
@@ -936,14 +936,53 @@ func (a *managerTestAgent) Steer(runID, steerID, message string) (harness.SteerS
 	if a.streams[runID] == nil {
 		return harness.SteerState{}, false
 	}
-	a.steers[runID] = append(a.steers[runID], message)
-	return harness.SteerState{ID: steerID, Message: message, CreatedAt: time.Now().UTC()}, true
+	if steerID == "" {
+		steerID = fmt.Sprintf("steer_%d", len(a.steers[runID])+1)
+	}
+	steer := harness.SteerState{ID: steerID, Message: message, CreatedAt: time.Now().UTC()}
+	a.steers[runID] = append(a.steers[runID], steer)
+	return steer, true
+}
+
+func (a *managerTestAgent) PendingSteers(runID string) []harness.SteerState {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]harness.SteerState(nil), a.steers[runID]...)
+}
+
+func (a *managerTestAgent) ReplaceSteer(runID, steerID, message string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for index := range a.steers[runID] {
+		if a.steers[runID][index].ID == steerID {
+			a.steers[runID][index].Message = message
+			return true
+		}
+	}
+	return false
+}
+
+func (a *managerTestAgent) RemoveSteer(runID, steerID string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for index := range a.steers[runID] {
+		if a.steers[runID][index].ID != steerID {
+			continue
+		}
+		a.steers[runID] = append(a.steers[runID][:index], a.steers[runID][index+1:]...)
+		return true
+	}
+	return false
 }
 
 func (a *managerTestAgent) steerMessages(runID string) []string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return append([]string(nil), a.steers[runID]...)
+	messages := make([]string, 0, len(a.steers[runID]))
+	for _, steer := range a.steers[runID] {
+		messages = append(messages, steer.Message)
+	}
+	return messages
 }
 
 func (a *managerTestAgent) send(runID string, event zenforge.Event) {
@@ -1200,4 +1239,77 @@ func TestRunManagerRecordReachesTheRegistry(t *testing.T) {
 	if err := other.Record(context.Background(), RunInfo{RunID: "forked_run", Status: RunCompleted}); !errors.Is(err, ErrRunExists) {
 		t.Fatalf("Record over a registry record = %v, want %v", err, ErrRunExists)
 	}
+}
+
+func TestRunManagerShowsAndEditsThePendingQueue(t *testing.T) {
+	manager, agent, _ := newTestRunManager(t, RunManagerOptions{TerminalRetention: -1})
+	defer closeManager(t, manager)
+	if _, err := manager.Start(context.Background(), zenforge.Task{RunID: "queue_run", Input: "hi"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Steer("queue_run", "steer_a", "first"); err != nil {
+		t.Fatalf("Steer: %v", err)
+	}
+	if _, err := manager.Steer("queue_run", "steer_b", "second"); err != nil {
+		t.Fatalf("Steer: %v", err)
+	}
+	pending, err := manager.PendingSteers("queue_run")
+	if err != nil {
+		t.Fatalf("PendingSteers: %v", err)
+	}
+	if len(pending) != 2 || pending[0].ID != "steer_a" || pending[1].Message != "second" {
+		t.Fatalf("pending = %#v", pending)
+	}
+	if err := manager.EditSteer("queue_run", "steer_a", "first, rewritten"); err != nil {
+		t.Fatalf("EditSteer: %v", err)
+	}
+	if err := manager.DropSteer("queue_run", "steer_b"); err != nil {
+		t.Fatalf("DropSteer: %v", err)
+	}
+	pending, err = manager.PendingSteers("queue_run")
+	if err != nil {
+		t.Fatalf("PendingSteers: %v", err)
+	}
+	if len(pending) != 1 || pending[0].Message != "first, rewritten" {
+		t.Fatalf("after edits = %#v", pending)
+	}
+	// A row the queue no longer holds is the not-found answer, not a silent
+	// success: the console paints an item that may have been delivered since.
+	if err := manager.EditSteer("queue_run", "steer_b", "gone"); !errors.Is(err, ErrSteerNotFound) {
+		t.Fatalf("editing a delivered steer = %v, want ErrSteerNotFound", err)
+	}
+	if err := manager.DropSteer("queue_run", "steer_b"); !errors.Is(err, ErrSteerNotFound) {
+		t.Fatalf("dropping a delivered steer = %v, want ErrSteerNotFound", err)
+	}
+	if _, err := manager.PendingSteers(""); !errors.Is(err, ErrInvalidRunID) {
+		t.Fatalf("blank PendingSteers = %v, want ErrInvalidRunID", err)
+	}
+	if _, err := manager.PendingSteers("missing"); !errors.Is(err, ErrRunNotFound) {
+		t.Fatalf("missing PendingSteers = %v, want ErrRunNotFound", err)
+	}
+	// A finished run holds nothing, and asking is not an error: the queue is
+	// dropped when the run ends, which is what a console renders after a turn.
+	agent.finish("queue_run", zenforge.EventRunDone)
+	waitStatus(t, manager, "queue_run", RunCompleted)
+	pending, err = manager.PendingSteers("queue_run")
+	if err != nil || len(pending) != 0 {
+		t.Fatalf("terminal PendingSteers = %#v err=%v", pending, err)
+	}
+	if err := manager.EditSteer("queue_run", "steer_a", "late"); !errors.Is(err, ErrSteerNotFound) {
+		t.Fatalf("editing a finished run's queue = %v, want ErrSteerNotFound", err)
+	}
+	if err := manager.DropSteer("queue_run", "steer_a"); !errors.Is(err, ErrSteerNotFound) {
+		t.Fatalf("dropping a finished run's queue = %v, want ErrSteerNotFound", err)
+	}
+}
+
+// The production agent has to satisfy the same queue shape the manager asserts at
+// runtime. It is a compile-time check rather than a behavioral one for a reason:
+// a missing method does not fail a build, it makes every queue operation answer
+// "this run does not accept steer" -- which is exactly the kind of silent
+// degradation that has to be caught before the console shows a queue it cannot
+// edit.
+func TestProductionAgentSatisfiesTheSteeringShape(t *testing.T) {
+	var agent steeringAgent = (*zenforge.Agent)(nil)
+	_ = agent
 }

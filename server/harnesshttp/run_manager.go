@@ -43,6 +43,7 @@ var (
 	ErrResumeNotFound   = fmt.Errorf("%w: no durable events exist", ErrRunNotFound)
 	ErrEventsRequired   = errors.New("event store and bus are required")
 	ErrSteerUnavailable = errors.New("run does not accept steer")
+	ErrSteerNotFound    = errors.New("no such steer is pending")
 )
 
 const defaultTerminalRetention = 5 * time.Minute
@@ -173,6 +174,95 @@ type SteerInfo struct {
 
 type steeringAgent interface {
 	Steer(runID, steerID, message string) (harness.SteerState, bool)
+	// PendingSteers reports what has not been delivered yet, in queue order, and
+	// the two mutations edit or drop one of those rows by the identity the
+	// console queued it under.
+	PendingSteers(runID string) []harness.SteerState
+	ReplaceSteer(runID, steerID, message string) bool
+	RemoveSteer(runID, steerID string) bool
+}
+
+// PendingSteers reports the messages queued for a run's next model-turn
+// boundary, in order. A finished run has no queue rather than an error -- what
+// was pending was dropped when the run ended -- while a run this process does
+// not hold is not found, which is the same answer Steer gives.
+func (m *RunManager) PendingSteers(runID string) ([]harness.SteerState, error) {
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		return nil, ErrInvalidRunID
+	}
+	m.mu.Lock()
+	run := m.runs[runID]
+	status := RunStatus("")
+	if run != nil {
+		status = run.info.Status
+	}
+	m.mu.Unlock()
+	if run == nil {
+		return nil, ErrRunNotFound
+	}
+	if terminal(status) {
+		return nil, nil
+	}
+	controller, ok := m.agent.(steeringAgent)
+	if !ok {
+		return nil, ErrSteerUnavailable
+	}
+	return controller.PendingSteers(runID), nil
+}
+
+// EditSteer rewrites one not-yet-delivered message. It reports
+// ErrSteerNotFound when the id is not pending any more, which is what the
+// console shows as an item that left the queue between paint and click.
+func (m *RunManager) EditSteer(runID, steerID, message string) error {
+	controller, err := m.pendingSteerController(runID)
+	if err != nil {
+		return err
+	}
+	if !controller.ReplaceSteer(runID, steerID, message) {
+		return ErrSteerNotFound
+	}
+	return nil
+}
+
+// DropSteer removes one not-yet-delivered message, so the run never sees it.
+func (m *RunManager) DropSteer(runID, steerID string) error {
+	controller, err := m.pendingSteerController(runID)
+	if err != nil {
+		return err
+	}
+	if !controller.RemoveSteer(runID, steerID) {
+		return ErrSteerNotFound
+	}
+	return nil
+}
+
+// pendingSteerController resolves the controller that owns a live run's queue,
+// applying the same terminal rule PendingSteers uses: a run that has ended holds
+// nothing, so an edit of one of its rows is a row that is gone.
+func (m *RunManager) pendingSteerController(runID string) (steeringAgent, error) {
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		return nil, ErrInvalidRunID
+	}
+	m.mu.Lock()
+	run := m.runs[runID]
+	status := RunStatus("")
+	if run != nil {
+		status = run.info.Status
+	}
+	m.mu.Unlock()
+	if run == nil {
+		return nil, ErrRunNotFound
+	}
+	if terminal(status) {
+		return nil, ErrSteerNotFound
+	}
+	controller, ok := m.agent.(steeringAgent)
+	if !ok {
+		return nil, ErrSteerUnavailable
+	}
+	return controller, nil
 }
 
 // RunManager owns detached run contexts and their sole stream drainers.

@@ -292,6 +292,34 @@ func (a *Agent) Steer(runID, steerID, message string) (harness.SteerState, bool)
 	return a.config.RunController.EnqueueSteer(runID, steerID, message)
 }
 
+// PendingSteers reports the messages still queued for a run's next model-turn
+// boundary, in order. It is the read the console's pending rows are projected
+// from, so it must not consume the queue: the run still has to receive them.
+func (a *Agent) PendingSteers(runID string) []harness.SteerState {
+	if a == nil || a.config.RunController == nil {
+		return nil
+	}
+	return a.config.RunController.PendingSteers(runID)
+}
+
+// ReplaceSteer rewrites one still-pending message in place, and RemoveSteer drops
+// one so the run never sees it. Both report false when the id is not pending any
+// more -- delivered, dropped, or never queued -- which is the answer the console
+// turns into "the item is no longer pending".
+func (a *Agent) ReplaceSteer(runID, steerID, message string) bool {
+	if a == nil || a.config.RunController == nil {
+		return false
+	}
+	return a.config.RunController.ReplaceSteer(runID, steerID, message)
+}
+
+func (a *Agent) RemoveSteer(runID, steerID string) bool {
+	if a == nil || a.config.RunController == nil {
+		return false
+	}
+	return a.config.RunController.RemoveSteer(runID, steerID)
+}
+
 func (a *Agent) openRunControl(runID string) error {
 	if a == nil || a.config.RunController == nil {
 		return nil

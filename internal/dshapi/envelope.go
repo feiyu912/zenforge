@@ -38,6 +38,14 @@ const (
 	// attachment failed (api/session-controller: workspaceAttachSessionId).
 	codeForkUnavailable       = "session/fork-unavailable"
 	codeWorkspaceAttachFailed = "session/workspace-attach-failed"
+	// codeAttachmentInvalid, codeQueueItemNotFound and codeSteerUnavailable are
+	// the console's own answers around its pending queue: an edit that tried to
+	// queue something other than text, a row the queue no longer holds, and a
+	// request to steer a message that is not a queued turn
+	// (api/session-controller ApiSessionList.updateQueue).
+	codeAttachmentInvalid = "session/attachment-invalid"
+	codeQueueItemNotFound = "session/queue-item-not-found"
+	codeSteerUnavailable  = "session/steer-unavailable"
 )
 
 // maxRequestBodyBytes bounds one unary request. Console envelopes and text

@@ -392,7 +392,17 @@ func (h *Handler) sessionPrompt(ctx context.Context, args map[string]json.RawMes
 	info, err := h.manager.Get(current)
 	switch {
 	case err == nil && info.Live(time.Now()):
-		if _, err := h.manager.Steer(current, strings.TrimSpace(requestID), text); err != nil {
+		steered, err := h.manager.Steer(current, strings.TrimSpace(requestID), text)
+		if err == nil {
+			// The run queue is the truth about what is pending; this store only
+			// remembers which half of the console's queue the message belongs in,
+			// keyed by the identity the run manager ended up using (it mints one
+			// when the console sent none). Recording it republishes the cell, so
+			// the row the console drew as its own echo is replaced by the host's
+			// row immediately (ADR 0130).
+			h.queues.enqueue(sessionID, current, mode, steered.SteerID)
+		}
+		if err != nil {
 			// Get found the run, so Steer's not-found here means this manager
 			// cannot reach it: a shared registry lists other processes' runs but
 			// does not deliver turns to them.

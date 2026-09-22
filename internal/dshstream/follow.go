@@ -50,6 +50,16 @@ func (h *Handler) sessionProjectionBaseline(sessionID string, cursor int64, titl
 		}
 		values[modelSelectionProjectionKey] = state.Projection
 	}
+	if h.cfg.Queue != nil {
+		// The pending queue is the second cell that travels with the snapshot
+		// rather than inside the block's watermark, and for the same reason as the
+		// goal: the console's seed clears every cell the block omits, and a client
+		// that reconnects while messages are still queued must keep rendering them
+		// until they are delivered. The value is current; the block's watermark
+		// stays the session cursor, which is what the title and selection cells
+		// are numbered by.
+		values[inboxProjectionKey] = inboxCell(h.cfg.Queue(sessionID))
+	}
 	if h.cfg.Goals != nil {
 		// The goal cell travels with the opening snapshot, and it has to: the
 		// client's seed clears every cell the block omits as of the cut, so a
@@ -238,7 +248,7 @@ func (h *Handler) runFollow(ctx context.Context, payload []byte, send func(any) 
 			}
 			return streamFail(codeInternal, "follow session: "+err.Error(), nil)
 		}
-		ended, failure := pumpTurn(ctx, live, liveErr, tail, assistant, send)
+		ended, failure := pumpTurn(ctx, request.sessionID, h.cfg.Queue, live, liveErr, tail, assistant, send)
 		if failure != nil {
 			return failure
 		}
@@ -281,7 +291,10 @@ func (h *Handler) runFollow(ctx context.Context, payload []byte, send func(any) 
 // and its settlement's end frame after it, because the client stages a settlement
 // while its attempt is open and publishes it when the end frame names its
 // sequence.
-func pumpTurn(ctx context.Context, live <-chan zenforge.Event, liveErr <-chan error, tail *dshwire.Projection, assistant *assistantTracker, send func(any) error) (bool, error) {
+// queue is the pending queue's read, or nil on a host that serves no queue: it is
+// called after each record so a message the run has just been handed stops being
+// pending the moment its delivery is visible in the transcript (ADR 0130).
+func pumpTurn(ctx context.Context, sessionID string, queue func(string) QueueState, live <-chan zenforge.Event, liveErr <-chan error, tail *dshwire.Projection, assistant *assistantTracker, send func(any) error) (bool, error) {
 	// A turn that ends with an attempt still open -- cancelled mid-answer, or a log
 	// that stops between attempts -- leaves the console rendering text that will
 	// never settle. Closing it is what keeps the next turn's start frame from
@@ -308,6 +321,13 @@ func pumpTurn(ctx context.Context, live <-chan zenforge.Event, liveErr <-chan er
 			// reached the log's end normally; the event channel drains first.
 		case event, ok := <-live:
 			if !ok {
+				// The run is over. Whatever it was still holding is no longer
+				// pending -- the queue goes with the run -- and this is the last
+				// moment anything is following it, so the read that notices the rows
+				// are gone happens here rather than never (ADR 0130).
+				if queue != nil {
+					queue(sessionID)
+				}
 				return true, nil
 			}
 			if assistant != nil {
@@ -343,6 +363,15 @@ func pumpTurn(ctx context.Context, live <-chan zenforge.Event, liveErr <-chan er
 						}
 					}
 				}
+			}
+			// The run may have just been handed what was queued for it: a delivery
+			// is a durable record with no console meaning of its own, and the queue's
+			// source reads the run queue rather than the log, so this is where the
+			// read that notices the message is gone happens. The returned value is
+			// not used -- the source publishes a change to whoever is carrying the
+			// cell (ADR 0130).
+			if queue != nil {
+				queue(sessionID)
 			}
 		}
 	}

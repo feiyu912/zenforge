@@ -28,14 +28,14 @@ methods are the remaining work, in priority order at the end of this page.
 
 This host answers **47** of the client's **109** methods, mounts
 **4** of them as logical streams, refuses **17** by name, and
-does not serve the remaining **41**.
+does not serve the remaining **40**.
 
 | State | Count |
 | --- | --- |
-| served | 47 |
+| served | 48 |
 | stream | 4 |
 | refused | 17 |
-| unserved | 41 |
+| unserved | 40 |
 | **client methods total** | **109** |
 
 The WebSocket mux also mounts `$events`, which is not part of the client's
@@ -78,6 +78,7 @@ attach the prompt to the session it has open (ADR 0115).
 | `session/prompt` | served | Send a turn into a session. Under the plan-execute preset a question is answered in the plan stage and never reaches an execute or summary stage (ADR 0107). Every turn the host starts records the prompt's `requestId` as the run's `PromptID`, and the projected message publishes it as `source.rpcId`, which is what retires the console's local submission echo; a queued turn's text is projected from `request.steer`'s `message` (ADR 0111). |
 | `session/rename` | served | Rename a session. |
 | `session/search` | served | Search the conversations the list shows for a literal phrase, answering one row per session with the newest matching message quoted and the reference's own twenty-result cap and `hasMore` flag, plus its own query refusals (ADR 0127). |
+| `session/updateQueue` | served | Edit, drop or steer one message the console has queued but the run has not been given yet. The pending rows are projected as the `inbox` cell -- the console's own two lists, split by the prompt mode each message was queued with -- and a row that leaves the run queue leaves the cell on the next read, which is how a delivery retires it. An edit carrying anything but text, an edit with no text, a row the queue no longer holds and a steer of something that is not a queued turn answer with the reference's own codes and sentences (ADR 0130). |
 | `session/selectModel` | served | Choose the provider and model a session runs on. The choice is restored on the next start (ADR 0103). |
 | `settings/canOpenAgentPresetDirectory` | served | Whether a native editor can be opened here (it cannot). |
 | `settings/describe` | served | The settings namespaces, their schema, their resolved values, the section the console itself wrote, and whether a document holds them (ADR 0102, ADR 0103). |
@@ -147,7 +148,6 @@ attach the prompt to the session it has open (ADR 0115).
 | `messageFeedback/put` | unserved | no message-feedback store |
 | `officeToPdf/generation` | unserved | no document conversion in this host |
 | `officeToPdf/render` | unserved | no document conversion in this host |
-| `session/updateQueue` | unserved | no queue editing |
 | `sessionFeedback/record` | unserved | no session-feedback store |
 | `sessionReferenceResolver/candidates` | unserved | no reference resolver |
 | `skills/list` | unserved | no skill listing exposed to the console |
@@ -176,19 +176,14 @@ live `zenforge serve` whose boot graph and every advertised bundle were fetched.
 that has shipped is removed rather than left to mislead the next window; the gaps below are
 in the order they block the page, from what the console asks first.
 
-1. **`session/updateQueue`** — editing the pending queue: reordering, editing or
-   dropping a message the console has queued for the next turn. This host's
-   control baseline publishes an empty `queues` map by design (`sessionQueuedItem`
-   says "no queue mirror yet"), so the queue projection has to be fed from the
-   prompt path's steer handling before the mutation means anything.
-2. **`skills/list`, `subagents/list`, `subagents/prompt`, `subagents/interruptByParent`**
+1. **`skills/list`, `subagents/list`, `subagents/prompt`, `subagents/interruptByParent`**
    — framework features that are not exposed to the console yet.
-3. **`terminal/*`** — an embedded terminal, which this host does not claim.
-4. **`workspace/insertBefore`, `workspace/insertSessionBefore`** — the manual
+2. **`terminal/*`** — an embedded terminal, which this host does not claim.
+3. **`workspace/insertBefore`, `workspace/insertSessionBefore`** — the manual
    row order inside the workspace list. Registrations, titles, deletion and the
    archived set are served (ADR 0101); only the drag-to-reorder mutations are
    left.
-5. **`messageFeedback/*`, `sessionFeedback/*`, `fileReferences/list`,
+4. **`messageFeedback/*`, `sessionFeedback/*`, `fileReferences/list`,
    `fileUploads/upload`, `officeToPdf/*`, `agentTeams/*`, `sessionReferenceResolver/candidates`,
    `dynamicCordisRunner/*`** — page features with no host-side counterpart yet.
 

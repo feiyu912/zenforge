@@ -11,6 +11,13 @@ import (
 // consumed only at a model-turn boundary so they never reorder a tool call and
 // its result. Applications that need cross-process delivery must provide their
 // own durable control queue and call EnqueueSteer on the owning process.
+//
+// The queue is the only copy of what has not been delivered, so it is both
+// written and read here: DrainSteers consumes one batch at a boundary, while
+// PendingSteers, ReplaceSteer and RemoveSteer are what a console uses to render
+// and edit what is still waiting. An admitted message leaves this queue and
+// becomes durable conversation state instead (the agent emits its own record for
+// it), which is why a delivery is a removal and not a state of its own.
 type RunController struct {
 	mu   sync.Mutex
 	runs map[string]*controlledRun
@@ -99,4 +106,76 @@ func (c *RunController) DrainSteers(runID string) []SteerState {
 	steers := append([]SteerState(nil), run.steers...)
 	run.steers = nil
 	return steers
+}
+
+// PendingSteers reports the messages still waiting for the next model-turn
+// boundary, in queue order, without consuming them: a console renders the queue
+// it has not been delivered yet, and reading it must not deliver it. The copy
+// belongs to the caller.
+func (c *RunController) PendingSteers(runID string) []SteerState {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	run := c.runs[strings.TrimSpace(runID)]
+	if run == nil || run.closed || len(run.steers) == 0 {
+		return nil
+	}
+	return append([]SteerState(nil), run.steers...)
+}
+
+// ReplaceSteer rewrites one still-pending message in place, keeping its position
+// in the queue and the identity the console correlates it by. It reports false
+// when the id is not pending any more -- already delivered, dropped, or never
+// queued -- and when the message is blank, which is not a message at all.
+func (c *RunController) ReplaceSteer(runID, steerID, message string) bool {
+	if c == nil {
+		return false
+	}
+	steerID = strings.TrimSpace(steerID)
+	message = strings.TrimSpace(message)
+	if steerID == "" || message == "" {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	run := c.runs[strings.TrimSpace(runID)]
+	if run == nil || run.closed {
+		return false
+	}
+	for index := range run.steers {
+		if run.steers[index].ID == steerID {
+			run.steers[index].Message = message
+			return true
+		}
+	}
+	return false
+}
+
+// RemoveSteer drops one still-pending message, so it is never delivered. It
+// reports false when the id is no longer pending, the same answer ReplaceSteer
+// gives and the one the console turns into "the item is not in the queue".
+func (c *RunController) RemoveSteer(runID, steerID string) bool {
+	if c == nil {
+		return false
+	}
+	steerID = strings.TrimSpace(steerID)
+	if steerID == "" {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	run := c.runs[strings.TrimSpace(runID)]
+	if run == nil || run.closed {
+		return false
+	}
+	for index := range run.steers {
+		if run.steers[index].ID != steerID {
+			continue
+		}
+		run.steers = append(run.steers[:index], run.steers[index+1:]...)
+		return true
+	}
+	return false
 }

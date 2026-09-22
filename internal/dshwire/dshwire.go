@@ -672,12 +672,23 @@ func messageID(seq int64) string {
 }
 
 func userMessage(seq int64, text, rpcID string) map[string]any {
+	return UserMessage(messageID(seq), text, rpcID)
+}
+
+// UserMessage builds one console user message: `{id, role, content, source}` with
+// a single text block and a `user` source carrying the prompt identity the
+// console retires its local echo by. It is the shape both carriers of a user's
+// words publish -- the transcript's `user/message` records, which number the id
+// by the session sequence, and the pending queue's items, whose id is the steer
+// id the console queued the message under -- so the two cannot disagree about
+// what a message looks like.
+func UserMessage(id, text, rpcID string) map[string]any {
 	source := map[string]any{"kind": "user"}
 	if rpcID != "" {
 		source["rpcId"] = rpcID
 	}
 	return map[string]any{
-		"id":      messageID(seq),
+		"id":      id,
 		"role":    "user",
 		"content": []any{map[string]any{"type": "text", "text": text}},
 		"source":  source,

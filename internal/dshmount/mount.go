@@ -31,6 +31,7 @@ import (
 	"github.com/feiyu912/zenforge/eventlog"
 	"github.com/feiyu912/zenforge/internal/dshapi"
 	"github.com/feiyu912/zenforge/internal/dshboot"
+	"github.com/feiyu912/zenforge/internal/dshstream"
 	"github.com/feiyu912/zenforge/internal/dshwire"
 	"github.com/feiyu912/zenforge/server/harnesshttp"
 	dshconsole "github.com/feiyu912/zenforge/webui/dsh"
@@ -181,6 +182,39 @@ func New(manager *harnesshttp.RunManager, events eventlog.Store, cfg Config) (*M
 // session exists without a turn in it yet.
 type draftSessions interface {
 	IsDraftSession(sessionID string) bool
+}
+
+// pendingQueue is the seam the two queue reads cross: the RPC handler owns the
+// run queue, and only it can say what a session still has pending.
+type pendingQueue interface {
+	PendingQueue(sessionID string) dshstream.QueueState
+	PendingQueueUpdates(observe func(dshstream.QueueUpdate)) (unsubscribe func())
+}
+
+// PendingQueue reports one session's pending queue through the mount. The follow
+// snapshot publishes it as the console's `inbox` cell, and the control stream's
+// frames ride the same source, so both halves of the projection read one answer.
+func (m *Mux) PendingQueue(sessionID string) dshstream.QueueState {
+	if m == nil {
+		return dshstream.QueueState{}
+	}
+	queues, ok := m.api.(pendingQueue)
+	if !ok {
+		return dshstream.QueueState{}
+	}
+	return queues.PendingQueue(sessionID)
+}
+
+// PendingQueueUpdates delivers later queue changes through the mount.
+func (m *Mux) PendingQueueUpdates(observe func(dshstream.QueueUpdate)) (unsubscribe func()) {
+	if m == nil || observe == nil {
+		return func() {}
+	}
+	queues, ok := m.api.(pendingQueue)
+	if !ok {
+		return func() {}
+	}
+	return queues.PendingQueueUpdates(observe)
 }
 
 // IsDraftSession reports whether the RPC handler knows this session as a draft --

@@ -546,6 +546,158 @@ wrote an event is omitted, because `session/page` answers not-found for it; and 
 log has no terminal event is recorded as cancelled when it is adopted. Drafts stay
 process-local (ADR 0104).
 
+## Shipped: the pending queue is the console's inbox cell (2026-09-22)
+
+`session/updateQueue` is served (ADR 0130), so the queue dock works: the messages
+waiting for the running turn are projected as the console's `inbox` cell, and every
+row can be edited, dropped or steered. The reference keeps that queue as a durable
+inbox folded out of the session's events; here the queue is the live run
+controller's, so the chain was about *projecting* it and mapping a row id back onto
+it:
+
+- **The queue is read, never consumed.** `RunController` gained `PendingSteers`,
+  `ReplaceSteer` and `RemoveSteer`, with `RunManager` and `zenforge.Agent` wrappers.
+  A peek hands back a copy, an edit rewrites the message in place and keeps its
+  position, a removal drops it before the run is handed it, and both mutations
+  answer `false` for an id that is no longer pending -- which is exactly what
+  `session/queue-item-not-found` reports.
+- **`inbox` is a cell, not a baseline field.** The follow snapshot seeds it
+  (`values.inbox`, both lists always present, empty lists included) and later values
+  arrive as `projection` frames on the control stream, numbered by the queue's own
+  wall-clock-anchored counter. It stays out of the control baseline's projections
+  block for the reason the goal cell does (ADR 0125): one watermark cannot order two
+  counters. `queues` stays `{}`, as the pinned client never reads it.
+- **A row's id is the message's id.** Both the row's `id` and its `source.rpcId`
+  are the console's own `requestId` -- the steer id the prompt path queued the
+  message under -- and the placement (`next-turn` / `next-step`) is the `mode` the
+  console chose, recorded when the prompt was queued. `steer` on a `next-turn` row
+  promotes it into `next-step`; on anything else it is
+  `session/steer-unavailable`.
+- **A mutation republishes the cell.** The console holds rows rather than re-reading
+  a snapshot, so an accepted edit or removal derives the cell again and announces
+  it. Delivery is noticed from the other side: the follow stream reconciles the run
+  queue on every record and once more when the run ends, so a message the run was
+  handed -- or one that died with it -- leaves the cell and retires the row.
+
+Every refusal is the reference's own, code, sentence and details: an edit carrying
+a non-text block is `session/attachment-invalid` "queue edits accept text content
+only" with `{reason: "QUEUE_EDIT_NON_TEXT"}`; an edit with no non-whitespace text is
+`gateway/bad-request`; an `itemId` the queue no longer holds is
+`session/queue-item-not-found` "queued item is no longer pending"; and a steer of
+something that is not a queued turn is `session/steer-unavailable` "current turn no
+longer accepts steering".
+
+Two deviations are recorded in the ADR. Both lists are delivered at the same
+model-turn boundary here (`session/prompt` already maps both modes onto the same
+steer queue, ADR 0111), so promotion changes where a row is *shown* and not when
+the run receives it; and the queue is process state rather than a durable fold, so
+a message queued for a run that ends before the boundary is dropped with the run
+instead of being carried into the session's next turn -- `docs/limitations.md` says
+so plainly, and the durable fold is the work named below.
+
+Live on a scratch host whose model endpoint holds the connection open (no
+credentials, the turn stays live):
+
+```
+$ session/prompt {"requestId":"req-queued","sessionId":"run_…","mode":"queue","content":[text "wait for the tests"]}
+{"accepted": true}
+$ session/prompt {"requestId":"req-steer",…,"mode":"steer","content":[text "and check the logs"]}
+{"accepted": true}
+$ session/follow <session/…>            # the opening snapshot
+  values.inbox = {"next-turn":[{"id":"req-queued","role":"user","content":[{"type":"text","text":"wait for the tests"}],
+                   "source":{"kind":"user","rpcId":"req-queued"}}],
+                  "next-step":[{"id":"req-steer",…,"source":{"kind":"user","rpcId":"req-steer"}}]}
+  projections.asOfSeq = cursor = 8
+$ session/control                        # the baseline keeps the queue out of its block
+  type=baseline  queues={}  projections[run_…].values={"modelSelection":{…}}
+$ session/updateQueue {"sessionId":"run_…","itemId":"req-queued","action":{"kind":"edit","content":[text "wait for the release instead"]}}
+{"accepted": true}
+  control frame: projection inbox seq 1790058738804
+  inbox.next-turn[0].content[0].text = "wait for the release instead"
+$ session/updateQueue {…,"action":{"kind":"steer"}}       # the row moves to the steering list
+{"accepted": true}
+  inbox = {"next-step":[req-queued, req-steer], "next-turn":[]}
+$ session/updateQueue {…,"action":{"kind":"steer"}}       # again
+{"…","error":{"code":"session/steer-unavailable","message":"current turn no longer accepts steering","details":{"itemId":"req-queued"}}}
+$ session/updateQueue {…,"itemId":"req-gone","action":{"kind":"remove"}}
+{"…","error":{"code":"session/queue-item-not-found","message":"queued item is no longer pending","details":{"itemId":"req-gone"}}}
+$ session/updateQueue {…,"action":{"kind":"edit","content":[image]}}
+{"…","error":{"code":"session/attachment-invalid","message":"queue edits accept text content only","details":{"reason":"QUEUE_EDIT_NON_TEXT"}}}
+$ session/updateQueue {…,"action":{"kind":"edit","content":[text "   "]}}
+{"…","error":{"code":"gateway/bad-request","message":"queue edit content must include non-whitespace text","details":{}}}
+$ session/updateQueue {…,"action":{"kind":"reorder"}}
+{"…","error":{"code":"gateway/arguments-invalid","message":"\"action.kind\" must be \"edit\", \"remove\" or \"steer\"","details":{"kind":"reorder"}}}
+$ session/updateQueue {…,"itemId":"req-steer","action":{"kind":"remove"}}   # and then the turn is cancelled
+{"accepted": true}          →  control frame: projection inbox  inbox = {"next-step":[],"next-turn":[]}
+```
+
+The live run earned its keep: the production agent was missing the three new
+methods, so every queue operation answered `steer-unavailable` while the unit tests
+(which use stub agents) stayed green. `server/harnesshttp` now compiles
+`*zenforge.Agent` against the manager's own queue interface, so a missing wrapper is
+a build failure rather than a silent degradation.
+
+The ledger reads **48 served / 4 streams / 17 refused / 40 unserved** of 109.
+
+## Next: the skills read, and why the subagent cluster is larger
+
+The ledger's next-up item is now the cluster `skills/list`, `subagents/list`,
+`subagents/prompt`, `subagents/interruptByParent`. It is not one chain: the skills
+read is a projection of something this host already has, and the subagent methods
+describe a subsystem this host has never built. Sizing both, so the next window
+does not re-derive them.
+
+**`skills/list` is the small one, and it is closeable.** The console asks
+`{sessionId}` and expects `{skills: [{path?, name, description, whenToUse?,
+modelInvocable}]}` (the row's only required fields are `name`, `description` and
+`modelInvocable`). This host already has the plumbing: `skill.Catalog.List` returns
+`[]skill.Descriptor` (`{name, description, license, compatibility, metadata}`), the
+filesystem catalog (`skill/fs`) discovers them under a root, `skill.NewBundle`
+freezes them with an allowlist and renders the catalog prompt plus the `load_skill`
+tool, and the serve command can hold that bundle. Three decisions are the work: what
+`modelInvocable` means here (the honest answer is "listed in this session's allowlist
+and therefore loadable by the model", which the bundle already computes), where
+`path` comes from (the descriptor does not carry one today -- `Content.Provenance`
+does, so the catalog would have to expose the package directory it already knows),
+and `whenToUse` (this host's frontmatter has no such field, so it is omitted rather
+than invented). Nothing about the console's search or badges needs more.
+
+**The subagents cluster needs a child-session plane, not a route.** The console's
+three methods describe *live child agents of a parent session*:
+`list(parentSessionId) → {entries: [{kind: "child", id, activity: "running" |
+"inactive", hasChildren, mode: "one-shot" (+ optional label) | "continuable"}]}`,
+`prompt({requestId, parentSessionId, childSessionId, mode: "continuable",
+delivery: "queue" | "steer", content}) → {messageId}` (a later message to a
+continuable child), and `interruptByParent(childSessionId, parentSessionId,
+"continuable") → {accepted: true}` (three bare parameters, not an object). This
+host's subagent layer is a task orchestrator: `subagent.Orchestrator.Invoke` runs
+`SubAgentSpec`s from a `Registry` as *tasks inside the parent's own run*
+(`tools/task`), returning results -- there is no child session id, no activity
+state, no continuable child to prompt later, and no parent-addressed interrupt. So
+a chain that serves these has to decide first whether a child is a **session** this
+host can open and project: `session/page` already refuses the `subagent` address arm
+("this host serves top-level runs only"), and a console that lists children will
+click them. That is the chain to scope, and it is larger than the skills read.
+
+After those: `terminal/*` (an embedded terminal this host does not claim),
+`workspace/insertBefore` + `workspace/insertSessionBefore` (drag-to-reorder only),
+and the long tail (`messageFeedback/*`, `sessionFeedback/*`, `fileReferences/list`,
+`fileUploads/upload`, `officeToPdf/*`, `agentTeams/*`,
+`sessionReferenceResolver/candidates`, `dynamicCordisRunner/*`).
+
+**Carried debt from the queue chain.** The pending queue is process state, where
+upstream owns a durable inbox folded out of the session's events
+(`inboxProjectionDefinition` applies the splice events, which is why its cell can
+sit in the control baseline at all). Closing that here means queue, claim and clear
+events in the run's log plus a projection fold over them, so a queued message
+outlives its run and a restarted host can restore it. It is worth doing before the
+console grows any expectation that a queued message outlives its turn, and it is not
+a prerequisite for the skills read.
+
+Kickoff for the next window: read this file's newest section and
+`docs/dsh-console-coverage.md`, then build **`skills/list`** as one chain (ADR 0131)
+-- it is the item that needs no new plane.
+
 ## Shipped: a fork copies the source's completed turns (2026-09-22)
 
 `session/fork` is served (ADR 0129), so both console affordances work: the
@@ -615,7 +767,7 @@ $ session/fork {"sessionId":"run-missing"}
 The ledger reads **47 served / 4 streams / 17 refused / 41 unserved** of 109, and
 the next-up list is down to one item: `session/updateQueue`.
 
-## Next: the pending queue, the last item in next-up 1
+## Next at the time: the pending queue (shipped as ADR 0130, above)
 
 **`session/updateQueue`** edits the messages the console has queued for a
 conversation's next turn: `{sessionId, itemId, action}`, where the action union
@@ -669,7 +821,7 @@ and `docs/limitations.md` says plainly that the composer's attach affordance
 cannot work here and why (its older bullet listing "search, attachments" among the
 bare-404 namespaces was corrected: one is served, the other refused by name).
 
-## Next: the two session-management methods left, sized
+## Next at the time: the two session-management methods left, sized (both shipped)
 
 The ledger's next-up item is now `session/fork` then `session/updateQueue`, and
 both were surveyed while landing the attachment refusal, so the next window does

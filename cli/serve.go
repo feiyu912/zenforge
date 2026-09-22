@@ -531,6 +531,12 @@ func newServeApp(ctx context.Context, opts *options, ioStreams IO, config serveC
 		// feed, so the two cannot disagree about a commit.
 		Goals:       consoleGoalStore.Projection,
 		GoalUpdates: consoleGoalStore.Updates,
+		// The console's pending queue: the messages a prompt queued while a turn
+		// was running, in the `inbox` cell the queue rows and the submission-echo
+		// retirement read, and the change feed the control stream's frames ride
+		// (ADR 0130).
+		Queue:        console.PendingQueue,
+		QueueUpdates: console.PendingQueueUpdates,
 	})
 	if err != nil {
 		return nil, err

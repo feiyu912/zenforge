@@ -132,6 +132,11 @@ type Handler struct {
 	// goals is the injected goal store, installed by SetGoals after New.
 	goalsMu sync.RWMutex
 	goals   GoalStore
+
+	// queues is the pending queue's projection source: the run queue holds what
+	// has not been delivered, and this store reports it in the shape the console's
+	// `inbox` cell carries (ADR 0130).
+	queues *queueStore
 }
 
 // pendingSession is a session id allocated by session/create that has not
@@ -164,6 +169,7 @@ func New(manager *harnesshttp.RunManager, events eventlog.Store, cfg Config) (*H
 		cfg:          cfg,
 		modelDefault: cfg.ModelDefault,
 		pending:      make(map[string]pendingSession),
+		queues:       newQueueStore(manager),
 	}, nil
 }
 
@@ -370,6 +376,8 @@ func (h *Handler) method(endpoint string) (methodFunc, bool) {
 			return h.sessionAttachment, true
 		case "fork":
 			return h.sessionFork, true
+		case "updateQueue":
+			return h.sessionUpdateQueue, true
 		case "canOpenWorkspacePath":
 			return h.sessionCanOpenWorkspacePath, true
 		case "openWorkspacePath":

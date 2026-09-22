@@ -483,6 +483,17 @@ func recordEventType(t *testing.T, value map[string]json.RawMessage) string {
 
 // decodeValueObject decodes one raw JSON value into an object, failing the test
 // otherwise.
+// decodeValueList decodes one JSON array of raw values, for the cells whose value
+// is a list (the pending queue's two message lists).
+func decodeValueList(t *testing.T, raw json.RawMessage) []json.RawMessage {
+	t.Helper()
+	var values []json.RawMessage
+	if err := json.Unmarshal(raw, &values); err != nil {
+		t.Fatalf("decode value list %s: %v", raw, err)
+	}
+	return values
+}
+
 func decodeValueObject(t *testing.T, raw json.RawMessage) map[string]json.RawMessage {
 	t.Helper()
 	object, err := decodeJSONObject(raw)

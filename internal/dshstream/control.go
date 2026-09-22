@@ -13,12 +13,17 @@ import "context"
 //
 // The jobs map stays empty and is honest about it: harnesshttp.RunManager models
 // one run, not a per-session background-job list, and inventing rows would be a
-// lie the panel renders. The projections map carries what this host does have:
-// each session's durable model selection, which the model picker reads back
-// (`projected.next ?? catalog.default`). It deliberately does not carry the goal
-// cell even though the composer's goal dock renders one -- projectionBaseline
-// records why, and the cell travels with the session's own follow snapshot and
-// this stream's later frames instead. The stream stays open after the baseline
+// lie the panel renders. The queues map stays empty for a narrower reason: the
+// pending queue this host has is served as the `inbox` projection cell, which is
+// what the console's queue rows and its submission-echo retirement read
+// (dshstream/queue.go), while `queues` is a second, newer mirror of the same
+// rows that this host's pinned bundle never reads -- so it is left empty rather
+// than filled with a shape nothing here can verify. The projections map carries
+// what this host does have: each session's durable model selection, which the
+// model picker reads back (`projected.next ?? catalog.default`). It deliberately
+// does not carry the goal or queue cells even though the composer renders both --
+// projectionBaseline records why, and those cells travel with the session's own
+// follow snapshot and this stream's later frames instead. The stream stays open after the baseline
 // because the client treats an end after the baseline as a lost carrier and
 // retries; it ends only when the client cancels it or the socket closes.
 func (h *Handler) runControl(ctx context.Context, payload []byte, send func(any) error) error {
@@ -59,6 +64,16 @@ func (h *Handler) runControl(ctx context.Context, payload []byte, send func(any)
 				Key:       modelSelectionProjectionKey,
 				Value:     update.Projection,
 				Seq:       update.Seq,
+			})
+		}))
+	}
+	if h.cfg.QueueUpdates != nil {
+		unsubscribe = append(unsubscribe, h.cfg.QueueUpdates(func(update QueueUpdate) {
+			enqueue(projectionChange{
+				SessionID: update.SessionID,
+				Key:       inboxProjectionKey,
+				Value:     inboxCell(update.State),
+				Seq:       update.State.Seq,
 			})
 		}))
 	}

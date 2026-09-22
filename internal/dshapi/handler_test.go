@@ -54,7 +54,7 @@ type stubAgent struct {
 
 	mu     sync.Mutex
 	runs   map[string]*stubRun
-	steers []string
+	steers []harness.SteerState
 	// tasks records every task the manager started through this agent, in
 	// order, so a test can assert what a continuation run was actually handed
 	// (its run id, its input, and the messages it carries).
@@ -96,15 +96,61 @@ func (a *stubAgent) Resume(ctx context.Context, runID string) (<-chan zenforge.E
 }
 
 // Steer matches harnesshttp's steeringAgent shape so RunManager.Steer can use
-// this agent, and records the message for assertions.
+// this agent, and records the message for assertions. The queue operations are
+// the rest of that shape: the pending list is what the console's queue rows are
+// projected from, and the two mutations are what session/updateQueue applies.
 func (a *stubAgent) Steer(runID, steerID, message string) (harness.SteerState, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if _, ok := a.runs[runID]; !ok {
 		return harness.SteerState{}, false
 	}
-	a.steers = append(a.steers, message)
-	return harness.SteerState{ID: steerID, Message: message, CreatedAt: time.Now().UTC()}, true
+	if steerID == "" {
+		steerID = fmt.Sprintf("steer_%d", len(a.steers)+1)
+	}
+	steer := harness.SteerState{ID: steerID, Message: message, CreatedAt: time.Now().UTC()}
+	a.steers = append(a.steers, steer)
+	return steer, true
+}
+
+func (a *stubAgent) PendingSteers(runID string) []harness.SteerState {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if _, ok := a.runs[runID]; !ok {
+		return nil
+	}
+	return append([]harness.SteerState(nil), a.steers...)
+}
+
+func (a *stubAgent) ReplaceSteer(runID, steerID, message string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if _, ok := a.runs[runID]; !ok {
+		return false
+	}
+	for index := range a.steers {
+		if a.steers[index].ID == steerID {
+			a.steers[index].Message = message
+			return true
+		}
+	}
+	return false
+}
+
+func (a *stubAgent) RemoveSteer(runID, steerID string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if _, ok := a.runs[runID]; !ok {
+		return false
+	}
+	for index := range a.steers {
+		if a.steers[index].ID != steerID {
+			continue
+		}
+		a.steers = append(a.steers[:index], a.steers[index+1:]...)
+		return true
+	}
+	return false
 }
 
 func (a *stubAgent) finish(runID string) {
@@ -119,10 +165,22 @@ func (a *stubAgent) finish(runID string) {
 	run.close()
 }
 
+// drainSteers is the delivery the agent performs at a model-turn boundary: the
+// pending queue is emptied and the messages become durable conversation state.
+func (a *stubAgent) drainSteers() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.steers = nil
+}
+
 func (a *stubAgent) steered() []string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return append([]string(nil), a.steers...)
+	messages := make([]string, 0, len(a.steers))
+	for _, steer := range a.steers {
+		messages = append(messages, steer.Message)
+	}
+	return messages
 }
 
 type fixture struct {
