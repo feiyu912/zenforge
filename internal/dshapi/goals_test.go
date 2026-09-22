@@ -20,6 +20,13 @@ import (
 // as a runtime surprise.
 const goalRemotePath = "../../webui/dsh/plugins/api/remotes/client.js"
 
+// goalBundle is the vendored console's remote map, read through the generated
+// declaration of the goal package.
+func goalBundle(t *testing.T) vendoredBundle {
+	t.Helper()
+	return vendoredBundle{source: readSource(t, goalRemotePath), pkg: "@deepseek-ai/dsh-goal", ns: "goals"}
+}
+
 // The seven methods the goal domain exposes, in the order the reference declares
 // them.
 var goalMethods = []string{"clear", "complete", "create", "edit", "get", "pause", "resume"}
@@ -57,7 +64,7 @@ var goalViewKeys = []string{
 // the host and is refused as unknown is exactly the failure a schema-only check
 // cannot see.
 func TestGoalEnvelopesMatchTheVendoredConsole(t *testing.T) {
-	source := readSource(t, goalRemotePath)
+	console := goalBundle(t)
 	recipe := readSource(t, "goals.go")
 
 	// The ref object is shared by clear/complete/pause/resume parameters and
@@ -87,14 +94,14 @@ func TestGoalEnvelopesMatchTheVendoredConsole(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.method, func(t *testing.T) {
-			descriptor := goalDescriptor(t, source, tc.method)
-			wires := goalWireNames(t, descriptor, tc.method)
+			descriptor := console.descriptor(t, tc.method)
+			wires := console.wireNames(t, descriptor, tc.method)
 			if !sameStrings(wires, tc.wires) {
 				t.Fatalf("console wires = %v, want %v", wires, tc.wires)
 			}
 
 			// The result schema, and whether the method answers undefined.
-			result := goalSchemaExpression(t, source, tc.method, "result")
+			result := console.schemaExpression(t, tc.method, "result")
 			if keys := sortedKeys(topLevelKeys(t, result)); !sameStrings(keys, tc.resultKeys) {
 				t.Fatalf("%s result keys = %v, want %v", tc.method, keys, tc.resultKeys)
 			}
@@ -103,7 +110,7 @@ func TestGoalEnvelopesMatchTheVendoredConsole(t *testing.T) {
 			}
 
 			// The object parameters, in declaration order.
-			objects := goalObjectParameters(t, source, tc.method)
+			objects := console.objectParameters(t, tc.method)
 			wantObjects := 0
 			if tc.requestKeys != nil {
 				wantObjects++
@@ -144,7 +151,7 @@ func TestGoalEnvelopesMatchTheVendoredConsole(t *testing.T) {
 // and not declared there is a strict-mode rejection at the client, and a field
 // dropped here is one the dock renders as undefined.
 func TestGoalEnvelopeValuesMatchTheVendoredConsole(t *testing.T) {
-	source := readSource(t, goalRemotePath)
+	console := goalBundle(t)
 	view := GoalView{
 		ID:            "goal-1",
 		Revision:      2,
@@ -172,7 +179,7 @@ func TestGoalEnvelopeValuesMatchTheVendoredConsole(t *testing.T) {
 		{"resume", view},
 	} {
 		t.Run(tc.method, func(t *testing.T) {
-			want := sortedKeys(topLevelKeys(t, goalSchemaExpression(t, source, tc.method, "result")))
+			want := sortedKeys(topLevelKeys(t, console.schemaExpression(t, tc.method, "result")))
 			if got := sortedKeys(jsonKeys(t, tc.value)); !sameStrings(got, want) {
 				t.Fatalf("%s result keys = %v, want %v", tc.method, got, want)
 			}
@@ -190,7 +197,7 @@ func TestGoalEnvelopeValuesMatchTheVendoredConsole(t *testing.T) {
 		{"create", "parameter_1", CreateGoalRequest{Objective: "ship it", MaxGoalRounds: 8}},
 		{"edit", "parameter_2", EditGoalRequest{Objective: stringPointer("ship it"), MaxGoalRounds: intPointer(8)}},
 	} {
-		want := sortedKeys(topLevelKeys(t, goalSchemaExpression(t, source, tc.method, tc.parameter)))
+		want := sortedKeys(topLevelKeys(t, console.schemaExpression(t, tc.method, tc.parameter)))
 		if got := sortedKeys(jsonKeys(t, tc.value)); !sameStrings(got, want) {
 			t.Fatalf("%s request keys = %v, want %v", tc.method, got, want)
 		}
@@ -551,34 +558,60 @@ func readSource(t *testing.T, path string) string {
 	return string(content)
 }
 
-// goalDescriptor returns the slice of the generated remote map that declares one
-// goal method, from its id to the next descriptor.
-func goalDescriptor(t *testing.T, source, method string) string {
+// vendoredBundle reads one vendored client bundle's generated remote map. The
+// console's own declaration is the contract this host answers, so a family's
+// envelope test reads the shapes out of these bytes rather than restating them by
+// hand: a rename upstream fails a test here instead of reaching the page as a
+// strict-mode rejection (ADR 0099, ADR 0125).
+type vendoredBundle struct {
+	source string
+	// pkg is the declaring package id, e.g. "@deepseek-ai/dsh-goal".
+	pkg string
+	// ns is the method namespace, e.g. "goals" or "session".
+	ns string
+}
+
+// id is the method id as the client declares it, e.g. `@deepseek-ai/dsh-goal#goals/get`.
+func (b vendoredBundle) id(method string) string {
+	return b.pkg + "#" + b.ns + "/" + method
+}
+
+// symbol is the generated identifier of one parameter or result schema, e.g.
+// `_deepseek_ai_dsh_goal_goals_get_parameter_1`.
+func (b vendoredBundle) symbol(method, name string) string {
+	pkg := strings.NewReplacer("@deepseek-ai/", "", "-", "_").Replace(b.pkg)
+	return "_deepseek_ai_" + pkg + "_" + b.ns + "_" + method + "_" + name
+}
+
+// descriptor returns the slice of the generated remote map that declares one
+// method, from its id to the next descriptor.
+func (b vendoredBundle) descriptor(t *testing.T, method string) string {
 	t.Helper()
-	marker := fmt.Sprintf(`id: "@deepseek-ai/dsh-goal#goals/%s"`, method)
-	start := strings.Index(source, marker)
+	marker := fmt.Sprintf("id: %q", b.id(method))
+	start := strings.Index(b.source, marker)
 	if start < 0 {
-		t.Fatalf("the console declares no goals/%s", method)
+		t.Fatalf("the console declares no %s", b.id(method))
 	}
-	rest := source[start+len(marker):]
-	// The next descriptor is the end of this one, whoever declares it: the goal
-	// package is not last in the generated map.
+	rest := b.source[start+len(marker):]
+	// The next descriptor is the end of this one, whoever declares it: a package
+	// is not last in the generated map.
 	if end := strings.Index(rest, `id: "`); end >= 0 {
 		return rest[:end]
 	}
 	return rest
 }
 
-// goalWireNames reads the parameter wire names of one descriptor, in order.
-func goalWireNames(t *testing.T, descriptor, method string) []string {
+// wireNames reads the parameter wire names of one descriptor, in order. A scope
+// block (the goal package's agent wire) names an argument once more than the
+// parameter list does; dropping it leaves exactly the parameters the client
+// sends.
+func (b vendoredBundle) wireNames(t *testing.T, descriptor, method string) []string {
 	t.Helper()
-	// The scope block names the agent wire once more than the parameter list
-	// does; dropping it leaves exactly the parameters the client sends.
 	descriptor = regexp.MustCompile(`(?s)scope: \{[^}]*\}`).ReplaceAllString(descriptor, "")
 	pattern := regexp.MustCompile(`wire: "([^"]+)"`)
 	matches := pattern.FindAllStringSubmatch(descriptor, -1)
 	if len(matches) == 0 {
-		t.Fatalf("goals/%s declares no parameter wire names", method)
+		t.Fatalf("%s declares no parameter wire names", b.id(method))
 	}
 	names := make([]string, 0, len(matches))
 	for _, match := range matches {
@@ -587,19 +620,19 @@ func goalWireNames(t *testing.T, descriptor, method string) []string {
 	return names
 }
 
-// goalSchemaExpression returns the generated schema expression for one method's
+// schemaExpression returns the generated schema expression for one method's
 // parameter or result, e.g. `parameter_1`.
-func goalSchemaExpression(t *testing.T, source, method, name string) string {
+func (b vendoredBundle) schemaExpression(t *testing.T, method, name string) string {
 	t.Helper()
-	marker := fmt.Sprintf("const _deepseek_ai_dsh_goal_goals_%s_%s$schema = () =>", method, name)
-	start := strings.Index(source, marker)
+	marker := fmt.Sprintf("const %s$schema = () =>", b.symbol(method, name))
+	start := strings.Index(b.source, marker)
 	if start < 0 {
-		t.Fatalf("the console declares no schema %s for goals/%s", name, method)
+		t.Fatalf("the console declares no schema %s for %s", name, b.id(method))
 	}
-	rest := source[start:]
+	rest := b.source[start:]
 	assign := strings.Index(rest, "??=")
 	if assign < 0 {
-		t.Fatalf("schema %s for goals/%s has no assignment", name, method)
+		t.Fatalf("schema %s for %s has no assignment", name, b.id(method))
 	}
 	depth := 0
 	for i := assign; i < len(rest); i++ {
@@ -614,23 +647,22 @@ func goalSchemaExpression(t *testing.T, source, method, name string) string {
 			}
 		}
 	}
-	t.Fatalf("schema %s for goals/%s has no terminator", name, method)
+	t.Fatalf("schema %s for %s has no terminator", name, b.id(method))
 	return ""
 }
 
-// goalObjectParameters returns the top-level keys of every object literal
-// declared in the parameter schemas of one method, in declaration order. A
-// parameter that is not an object (the scoped session id) contributes nothing.
-func goalObjectParameters(t *testing.T, source, method string) [][]string {
+// objectParameters returns the top-level keys of every object literal declared in
+// the parameter schemas of one method, in declaration order. A parameter that is
+// not an object (a bare session id) contributes nothing.
+func (b vendoredBundle) objectParameters(t *testing.T, method string) [][]string {
 	t.Helper()
 	var objects [][]string
 	for index := 0; index < 8; index++ {
 		name := fmt.Sprintf("parameter_%d", index)
-		marker := fmt.Sprintf("const _deepseek_ai_dsh_goal_goals_%s_%s$schema = () =>", method, name)
-		if !strings.Contains(source, marker) {
+		if !strings.Contains(b.source, fmt.Sprintf("const %s$schema = () =>", b.symbol(method, name))) {
 			break
 		}
-		expression := goalSchemaExpression(t, source, method, name)
+		expression := b.schemaExpression(t, method, name)
 		if keys := topLevelKeys(t, expression); len(keys) > 0 {
 			objects = append(objects, keys)
 		}

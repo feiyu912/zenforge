@@ -26,16 +26,16 @@ methods are the remaining work, in priority order at the end of this page.
 
 ## Summary
 
-This host answers **44** of the client's **109** methods, mounts
-**4** of them as logical streams, refuses **15** by name, and
-does not serve the remaining **46**.
+This host answers **45** of the client's **109** methods, mounts
+**4** of them as logical streams, refuses **16** by name, and
+does not serve the remaining **44**.
 
 | State | Count |
 | --- | --- |
-| served | 44 |
+| served | 45 |
 | stream | 4 |
-| refused | 15 |
-| unserved | 46 |
+| refused | 16 |
+| unserved | 44 |
 | **client methods total** | **109** |
 
 The WebSocket mux also mounts `$events`, which is not part of the client's
@@ -68,6 +68,7 @@ attach the prompt to the session it has open (ADR 0115).
 | `llm/listProviders` | served | The registered provider routes. |
 | `permissionPresets/catalog` | served | The permission presets the host's own settings offer. |
 | `pluginInventory/list` | served | The console bundles and plugins this host ships. |
+| `session/canOpenWorkspacePath` | served | Whether this host can hand a workspace path to a native desktop: `false`, as the reference's own bare boolean, because this host serves the browser carrier and implements no desktop carrier (ADR 0126). |
 | `session/cancel` | served | Stop the conversation's newest turn. The console names the session it has open (the first turn's id) while a multi-turn conversation runs `<session>~<k>`, so cancel resolves the chain ADR 0108 already builds and cancels the newest turn, accepting it idempotently and answering a conflict that names the turn it refused (ADR 0113). |
 | `session/create` | served | Create a session. It exists before its first turn: its history is empty, not missing (ADR 0104). |
 | `session/list` | served | List sessions. The list is the host's durable run registry, so it survives a restart and does not expire at the terminal retention; a record whose run never wrote an event is omitted because the console cannot open it (ADR 0109). A planning session is listed by the operator's own task; the plan-execute preset's appended instruction never reaches the title (ADR 0106). |
@@ -111,6 +112,7 @@ attach the prompt to the session it has open (ADR 0115).
 | `pluginManager/removeBundle` | refused | this host ships a fixed set of console bundles and has no loader, so it cannot install, enable, disable or remove a plugin |
 | `pluginManager/setBundleEnabled` | refused | this host ships a fixed set of console bundles and has no loader, so it cannot install, enable, disable or remove a plugin |
 | `pluginManager/setPluginEnabled` | refused | this host ships a fixed set of console bundles and has no loader, so it cannot install, enable, disable or remove a plugin |
+| `session/openWorkspacePath` | refused | this host serves the console in a browser and has no desktop carrier to open a path on; workspaceFiles/list and workspaceFiles/read show a file inside the session instead |
 | `settings/openAgentPresetDirectory` | refused | this host has no native editor to open a settings document or a preset directory in; configure the host with --base-url, --model, --api-key or the settings panel instead |
 | `settings/openSettingsDocument` | refused | this host has no native editor to open a settings document or a preset directory in; configure the host with --base-url, --model, --api-key or the settings panel instead |
 | `workspaceFiles/changes` | stream | The subscription a file resource opens before it stats anything: the `ready` frame unblocks the tab, and this host sends no `change` frames because it watches no files (ADR 0120). |
@@ -143,9 +145,7 @@ attach the prompt to the session it has open (ADR 0115).
 | `officeToPdf/generation` | unserved | no document conversion in this host |
 | `officeToPdf/render` | unserved | no document conversion in this host |
 | `session/attachment` | unserved | no attachment store |
-| `session/canOpenWorkspacePath` | unserved | workspace opening is not wired |
 | `session/fork` | unserved | no session fork |
-| `session/openWorkspacePath` | unserved | workspace opening is not wired |
 | `session/search` | unserved | no session search |
 | `session/updateQueue` | unserved | no queue editing |
 | `sessionFeedback/record` | unserved | no session-feedback store |
@@ -176,18 +176,16 @@ live `zenforge serve` whose boot graph and every advertised bundle were fetched.
 that has shipped is removed rather than left to mislead the next window; the gaps below are
 in the order they block the page, from what the console asks first.
 
-1. **`session/openWorkspacePath`, `session/canOpenWorkspacePath`** — opening a
-   workspace into a session, the other half of selection.
-2. **`session/search`, `session/fork`, `session/attachment`, `session/updateQueue`**
+1. **`session/search`, `session/fork`, `session/attachment`, `session/updateQueue`**
    — session management the sidebar offers.
-3. **`skills/list`, `subagents/list`, `subagents/prompt`, `subagents/interruptByParent`**
+2. **`skills/list`, `subagents/list`, `subagents/prompt`, `subagents/interruptByParent`**
    — framework features that are not exposed to the console yet.
-4. **`terminal/*`** — an embedded terminal, which this host does not claim.
-5. **`workspace/insertBefore`, `workspace/insertSessionBefore`** — the manual
+3. **`terminal/*`** — an embedded terminal, which this host does not claim.
+4. **`workspace/insertBefore`, `workspace/insertSessionBefore`** — the manual
    row order inside the workspace list. Registrations, titles, deletion and the
    archived set are served (ADR 0101); only the drag-to-reorder mutations are
    left.
-6. **`messageFeedback/*`, `sessionFeedback/*`, `fileReferences/list`,
+5. **`messageFeedback/*`, `sessionFeedback/*`, `fileReferences/list`,
    `fileUploads/upload`, `officeToPdf/*`, `agentTeams/*`, `sessionReferenceResolver/candidates`,
    `dynamicCordisRunner/*`** — page features with no host-side counterpart yet.
 

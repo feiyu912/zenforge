@@ -609,3 +609,19 @@ honest gaps remain in that panel:
   not run the framework's goal-continuation loop, so the bar reports eligibility
   rather than a live scheduler, and a goal does not continue by itself under
   `zenforge serve`; `zenforge goal` is the surface that iterates one.
+
+## The host has no desktop to open a path on
+
+The console declares two methods about the **machine serving it**: one asks
+whether this deployment can hand a workspace path to the operating system's file
+manager, and the other does it (`action: "reveal"` for a file-manager reveal,
+omission for the default application). This host serves the console in a browser
+and implements no desktop carrier -- the protocol recon listed the desktop bridge
+as an explicit non-goal -- so the question is answered `false` and the operation
+is refused by name, with the substitute named in the refusal (ADR 0126). In
+practice there is no "reveal in Finder" or "open in the default application"
+affordance behind the console, and a workspace file is looked at in the console's
+own file browser (`workspaceFiles/list`, `workspaceFiles/read`) instead. Nothing
+in the shipped page calls either method, so no visible control is lost; a
+deployment that ships a desktop carrier is what would flip the answer and make
+the open real.

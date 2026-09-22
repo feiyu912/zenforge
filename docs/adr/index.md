@@ -154,3 +154,4 @@ and what the adapter answers today is
 | [0123](0123-the-prompt-cards-the-console-renders.md) | The prompt cards the console renders |
 | [0124](0124-the-chunks-and-errors-the-console-reads-off-a-stream.md) | The chunks and errors the console reads off a stream |
 | [0125](0125-the-goal-dock-reads-the-frameworks-goal-state.md) | The goal dock reads and mutates the framework's goal state |
+| [0126](0126-a-desktop-capability-is-answered-not-built.md) | A desktop capability is answered, not built |

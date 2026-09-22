@@ -364,6 +364,10 @@ func (h *Handler) method(endpoint string) (methodFunc, bool) {
 			return h.sessionModelCatalog, true
 		case "selectModel":
 			return h.sessionSelectModel, true
+		case "canOpenWorkspacePath":
+			return h.sessionCanOpenWorkspacePath, true
+		case "openWorkspacePath":
+			return h.sessionOpenWorkspacePath, true
 		}
 	case "goals":
 		switch name {

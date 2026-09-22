@@ -546,6 +546,67 @@ wrote an event is omitted, because `session/page` answers not-found for it; and 
 log has no terminal event is recorded as cancelled when it is adopted. Drafts stay
 process-local (ADR 0104).
 
+## Shipped: the desktop question is answered, the open refused (2026-09-22)
+
+`session/canOpenWorkspacePath` and `session/openWorkspacePath` are routed
+(ADR 0126), which closes the ledger's next-up item 1 -- but not the way that item
+described it. The prose read the pair as "opening a workspace into a session, the
+other half of selection", and the reference says they are about the **machine
+serving the console**: `canOpenWorkspacePath()` is "Report whether this deployment
+can hand a Session workspace path to a native desktop", and `openWorkspacePath`
+opens a path *on the Host desktop*, with `action: "reveal"` for a file-manager
+reveal and omission for the default application. The caller upstream is the
+desktop carrier (`dshDesktopBoot`), which the protocol recon had already listed as
+an explicit non-goal, and no bundle in our pinned client calls either method. So
+the honest answer is split: a capability **question** is answered, and an
+**operation** this host cannot perform is refused by name.
+
+The probe answers `false` as a bare JSON boolean. The declared result is
+`boolean()`, not an object, and a caller branches on it -- an `unimplemented`
+error would read as "this host is broken" instead of "this host has no desktop",
+which is the difference between a disabled affordance and a failed page. The
+operation answers `unimplemented` with the missing capability in its details and
+one sentence naming the reason *and* the substitute:
+`workspaceFiles/list`/`workspaceFiles/read` show a file inside the session. Its
+declared request fields (`path`, `action`) are validated *before* the refusal so a
+typo is still reported as a typo, while a **valid** request is refused too: what is
+missing is the desktop, not an argument.
+
+No opener was built, and that is the decision rather than an unfinished edge.
+Serving it would spawn a native file manager (`open -R`, `explorer /select,`,
+`xdg-open`) from the host process on behalf of any page that can reach the
+loopback API -- a side effect on the operator's own machine, for a method with no
+caller in the pinned bundle and no desktop carrier in this deployment. If a
+desktop carrier is ever shipped, the probe flips to `true` and the operation is
+implemented in the same change.
+
+Live evidence on a scratch host (`--addr 127.0.0.1:8801`, throwaway
+`--checkpoint-dir`/`--settings-file`):
+
+```
+$ curl -s -X POST http://127.0.0.1:8801/api/session/canOpenWorkspacePath -d …args {}…
+{"type":"server-response","rpcId":"p","result":{"ok":true,"value":false}}
+$ curl -s -X POST http://127.0.0.1:8801/api/session/openWorkspacePath -d …args {"path":"…/ws","action":"reveal"}…
+{"…","result":{"ok":false,"error":{"code":"unimplemented","message":"this host serves the
+console in a browser and has no desktop carrier to open a path on; workspaceFiles/list and
+workspaceFiles/read show a file inside the session instead",
+"details":{"capability":"a desktop carrier to open a path on"}}}}
+$ curl -s -X POST http://127.0.0.1:8801/api/session/openWorkspacePath -d …args {"path":"…/ws","reveal":true}…
+{"…","error":{"code":"gateway/arguments-invalid","message":"unexpected argument \"reveal\""…}}
+```
+
+The request splice (`{"request":{…}}`) and the flat form both reach the same
+refusal, because `unwrapRequestArguments` flattens the object and drops the
+wrapper. The ledger now reads **45 served / 4 streams / 16 refused / 44 unserved**
+of 109, and its next-up list starts at `session/search`, `session/fork`,
+`session/attachment`, `session/updateQueue`.
+
+One piece of machinery was generalized while pinning these envelopes: the
+bundle-truth readers that used to live in the goal tests are now a
+`vendoredBundle` (source, package, namespace), so both families read the same
+generated remote map in `webui/dsh/plugins/api/remotes/client.js` instead of two
+hand-copied parsers. What the goal tests assert did not change.
+
 ## Shipped: the goal dock reads the framework's goal state (2026-09-22)
 
 The seven `goals/*` methods, the `goal` projection cell and
@@ -974,9 +1035,11 @@ serves `qwen-plus`, and the card shows only what is written on it.
 > boundaries are projected (ADR 0121), the built-in provider routes are editable cards
 > (ADR 0122), the prompt cards render (ADR 0123), the stream carries the usage and finish
 > chunks and answers a cancelled run's open tool calls (ADR 0124), and the goal dock reads
-> and mutates the framework's durable goal state (ADR 0125). The next chain is still
-> "Next up" 1 in the ledger: `session/openWorkspacePath` and
-> `session/canOpenWorkspacePath`, opening a workspace into a session. If a scratch host is
+> and mutates the framework's durable goal state (ADR 0125), and the console's
+> desktop question is answered `false` while the desktop open is refused by name because
+> this host implements no desktop carrier (ADR 0126). The next chain is "Next up" 1 in the
+> ledger: `session/search`, `session/fork`, `session/attachment` and
+> `session/updateQueue`, the session management the sidebar offers. If a scratch host is
 > needed, give it `ZENFORGE_CONFIG_DIR` or `--settings-file` under a throwaway directory so
 > it cannot rewrite the operator's document, and its own `--checkpoint-dir` too, because the
 > event store and the run registry are derived from it: a scratch host started in `/tmp`
