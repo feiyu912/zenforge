@@ -104,6 +104,10 @@ type Handler struct {
 	commandsMu sync.RWMutex
 	commands   CommandSource
 
+	// skills is the injected skill catalog, installed by SetSkills after New.
+	skillsMu sync.RWMutex
+	skills   SkillSource
+
 	// plugins is the injected plugin inventory, installed by SetPluginInventory
 	// after New.
 	pluginsMu sync.RWMutex
@@ -382,6 +386,11 @@ func (h *Handler) method(endpoint string) (methodFunc, bool) {
 			return h.sessionCanOpenWorkspacePath, true
 		case "openWorkspacePath":
 			return h.sessionOpenWorkspacePath, true
+		}
+	case "skills":
+		switch name {
+		case "list":
+			return h.sessionSkills, true
 		}
 	case "goals":
 		switch name {

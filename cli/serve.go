@@ -502,6 +502,9 @@ func newServeApp(ctx context.Context, opts *options, ioStreams IO, config serveC
 		Commands:         consoleCommandCatalog(opts),
 		Workspaces:       workspaceRegistry,
 		Goals:            consoleGoalStore,
+		// The skills panel reads the same catalog the runs advertise (ADR 0131),
+		// so the panel cannot list a skill the agent would not be able to load.
+		Skills: consoleSkillCatalog(*opts),
 	})
 	if err != nil {
 		return nil, err

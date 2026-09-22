@@ -85,6 +85,10 @@ type Config struct {
 	// Goals answers the console's goal dock: the seven goals/* methods. Without
 	// it the namespace answers unimplemented and the dock never appears.
 	Goals dshapi.GoalStore
+	// Skills answers the console's skills panel. Without it the namespace answers
+	// unimplemented, which is the honest answer for a host whose serve command
+	// installed no skill catalog.
+	Skills dshapi.SkillSource
 }
 
 // Mux is the assembled console host. It is immutable after New, which is what
@@ -147,6 +151,9 @@ func New(manager *harnesshttp.RunManager, events eventlog.Store, cfg Config) (*M
 	}
 	if cfg.Goals != nil {
 		api.SetGoals(cfg.Goals)
+	}
+	if cfg.Skills != nil {
+		api.SetSkills(cfg.Skills)
 	}
 	if cfg.WorkspaceFiles != nil {
 		api.SetWorkspaceFiles(cfg.WorkspaceFiles)

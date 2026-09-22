@@ -272,6 +272,7 @@ nav:
       - 0128 The attachment read is refused: adr/0128-the-attachment-read-is-refused.md
       - 0129 A fork copies the source's completed turns: adr/0129-a-fork-copies-the-sources-completed-turns.md
       - 0130 The pending queue is the console's inbox cell: adr/0130-the-pending-queue-is-the-consoles-inbox-cell.md
+      - 0131 The skill catalog is one catalog: adr/0131-the-skill-catalog-is-one-catalog.md
 
 extra:
   social:

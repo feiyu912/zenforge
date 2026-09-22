@@ -23,6 +23,10 @@ import (
 var validName = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 
 // Options controls filesystem catalog validation.
+// DefaultDir is where skill packages live relative to a workspace: the directory
+// whose immediate children each hold a SKILL.md.
+const DefaultDir = ".zenforge/skills"
+
 type Options struct {
 	Source                string
 	MaxContentBytes       int64
@@ -425,6 +429,7 @@ func parseFrontmatter(raw []byte) (skill.Descriptor, error) {
 		return skill.Descriptor{}, errors.New("missing opening frontmatter delimiter")
 	}
 	values := make(map[string]string)
+	flags := make(map[string]bool)
 	metadata := make(map[string]any)
 	seen := make(map[string]struct{})
 	metadataSeen := make(map[string]struct{})
@@ -467,9 +472,23 @@ func parseFrontmatter(raw []byte) (skill.Descriptor, error) {
 		if hasControl(value) {
 			return skill.Descriptor{}, fmt.Errorf("control character in %q", key)
 		}
+		// Upstream renamed these keys, and it refuses the old spellings rather
+		// than guessing which half of a skill's policy the author meant. A file
+		// written for the older spelling fails here the same way it fails there.
+		if canonical, legacy := legacyInvocationKey(key); legacy {
+			return skill.Descriptor{}, fmt.Errorf("frontmatter field %q is unsupported; use %q", key, canonical)
+		}
 		switch key {
 		case "name", "license", "compatibility":
 			values[key] = value
+		case "whenToUse":
+			values[key] = value
+		case "disable-model-invocation", "user-invocable":
+			flag, err := frontmatterBool(value)
+			if err != nil {
+				return skill.Descriptor{}, fmt.Errorf("frontmatter field %q %w", key, err)
+			}
+			flags[key] = flag
 		case "description":
 			if value == "|" || value == ">" || value == "|-" || value == ">-" || value == "|+" || value == ">+" {
 				return skill.Descriptor{}, errors.New("multiline description is not supported")
@@ -494,8 +513,42 @@ func parseFrontmatter(raw []byte) (skill.Descriptor, error) {
 	}
 	return skill.Descriptor{
 		Name: values["name"], Description: values["description"],
-		License: values["license"], Compatibility: values["compatibility"], Metadata: metadata,
+		WhenToUse:              values["whenToUse"],
+		DisableModelInvocation: flags["disable-model-invocation"],
+		DisableUserInvocation:  hasKey(flags, "user-invocable") && !flags["user-invocable"],
+		License:                values["license"], Compatibility: values["compatibility"], Metadata: metadata,
 	}, nil
+}
+
+// legacyInvocationKey maps the invocation spellings upstream renamed to the ones
+// it accepts now.
+func legacyInvocationKey(key string) (string, bool) {
+	switch key {
+	case "disableModelInvocation", "modelInvocable":
+		return "disable-model-invocation", true
+	case "userInvocable":
+		return "user-invocable", true
+	}
+	return "", false
+}
+
+// hasKey reports whether a frontmatter boolean was written at all, so that an
+// absent field keeps the upstream default instead of the map's zero value.
+func hasKey(flags map[string]bool, key string) bool {
+	_, ok := flags[key]
+	return ok
+}
+
+// frontmatterBool reads a YAML boolean the way upstream does: the two words, and
+// the two digits, and nothing else.
+func frontmatterBool(value string) (bool, error) {
+	switch value {
+	case "true", "1":
+		return true, nil
+	case "false", "0":
+		return false, nil
+	}
+	return false, errors.New("must be a boolean")
 }
 
 func parseDocument(raw []byte) (skill.Descriptor, string, error) {

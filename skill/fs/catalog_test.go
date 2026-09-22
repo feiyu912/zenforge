@@ -464,3 +464,103 @@ func TestCatalogUnknownSkill(t *testing.T) {
 		t.Fatalf("error=%v, want ErrNotFound", err)
 	}
 }
+
+// A skill's own routing guidance and invocation policy are part of the frontmatter
+// upstream reads, so the same file works here: the guidance travels on the
+// descriptor, and the two policies keep upstream's defaults when they are absent.
+func TestCatalogReadsGuidanceAndInvocationPolicy(t *testing.T) {
+	root := t.TempDir()
+	writeFrontmatterSkill(t, root, "guided", "name: guided\ndescription: how to guide\nwhenToUse: when the question is about routing")
+	writeFrontmatterSkill(t, root, "hidden", "name: hidden\ndescription: hidden from the model\ndisable-model-invocation: true")
+	writeFrontmatterSkill(t, root, "operator-only", "name: operator-only\ndescription: not for the operator\nuser-invocable: false")
+	writeFrontmatterSkill(t, root, "digit", "name: digit\ndescription: written with digits\ndisable-model-invocation: 1\nuser-invocable: 1")
+	writeFrontmatterSkill(t, root, "plain", "name: plain\ndescription: no policy at all")
+
+	catalog, err := New(root, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := catalog.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := make(map[string]skill.Descriptor, len(items))
+	for _, item := range items {
+		byName[item.Name] = item
+	}
+	if got := byName["guided"].WhenToUse; got != "when the question is about routing" {
+		t.Fatalf("whenToUse = %q, want the frontmatter's guidance", got)
+	}
+	if !byName["hidden"].DisableModelInvocation || byName["hidden"].DisableUserInvocation {
+		t.Fatalf("hidden = %+v, want the model alone excluded", byName["hidden"])
+	}
+	if !byName["operator-only"].DisableUserInvocation || byName["operator-only"].DisableModelInvocation {
+		t.Fatalf("operator-only = %+v, want the operator alone excluded", byName["operator-only"])
+	}
+	if !byName["digit"].DisableModelInvocation || byName["digit"].DisableUserInvocation {
+		t.Fatalf("digit = %+v, want the digit spellings read as booleans", byName["digit"])
+	}
+	plain := byName["plain"]
+	if plain.WhenToUse != "" || plain.DisableModelInvocation || plain.DisableUserInvocation {
+		t.Fatalf("plain = %+v, want upstream's defaults", plain)
+	}
+}
+
+// The older camelCase spellings are refused rather than guessed at, with
+// upstream's own sentence: a half-read policy would silently advertise a skill
+// the author asked to hide.
+func TestCatalogRefusesTheLegacyInvocationSpellings(t *testing.T) {
+	tests := []struct {
+		field     string
+		canonical string
+	}{
+		{"disableModelInvocation", "disable-model-invocation"},
+		{"modelInvocable", "disable-model-invocation"},
+		{"userInvocable", "user-invocable"},
+	}
+	for _, test := range tests {
+		t.Run(test.field, func(t *testing.T) {
+			root := t.TempDir()
+			writeFrontmatterSkill(t, root, "legacy", "name: legacy\ndescription: old spelling\n"+test.field+": true")
+			catalog, err := New(root, Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = catalog.List(context.Background())
+			if err == nil {
+				t.Fatalf("list = nil error, want the %q refusal", test.field)
+			}
+			want := "frontmatter field \"" + test.field + "\" is unsupported; use \"" + test.canonical + "\""
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("error = %v, want %q", err, want)
+			}
+		})
+	}
+}
+
+// A policy field that is not a boolean is a malformed skill, not a skill whose
+// policy is silently defaulted.
+func TestCatalogRejectsNonBooleanPolicy(t *testing.T) {
+	root := t.TempDir()
+	writeFrontmatterSkill(t, root, "maybe", "name: maybe\ndescription: hedging\ndisable-model-invocation: perhaps")
+	catalog, err := New(root, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := catalog.List(context.Background()); !errors.Is(err, skill.ErrInvalid) {
+		t.Fatalf("error=%v, want ErrInvalid", err)
+	}
+}
+
+// writeFrontmatterSkill writes one skill whose frontmatter is given verbatim.
+func writeFrontmatterSkill(t *testing.T, root, name, frontmatter string) {
+	t.Helper()
+	dir := filepath.Join(root, name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	raw := "---\n" + frontmatter + "\n---\nbody"
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}

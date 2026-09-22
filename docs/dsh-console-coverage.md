@@ -28,14 +28,14 @@ methods are the remaining work, in priority order at the end of this page.
 
 This host answers **47** of the client's **109** methods, mounts
 **4** of them as logical streams, refuses **17** by name, and
-does not serve the remaining **40**.
+does not serve the remaining **39**.
 
 | State | Count |
 | --- | --- |
-| served | 48 |
+| served | 49 |
 | stream | 4 |
 | refused | 17 |
-| unserved | 40 |
+| unserved | 39 |
 | **client methods total** | **109** |
 
 The WebSocket mux also mounts `$events`, which is not part of the client's
@@ -85,6 +85,7 @@ attach the prompt to the session it has open (ADR 0115).
 | `settings/mutate` | served | Apply settings operations. |
 | `settings/replace` | served | Replace a settings value. |
 | `settings/update` | served | Update a settings value. |
+| `skills/list` | served | The skills an operator may invoke in a conversation, read from this host's skill catalog: the workspace's own `.zenforge/skills` and the per-user directory, with the workspace layer winning by name (ADR 0131). Each row carries the skill's name, its description and the routing guidance the skill declares, plus whether the model may pick it up on its own -- a skill hidden from the model stays listed with that badge, while the model-facing catalog and loader leave it out. The catalog is read per request, so a package dropped in while the host runs appears without a restart, and the session named in the request is validated first, because the panel is per conversation. | |
 | `workspace/archiveSession` | served | Move a session into a workspace's archived list. |
 | `workspace/create` | served | Register a directory as a workspace. |
 | `workspace/delete` | served | Remove a registration; the host's own workspace is refused by name. |
@@ -150,7 +151,6 @@ attach the prompt to the session it has open (ADR 0115).
 | `officeToPdf/render` | unserved | no document conversion in this host |
 | `sessionFeedback/record` | unserved | no session-feedback store |
 | `sessionReferenceResolver/candidates` | unserved | no reference resolver |
-| `skills/list` | unserved | no skill listing exposed to the console |
 | `subagents/interruptByParent` | unserved | subagent tools exist in the framework, not exposed here |
 | `subagents/list` | unserved | subagent tools exist in the framework, not exposed here |
 | `subagents/prompt` | unserved | subagent tools exist in the framework, not exposed here |
@@ -176,9 +176,13 @@ live `zenforge serve` whose boot graph and every advertised bundle were fetched.
 that has shipped is removed rather than left to mislead the next window; the gaps below are
 in the order they block the page, from what the console asks first.
 
-1. **`skills/list`, `subagents/list`, `subagents/prompt`, `subagents/interruptByParent`**
-   — framework features that are not exposed to the console yet.
-2. **`terminal/*`** — an embedded terminal, which this host does not claim.
+1. **`subagents/list`, `subagents/prompt`, `subagents/interruptByParent`**
+   — live child sessions of a parent conversation: this host runs subagents as
+   tasks inside the parent's own run, so the three need a child-session plane
+   before they mean anything.
+2. **`terminal/*`** — an embedded terminal, which this host does not claim: the
+   job manager runs a command under a PTY, but there is no attachment layer, no
+   runtime resize, no screen model for `follow` and no shell discovery.
 3. **`workspace/insertBefore`, `workspace/insertSessionBefore`** — the manual
    row order inside the workspace list. Registrations, titles, deletion and the
    archived set are served (ADR 0101); only the drag-to-reorder mutations are

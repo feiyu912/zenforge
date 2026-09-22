@@ -29,6 +29,11 @@ type configFile struct {
 	// workspace directory stays flag-only so a checked-in `.zenforge/commands`
 	// need not be restated in configuration.
 	Commands *commandsConfig `json:"commands,omitempty"`
+	// Skills declares where skill packages are discovered outside the
+	// workspace, with the same rule as Commands: the per-user directory is
+	// opt-in, and the workspace directory stays flag-only so a checked-in
+	// `.zenforge/skills` need not be restated in configuration.
+	Skills *skillsConfig `json:"skills,omitempty"`
 	// MCPServers declares the MCP servers this client starts over stdio and
 	// exposes as namespaced tools. It is always present in the generated
 	// default file (as an empty object) so the key is discoverable.
@@ -202,6 +207,14 @@ type approvalConfig struct {
 type checkpointConfig struct {
 	Type string `json:"type,omitempty"`
 	Path string `json:"path,omitempty"`
+}
+
+// skillsConfig declares skill discovery outside the workspace.
+type skillsConfig struct {
+	// UserDir is the per-user skill directory available in every workspace.
+	// Empty uses <user config dir>/zenforge/skills; a workspace skill of the
+	// same name still wins.
+	UserDir string `json:"userDir,omitempty"`
 }
 
 // commandsConfig declares command discovery outside the workspace.
@@ -421,6 +434,11 @@ func applyConfig(opts *options, config configFile) error {
 	if config.Commands != nil {
 		if userDir := strings.TrimSpace(config.Commands.UserDir); userDir != "" {
 			opts.userCommandsDir = userDir
+		}
+	}
+	if config.Skills != nil {
+		if userDir := strings.TrimSpace(config.Skills.UserDir); userDir != "" {
+			opts.userSkillsDir = userDir
 		}
 	}
 	if config.Shell.WorkingDir != "" {

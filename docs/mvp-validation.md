@@ -311,6 +311,10 @@ rg -n '"[^"[:space:]]*agent-platform[^"[:space:]]*"' --glob "*.go" .
 | Requirement | Evidence |
 | --- | --- |
 | filesystem catalogs validate real `SKILL.md` packages | `skill/fs` package tests |
+| upstream's invocation policy (`disable-model-invocation`, `user-invocable`) and guidance (`whenToUse`) are read from frontmatter, and the retired camelCase spellings are refused with upstream's sentence | `TestCatalogReadsGuidanceAndInvocationPolicy`, `TestCatalogRefusesTheLegacyInvocationSpellings`, `TestCatalogRejectsNonBooleanPolicy` |
+| a bundle is the model-facing view: a model-hidden skill is absent from the catalog prompt and from `load_skill`, while the catalog still carries it | `TestBundleHidesSkillsThatDisableModelInvocation` |
+| `zenforge` reads skills from the workspace's `.zenforge/skills` and a per-user directory, the workspace layer winning by name, and a missing directory is an empty catalog | `TestBuildSkillsIsAbsentWithoutACatalog`, `TestConsoleSkillsReportsAnUnreadableLayer` |
+| the console's skills panel lists the operator-invocable rows with the skill's own guidance and the model's invocability, and reports the reference's `session/not-found` and `skill listing failed:` answers | `TestSessionSkillsListsTheOperatorsCatalog`, `TestSessionSkillsValidatesTheSessionAndTheArguments`, `TestSessionSkillsReportsAMissingOrBrokenCatalog`, `TestSkillsListEnvelopeMatchesTheVendoredConsole` |
 | first request contains descriptors but not bodies | `TestAgentSkillsUseProgressiveDisclosure`, `integration/consumer.TestOpenAIEnvProviderRunsTypedAndApprovedSandboxTools` |
 | `load_skill` returns body, SHA-256 digest, and safe relative provenance | `skill` package tests, `integration/consumer.TestOpenAIEnvProviderRunsTypedAndApprovedSandboxTools` |
 | ordinary typed tools remain distinct and operational | `integration/consumer.TestOpenAIEnvProviderRunsTypedAndApprovedSandboxTools` |

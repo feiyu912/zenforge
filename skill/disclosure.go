@@ -47,12 +47,24 @@ func NewBundle(ctx context.Context, catalog Catalog, allowlist []string, configu
 	if err != nil {
 		return nil, err
 	}
-	items, err := catalog.List(ctx)
+	discovered, err := catalog.List(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if err := validateDescriptors(items); err != nil {
+	if err := validateDescriptors(discovered); err != nil {
 		return nil, err
+	}
+	// A bundle is the model-facing view of a catalog, so a skill that declares
+	// itself hidden from the model is not advertised and not loadable here: it
+	// stays in the catalog for the surfaces that are the operator's own, and the
+	// prompt, the load tool, the allowlist and the fingerprint are all built over
+	// what remains. The catalog is unchanged, so nothing else loses the entry.
+	items := make([]Descriptor, 0, len(discovered))
+	for _, item := range discovered {
+		if item.DisableModelInvocation {
+			continue
+		}
+		items = append(items, item)
 	}
 	byName := make(map[string]Descriptor, len(items))
 	for _, item := range items {

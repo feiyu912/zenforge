@@ -498,3 +498,62 @@ func TestPromptRejectsDescriptorInjection(t *testing.T) {
 		t.Fatalf("prompt=%q error=%v, want empty prompt and ErrInvalid", prompt, err)
 	}
 }
+
+// A bundle is the model-facing view, so a skill that hides itself from the model
+// is neither advertised nor loadable through it -- while the catalog still
+// carries the skill for the surfaces that are the operator's own, which is what
+// the console's skills panel reads.
+func TestBundleHidesSkillsThatDisableModelInvocation(t *testing.T) {
+	catalog := memoryCatalog{
+		"visible": {
+			Descriptor: Descriptor{Name: "visible", Description: "for the model"},
+			Body:       "visible body", Digest: testDigestA, Provenance: Provenance{Source: "test", Path: "visible/SKILL.md"},
+		},
+		"hidden": {
+			Descriptor: Descriptor{Name: "hidden", Description: "not for the model", DisableModelInvocation: true},
+			Body:       "hidden body", Digest: testDigestA, Provenance: Provenance{Source: "test", Path: "hidden/SKILL.md"},
+		},
+	}
+	bundle, err := NewBundle(context.Background(), catalog, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt := bundle.CatalogPrompt()
+	if !strings.Contains(prompt, "visible: for the model") || strings.Contains(prompt, "hidden: not for the model") {
+		t.Fatalf("prompt = %q, want only the model-visible skill", prompt)
+	}
+	if _, err := bundle.LoadSkillTool().Call(context.Background(), json.RawMessage(`{"name":"hidden"}`), tool.Context{}); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("loading a model-hidden skill err=%v, want the uniform unavailable result", err)
+	}
+	// The catalog is untouched: listing it still shows both, which is how the
+	// operator-facing surfaces see what the model cannot.
+	items, err := catalog.List(context.Background())
+	if err != nil || len(items) != 2 {
+		t.Fatalf("catalog = %#v err=%v, want both skills", items, err)
+	}
+}
+
+// The operator's own guidance travels on the descriptor and is validated like the
+// description is: prompt advertising may not smuggle control characters or
+// unbounded text.
+func TestValidateRejectsUnsafeWhenToUse(t *testing.T) {
+	tests := []struct {
+		name      string
+		whenToUse string
+	}{
+		{"control character", "use when\x01routing"},
+		{"newline", "use when\nrouting"},
+		{"oversize", strings.Repeat("x", MaxDescriptionBytes+1)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			items := []Descriptor{{Name: "guided", Description: "ok", WhenToUse: test.whenToUse}}
+			if err := validateDescriptors(items); !errors.Is(err, ErrInvalid) {
+				t.Fatalf("error=%v, want ErrInvalid", err)
+			}
+		})
+	}
+	if err := validateDescriptors([]Descriptor{{Name: "guided", Description: "ok", WhenToUse: "use when routing"}}); err != nil {
+		t.Fatalf("a safe whenToUse was refused: %v", err)
+	}
+}

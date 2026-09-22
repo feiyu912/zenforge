@@ -546,6 +546,123 @@ wrote an event is omitted, because `session/page` answers not-found for it; and 
 log has no terminal event is recorded as cancelled when it is adopted. Drafts stay
 process-local (ADR 0104).
 
+## Shipped: the skill catalog is one catalog (2026-09-22)
+
+`skills/list` is served (ADR 0131), so the console's skills panel works. The
+chain's shape was decided by one fact: `zenforge` had a skill catalog in the
+framework (`skill/fs`, `skill.NewBundle`, `Config.Skills`) and **never wired it
+up**, so a run advertised no skills and the panel had nothing to show. The chain
+therefore ran through both halves, and the rule that keeps them honest is that the
+panel and the model read the *same* catalog:
+
+- **The CLI owns the catalog.** `--skills` (default `<workspace>/.zenforge/skills`)
+  and `--user-skills` (default `<user config dir>/zenforge/skills`, or
+  `skills.userDir`), merged with the workspace layer winning by name -- the rule
+  the slash-command catalog already follows. A directory that does not exist is an
+  empty layer; one that exists but cannot be scanned fails the read, so an
+  unreadable directory is never reported as "no skills installed".
+- **One catalog, two readers.** `buildSkillCatalog` feeds both the console
+  adapter and the run: the run gets the bundle (`load_skill` plus the catalog
+  prompt) only when the catalog is not empty, so a host with no skills claims
+  none. A panel that listed a skill the agent could not load would be the lie this
+  pairing exists to prevent.
+- **Upstream's fields are read.** `skill.Descriptor` gained `WhenToUse`,
+  `DisableModelInvocation` and `DisableUserInvocation` (negatives, so the zero
+  value keeps upstream's "invocable by both" default), and `skill/fs` parses
+  `whenToUse`, `disable-model-invocation` and `user-invocable`, refusing the
+  retired camelCase spellings with upstream's own sentence.
+- **The bundle is the model-facing view.** `NewBundle` drops a model-hidden skill
+  from the prompt, the `load_skill` tool, the allowlist and the fingerprint; the
+  panel keeps it with `modelInvocable: false`, and drops the user-hidden one.
+- **The method validates the session and answers an array.**
+  `session/not-found` uses the reference's sentence, an unreadable catalog answers
+  `skill listing failed: …`, a host with no seam answers `unimplemented` naming
+  `SkillSource`, and an empty catalog answers `{skills: []}` rather than null.
+
+Two deviations are recorded in the ADR: the catalog is host-wide (the reference
+scopes it per session composition; this host has one workspace), and `whenToUse`
+travels on the panel's rows rather than in the probe the model receives.
+
+Evidence beyond the unit tests came from a live `zenforge serve` whose provider was
+pointed at a local endpoint that records the request body and refuses it: the
+recorded run contained `Available skills:\n- review: Review a change for
+correctness before it ships`, offered `load_skill`, and contained neither the
+`disable-model-invocation` skill nor the `whenToUse` line. The panel answered both
+rows, `operator` with `"modelInvocable": false`.
+
+The ledger reads **49 served / 4 streams / 17 refused / 39 unserved** of 109.
+
+## Next: two reads this host can serve, and the namespaces it should refuse
+
+The ledger's remaining 39 rows split cleanly now that both clusters have been
+reconnoitred against the vendored schemas and this host's machinery. Three of them
+are small reads that this host can answer truthfully; the rest are namespaces whose
+capability does not exist, and the honest move is to refuse each **by name** in one
+chain and record the missing subsystem (ADR 0128's precedent).
+
+**Serve next, in this order.**
+
+1. **`workspace/insertBefore` + `workspace/insertSessionBefore`** (2 rows). The
+   registry, titles, deletion and the archived set are already served (ADR 0101);
+   only the manual row order is missing, which is a mutation of the order the
+   registry already holds. Smallest remaining chain.
+2. **The feedback cluster** — `messageFeedback/put`, `list`, `delete` and
+   `sessionFeedback/record` (4 rows). The machinery is genuinely present: message
+   ids exist and are already published (`msg-<seq>`, `internal/dshwire`), the event
+   vocabulary already reserves `feedback/message-put`, `feedback/message-delete`
+   and `feedback/record`, and `dshapi/session.go`'s `appendTitle` is the exact
+   pattern for a host-authored, sequence-numbered session event with version
+   compare-and-set. One wire subtlety to verify from the bundle before writing code:
+   these results carry **in-value** failures (`{ok:false, error:{code:
+   "session-not-found" | "version-conflict"}}`) rather than the method-level error
+   envelope every other namespace uses, so the shape has to be copied from the
+   vendored schema rather than assumed.
+3. **`fileReferences/list`** (1 row). This is the console's `@` picker, and with it
+   unserved the whole `@` menu fails, not just its file section. The pieces exist:
+   `workspaceFileScope` resolves the scope and `tools/workspace/glob.go`'s walker
+   already bounds a recursive scan.
+
+**Refuse by name, one ADR, with the capability that is missing.** None of these is
+a route; each needs a subsystem this host has never built:
+
+- **`terminal/*` (11 rows)** — the job manager runs a command under a PTY
+  (`jobs.Manager.Start` → `pty.StartWithSize`), and that is where it stops: there is
+  no attachment layer (`controllerId`/`attachmentId`, retained holds), no runtime
+  resize (the master is not exposed and nothing calls `pty.Setsize`), no screen
+  model for `follow`'s snapshot (no VT emulator, and the output buffer is lossy
+  where a gapless sequence is required), and no shell discovery for `shells/`.
+- **`fileUploads/upload` (1 row)** — the same seam as the refused `session/attachment`
+  (ADR 0128): no attachment store. Reuse that refusal verbatim so the two halves
+  cannot drift.
+- **`subagents/list`, `prompt`, `interruptByParent` (3 rows)** — a child-session
+  plane. Children here are one-shot *runs inside the parent run*
+  (`<parentRunID>_sub_<taskID>`), streamed off the agent rather than registered, so
+  there is no child session to list, no continuable child to prompt and no
+  parent-addressed interrupt; `session/page` and `session/follow` already refuse the
+  `subagent` address arm on purpose.
+- **`sessionReferenceResolver/candidates` (1 row)** — candidates are derivable from
+  the session and workspace registries, but nothing in this host parses or expands
+  an `@`-mention, and no resolve remote is declared, so a picked row would reach the
+  model as literal text.
+- **`officeToPdf/generation|render` (2 rows)**, **`agentTeams/*` (3 rows)**,
+  **`dynamicCordisRunner/*` (12 rows)** — no converter and no PDF library; no
+  agent-team feature; no dynamic plugin runtime (the roster already blocks the
+  cordis panel and `pluginManager/*` refuses for the same reason).
+- **`agentTeams/*` also needs a ledger correction, not a refusal.** The vendored
+  client does not declare them at all -- the declaring bundle
+  (`experimental/client-ui-agent-team`) is dropped by
+  `scripts/build-console.sh`'s `DROP_PLUGINS`, exactly as `ui-sidebar-documentpreview`
+  (officeToPdf) and `cordis-client-runner` are dropped and `extensions/ui-cordis` is
+  blocked in the roster. So those three families have **no live consumer on this
+  page**; their rows should say so, the way `session/workspaceDesktop` already says
+  it is absent from the pinned bundle.
+
+**Carried debt, still open.** The pending queue is process state, where upstream
+folds a durable inbox out of the session's events (ADR 0130, `docs/limitations.md`).
+Closing it means queue, claim and clear events in the run's log plus a projection
+fold over them, so a queued message outlives its run and a restarted host can
+restore it. It is the last row of real work after the reads and the refusals.
+
 ## Shipped: the pending queue is the console's inbox cell (2026-09-22)
 
 `session/updateQueue` is served (ADR 0130), so the queue dock works: the messages
@@ -639,7 +756,7 @@ a build failure rather than a silent degradation.
 
 The ledger reads **48 served / 4 streams / 17 refused / 40 unserved** of 109.
 
-## Next: the skills read, and why the subagent cluster is larger
+## Next at the time: the skills read, and why the subagent cluster is larger
 
 The ledger's next-up item is now the cluster `skills/list`, `subagents/list`,
 `subagents/prompt`, `subagents/interruptByParent`. It is not one chain: the skills

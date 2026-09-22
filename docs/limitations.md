@@ -689,3 +689,26 @@ run rather than delivered to a later turn the operator did not aim it at, and a
 host that restarts has no queue to restore. In both cases the console is told the
 truth (the row leaves the cell), and the durable fold is a piece of work this host
 has not built.
+
+## The skill catalog the console shows is the one a run advertises
+
+`zenforge` reads skills from the workspace's `.zenforge/skills` and from a
+per-user directory, and the skills panel lists exactly what a run started from
+that host can load (ADR 0131). Four things follow from that, and they are worth
+knowing before relying on the panel:
+
+- The catalog is host-wide, not per session. The reference resolves a session's
+  own composition before listing; this host has one workspace and one catalog, so
+  the session in the request is validated and then every session sees the same
+  rows.
+- `whenToUse` is shown to a person, not to the model. The probe the model receives
+  advertises each skill as `name: description`; the routing guidance travels on
+  the panel's rows.
+- A skill that disables model invocation stays listed, with
+  `modelInvocable: false`, and is absent from the probe and from `load_skill`.
+  A skill that disables user invocation is left out of the panel entirely.
+- The skill set is part of a run's identity. The framework records the bundle's
+  fingerprint in the run's state, so removing a directory (or a skill in it) makes
+  a run that started with that catalog refuse to resume, naming the missing
+  bundle. Add a skill and the new run picks it up; the old run's checkpoint is
+  pinned to the set it ran with.

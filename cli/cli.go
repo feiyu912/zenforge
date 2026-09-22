@@ -35,6 +35,7 @@ import (
 	"github.com/feiyu912/zenforge/policy"
 	"github.com/feiyu912/zenforge/sandbox/linuxsandbox"
 	"github.com/feiyu912/zenforge/schedule"
+	skillfs "github.com/feiyu912/zenforge/skill/fs"
 	"github.com/feiyu912/zenforge/tool"
 	"github.com/feiyu912/zenforge/tools/askuser"
 	"github.com/feiyu912/zenforge/tools/contextinfo"
@@ -700,8 +701,15 @@ type options struct {
 	// userCommandsDir is the per-user catalog every workspace sees. Empty
 	// derives it from the user config directory.
 	userCommandsDir string
-	scheduleSpec    string
-	listCommands    bool
+	// skillsDir is the workspace's skill catalog: the directory whose immediate
+	// children are skill packages. Empty derives it from the workspace.
+	skillsDir string
+	// userSkillsDir is the per-user skill catalog every workspace sees. Empty
+	// derives it from the user config directory, and a workspace skill of the
+	// same name wins.
+	userSkillsDir string
+	scheduleSpec  string
+	listCommands  bool
 
 	sandboxBackend      string
 	sandboxRoots        multiFlag
@@ -857,6 +865,8 @@ func bindOptions(fs *flag.FlagSet, opts *options) {
 	fs.StringVar(&opts.reviewMode, "review", opts.reviewMode, "independent review of each finished run: off, report, or enforce")
 	fs.StringVar(&opts.commandsDir, "commands", opts.commandsDir, "directory of command definitions (default <workspace>/"+commands.DefaultDir+")")
 	fs.StringVar(&opts.userCommandsDir, "user-commands", opts.userCommandsDir, "directory of per-user command definitions (default <user config dir>/zenforge/commands)")
+	fs.StringVar(&opts.skillsDir, "skills", opts.skillsDir, "directory of skill packages (default <workspace>/"+skillfs.DefaultDir+")")
+	fs.StringVar(&opts.userSkillsDir, "user-skills", opts.userSkillsDir, "directory of per-user skill packages (default <user config dir>/zenforge/skills)")
 	fs.BoolVar(&opts.listCommands, "list-commands", opts.listCommands, "list the available commands and exit")
 	fs.StringVar(&opts.scheduleSpec, "schedule", opts.scheduleSpec, "repeat the task on a schedule, e.g. 'every 1h' or '0 3 * * *'")
 	fs.IntVar(&opts.goalMaxRounds, "goal-max-rounds", opts.goalMaxRounds, "default round budget for goals created in this session")
@@ -1192,8 +1202,13 @@ func buildAgentConfig(ctx context.Context, opts *options, ioStreams IO) (zenforg
 	if err != nil {
 		return zenforge.Config{}, nil, err
 	}
+	skills, err := buildSkills(ctx, *opts)
+	if err != nil {
+		return zenforge.Config{}, nil, err
+	}
 	return zenforge.Config{
 		Model:              modelAdapter,
+		Skills:             skills,
 		Hooks:              hookEngine,
 		Memory:             memoryProvider,
 		Review:             guardian,

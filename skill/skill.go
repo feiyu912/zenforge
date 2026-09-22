@@ -60,11 +60,24 @@ var (
 
 // Descriptor is the small, prompt-safe portion of a skill.
 type Descriptor struct {
-	Name          string         `json:"name"`
-	Description   string         `json:"description"`
-	License       string         `json:"license,omitempty"`
-	Compatibility string         `json:"compatibility,omitempty"`
-	Metadata      map[string]any `json:"metadata,omitempty"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	// WhenToUse is the skill's own extra routing guidance, shown by discovery
+	// consumers beside the description. Optional.
+	WhenToUse string `json:"whenToUse,omitempty"`
+	// DisableModelInvocation keeps the skill out of every model-facing surface --
+	// the advertised catalog prompt and the load tool -- while leaving it in the
+	// catalog for the surfaces that are the operator's own. The name is the
+	// negative of upstream's `disable-model-invocation` frontmatter field, so the
+	// zero value is the upstream default (the model may invoke it).
+	DisableModelInvocation bool `json:"disableModelInvocation,omitempty"`
+	// DisableUserInvocation keeps the skill out of the operator-facing discovery
+	// surfaces for the same reason, mirroring upstream's `user-invocable: false`.
+	// The zero value is likewise the upstream default.
+	DisableUserInvocation bool           `json:"disableUserInvocation,omitempty"`
+	License               string         `json:"license,omitempty"`
+	Compatibility         string         `json:"compatibility,omitempty"`
+	Metadata              map[string]any `json:"metadata,omitempty"`
 }
 
 // Provenance identifies where loaded content came from.
@@ -200,6 +213,12 @@ func validateDescriptors(items []Descriptor) error {
 		if len(item.Description) == 0 || len(item.Description) > MaxDescriptionBytes ||
 			strings.ContainsAny(item.Description, "\r\n") || containsControl(item.Description) {
 			return fmt.Errorf("%w: invalid description for %q", ErrInvalid, item.Name)
+		}
+		// The routing guidance is advertised to a model like the description is, so
+		// it is held to the same rule: present and prompt-safe, or absent.
+		if len(item.WhenToUse) > MaxDescriptionBytes ||
+			strings.ContainsAny(item.WhenToUse, "\r\n") || containsControl(item.WhenToUse) {
+			return fmt.Errorf("%w: invalid whenToUse for %q", ErrInvalid, item.Name)
 		}
 	}
 	return nil
