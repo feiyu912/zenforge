@@ -625,3 +625,19 @@ own file browser (`workspaceFiles/list`, `workspaceFiles/read`) instead. Nothing
 in the shipped page calls either method, so no visible control is lost; a
 deployment that ships a desktop carrier is what would flip the answer and make
 the open real.
+
+## The sidebar's search has no index and no ranking
+
+Searching the sidebar reads the conversations the list shows, on demand, out of
+the same projected logs the transcript is served from (ADR 0127). That is enough
+to answer the question and not enough to be an index: there is no ranked
+relevance order (a conversation's row quotes its **newest** matching message, and
+rows keep the list's newest-first order), every query re-reads the listed
+conversations rather than consulting a prepared index, and the cancellation signal
+the client sends has nothing to interrupt because this host's unary transport does
+not carry one. On a directory with a very large number of long conversations a
+query therefore costs more than it would against the reference's
+`@deepseek-ai/dsh-session-query` provider, which this host does not mount. What
+the answer does mirror is the contract the sidebar renders: one row per
+conversation, the reference's twenty-result cap with `hasMore`, its 240-code-point
+excerpt bound, and its own refusals for a blank, over-long or NUL-bearing query.

@@ -155,3 +155,4 @@ and what the adapter answers today is
 | [0124](0124-the-chunks-and-errors-the-console-reads-off-a-stream.md) | The chunks and errors the console reads off a stream |
 | [0125](0125-the-goal-dock-reads-the-frameworks-goal-state.md) | The goal dock reads and mutates the framework's goal state |
 | [0126](0126-a-desktop-capability-is-answered-not-built.md) | A desktop capability is answered, not built |
+| [0127](0127-the-sidebars-search-reads-the-logs-the-list-shows.md) | The sidebar's search reads the logs the list already shows |

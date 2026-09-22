@@ -546,6 +546,72 @@ wrote an event is omitted, because `session/page` answers not-found for it; and 
 log has no terminal event is recorded as cancelled when it is adopted. Drafts stay
 process-local (ADR 0104).
 
+## Shipped: the sidebar's search reads the logs the list shows (2026-09-22)
+
+`session/search` is served (ADR 0127), so the workspace browser's search box has a
+host answer. The plugin calls it with one literal phrase and a signal
+(`client/ui-workspace`'s `searchSessions`, via the session manager's "Search
+visible session message content"), and what the sidebar renders is the contract:
+one row per conversation, the reference's twenty-result cap with `hasMore`, and a
+240-code-point excerpt.
+
+This host mounts no query provider -- the reference answers from
+`@deepseek-ai/dsh-session-query`, whose refusal is literally "this deployment does
+not mount ..." -- and it does not need one: it already reads and projects exactly
+these conversations for `session/list`, `session/page` and `session/follow`. Two
+reusable pieces came out of that:
+
+- **`visibleSessions`** is now the one enumeration `session/list` and
+  `session/search` share (the grouping of a conversation's turns, the blank
+  filter, the newest-first order, and the projected log each row was built from).
+  A session is therefore searchable exactly when it is listed, and a conversation
+  whose log cannot be read is skipped rather than answered with an invented hit.
+- **The reference's own rules are mirrored where the client can see them**: the
+  matcher is its "literal case-insensitive, whitespace-flexible" filter (the
+  phrase is data, its metacharacters literal, its words separable by any
+  whitespace), and the refusals are its own words -- `gateway/bad-request` for a
+  blank, over-500-UTF-16-unit or NUL-bearing query, `gateway/arguments-invalid`
+  for a missing or non-string `query`, which its strict schema rejects before the
+  handler runs.
+
+Three deviations are consequences of having no index, and they are in the ADR
+rather than hidden: a row quotes the conversation's **newest** matching message
+(the reference's `bestMatch` is rank-ordered), rows keep the list's newest-first
+order rather than a global relevance order, and the `signal` the client passes has
+nothing to interrupt because this host's unary transport does not carry one. The
+excerpt is ours too: a window starting up to 60 code points before the match with
+a leading ellipsis, then the reference's longest-prefix cut to 240 code points.
+Only `user/message` and `assistant/message` records are searched -- a tool result
+is not message content -- which is the reference's event filter, and our sessions
+are linear, so its `surface: current` filter is a no-op here.
+
+Live evidence on a scratch host (`--addr 127.0.0.1:8803`, throwaway
+`--checkpoint-dir`/`--settings-file`), with no model credentials at all: the
+prompt is recorded and the conversation is listed before the model is called, so
+the search is provable without a provider.
+
+```
+$ session/prompt "the quarterly report discusses the harbor crane budget"
+$ session/search {"query":"harbor crane"}
+{"…","result":{"ok":true,"value":{"hasMore":false,"items":[{"sessionId":"run_…297714000",
+"snippet":"the quarterly report discusses the harbor crane budget"}]}}}
+$ session/search {"query":"QUARTERLY   REPORT"}          # multi-space, case-folded
+{"…","items":[{"sessionId":"run_…297714000","snippet":"the quarterly report discusses the harbor crane budget"}]}
+$ session/prompt (second conversation) "the harbor crane quote arrived late"
+$ session/search {"query":"harbor crane"}
+{"…","items":[{"sessionId":"run_…321548000","snippet":"the harbor crane quote arrived late"},
+              {"sessionId":"run_…297714000","snippet":"the quarterly report discusses the harbor crane budget"}]}
+$ session/search {"query":"  "}
+{"…","error":{"code":"gateway/bad-request","message":"session search query must not be empty","details":{}}}
+$ session/search {"query":"report","limit":3}
+{"…","error":{"code":"gateway/arguments-invalid","message":"unexpected argument \"limit\""}}
+```
+
+The row order is exactly `session/list`'s (`run_…321548000` then
+`run_…297714000`), which is the point of sharing the enumeration. The ledger now
+reads **46 served / 4 streams / 16 refused / 43 unserved** of 109, and next-up
+item 1 narrows to `session/fork`, `session/attachment` and `session/updateQueue`.
+
 ## Shipped: the desktop question is answered, the open refused (2026-09-22)
 
 `session/canOpenWorkspacePath` and `session/openWorkspacePath` are routed
@@ -1037,9 +1103,11 @@ serves `qwen-plus`, and the card shows only what is written on it.
 > chunks and answers a cancelled run's open tool calls (ADR 0124), and the goal dock reads
 > and mutates the framework's durable goal state (ADR 0125), and the console's
 > desktop question is answered `false` while the desktop open is refused by name because
-> this host implements no desktop carrier (ADR 0126). The next chain is "Next up" 1 in the
-> ledger: `session/search`, `session/fork`, `session/attachment` and
-> `session/updateQueue`, the session management the sidebar offers. If a scratch host is
+> this host implements no desktop carrier (ADR 0126), and the sidebar's search reads the
+> conversations the list already shows, with the reference's own cap, excerpt bound and
+> query refusals (ADR 0127). The next chain is "Next up" 1 in the ledger:
+> `session/fork`, `session/attachment` and `session/updateQueue` -- forking a
+> conversation at a message, fetching an attached image, and editing the pending queue. If a scratch host is
 > needed, give it `ZENFORGE_CONFIG_DIR` or `--settings-file` under a throwaway directory so
 > it cannot rewrite the operator's document, and its own `--checkpoint-dir` too, because the
 > event store and the run registry are derived from it: a scratch host started in `/tmp`

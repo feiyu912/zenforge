@@ -26,16 +26,16 @@ methods are the remaining work, in priority order at the end of this page.
 
 ## Summary
 
-This host answers **45** of the client's **109** methods, mounts
+This host answers **46** of the client's **109** methods, mounts
 **4** of them as logical streams, refuses **16** by name, and
-does not serve the remaining **44**.
+does not serve the remaining **43**.
 
 | State | Count |
 | --- | --- |
-| served | 45 |
+| served | 46 |
 | stream | 4 |
 | refused | 16 |
-| unserved | 44 |
+| unserved | 43 |
 | **client methods total** | **109** |
 
 The WebSocket mux also mounts `$events`, which is not part of the client's
@@ -76,6 +76,7 @@ attach the prompt to the session it has open (ADR 0115).
 | `session/page` | served | A page of a session's events, projected into the console's vocabulary. A created session with no turns answers an empty page (ADR 0104, ADR 0105). A session's turns share one sequence, so `Load earlier` reaches an earlier prompt (ADR 0108), and every message is identified by that sequence, so a second question renders as itself instead of matching the first question's node (ADR 0110). |
 | `session/prompt` | served | Send a turn into a session. Under the plan-execute preset a question is answered in the plan stage and never reaches an execute or summary stage (ADR 0107). Every turn the host starts records the prompt's `requestId` as the run's `PromptID`, and the projected message publishes it as `source.rpcId`, which is what retires the console's local submission echo; a queued turn's text is projected from `request.steer`'s `message` (ADR 0111). |
 | `session/rename` | served | Rename a session. |
+| `session/search` | served | Search the conversations the list shows for a literal phrase, answering one row per session with the newest matching message quoted and the reference's own twenty-result cap and `hasMore` flag, plus its own query refusals (ADR 0127). |
 | `session/selectModel` | served | Choose the provider and model a session runs on. The choice is restored on the next start (ADR 0103). |
 | `settings/canOpenAgentPresetDirectory` | served | Whether a native editor can be opened here (it cannot). |
 | `settings/describe` | served | The settings namespaces, their schema, their resolved values, the section the console itself wrote, and whether a document holds them (ADR 0102, ADR 0103). |
@@ -146,7 +147,6 @@ attach the prompt to the session it has open (ADR 0115).
 | `officeToPdf/render` | unserved | no document conversion in this host |
 | `session/attachment` | unserved | no attachment store |
 | `session/fork` | unserved | no session fork |
-| `session/search` | unserved | no session search |
 | `session/updateQueue` | unserved | no queue editing |
 | `sessionFeedback/record` | unserved | no session-feedback store |
 | `sessionReferenceResolver/candidates` | unserved | no reference resolver |
@@ -176,8 +176,9 @@ live `zenforge serve` whose boot graph and every advertised bundle were fetched.
 that has shipped is removed rather than left to mislead the next window; the gaps below are
 in the order they block the page, from what the console asks first.
 
-1. **`session/search`, `session/fork`, `session/attachment`, `session/updateQueue`**
-   — session management the sidebar offers.
+1. **`session/fork`, `session/attachment`, `session/updateQueue`** — session
+   management the sidebar offers: forking a conversation at a message, fetching an
+   attached image, and editing the pending queue.
 2. **`skills/list`, `subagents/list`, `subagents/prompt`, `subagents/interruptByParent`**
    — framework features that are not exposed to the console yet.
 3. **`terminal/*`** — an embedded terminal, which this host does not claim.

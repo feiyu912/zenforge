@@ -29,19 +29,25 @@ const (
 	titleAppendAttempts = 8
 )
 
-// sessionList answers POST /api/session/list. The list is the run manager's
-// view merged with this handler's pending allocations: a pending session is
-// blank by definition, and a run's blank stays false because it has a log.
-func (h *Handler) sessionList(ctx context.Context, args map[string]json.RawMessage) (any, *methodError) {
-	if _, _, failure := stringArg(args, "cursor"); failure != nil {
-		return nil, failure
-	}
-	// The cursor is opaque and this host never issues one, so there is no
-	// second page to resume. Accepting and ignoring it is honest; inventing a
-	// cursor protocol the client never sees would not be.
+// visibleSession is one conversation the console's session list shows: the
+// grouped id, the newest run behind it, the row this host serves for it, and the
+// conversation's projected log when it could be read. session/list renders the
+// rows; session/search walks the logs. Sharing the enumeration is what keeps a
+// session searchable exactly when it is listed -- the grouping, the blank filter
+// and the newest-first order are one rule, not two.
+type visibleSession struct {
+	ID   string
+	Info harnesshttp.RunInfo
+	Item map[string]any
+	Log  *dshwire.SessionLog
+}
+
+// visibleSessions is the console's session list as values: every entry the list
+// renders, in the order it renders them.
+func (h *Handler) visibleSessions(ctx context.Context) ([]visibleSession, error) {
 	infos, err := h.manager.List(ctx)
 	if err != nil {
-		return nil, fail(codeInternal, "list runs: "+err.Error(), nil)
+		return nil, err
 	}
 	// A session's later turns are listed as one conversation, reported from its
 	// newest turn: the console lists sessions, and one conversation appearing
@@ -70,14 +76,14 @@ func (h *Handler) sessionList(ctx context.Context, args map[string]json.RawMessa
 			newest[sessionID] = info
 		}
 	}
-	items := make([]map[string]any, 0, len(order)+1)
+	sessions := make([]visibleSession, 0, len(order)+1)
 	for _, sessionID := range order {
-		item, listable := h.listableSession(ctx, sessionID, newest[sessionID])
+		item, log, listable := h.listableSession(ctx, sessionID, newest[sessionID])
 		if !listable {
 			continue
 		}
 		item["sessionId"] = sessionID
-		items = append(items, item)
+		sessions = append(sessions, visibleSession{ID: sessionID, Info: newest[sessionID], Item: item, Log: log})
 	}
 	h.mu.Lock()
 	pending := make([]pendingSession, 0, len(h.pending))
@@ -86,26 +92,55 @@ func (h *Handler) sessionList(ctx context.Context, args map[string]json.RawMessa
 	}
 	h.mu.Unlock()
 	for _, session := range pending {
-		items = append(items, map[string]any{
-			"sessionId": session.id,
-			"updatedAt": session.createdAt.UnixMilli(),
-			"running":   false,
-			"blank":     true,
+		sessions = append(sessions, visibleSession{
+			ID: session.id,
+			Info: harnesshttp.RunInfo{
+				RunID:     session.id,
+				UpdatedAt: session.createdAt,
+			},
+			Item: map[string]any{
+				"sessionId": session.id,
+				"updatedAt": session.createdAt.UnixMilli(),
+				"running":   false,
+				"blank":     true,
+			},
 		})
 	}
 	// Newest first, with the session id as a stable tie-break so concurrent
-	// creates in the same millisecond still order deterministically.
-	sort.Slice(items, func(i, j int) bool {
-		left, right := items[i], items[j]
-		leftAt, _ := left["updatedAt"].(int64)
-		rightAt, _ := right["updatedAt"].(int64)
+	// creates in the same millisecond still order deterministically. The
+	// comparison is on the millisecond the row serves rather than the finer time
+	// behind it: the client sorts the rows it received, so the served array order
+	// and the served `updatedAt` have to agree even for two creates inside one
+	// millisecond, which the id then breaks.
+	sort.Slice(sessions, func(i, j int) bool {
+		left, right := sessions[i], sessions[j]
+		leftAt, rightAt := left.Info.UpdatedAt.UnixMilli(), right.Info.UpdatedAt.UnixMilli()
 		if leftAt != rightAt {
 			return leftAt > rightAt
 		}
-		leftID, _ := left["sessionId"].(string)
-		rightID, _ := right["sessionId"].(string)
-		return leftID < rightID
+		return left.ID < right.ID
 	})
+	return sessions, nil
+}
+
+// sessionList answers POST /api/session/list. The list is the run manager's
+// view merged with this handler's pending allocations: a pending session is
+// blank by definition, and a run's blank stays false because it has a log.
+func (h *Handler) sessionList(ctx context.Context, args map[string]json.RawMessage) (any, *methodError) {
+	if _, _, failure := stringArg(args, "cursor"); failure != nil {
+		return nil, failure
+	}
+	// The cursor is opaque and this host never issues one, so there is no
+	// second page to resume. Accepting and ignoring it is honest; inventing a
+	// cursor protocol the client never sees would not be.
+	sessions, err := h.visibleSessions(ctx)
+	if err != nil {
+		return nil, fail(codeInternal, "list runs: "+err.Error(), nil)
+	}
+	items := make([]map[string]any, 0, len(sessions))
+	for _, session := range sessions {
+		items = append(items, session.Item)
+	}
 	return map[string]any{"items": items}, nil
 }
 
@@ -120,14 +155,14 @@ func (h *Handler) sessionList(ctx context.Context, args map[string]json.RawMessa
 // and with a durable registry that record would otherwise be listed forever.
 // A live run is kept: it is between its claim and its first event only for a
 // moment, and the console shows it as running.
-func (h *Handler) listableSession(ctx context.Context, sessionID string, info harnesshttp.RunInfo) (map[string]any, bool) {
+func (h *Handler) listableSession(ctx context.Context, sessionID string, info harnesshttp.RunInfo) (map[string]any, *dshwire.SessionLog, bool) {
 	events, err := h.events.Read(ctx, info.RunID, 0, 0)
 	if err != nil {
 		events = nil
 	}
 	live := info.Live(time.Now())
 	if len(events) == 0 && !live {
-		return nil, false
+		return nil, nil, false
 	}
 	item := map[string]any{
 		"sessionId": info.RunID,
@@ -144,11 +179,15 @@ func (h *Handler) listableSession(ctx context.Context, sessionID string, info ha
 	// projection store from this block and reads the row title from the store, so a
 	// top-level title is a field nothing renders (ADR 0119). The title is read from
 	// the session's whole log, because a rename can have landed on any turn.
-	if log, err := dshwire.Session(ctx, h, sessionID, func(turn int) dshwire.Identity {
+	log, err := dshwire.Session(ctx, h, sessionID, func(turn int) dshwire.Identity {
 		identity := h.wireIdentity(sessionID)
 		identity.Turn = turn
 		return identity
-	}); err == nil {
+	})
+	if err != nil {
+		log = nil
+	}
+	if log != nil {
 		if title, seq := log.Title(); title != "" {
 			item["projections"] = map[string]any{
 				"asOfSeq": seq,
@@ -156,7 +195,7 @@ func (h *Handler) listableSession(ctx context.Context, sessionID string, info ha
 			}
 		}
 	}
-	return item, true
+	return item, log, true
 }
 
 // sessionCreate answers POST /api/session/create. It either adopts an explicit
