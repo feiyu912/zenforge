@@ -4799,3 +4799,30 @@ func TestAgentRecordsThePromptsIdentityInRunStarted(t *testing.T) {
 		t.Fatalf("run.started payload = %v, want no promptId without a caller identity", first.Payload)
 	}
 }
+
+// A prompt whose attachment is delivered as text the model reads must not title
+// the conversation with that text: the operator's own words are what the
+// console's sidebar shows, and they are carried apart from the model's input.
+func TestSessionTitlePrefersTheOperatorsOwnWords(t *testing.T) {
+	handle := `[File "notes.txt" (16 bytes, sha256:41636006): verbatim read-only copy saved at ".zenforge/attachments/41636006b744-notes.txt".]`
+	state := harness.RunState{
+		Input: handle + "\n\nwhat does the file say",
+		Meta:  map[string]any{MetaPromptText: "what does the file say"},
+	}
+	if got := sessionTitleInput(state); got != "what does the file say" {
+		t.Fatalf("title input = %q, want the operator's own words", got)
+	}
+	// Without the key, the model's input is still the honest fallback, and the
+	// plan-execute stage's own copy keeps winning over the run's raw input.
+	plain := harness.RunState{Input: "hello"}
+	if got := sessionTitleInput(plain); got != "hello" {
+		t.Fatalf("title input = %q, want the run's input", got)
+	}
+	planned := harness.RunState{
+		Input: "stage prompt",
+		Meta:  map[string]any{planExecuteInputMetaKey: "the operator's request"},
+	}
+	if got := sessionTitleInput(planned); got != "the operator's request" {
+		t.Fatalf("title input = %q, want the plan stage's own copy", got)
+	}
+}

@@ -12,7 +12,6 @@ import (
 	"github.com/feiyu912/zenforge"
 	"github.com/feiyu912/zenforge/internal/dshsession"
 	"github.com/feiyu912/zenforge/internal/dshwire"
-	"github.com/feiyu912/zenforge/model"
 	"github.com/feiyu912/zenforge/server/harnesshttp"
 	"github.com/feiyu912/zenforge/sessiontitle"
 )
@@ -186,7 +185,7 @@ func (h *Handler) listableSession(ctx context.Context, sessionID string, info ha
 		identity := h.wireIdentity(sessionID)
 		identity.Turn = turn
 		return identity
-	})
+	}, h.promptInputs(ctx))
 	if err != nil {
 		log = nil
 	}
@@ -352,14 +351,26 @@ func (h *Handler) sessionPrompt(ctx context.Context, args map[string]json.RawMes
 	if !ok {
 		return nil, argumentRequired("content")
 	}
-	text, promptImages, failure := decodePromptContent(rawContent)
+	content, failure := decodePromptContent(rawContent)
 	if failure != nil {
 		return nil, failure
 	}
+	promptImages := content.images
+	promptFiles := content.files
 
 	// A prompt may name a continuation run id rather than the session's first
 	// turn, and either names the same conversation.
 	sessionID = h.resolveSession(ctx, sessionID)
+
+	// Everything with bytes is resolved before the branch that starts a run: the
+	// store publishes what the console's transcript will refer to, and the run's
+	// input carries a file's model-visible handle (ADR 0139). A store that cannot
+	// be reached refuses the prompt here, before a turn is started without its
+	// attachment.
+	admission, failure := h.admitPromptAttachments(ctx, sessionID, content)
+	if failure != nil {
+		return nil, failure
+	}
 
 	if h.takePending(sessionID) {
 		if failure := h.applyModelSelection(sessionID); failure != nil {
@@ -371,18 +382,23 @@ func (h *Handler) sessionPrompt(ctx context.Context, args map[string]json.RawMes
 		}
 		if _, err := h.manager.Start(ctx, zenforge.Task{
 			RunID:    sessionID,
-			Input:    text,
+			Input:    admission.text,
 			PromptID: strings.TrimSpace(requestID),
 			// The turn's own images ride on the message this run starts with, so
 			// the model sees them exactly once and every later request of the
 			// conversation replays them (zenforge.Task.Images).
-			Images: promptImages,
+			Images: admission.images,
+			// The operator's own words are carried apart from the input the model
+			// reads, because a file's handle text is part of the latter and must
+			// not become the session's title (zenforge.MetaPromptText).
+			Meta: promptTextMeta(content.text),
 		}); err != nil {
 			// The allocation survives a start that never happened, so the
 			// console can retry the prompt without re-creating the session.
 			_ = h.rememberPending(sessionID)
 			return nil, startFailure(sessionID, err)
 		}
+		h.recordPromptAttachments(ctx, sessionID, sessionID, admission.attachments)
 		// A turn is running, so input the durable inbox still holds -- queued for
 		// an earlier turn that ended before its boundary, or restored after this
 		// host restarted -- is handed to it now (ADR 0136). The rows stay pending
@@ -407,23 +423,23 @@ func (h *Handler) sessionPrompt(ctx context.Context, args map[string]json.RawMes
 		// running turn lifts. Neither carries bytes, so an image is refused here
 		// by name rather than dropped -- the operator would otherwise have no way
 		// to know the prompt it sent lost its attachment.
-		if len(promptImages) > 0 {
+		if len(promptImages) > 0 || len(promptFiles) > 0 {
 			return nil, fail(codeUnsupportedContent,
-				"an image cannot be delivered to a run that is already answering: this host's queue and steer paths carry the next turn's text, so wait for the turn to finish and send the image with the prompt that starts the next one",
-				map[string]any{"part": "image", "mode": mode, "sessionId": sessionID})
+				"an attachment cannot be delivered to a run that is already answering: this host's queue and steer paths carry the next turn's text, so wait for the turn to finish and send the attachment with the prompt that starts the next one",
+				map[string]any{"part": attachmentPartName(promptImages, promptFiles), "mode": mode, "sessionId": sessionID})
 		}
 		// Input the durable inbox still holds is handed to this run first, so a
 		// message restored after a restart is delivered ahead of the new one
 		// (ADR 0136).
 		h.queues.restore(sessionID, current)
-		steered, err := h.manager.Steer(current, strings.TrimSpace(requestID), text)
+		steered, err := h.manager.Steer(current, strings.TrimSpace(requestID), admission.text)
 		if err == nil {
 			// The acceptance is durable: the message is spliced into the session's
 			// own log, and the cell is derived from that. The id is the identity the
 			// run manager ended up using (it mints one when the console sent none),
 			// so the log holds the id the console's queue mutations address (ADR
 			// 0130, ADR 0136).
-			if failure := h.queues.enqueue(sessionID, mode, steered.SteerID, text); failure != nil {
+			if failure := h.queues.enqueue(sessionID, mode, steered.SteerID, admission.text); failure != nil {
 				return nil, failure
 			}
 		}
@@ -456,17 +472,19 @@ func (h *Handler) sessionPrompt(ctx context.Context, args map[string]json.RawMes
 	}
 	task := zenforge.Task{
 		RunID:  continuationID,
-		Input:  text,
-		Images: promptImages,
+		Input:  admission.text,
+		Images: admission.images,
 		// Every turn carries the identity of the prompt that started it: the
 		// console retires one echo per submission, so a continuation's prompt
 		// needs its own identity just as the first turn's does (ADR 0111).
 		PromptID:        strings.TrimSpace(requestID),
 		InitialMessages: h.conversationMessages(ctx, runIDs),
+		Meta:            promptTextMeta(content.text),
 	}
 	if _, err := h.manager.Start(ctx, task); err != nil {
 		return nil, startFailure(continuationID, err)
 	}
+	h.recordPromptAttachments(ctx, sessionID, continuationID, admission.attachments)
 	// The new turn is handed whatever the durable inbox still holds: input queued
 	// for an earlier turn whose boundary never came, restored here rather than
 	// carried to a turn nobody will run (ADR 0136).
@@ -507,44 +525,45 @@ func (h *Handler) applyModelSelection(sessionID string) *methodError {
 // A prompt with no text part at all is refused: the run's input is the text it
 // is prompted with, and a message that is only an attachment has nothing to
 // answer, which is the same rule the console's composer enforces.
-func decodePromptContent(raw json.RawMessage) (string, []model.Image, *methodError) {
+func decodePromptContent(raw json.RawMessage) (promptContent, *methodError) {
 	var parts []json.RawMessage
 	if err := json.Unmarshal(raw, &parts); err != nil {
-		return "", nil, fail(codeArgumentsInvalid, `"content" must be an array of content parts`,
+		return promptContent{}, fail(codeArgumentsInvalid, `"content" must be an array of content parts`,
 			map[string]any{"argument": "content"})
 	}
 	if len(parts) == 0 {
-		return "", nil, fail(codeArgumentsInvalid, `"content" must contain at least one part`,
+		return promptContent{}, fail(codeArgumentsInvalid, `"content" must contain at least one part`,
 			map[string]any{"argument": "content"})
 	}
 	texts := make([]string, 0, len(parts))
-	images := make([]model.Image, 0, len(parts))
+	images := make([]promptImagePart, 0, len(parts))
+	files := make([]promptFilePart, 0, len(parts))
 	for _, rawPart := range parts {
 		part, err := decodeJSONObject(rawPart)
 		if err != nil {
-			return "", nil, fail(codeArgumentsInvalid, `each "content" part must be a JSON object`,
+			return promptContent{}, fail(codeArgumentsInvalid, `each "content" part must be a JSON object`,
 				map[string]any{"argument": "content"})
 		}
 		rawType, ok := part["type"]
 		if !ok {
-			return "", nil, fail(codeArgumentsInvalid, `each "content" part requires a "type"`,
+			return promptContent{}, fail(codeArgumentsInvalid, `each "content" part requires a "type"`,
 				map[string]any{"argument": "content"})
 		}
 		var partType string
 		if err := json.Unmarshal(rawType, &partType); err != nil {
-			return "", nil, fail(codeArgumentsInvalid, `content part "type" must be a string`,
+			return promptContent{}, fail(codeArgumentsInvalid, `content part "type" must be a string`,
 				map[string]any{"argument": "content"})
 		}
 		switch partType {
 		case "text":
 			rawText, ok := part["text"]
 			if !ok {
-				return "", nil, fail(codeArgumentsInvalid, `a "text" content part requires "text"`,
+				return promptContent{}, fail(codeArgumentsInvalid, `a "text" content part requires "text"`,
 					map[string]any{"argument": "content"})
 			}
 			var value string
 			if err := json.Unmarshal(rawText, &value); err != nil {
-				return "", nil, fail(codeArgumentsInvalid, `content part "text" must be a string`,
+				return promptContent{}, fail(codeArgumentsInvalid, `content part "text" must be a string`,
 					map[string]any{"argument": "content"})
 			}
 			if value = strings.TrimSpace(value); value != "" {
@@ -553,22 +572,26 @@ func decodePromptContent(raw json.RawMessage) (string, []model.Image, *methodErr
 		case "image":
 			admitted, failure := decodePromptContentImages([]json.RawMessage{rawPart})
 			if failure != nil {
-				return "", nil, failure
+				return promptContent{}, failure
 			}
 			images = append(images, admitted...)
 		case "file":
-			return "", nil, decodeFilePromptPart(part)
+			decoded, failure := decodeFilePromptPart(part)
+			if failure != nil {
+				return promptContent{}, failure
+			}
+			files = append(files, decoded)
 		default:
-			return "", nil, fail(codeUnsupportedContent,
+			return promptContent{}, fail(codeUnsupportedContent,
 				fmt.Sprintf("prompt content part %q is not supported: this host accepts text and image parts", partType),
 				map[string]any{"part": partType})
 		}
 	}
 	if len(texts) == 0 {
-		return "", nil, fail(codeArgumentsInvalid, `"content" must contain at least one non-whitespace text part`,
+		return promptContent{}, fail(codeArgumentsInvalid, `"content" must contain at least one non-whitespace text part`,
 			map[string]any{"argument": "content"})
 	}
-	return strings.Join(texts, "\n\n"), images, nil
+	return promptContent{text: strings.Join(texts, "\n\n"), images: images, files: files}, nil
 }
 
 // sessionCancel answers POST /api/session/cancel. Cancel is idempotent for an
@@ -755,7 +778,7 @@ func (h *Handler) sessionPage(ctx context.Context, args map[string]json.RawMessa
 		identity := h.wireIdentity(sessionID)
 		identity.Turn = turn
 		return identity
-	})
+	}, h.promptInputs(ctx))
 	if err != nil {
 		return nil, fail(codeInternal, "read session log: "+err.Error(), nil)
 	}

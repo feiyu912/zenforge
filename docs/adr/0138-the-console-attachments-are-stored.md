@@ -1,6 +1,9 @@
 # 0138. The console's attachments are stored, images reach the model, and files are refused for the reason they cannot
 
 - Status: Accepted
+- Superseded in part by ADR 0139: the three deviations recorded below (the
+  transcript's missing image block, the unreadable WebP, the refused file part)
+  are closed there; what remains refused is named there instead.
 - Date: 2026-09-22
 - Related: 0099 (the console boundary), 0120 (the workspace file face), 0134
   (the `@` menu over the same directory), 0128 (refusing a family by name)
@@ -117,6 +120,11 @@ name exactly where it cannot.**
 - An image prompt reaches the model, and the answer is about the image.
 
 ### Deviations, recorded rather than hidden
+
+**Closed by ADR 0139**, which measures WebP from its own header, carries the
+prompt's attachments into the projected user message, and delivers a file as the
+reference host does. They are kept here as what was true when this decision
+landed.
 
 1. **The durable transcript does not yet carry the prompt's image.** The projected
    `user/message` is built from `run.started`'s `input` (`dshwire.userMessage`,

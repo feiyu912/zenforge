@@ -132,7 +132,7 @@ func (l *SessionLog) Title() (string, int64) {
 // A session with no turns yet yields an empty log with no error; callers decide
 // whether that is a draft (the console's new chat) or a session this host does
 // not serve.
-func Session(ctx context.Context, source Source, sessionID string, identity func(turn int) Identity) (*SessionLog, error) {
+func Session(ctx context.Context, source Source, sessionID string, identity func(turn int) Identity, inputs Inputs) (*SessionLog, error) {
 	runs, err := source.Turns(ctx, sessionID)
 	if err != nil {
 		return nil, err
@@ -156,7 +156,13 @@ func Session(ctx context.Context, source Source, sessionID string, identity func
 				}
 			}
 		}
-		projection := Project(events, stamp)
+		// Each turn's opening message carries that turn's own attachments, which
+		// is why the provider is asked by run id rather than once per session.
+		var runInputs []Attachment
+		if inputs != nil {
+			runInputs = inputs(runID)
+		}
+		projection := Project(events, stamp, func(string) []Attachment { return runInputs })
 		log.Records = append(log.Records, projection.Events...)
 		log.TurnRecords = append(log.TurnRecords, len(projection.Events))
 		// The next turn starts where this turn's records end, whether or not it

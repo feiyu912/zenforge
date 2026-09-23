@@ -73,7 +73,7 @@ func TestProjectionIsLegalForTheVendoredConsole(t *testing.T) {
 		"type": true, "seq": true, "time": true, "data": true,
 		"ignorable": true, "surfaceOp": true, "sourceEventSeqs": true,
 	}
-	projection := Project(aTurn(), Identity{Provider: "openai", Model: "qwen-plus"})
+	projection := Project(aTurn(), Identity{Provider: "openai", Model: "qwen-plus"}, nil)
 	for _, record := range projection.Events {
 		encoded, err := json.Marshal(record)
 		if err != nil {

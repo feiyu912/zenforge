@@ -54,7 +54,15 @@ const (
 	// reasoning (with its signature) that the provider requires replayed
 	// verbatim on the next turn. They ride in MessageState.Meta, which the
 	// run-state schema already defines, so no schema version changes.
-	metaMessageImages             = "zenforge.images"
+	metaMessageImages = "zenforge.images"
+
+	// MetaPromptText carries the operator's own words separately from the input
+	// the model is given. They differ when a prompt's attachment is delivered as
+	// text the model must read (the console's file handle): that text belongs in
+	// front of the prompt for the model, and nowhere near the session title the
+	// console's sidebar shows. It is exported because the adapter that admits a
+	// prompt is what sets it.
+	MetaPromptText                = "zenforge.promptText"
 	metaMessageReasoning          = "zenforge.reasoning"
 	metaMessageReasoningSignature = "zenforge.reasoning_signature"
 	metaProjectInstructions       = "zenforge.project_instructions"
@@ -3682,6 +3690,14 @@ func (a *Agent) maybeInjectEnvironmentUpdate(
 // titled every planning session with the preset's instruction -- the console's
 // sidebar read "h Create a concise todo plan for" (ADR 0106).
 func sessionTitleInput(state harness.RunState) string {
+	// The operator's own words first: a prompt whose attachment was delivered as
+	// text the model reads would otherwise title the conversation with a file
+	// handle.
+	if text, ok := state.Meta[MetaPromptText].(string); ok {
+		if strings.TrimSpace(text) != "" {
+			return text
+		}
+	}
 	if task, ok := state.Meta[planExecuteInputMetaKey].(string); ok {
 		if strings.TrimSpace(task) != "" {
 			return task

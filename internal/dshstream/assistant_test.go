@@ -400,7 +400,7 @@ func TestAssistantTrackerHandsOverAnOpenAttemptAsABaseline(t *testing.T) {
 		deltaEvent(5, "the ", "attempt-1", 1),
 		deltaEvent(6, "answer", "attempt-1", 1),
 	}
-	tracker := replayAssistant("run-1", 2, 8, dshwire.Identity{Turn: 2}, events)
+	tracker := replayAssistant("run-1", 2, 8, dshwire.Identity{Turn: 2}, events, nil)
 	opening := tracker.baselineOf()
 	if opening == nil {
 		t.Fatal("a turn that is still streaming handed over no attempt")
@@ -441,7 +441,7 @@ func TestAssistantTrackerHandsOverAnOpenAttemptAsABaseline(t *testing.T) {
 		durableEvent(2, zenforge.EventStepStarted, map[string]any{"step": 1}),
 		deltaEvent(3, "done", "attempt-1", 1),
 		durableEvent(4, zenforge.EventModelDone, map[string]any{"step": 1}),
-	})
+	}, nil)
 	if settling := settled.baselineOf(); settling != nil {
 		t.Fatalf("a settled turn handed over %+v", settling)
 	}

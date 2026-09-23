@@ -558,6 +558,70 @@ wrote an event is omitted, because `session/page` answers not-found for it; and 
 log has no terminal event is recorded as cancelled when it is adopted. Drafts stay
 process-local (ADR 0104).
 
+## Shipped: every recorded attachment deviation is closed (2026-09-22)
+
+ADR 0138 left three gaps; ADR 0139 closes them, and the live host shows all three:
+
+- **WebP is measured from its own header.** `imageSizeWebP` walks the RIFF chunk
+  list and reads all three bitstreams (`VP8X`'s 24-bit canvas after its flags,
+  `VP8L`'s packed 14-bit fields, `VP8 `'s frame header masked to 14 bits), bounded
+  to 64 bytes of chunks and never touching pixels. Five real Pillow-produced WebP
+  files are embedded in the test (lossy, wide lossy, lossless, extended with EXIF,
+  640x480 alpha) plus a `VP8X`-only header, and twenty generated files across four
+  variants and five sizes were compared against Pillow's own reported size while
+  implementing it: all agreed. `session/attachment` now answers a WebP's real
+  dimensions instead of refusing it.
+- **The projected user message carries what the model was given.** The host records
+  each prompt's blocks against the run that turn is (`attachments/prompts/…`, one
+  record per run); `dshwire` gained an `Inputs` provider, and the `run.started` arm
+  builds the message content as the attachments in the console's own submission
+  order, then the text. Both readers use it: the live follow stream and this
+  package's `session/page` and list projections. Live: the transcript's own
+  `user/message` for an image prompt carries the image block with the stored id and
+  the dimensions read from the PNG.
+- **A file is delivered as upstream delivers it.** Reading `dsh-llm`'s
+  `fileHandleText` settled that upstream never sends a file's bytes to a model
+  either: it replaces the block with text naming the file, its size, its digest
+  prefix and the path of a verbatim read-only copy. This host now does the same,
+  publishing the copy at `.zenforge/attachments/<digest>-<name>` (mode 0444) inside
+  the workspace -- it has to be inside it, because the agent's own file tools are
+  rooted there -- and the transcript shows a `file` block naming the stored
+  attachment. An unknown receipt is the console's own attachment error, named.
+
+One defect surfaced in that live run and is fixed here: the handle text is part of
+the run's input, so the session title was `[File "notes.txt" (16 bytes, ...` until
+the operator's own words were carried beside it in the run's metadata
+(`zenforge.MetaPromptText`). The live sidebar now reads `what colour is this, and
+what does the`.
+
+What is still refused, and why it is not a deviation: an attachment into a run that
+is **already answering** (the queue and steer paths carry text only), a part that
+is neither text, image nor file, and `session/attachment` for a non-image (the
+pinned client's descriptor is an image union with no shape for anything else).
+
+## Next: the remaining refused families, in the order the console notices them
+
+The attachment plane is served end to end now. What the ledger still refuses is
+what this host genuinely has no half for, so the next chains are the families the
+console can open and find empty:
+
+1. **The terminal** (`terminal/*`). The console's terminal panel is a real WS + RPC
+   family with a PTY behind it; this host has no PTY (and the sandbox this repo is
+   developed in cannot even allocate one -- `start pty: operation not permitted`,
+   recorded in ADR 0137), so the honest chain here is to decide whether a session
+   that *can* allocate a PTY is worth the sandbox policy work, or to keep refusing
+   `terminal/*` by name with the reason.
+2. **Child sessions and delegation** (`session/children`, the subagent plane). The
+   console renders a parent's children; this host runs subagents, so the missing
+   half is a projection from the subagent registry rather than a capability.
+3. **The `@`-mention resolver for conversations.** The file half of the `@` menu
+   works (ADR 0134); the conversation half needs a resolver that turns a picked
+   session into the text the model should read, and the same decision applies as
+   for files: read the log, or name the missing half.
+4. **Office and PDF conversion.** No converter is linked and the panel that would
+   show the result is dropped from the build; the honest answer stays the refusal
+   that names the missing converter, unless a converter is worth adding.
+
 ## Shipped: the console's attachments are stored, and images reach the model (2026-09-22)
 
 The upload path, the store and the read half are served, and an image prompt is
@@ -585,7 +649,7 @@ The ledger moved two rows: **58 served / 4 streams / 44 refused / 0 unserved** o
 the input message the run appends (the metadata slot tool results already use);
 that is the only framework change.
 
-## Next: the prompt's image in the durable transcript, then WebP dimensions
+## Next at the time: the prompt's image in the durable transcript, then WebP dimensions
 
 Two gaps ADR 0138 records as deviations, in the order the console notices them:
 

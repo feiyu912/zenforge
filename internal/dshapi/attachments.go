@@ -74,6 +74,39 @@ type AttachmentStore interface {
 	// descriptor that is not published for that session is reported as
 	// [ErrAttachmentNotFound].
 	Read(ctx context.Context, sessionID, attachmentID string) (AttachmentDescriptor, []byte, error)
+	// RecordPromptAttachments publishes what one turn's prompt carried, under the
+	// run id that turn runs as, so the console's transcript of that turn can show
+	// it (ADR 0139). It is the write half of the seam the projector reads: the
+	// durable log's run.started holds the prompt's text, and only the host that
+	// admitted the prompt knows the rest.
+	RecordPromptAttachments(ctx context.Context, sessionID, runID string, attachments []PromptAttachment) error
+	// PromptAttachments returns what one run's prompt carried, which is the read
+	// half of the same record: the console's page and history projections are
+	// served from the log, so they read it back by run id.
+	PromptAttachments(ctx context.Context, runID string) ([]PromptAttachment, error)
+	// MaterializePromptFile publishes a stored file as a verbatim read-only copy
+	// the agent's own file tools can read, and returns the path the run is told to
+	// read -- relative to the tool world when the store has one, which is what a
+	// workspace-rooted file tool accepts. An empty path means the store could not
+	// publish one, and the model is told that instead.
+	MaterializePromptFile(ctx context.Context, sessionID, attachmentID string) (string, error)
+}
+
+// PromptAttachment is one attachment a prompt carried, as the transcript shows
+// it. An image names its stored attachment, media type and pixel dimensions; a
+// file names its stored attachment and size, and the model-visible copy the run
+// was told to read.
+type PromptAttachment struct {
+	Kind         string `json:"kind"`
+	AttachmentID string `json:"attachmentId"`
+	Name         string `json:"name,omitempty"`
+	MediaType    string `json:"mediaType,omitempty"`
+	Bytes        int    `json:"bytes"`
+	Width        int    `json:"width,omitempty"`
+	Height       int    `json:"height,omitempty"`
+	// Path is where a file's verbatim read-only copy was published, when the
+	// store could publish one. It is what the run was told to read.
+	Path string `json:"path,omitempty"`
 }
 
 // ErrAttachmentNotFound reports an id that this session has no stored attachment
@@ -305,8 +338,8 @@ func (h *Handler) sessionAttachment(ctx context.Context, args map[string]json.Ra
 // would otherwise be sent to a provider as a format it is not, and the size is
 // bounded by the same limit the model path enforces, because the image is
 // replayed on every later request of the conversation.
-func decodePromptContentImages(parts []json.RawMessage) ([]model.Image, *methodError) {
-	images := make([]model.Image, 0, len(parts))
+func decodePromptContentImages(parts []json.RawMessage) ([]promptImagePart, *methodError) {
+	images := make([]promptImagePart, 0, len(parts))
 	for _, rawPart := range parts {
 		part, err := decodeJSONObject(rawPart)
 		if err != nil {
@@ -356,7 +389,7 @@ func decodePromptContentImages(parts []json.RawMessage) ([]model.Image, *methodE
 		if failure != nil {
 			return nil, failure
 		}
-		images = append(images, model.Image{MediaType: mediaType, Data: data, Path: name})
+		images = append(images, promptImagePart{name: name, data: data})
 	}
 	if len(images) == 0 {
 		return nil, nil
@@ -365,7 +398,7 @@ func decodePromptContentImages(parts []json.RawMessage) ([]model.Image, *methodE
 	// aggregate is bounded too -- the same reason the per-image limit exists.
 	total := 0
 	for _, image := range images {
-		total += len(image.Data)
+		total += len(image.data)
 	}
 	if total > model.MaxImageBytes {
 		return nil, fail(attachmentInvalidCode,
@@ -375,23 +408,25 @@ func decodePromptContentImages(parts []json.RawMessage) ([]model.Image, *methodE
 	return images, nil
 }
 
-// decodeFilePromptPart reports the refusal for a `file` content part, and is the
-// one place that decides it. The console cites a receipt for a file it uploaded
-// (`serializeDraftAttachments`: `{type: "file", receiptId}`), so the bytes may
-// well be in this host's store; what is missing is a carrier, and the refusal
-// says exactly that instead of blaming a missing store.
-func decodeFilePromptPart(part map[string]json.RawMessage) *methodError {
+// decodeFilePromptPart reads a `file` content part into the receipt it cites. The
+// console uploads a file first and then cites its receipt
+// (`serializeDraftAttachments`: `{type: "file", receiptId}`), so this is the id
+// the store is asked to resolve -- and an id it never staged is the console's own
+// attachment error, reported by admission rather than here.
+func decodeFilePromptPart(part map[string]json.RawMessage) (promptFilePart, *methodError) {
 	receiptID, _, failure := stringArg(part, "receiptId")
 	if failure != nil {
-		return failure
+		return promptFilePart{}, failure
 	}
-	details := map[string]any{"part": "file", "capability": "a model-visible file input"}
-	if receiptID != "" {
-		details["receiptId"] = receiptID
+	if receiptID == "" {
+		return promptFilePart{}, fail(codeArgumentsInvalid, `a "file" content part requires "receiptId"`,
+			map[string]any{"argument": "content"})
 	}
-	return fail(codeUnsupportedContent,
-		"this host can store an uploaded file and hand its bytes back by id, but its model path carries images only, so a file part cannot be delivered to the model; put the file in the workspace and ask the agent to read it",
-		details)
+	name, _, failure := stringArg(part, "name")
+	if failure != nil {
+		return promptFilePart{}, failure
+	}
+	return promptFilePart{receiptID: receiptID, name: name}, nil
 }
 
 // attachmentRefusal is the one sentence the family refuses with when no store is

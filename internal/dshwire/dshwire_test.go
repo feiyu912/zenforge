@@ -44,7 +44,7 @@ func aTurn() []zenforge.Event {
 
 func project(t *testing.T, events []zenforge.Event) []Event {
 	t.Helper()
-	return Project(events, Identity{Provider: "openai", Model: "qwen-plus"}).Events
+	return Project(events, Identity{Provider: "openai", Model: "qwen-plus"}, nil).Events
 }
 
 func findByType(t *testing.T, events []Event, eventType string) Event {
@@ -88,7 +88,7 @@ func TestProjectionNumbersTheConsoleSequence(t *testing.T) {
 	}
 	// A turn that projects to records must still cite the time of the durable
 	// event each record came from.
-	source := Project(events, Identity{}).Source
+	source := Project(events, Identity{}, nil).Source
 	if gone := len(events) - len(source); gone == 0 {
 		t.Fatal("no durable events were dropped, so this case no longer exercises the filter")
 	}
@@ -258,7 +258,7 @@ func TestProjectionServesTheSystemPromptAndTheRequestHeader(t *testing.T) {
 		event(7, zenforge.EventStepDone, map[string]any{"step": 1}),
 	}
 	identity := Identity{Provider: "openai", Model: "qwen-plus"}
-	projected := Project(events, identity)
+	projected := Project(events, identity, nil)
 	want := []string{
 		"turn/start", "user/message", "step/start", "system/message", "system/message",
 		"request/header", "assistant/message", "step/end",
@@ -451,7 +451,7 @@ func TestProjectionContinuesAfterASnapshot(t *testing.T) {
 		event(3, zenforge.EventModelStarted, map[string]any{"step": 1}),
 		event(4, zenforge.EventModelDelta, map[string]any{"step": 1, "textDelta": "Hello"}),
 	}
-	projection := Project(events, Identity{})
+	projection := Project(events, Identity{}, nil)
 	projection.Append(event(5, zenforge.EventModelDelta, map[string]any{"step": 1, "textDelta": " there"}))
 	projection.Append(event(6, zenforge.EventModelDone, map[string]any{"step": 1}))
 	assistant := findByType(t, projection.Events, "assistant/message")
@@ -473,7 +473,7 @@ func TestProjectionContinuesAfterASnapshot(t *testing.T) {
 // the follow snapshot serve the newest records and say whether anything older
 // was left out.
 func TestProjectionWindowsTheNewestRecords(t *testing.T) {
-	projection := Project(aTurn(), Identity{})
+	projection := Project(aTurn(), Identity{}, nil)
 	window, hasMore := projection.Window(3)
 	if !hasMore {
 		t.Fatal("hasMore = false for a window that cut the log")
@@ -597,7 +597,7 @@ func sourceRPCID(t *testing.T, projected Event) string {
 // shape the fold expects -- a tagged source object rather than the string the
 // durable payload carries (ADR 0119).
 func TestProjectionServesTheTitleTheConsoleFolds(t *testing.T) {
-	projector := New(Identity{Turn: 1})
+	projector := New(Identity{Turn: 1}, nil)
 	renamed, ok := projector.Next(zenforge.Event{
 		Seq: 1, Type: zenforge.EventSessionTitle, Timestamp: 7,
 		Payload: map[string]any{"title": "My Session", "source": "user"},
@@ -630,5 +630,105 @@ func TestProjectionServesTheTitleTheConsoleFolds(t *testing.T) {
 	derivedSource, _ := derived.Data["source"].(map[string]any)
 	if derivedSource["kind"] != "fallback" {
 		t.Fatalf("source = %v, want {kind:fallback}", derived.Data["source"])
+	}
+}
+
+// The projected user message shows what the model was given. The prompt's text
+// alone is what run.started carries durably, so the attachments come from the
+// host that admitted the prompt -- and they have to be there when the transcript
+// is rebuilt from the log, which is what this pins.
+func TestUserMessageCarriesThePromptsAttachments(t *testing.T) {
+	events := []zenforge.Event{
+		event(1, zenforge.EventRunStarted, map[string]any{"input": "what is this?", "promptId": "req-1", "runId": "run_1"}),
+		event(2, zenforge.EventRunDone, map[string]any{"output": "a picture"}),
+	}
+	inputs := func(runID string) []Attachment {
+		if runID != "run_1" {
+			t.Fatalf("run id = %q, want the run the prompt started", runID)
+		}
+		return []Attachment{
+			{Kind: "file", AttachmentID: "att-file", Name: "notes.txt", Bytes: 16},
+			{Kind: "image", AttachmentID: "att-image", Name: "pixels.png", MediaType: "image/png", Bytes: 73, Width: 4, Height: 3},
+			{Kind: "image", AttachmentID: "att-anonymous", MediaType: "image/jpeg", Bytes: 9, Width: 1, Height: 1},
+		}
+	}
+	projected := Project(events, Identity{}, Inputs(inputs)).Events
+	message := findByType(t, projected, "user/message")
+	content, ok := message.Data["content"].([]any)
+	if !ok || len(content) != 4 {
+		t.Fatalf("content = %#v, want two blocks and the text", message.Data["content"])
+	}
+	file, _ := content[0].(map[string]any)
+	if file["type"] != "file" {
+		t.Fatalf("first block = %#v, want the file the prompt carried first", file)
+	}
+	attachment, _ := file["attachment"].(map[string]any)
+	if attachment["attachmentId"] != "att-file" || attachment["name"] != "notes.txt" || attachment["bytes"] != 16 {
+		t.Fatalf("file block = %#v, want its stored attachment and size", attachment)
+	}
+	image, _ := content[1].(map[string]any)
+	target, _ := image["attachment"].(map[string]any)
+	if image["type"] != "image" || target["attachmentId"] != "att-image" || target["mediaType"] != "image/png" ||
+		target["width"] != 4 || target["height"] != 3 || target["name"] != "pixels.png" {
+		t.Fatalf("image block = %#v, want its stored attachment and dimensions", image)
+	}
+	// A nameless image is still renderable, so it keeps its block and simply
+	// carries no name.
+	anonymous, _ := content[2].(map[string]any)
+	if anonymous["type"] != "image" {
+		t.Fatalf("third block = %#v, want the nameless image", anonymous)
+	}
+	if _, present := anonymous["attachment"].(map[string]any)["name"]; present {
+		t.Fatalf("nameless image block = %#v, want no name", anonymous)
+	}
+	text, _ := content[3].(map[string]any)
+	if text["type"] != "text" || text["text"] != "what is this?" {
+		t.Fatalf("last block = %#v, want the prompt's words", text)
+	}
+}
+
+// An image the console could not draw is not a block: a descriptor without the
+// facts a viewer needs would render as a broken attachment, so it is dropped
+// rather than shown wrong.
+func TestUserMessageSkipsAnImageItCannotDescribe(t *testing.T) {
+	events := []zenforge.Event{event(1, zenforge.EventRunStarted, map[string]any{"input": "hello"})}
+	inputs := func(string) []Attachment {
+		return []Attachment{
+			{Kind: "image", AttachmentID: "att-image", MediaType: "image/png", Bytes: 8},
+			{Kind: "file", Bytes: 4},
+			{Kind: "video", AttachmentID: "att-video"},
+		}
+	}
+	projected := Project(events, Identity{}, Inputs(inputs)).Events
+	message := findByType(t, projected, "user/message")
+	content, _ := message.Data["content"].([]any)
+	if len(content) != 1 {
+		t.Fatalf("content = %#v, want only the text block", content)
+	}
+	if text, _ := content[0].(map[string]any); text["text"] != "hello" {
+		t.Fatalf("content = %#v, want the prompt's words", content)
+	}
+}
+
+// A prompt with no attachments projects exactly the message it always did: the
+// seam must not change the shape of an ordinary turn.
+func TestUserMessageWithoutAttachmentsIsOneTextBlock(t *testing.T) {
+	events := []zenforge.Event{event(1, zenforge.EventRunStarted, map[string]any{"input": "hello"})}
+	for name, inputs := range map[string]Inputs{
+		"no provider":     nil,
+		"empty provider":  func(string) []Attachment { return nil },
+		"only unrendered": func(string) []Attachment { return []Attachment{{Kind: "image"}} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			projected := Project(events, Identity{}, inputs).Events
+			message := findByType(t, projected, "user/message")
+			content, _ := message.Data["content"].([]any)
+			if len(content) != 1 {
+				t.Fatalf("content = %#v, want one text block", content)
+			}
+			if text, _ := content[0].(map[string]any); text["type"] != "text" || text["text"] != "hello" {
+				t.Fatalf("content = %#v, want the prompt's words", content)
+			}
+		})
 	}
 }

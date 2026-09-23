@@ -655,29 +655,38 @@ the answer does mirror is the contract the sidebar renders: one row per
 conversation, the reference's twenty-result cap with `hasMore`, its 240-code-point
 excerpt bound, and its own refusals for a blank, over-long or NUL-bearing query.
 
-## Attachments: images work, files cannot be sent yet
+## Attachments: images and files both reach the model
 
-The upload path and the store are served (ADR 0138): a picked file uploads through
-`fileUploads/upload` or the raw-byte route `/api/session/uploadFileBinary`, is
-stored under the checkpoint directory with the metadata the console renders
-(`mediaType`, `bytes`, `width`, `height`), and can be read back with
-`session/attachment`. What is missing is a *carrier* for a non-image file:
+The upload path, the store and the prompt path are served (ADRs 0138, 0139): a
+picked file uploads through `fileUploads/upload` or the raw-byte route
+`/api/session/uploadFileBinary`, is stored under the checkpoint directory with the
+metadata the console renders (`mediaType`, `bytes`, `width`, `height`), and can be
+read back with `session/attachment`, whose dimensions are read from the image's own
+header for PNG, JPEG, GIF **and WebP** alike.
 
-- a prompt that cites a receipt (`{type: "file", receiptId}`) is refused by name,
-  because this host's model path carries images only, so there is nothing to
-  deliver the file to. The workspace remains the substitute: a file put in the
-  host's directory can be read by the agent's own file tools;
-- an **image** prompt works: it travels inline in the prompt and is delivered to
-  the run the prompt starts, so the model answers about the image. Two limits are
-  named rather than hidden: an image cannot be queued or steered into a run that is
-  already answering (those paths carry the next turn's text), and a WebP can be
-  *sent* but not *read back*, because this host has no reader for its dimensions
-  and `session/attachment`'s descriptor requires them. Storing one under a guessed
-  0x0 would have been worse than refusing it;
-- the durable transcript does not yet render the prompt's image: the projected
-  user message is built from `run.started`'s input text, so after the console
-  retires its local echo the image is no longer shown, even though the model
-  received it (ADR 0138, deviation 1).
+- an **image** prompt travels inline in the prompt and is delivered to the run the
+  prompt starts, so the model answers about the image. The transcript shows it too:
+  the projected user message carries the image block with the stored attachment id
+  and its real dimensions, so retiring the console's local echo no longer loses it;
+- a **file** prompt is delivered the way the reference host delivers one: the model
+  receives text naming the file, its size, its digest prefix and the path of a
+  verbatim read-only copy the agent's file tools can read, and the transcript shows
+  a file block naming the stored attachment. The copy is published at
+  `.zenforge/attachments/<digest>-<name>` inside the workspace, mode 0444, because
+  the agent's file tools are rooted in the workspace and a copy anywhere else would
+  be a path the model is told to read and cannot. A run told to read a path it
+  cannot reach is never a claim this host makes silently: if there is no workspace
+  to publish into, the model is told that instead;
+- the limits that remain are named rather than hidden: an attachment cannot be
+  queued or steered into a run that is **already answering** (those paths carry the
+  next turn's text, so it would be dropped), and an image whose header this host
+  cannot read -- a truncated or corrupt file, not a format -- is refused by name
+  because the console's message block needs the dimensions a viewer draws at;
+- one failure mode is honest and bounded: a run's attachments are recorded once,
+  right after the run starts, and the record is best-effort. If the host dies in
+  that instant, the turn's transcript shows the prompt's text without its
+  attachments -- the model still received them -- because failing an already
+  answering prompt would be the bigger loss.
 
 ## A forked conversation is a snapshot
 
@@ -789,10 +798,11 @@ operator can act on. They are worth listing in one place:
 - **No child sessions.** Subagents run as tasks inside the parent's own run, so there
   is no child to list, prompt or interrupt, and the follow stream refuses a subagent
   address for the same reason.
-- **No file attachments in a prompt.** The upload route and the store are served, but a
-  prompt that cites a file receipt is refused by name: the model path carries images
-  only. Images in a prompt do work (see "Attachments" above), with the queue and
-  WebP limits named there.
+- **Attachments do not survive the queue.** A prompt's images and files reach the run
+  it starts, and the transcript shows them, but a message *queued* or *steered* into a
+  run that is already answering carries text only, so an attachment submitted that way
+  is refused by name (see "Attachments" above). The same section names the one
+  best-effort step: a run's attachment record is written just after the run starts.
 - **No conversation references in the `@` menu.** Nothing parses or expands an
   `@`-mention, so a picked conversation row would reach the model as literal text.
   The file half of the same menu does work.

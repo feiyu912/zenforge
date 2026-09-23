@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/feiyu912/zenforge"
+	"github.com/feiyu912/zenforge/internal/dshwire"
 	"github.com/feiyu912/zenforge/model"
 )
 
@@ -275,29 +276,54 @@ func TestSessionAttachmentServesAStoredImage(t *testing.T) {
 		t.Fatalf("non-image details = %+v, want NOT_AN_IMAGE", envelope.Result.Error.Details)
 	}
 
-	// A WebP is an image whose dimensions this host cannot read. The bytes are
-	// stored and the refusal names the missing reader instead of guessing a size.
-	webp := store.mustSave(t, sessionID, "picture.webp", webpHeader(64, 32))
-	if webp.MediaType != "image/webp" || webp.Width != 0 || webp.Height != 0 {
-		t.Fatalf("webp descriptor = %+v, want a stored WebP with no dimensions", webp)
+	// A real WebP is measured and served like any other image now that the header
+	// reader exists (ADR 0139).
+	webp := store.mustSave(t, sessionID, "picture.webp", decodeFixture(t, testWebPBase64))
+	if webp.MediaType != "image/webp" || webp.Width != 4 || webp.Height != 3 {
+		t.Fatalf("webp descriptor = %+v, want a measured WebP", webp)
 	}
 	envelope = decodeResponse(t, f.post(t, "/api/session/attachment", rpcBody(t, "s4", "session/attachment",
 		`{"sessionId":`+mustJSON(t, sessionID)+`,"attachmentId":`+mustJSON(t, webp.ID)+`}`)))
+	if !envelope.Result.OK {
+		t.Fatalf("webp read = %s, want the attachment", envelope.Result.Error)
+	}
+
+	// A WebP whose header is truncated is still stored, with no dimensions, and
+	// the read names the missing measurement instead of guessing a size.
+	broken := store.mustSave(t, sessionID, "broken.webp", decodeFixture(t, testWebPBase64)[:20])
+	if broken.MediaType != "image/webp" || broken.Width != 0 {
+		t.Fatalf("broken descriptor = %+v, want the type with no dimensions", broken)
+	}
+	envelope = decodeResponse(t, f.post(t, "/api/session/attachment", rpcBody(t, "s5", "session/attachment",
+		`{"sessionId":`+mustJSON(t, sessionID)+`,"attachmentId":`+mustJSON(t, broken.ID)+`}`)))
 	if envelope.Result.OK || envelope.Result.Error.Code != attachmentInvalidCode {
-		t.Fatalf("webp = %+v, want %q", envelope.Result, attachmentInvalidCode)
+		t.Fatalf("broken webp = %+v, want %q", envelope.Result, attachmentInvalidCode)
 	}
 	if reason, _ := envelope.Result.Error.Details["reason"].(string); reason != "DIMENSIONS_UNREADABLE" {
-		t.Fatalf("webp details = %+v, want DIMENSIONS_UNREADABLE", envelope.Result.Error.Details)
+		t.Fatalf("broken webp details = %+v, want DIMENSIONS_UNREADABLE", envelope.Result.Error.Details)
 	}
 	if !strings.Contains(envelope.Result.Error.Message, "image/webp") {
-		t.Fatalf("webp message = %q, want the format named", envelope.Result.Error.Message)
+		t.Fatalf("broken webp message = %q, want the format named", envelope.Result.Error.Message)
 	}
 }
 
+// testWebPBase64 is a real 4x3 lossless WebP produced by Pillow, embedded so the
+// family's own test measures a real container.
+const testWebPBase64 = "UklGRh4AAABXRUJQVlA4TBEAAAAvA4AAAAdQiirUo/+BiOh/AAA="
+
+func decodeFixture(t *testing.T, encoded string) []byte {
+	t.Helper()
+	data, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		t.Fatalf("decode fixture: %v", err)
+	}
+	return data
+}
+
 // An image content part travels inline in the prompt and is delivered to the run
-// the prompt starts; a file part cites a receipt and is refused by name, because
-// the missing half is a carrier rather than a store.
-func TestPromptAdmitsImagesAndRefusesFilesByName(t *testing.T) {
+// the prompt starts; a file part cites a receipt, is resolved from the store, and
+// is delivered as the model-visible handle text the reference host uses.
+func TestPromptAdmitsImagesAndDeliversFilesAsHandles(t *testing.T) {
 	f := newFixture(t, Config{})
 	f.handler.SetAttachments(newMemoryAttachments())
 	sessionID := f.createSession(t)
@@ -323,7 +349,6 @@ func TestPromptAdmitsImagesAndRefusesFilesByName(t *testing.T) {
 	for _, content := range []string{
 		`{"type":"image","mediaType":"image/png","data":` + mustJSON(t, base64.StdEncoding.EncodeToString([]byte("not an image"))) + `}`,
 		`{"type":"image","mediaType":"image/jpeg","data":` + mustJSON(t, base64.StdEncoding.EncodeToString(encoded)) + `}`,
-		`{"type":"file","receiptId":"att-deadbeef"}`,
 	} {
 		envelope := decodeResponse(t, f.post(t, "/api/session/prompt", rpcBody(t, "rpc-x", "session/prompt",
 			`{"requestId":"req-2","sessionId":`+mustJSON(t, sessionID)+`,"mode":"queue","content":[{"type":"text","text":"hello"},`+content+`]}`)))
@@ -334,13 +359,55 @@ func TestPromptAdmitsImagesAndRefusesFilesByName(t *testing.T) {
 			t.Fatalf("%s: code = %q, want %q", content, envelope.Result.Error.Code, codeUnsupportedContent)
 		}
 	}
-	// The file refusal names the missing carrier and the substitute, and never
-	// pretends the bytes were not stored.
+
+	// A file that was staged is delivered: the run's input carries the reference
+	// host's handle text naming the file, its size, its digest prefix and the
+	// read-only copy the agent can read, and the transcript block names the stored
+	// attachment.
+	fileSession := f.createSession(t)
+	staged, failure := f.handler.storeAttachment(context.Background(), fileSession, "notes.txt", []byte("the file's words"))
+	if failure != nil {
+		t.Fatalf("stage file: %v", failure)
+	}
 	envelope = decodeResponse(t, f.post(t, "/api/session/prompt", rpcBody(t, "rpc-file", "session/prompt",
-		`{"requestId":"req-3","sessionId":`+mustJSON(t, sessionID)+`,"mode":"queue","content":[{"type":"text","text":"hello"},{"type":"file","receiptId":"att-deadbeef"}]}`)))
-	if !strings.Contains(envelope.Result.Error.Message, "carries images only") ||
-		!strings.Contains(envelope.Result.Error.Message, "workspace") {
-		t.Fatalf("file refusal = %q, want the carrier and the substitute named", envelope.Result.Error.Message)
+		`{"requestId":"req-3","sessionId":`+mustJSON(t, fileSession)+`,"mode":"queue","content":[{"type":"text","text":"read this"},{"type":"file","receiptId":`+mustJSON(t, staged.ID)+`}]}`)))
+	if !envelope.Result.OK {
+		t.Fatalf("file prompt = %s, want it accepted", envelope.Result.Error)
+	}
+	task = f.lastTask(t)
+	if !strings.Contains(task.Input, `File "notes.txt" (16 bytes, sha256:`+strings.TrimPrefix(staged.ID, "att-")[:8]+`)`) ||
+		!strings.Contains(task.Input, "verbatim read-only copy saved at") {
+		t.Fatalf("task input = %q, want the handle text naming the file", task.Input)
+	}
+	if len(task.Images) != 0 {
+		t.Fatalf("task images = %+v, want a file to add none", task.Images)
+	}
+	if strings.Index(task.Input, "File ") > strings.Index(task.Input, "read this") {
+		t.Fatalf("task input = %q, want the handle before the words", task.Input)
+	}
+	// The operator's own words travel apart from the model's input, so the
+	// conversation is not titled with a file handle.
+	if got, _ := task.Meta[zenforge.MetaPromptText].(string); got != "read this" {
+		t.Fatalf("task meta prompt text = %q, want the operator's words", got)
+	}
+
+	// A receipt this session never staged is the console's own attachment error,
+	// named, rather than a sentence about a carrier.
+	unknownSession := f.createSession(t)
+	envelope = decodeResponse(t, f.post(t, "/api/session/prompt", rpcBody(t, "rpc-file-unknown", "session/prompt",
+		`{"requestId":"req-4","sessionId":`+mustJSON(t, unknownSession)+`,"mode":"queue","content":[{"type":"text","text":"hello"},{"type":"file","receiptId":"att-deadbeef"}]}`)))
+	if envelope.Result.OK || envelope.Result.Error.Code != attachmentInvalidCode {
+		t.Fatalf("unknown receipt = %+v, want %q", envelope.Result, attachmentInvalidCode)
+	}
+	if reason, _ := envelope.Result.Error.Details["reason"].(string); reason != "ATTACHMENT_NOT_FOUND" {
+		t.Fatalf("unknown receipt details = %+v, want ATTACHMENT_NOT_FOUND", envelope.Result.Error.Details)
+	}
+
+	// A file part with no receipt at all is a malformed part, not a refusal.
+	envelope = decodeResponse(t, f.post(t, "/api/session/prompt", rpcBody(t, "rpc-file-none", "session/prompt",
+		`{"requestId":"req-5","sessionId":`+mustJSON(t, unknownSession)+`,"mode":"queue","content":[{"type":"text","text":"hello"},{"type":"file"}]}`)))
+	if envelope.Result.OK || envelope.Result.Error.Code != codeArgumentsInvalid {
+		t.Fatalf("receiptless file = %+v, want %q", envelope.Result, codeArgumentsInvalid)
 	}
 }
 
@@ -375,31 +442,63 @@ func TestPromptRefusesAnImageIntoALiveRun(t *testing.T) {
 // descriptor the way a real store does: the media type from the bytes and the
 // dimensions from the image header, when this host can read it.
 type memoryAttachments struct {
+	prompts map[string][]PromptAttachment
+
 	mu       sync.Mutex
 	uploads  []memoryUpload
 	sessions map[string]map[string]memoryUpload
 }
 
 type memoryUpload struct {
-	sessionID string
-	name      string
-	data      []byte
+	sessionID  string
+	name       string
+	data       []byte
+	descriptor AttachmentDescriptor
 }
 
 func newMemoryAttachments() *memoryAttachments {
-	return &memoryAttachments{sessions: map[string]map[string]memoryUpload{}}
+	return &memoryAttachments{
+		sessions: map[string]map[string]memoryUpload{},
+		prompts:  map[string][]PromptAttachment{},
+	}
 }
 
 func (m *memoryAttachments) Save(_ context.Context, sessionID, name string, data []byte) (AttachmentDescriptor, error) {
 	descriptor := describeBytes(name, data)
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.uploads = append(m.uploads, memoryUpload{sessionID: sessionID, name: name, data: append([]byte(nil), data...)})
+	m.uploads = append(m.uploads, memoryUpload{sessionID: sessionID, name: name, data: append([]byte(nil), data...), descriptor: descriptor})
 	if m.sessions[sessionID] == nil {
 		m.sessions[sessionID] = map[string]memoryUpload{}
 	}
 	m.sessions[sessionID][descriptor.ID] = memoryUpload{sessionID: sessionID, name: name, data: append([]byte(nil), data...)}
 	return descriptor, nil
+}
+
+// RecordPromptAttachments keeps what one prompt carried, so a test can assert the
+// seam the projector reads.
+func (m *memoryAttachments) RecordPromptAttachments(_ context.Context, sessionID, runID string, attachments []PromptAttachment) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.prompts == nil {
+		m.prompts = map[string][]PromptAttachment{}
+	}
+	m.prompts[runID] = append([]PromptAttachment(nil), attachments...)
+	return nil
+}
+
+// MaterializePromptFile publishes a copy in the fake tool world and returns its
+// path, which is what the model is told to read.
+func (m *memoryAttachments) MaterializePromptFile(_ context.Context, sessionID, attachmentID string) (string, error) {
+	descriptor, _, err := m.Read(context.Background(), sessionID, attachmentID)
+	if err != nil {
+		return "", err
+	}
+	name := descriptor.Name
+	if name == "" {
+		name = attachmentID
+	}
+	return "attachments/" + name, nil
 }
 
 func (m *memoryAttachments) Read(_ context.Context, sessionID, attachmentID string) (AttachmentDescriptor, []byte, error) {
@@ -416,6 +515,28 @@ func (m *memoryAttachments) saved() []memoryUpload {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return append([]memoryUpload(nil), m.uploads...)
+}
+
+// savedID is the id this store published for one name, so a test can assert the
+// descriptor the projector is handed is the one the console was given.
+func (m *memoryAttachments) savedID(t *testing.T, sessionID, name string) string {
+	t.Helper()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, upload := range m.uploads {
+		if upload.sessionID == sessionID && upload.name == name {
+			return upload.descriptor.ID
+		}
+	}
+	t.Fatalf("no stored attachment named %q for %q", name, sessionID)
+	return ""
+}
+
+// PromptAttachments is the read half a host installs on its stream.
+func (m *memoryAttachments) PromptAttachments(_ context.Context, runID string) ([]PromptAttachment, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]PromptAttachment(nil), m.prompts[runID]...), nil
 }
 
 func (m *memoryAttachments) mustSave(t *testing.T, sessionID, name string, data []byte) AttachmentDescriptor {
@@ -486,21 +607,6 @@ func encodePNG(t *testing.T, width, height int) []byte {
 	return buffer.Bytes()
 }
 
-// webpHeader is a RIFF/WEBP header with a VP8L lossless header, which is enough
-// for a media-type sniffer and not enough for a dimension reader: exactly the
-// honest WebP case.
-func webpHeader(width, height int) []byte {
-	data := make([]byte, 25)
-	copy(data[0:4], "RIFF")
-	copy(data[8:12], "WEBP")
-	copy(data[12:16], "VP8L")
-	data[20] = 0x2f
-	data[21] = byte(width - 1)
-	data[22] = byte((height-1)<<6 | (width-1)>>8)
-	data[23] = byte((height - 1) >> 2)
-	return data
-}
-
 func (f *fixture) postRawUpload(t *testing.T, sessionID, name string, data []byte) *bytes.Buffer {
 	t.Helper()
 	path := fmt.Sprintf("/api/session/uploadFileBinary?sessionId=%s&name=%s", sessionID, name)
@@ -532,4 +638,103 @@ func (f *fixture) lastTask(t *testing.T) zenforge.Task {
 		t.Fatalf("no task was started")
 	}
 	return f.agent.tasks[len(f.agent.tasks)-1]
+}
+
+// The seam between the host that admitted a prompt and the projector that shows
+// its turn: what the prompt carried is recorded under the run that turn is, and
+// the console's stream reads it back by run id.
+func TestPromptAttachmentsReachTheProjectedMessage(t *testing.T) {
+	f := newFixture(t, Config{})
+	store := newMemoryAttachments()
+	f.handler.SetAttachments(store)
+	sessionID := f.createSession(t)
+
+	encoded := encodePNG(t, 4, 5)
+	envelope := decodeResponse(t, f.post(t, "/api/session/prompt", rpcBody(t, "rpc-prompt", "session/prompt",
+		`{"requestId":"req-1","sessionId":`+mustJSON(t, sessionID)+
+			`,"mode":"queue","content":[{"type":"text","text":"what is this"},`+
+			`{"type":"image","mediaType":"image/png","data":`+mustJSON(t, base64.StdEncoding.EncodeToString(encoded))+`,"name":"pixels.png"}]}`)))
+	if !envelope.Result.OK {
+		t.Fatalf("prompt = %s, want it accepted", envelope.Result.Error)
+	}
+	task := f.lastTask(t)
+	expected := dshwire.Attachment{
+		Kind:         "image",
+		AttachmentID: store.savedID(t, sessionID, "pixels.png"),
+		Name:         "pixels.png",
+		MediaType:    "image/png",
+		Bytes:        len(encoded),
+		Width:        4,
+		Height:       5,
+	}
+	recorded := store.prompts[task.RunID]
+	if len(recorded) != 1 {
+		t.Fatalf("recorded for %q = %+v, want one attachment", task.RunID, recorded)
+	}
+	if recorded[0].Kind != "image" || recorded[0].AttachmentID != expected.AttachmentID ||
+		recorded[0].Width != 4 || recorded[0].Height != 5 || recorded[0].Bytes != len(encoded) {
+		t.Fatalf("recorded = %+v, want %+v", recorded[0], expected)
+	}
+	// The projector's half answers the same thing for that run, and nothing for
+	// another.
+	inputs := PromptInputAttachments(func(runID string) []PromptAttachment {
+		recorded, _ := store.PromptAttachments(context.Background(), runID)
+		return recorded
+	})
+	attachments := inputs(task.RunID)
+	if len(attachments) != 1 || attachments[0] != expected {
+		t.Fatalf("projector inputs = %+v, want %+v", attachments, expected)
+	}
+	if other := inputs(task.RunID + "~9"); len(other) != 0 {
+		t.Fatalf("another run = %+v, want none", other)
+	}
+	if PromptInputAttachments(nil) != nil {
+		t.Fatal("no source must project no attachments")
+	}
+}
+
+// An image whose header this host cannot measure cannot be described to the
+// console, whose message block carries the dimensions a viewer draws at: the
+// prompt is refused by name rather than shown as an attachment of unknown size.
+func TestPromptRefusesAnImageItCannotMeasure(t *testing.T) {
+	f := newFixture(t, Config{})
+	f.handler.SetAttachments(newMemoryAttachments())
+	sessionID := f.createSession(t)
+
+	broken := decodeFixture(t, testWebPBase64)[:20]
+	envelope := decodeResponse(t, f.post(t, "/api/session/prompt", rpcBody(t, "rpc-prompt", "session/prompt",
+		`{"requestId":"req-1","sessionId":`+mustJSON(t, sessionID)+
+			`,"mode":"queue","content":[{"type":"text","text":"what is this"},`+
+			`{"type":"image","mediaType":"image/webp","data":`+mustJSON(t, base64.StdEncoding.EncodeToString(broken))+`}]}`)))
+	if envelope.Result.OK || envelope.Result.Error.Code != attachmentInvalidCode {
+		t.Fatalf("broken image prompt = %+v, want %q", envelope.Result, attachmentInvalidCode)
+	}
+	if reason, _ := envelope.Result.Error.Details["reason"].(string); reason != "DIMENSIONS_UNREADABLE" {
+		t.Fatalf("details = %+v, want DIMENSIONS_UNREADABLE", envelope.Result.Error.Details)
+	}
+	if !strings.Contains(envelope.Result.Error.Message, "image/webp") {
+		t.Fatalf("message = %q, want the format named", envelope.Result.Error.Message)
+	}
+}
+
+// A host with no store refuses a prompt's attachment with the family's own
+// sentence, and starts no turn: an attachment the transcript could not refer to
+// is not admitted on the promise of a later error.
+func TestPromptWithoutAStoreRefusesAttachmentsByName(t *testing.T) {
+	f := newFixture(t, Config{})
+	sessionID := f.createSession(t)
+	encoded := encodePNG(t, 2, 2)
+	envelope := decodeResponse(t, f.post(t, "/api/session/prompt", rpcBody(t, "rpc-prompt", "session/prompt",
+		`{"requestId":"req-1","sessionId":`+mustJSON(t, sessionID)+
+			`,"mode":"queue","content":[{"type":"text","text":"what is this"},`+
+			`{"type":"image","mediaType":"image/png","data":`+mustJSON(t, base64.StdEncoding.EncodeToString(encoded))+`}]}`)))
+	if envelope.Result.OK || envelope.Result.Error.Code != codeUnimplemented {
+		t.Fatalf("prompt without a store = %+v, want %q", envelope.Result, codeUnimplemented)
+	}
+	if envelope.Result.Error.Message != attachmentRefusal {
+		t.Fatalf("message = %q, want the family's own sentence", envelope.Result.Error.Message)
+	}
+	if _, ok := envelope.Result.Error.Details["capability"]; !ok {
+		t.Fatalf("details = %+v, want the missing capability named", envelope.Result.Error.Details)
+	}
 }

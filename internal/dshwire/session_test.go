@@ -42,7 +42,7 @@ func sessionIdentity(turn int) Identity {
 // resumed stream must not cite a cursor behind what it already applied
 // (api/gateway/src/client/journal-stream.ts follows + opening).
 func TestSessionLogContinuesTheSequenceAcrossTurns(t *testing.T) {
-	log, err := Session(context.Background(), twoTurnSource(), "run_one", sessionIdentity)
+	log, err := Session(context.Background(), twoTurnSource(), "run_one", sessionIdentity, nil)
 	if err != nil {
 		t.Fatalf("Session returned error: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestSessionLogContinuesTheSequenceAcrossTurns(t *testing.T) {
 // turns of one conversation must not both claim turn 1, or the transcript shows
 // one turn's messages inside the other.
 func TestSessionLogNumbersTheSecondTurnAsATurn(t *testing.T) {
-	log, err := Session(context.Background(), twoTurnSource(), "run_one", sessionIdentity)
+	log, err := Session(context.Background(), twoTurnSource(), "run_one", sessionIdentity, nil)
 	if err != nil {
 		t.Fatalf("Session returned error: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestSessionLogNumbersTheSecondTurnAsATurn(t *testing.T) {
 // newest maxMessages records, which for a conversation of two short turns reaches
 // back into the first one rather than starting at the second turn's beginning.
 func TestSessionLogWindowSpansTurns(t *testing.T) {
-	log, err := Session(context.Background(), twoTurnSource(), "run_one", sessionIdentity)
+	log, err := Session(context.Background(), twoTurnSource(), "run_one", sessionIdentity, nil)
 	if err != nil {
 		t.Fatalf("Session returned error: %v", err)
 	}
@@ -144,7 +144,7 @@ func TestSessionLogWindowSpansTurns(t *testing.T) {
 // where it meets what the console already has, and reports more history until the
 // conversation's beginning.
 func TestSessionLogPagesBackThroughAnEarlierTurn(t *testing.T) {
-	log, err := Session(context.Background(), twoTurnSource(), "run_one", sessionIdentity)
+	log, err := Session(context.Background(), twoTurnSource(), "run_one", sessionIdentity, nil)
 	if err != nil {
 		t.Fatalf("Session returned error: %v", err)
 	}
@@ -173,7 +173,7 @@ func TestSessionLogPagesBackThroughAnEarlierTurn(t *testing.T) {
 // its first prompt: no turns, no records, and the empty cursor upstream uses.
 func TestSessionLogOfASessionWithNoTurns(t *testing.T) {
 	source := stubSource{turns: nil, runs: map[string][]zenforge.Event{}}
-	log, err := Session(context.Background(), source, "run_draft", sessionIdentity)
+	log, err := Session(context.Background(), source, "run_draft", sessionIdentity, nil)
 	if err != nil {
 		t.Fatalf("Session returned error: %v", err)
 	}
@@ -204,7 +204,7 @@ func TestSessionLogCountsEmptyTurnsWithoutSkippingNumbers(t *testing.T) {
 			"run_one~3": aTurn(),
 		},
 	}
-	log, err := Session(context.Background(), source, "run_one", sessionIdentity)
+	log, err := Session(context.Background(), source, "run_one", sessionIdentity, nil)
 	if err != nil {
 		t.Fatalf("Session returned error: %v", err)
 	}
@@ -247,7 +247,7 @@ func TestSessionLogCountsEmptyTurnsWithoutSkippingNumbers(t *testing.T) {
 // run's own first event), and the operator's second question rendered as the
 // first one instead of itself (ADR 0110).
 func TestSessionLogIdentifiesMessagesByTheSessionSequence(t *testing.T) {
-	log, err := Session(context.Background(), twoTurnSource(), "run_one", sessionIdentity)
+	log, err := Session(context.Background(), twoTurnSource(), "run_one", sessionIdentity, nil)
 	if err != nil {
 		t.Fatalf("Session returned error: %v", err)
 	}
@@ -304,7 +304,7 @@ func TestSessionLogNamesTheTurnOfARecord(t *testing.T) {
 			"run_one~3": aTurn(),
 		},
 	}
-	log, err := Session(context.Background(), source, "run_one", sessionIdentity)
+	log, err := Session(context.Background(), source, "run_one", sessionIdentity, nil)
 	if err != nil {
 		t.Fatalf("Session returned error: %v", err)
 	}
@@ -345,14 +345,14 @@ func TestSessionLogReadsTheForkLineage(t *testing.T) {
 		turns: []string{"run_child", "run_child~2"},
 		runs:  map[string][]zenforge.Event{"run_child": child, "run_child~2": later},
 	}
-	log, err := Session(context.Background(), source, "run_child", sessionIdentity)
+	log, err := Session(context.Background(), source, "run_child", sessionIdentity, nil)
 	if err != nil {
 		t.Fatalf("Session returned error: %v", err)
 	}
 	if log.ParentSessionID != "run_source" {
 		t.Fatalf("parent = %q, want the first turn's source", log.ParentSessionID)
 	}
-	plain, err := Session(context.Background(), twoTurnSource(), "run_one", sessionIdentity)
+	plain, err := Session(context.Background(), twoTurnSource(), "run_one", sessionIdentity, nil)
 	if err != nil {
 		t.Fatalf("Session returned error: %v", err)
 	}

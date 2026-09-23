@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	pathpkg "path"
 	"path/filepath"
 	"strings"
 
@@ -42,19 +43,29 @@ const attachmentStoreDir = "attachments"
 const (
 	attachmentObjectsDirName  = "objects"
 	attachmentSessionsDirName = "sessions"
+	attachmentPromptsDirName  = "prompts"
 )
+
+// promptCopyDirName is where a file a prompt carried is published for the agent
+// to read, relative to the workspace root. The file tools are rooted in the
+// workspace (workspace/local opens a root and refuses paths outside it), so a
+// copy anywhere else would be a path the model is told to read and cannot.
+const promptCopyDirName = ".zenforge/attachments"
 
 // attachmentDiskStore is the file-backed [dshapi.AttachmentStore].
 type attachmentDiskStore struct {
-	root   string
-	prefix string
+	root string
+	// workspace is the root a prompt's file copies are published under. Empty
+	// means this host has no tool world to publish into, which the model is told
+	// rather than handed a path it cannot read.
+	workspace string
 }
 
 // consoleAttachments builds the store under the host's checkpoint directory. A
 // directory that cannot be created is nil, so the console's attachment family
 // answers `unimplemented` with the dependency named instead of failing every
 // upload with an internal error.
-func consoleAttachments(checkpointDir string) dshapi.AttachmentStore {
+func consoleAttachments(checkpointDir, workspace string) dshapi.AttachmentStore {
 	if strings.TrimSpace(checkpointDir) == "" {
 		return nil
 	}
@@ -62,12 +73,13 @@ func consoleAttachments(checkpointDir string) dshapi.AttachmentStore {
 	for _, directory := range []string{
 		filepath.Join(root, attachmentObjectsDirName),
 		filepath.Join(root, attachmentSessionsDirName),
+		filepath.Join(root, attachmentPromptsDirName),
 	} {
 		if err := os.MkdirAll(directory, 0o700); err != nil {
 			return nil
 		}
 	}
-	return &attachmentDiskStore{root: root}
+	return &attachmentDiskStore{root: root, workspace: strings.TrimSpace(workspace)}
 }
 
 // attachmentRecord is the sidecar: the descriptor plus the session that owns it
@@ -225,4 +237,183 @@ func writeAttachmentFile(path string, data []byte) error {
 		return fmt.Errorf("publish attachment: %w", err)
 	}
 	return nil
+}
+
+// promptRecordPath is the sidecar's path for one run's prompt. The run id is a
+// session id or a continuation of one (`sess~2`), both filesystem-safe, and a
+// digest keeps even an unexpected one from escaping the tree.
+func (s *attachmentDiskStore) promptRecordPath(runID string) string {
+	scope := sha256.Sum256([]byte(runID))
+	return filepath.Join(s.root, attachmentPromptsDirName, hex.EncodeToString(scope[:])[:16]+".json")
+}
+
+// RecordPromptAttachments publishes what one turn's prompt carried, keyed by the
+// run that turn is. It is written before the console can read the turn's
+// projected message, so the transcript never has to guess.
+func (s *attachmentDiskStore) RecordPromptAttachments(_ context.Context, sessionID, runID string, attachments []dshapi.PromptAttachment) error {
+	if strings.TrimSpace(runID) == "" {
+		return errors.New("a prompt record requires the run it belongs to")
+	}
+	stored := attachmentsPromptRecord{SessionID: sessionID, RunID: runID, Attachments: attachments}
+	encoded, err := json.Marshal(stored)
+	if err != nil {
+		return fmt.Errorf("encode prompt attachments: %w", err)
+	}
+	path := s.promptRecordPath(runID)
+	temp, err := os.CreateTemp(filepath.Dir(path), ".staged-*")
+	if err != nil {
+		return fmt.Errorf("stage prompt attachments: %w", err)
+	}
+	tempPath := temp.Name()
+	defer os.Remove(tempPath)
+	if _, err := temp.Write(encoded); err != nil {
+		temp.Close()
+		return fmt.Errorf("write prompt attachments: %w", err)
+	}
+	if err := temp.Close(); err != nil {
+		return fmt.Errorf("close prompt attachments: %w", err)
+	}
+	if err := os.Chmod(tempPath, 0o600); err != nil {
+		return fmt.Errorf("protect prompt attachments: %w", err)
+	}
+	if err := os.Rename(tempPath, path); err != nil {
+		return fmt.Errorf("publish prompt attachments: %w", err)
+	}
+	return nil
+}
+
+// promptAttachments is the projector's half: what one run's prompt carried, or
+// nothing. A record that will not decode is not an attachment this host can
+// describe, so it projects the turn as an unattached prompt rather than failing
+// the console's stream.
+func (s *attachmentDiskStore) PromptAttachments(_ context.Context, runID string) ([]dshapi.PromptAttachment, error) {
+	if strings.TrimSpace(runID) == "" {
+		return nil, nil
+	}
+	encoded, err := os.ReadFile(s.promptRecordPath(runID))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var stored attachmentsPromptRecord
+	if err := json.Unmarshal(encoded, &stored); err != nil {
+		return nil, fmt.Errorf("decode prompt attachments: %w", err)
+	}
+	if stored.RunID != runID {
+		return nil, fmt.Errorf("prompt attachments for %q name %q", runID, stored.RunID)
+	}
+	return stored.Attachments, nil
+}
+
+// attachmentsPromptRecord is one run's prompt attachments, on disk.
+type attachmentsPromptRecord struct {
+	SessionID   string                    `json:"sessionId"`
+	RunID       string                    `json:"runId"`
+	Attachments []dshapi.PromptAttachment `json:"attachments"`
+}
+
+// MaterializePromptFile publishes a stored file as a verbatim read-only copy in
+// the workspace, and returns the path the run is told to read -- the same form
+// the reference host hands a run (dsh-llm `fileHandleText`). An empty path means
+// there is no tool world to publish into.
+func (s *attachmentDiskStore) MaterializePromptFile(ctx context.Context, sessionID, attachmentID string) (string, error) {
+	if s.workspace == "" {
+		return "", nil
+	}
+	descriptor, data, err := s.Read(ctx, sessionID, attachmentID)
+	if err != nil {
+		return "", err
+	}
+	name := attachmentsCopyName(descriptor)
+	directory := filepath.Join(s.workspace, filepath.FromSlash(promptCopyDirName))
+	if err := os.MkdirAll(directory, 0o755); err != nil {
+		return "", fmt.Errorf("create the file directory: %w", err)
+	}
+	path := filepath.Join(directory, name)
+	if err := writeReadOnlyCopy(path, data); err != nil {
+		return "", err
+	}
+	// The agent's file tools are rooted in the workspace, so the path it is given
+	// is the one those tools accept: relative to that root.
+	return pathpkg.Join(promptCopyDirName, name), nil
+}
+
+// attachmentsCopyName names the published copy after the digest and the display
+// name, so two different files with the same name cannot overwrite each other and
+// the name the operator chose is still visible.
+func attachmentsCopyName(descriptor dshapi.AttachmentDescriptor) string {
+	digest := strings.TrimPrefix(descriptor.ID, "att-")
+	if len(digest) > 12 {
+		digest = digest[:12]
+	}
+	name := sanitizeAttachmentName(descriptor.Name)
+	if name == "" {
+		name = "file"
+	}
+	return digest + "-" + name
+}
+
+// writeReadOnlyCopy publishes bytes at path with mode 0444, atomically and
+// idempotently: the copy is verbatim and read-only, exactly as the run is told,
+// and publishing it twice replaces it rather than failing.
+func writeReadOnlyCopy(path string, data []byte) error {
+	temp, err := os.CreateTemp(filepath.Dir(path), ".staged-*")
+	if err != nil {
+		return fmt.Errorf("stage the file copy: %w", err)
+	}
+	tempPath := temp.Name()
+	defer os.Remove(tempPath)
+	if _, err := temp.Write(data); err != nil {
+		temp.Close()
+		return fmt.Errorf("write the file copy: %w", err)
+	}
+	if err := temp.Close(); err != nil {
+		return fmt.Errorf("close the file copy: %w", err)
+	}
+	if err := os.Chmod(tempPath, 0o444); err != nil {
+		return fmt.Errorf("protect the file copy: %w", err)
+	}
+	if err := os.Rename(tempPath, path); err != nil {
+		return fmt.Errorf("publish the file copy: %w", err)
+	}
+	return nil
+}
+
+// consolePromptAttachments is the provider the console's stream is given: what one
+// run's prompt carried, by run id.
+func consolePromptAttachments(store dshapi.AttachmentStore, ctx context.Context) func(runID string) []dshapi.PromptAttachment {
+	return func(runID string) []dshapi.PromptAttachment {
+		if store == nil {
+			return nil
+		}
+		recorded, err := store.PromptAttachments(ctx, runID)
+		if err != nil {
+			return nil
+		}
+		return recorded
+	}
+}
+
+// sanitizeAttachmentName reduces a display name to one path component: a name is
+// the operator's text, and a copy published in the workspace must not be able to
+// name a directory of its own.
+func sanitizeAttachmentName(name string) string {
+	name = filepath.Base(strings.TrimSpace(name))
+	name = strings.TrimLeft(name, ".")
+	if name == "" || name == "." || name == string(filepath.Separator) {
+		return ""
+	}
+	cleaned := strings.Map(func(character rune) rune {
+		switch character {
+		case '/', '\\', 0:
+			return -1
+		}
+		if character < 0x20 {
+			return -1
+		}
+		return character
+	}, name)
+	return cleaned
 }

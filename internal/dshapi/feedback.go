@@ -451,7 +451,7 @@ func (h *Handler) assistantMessageExists(ctx context.Context, sessionID, message
 		identity := h.wireIdentity(sessionID)
 		identity.Turn = turn
 		return identity
-	})
+	}, nil)
 	if err != nil {
 		return false
 	}

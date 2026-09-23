@@ -108,6 +108,13 @@ var SurfaceEligibleTypes = map[string]bool{
 type Projector struct {
 	identity Identity
 
+	// inputs answers the attachments a turn's prompt carried, by run id. It is a
+	// function rather than a slice because one projector can outlive one run: a
+	// follow stream continues over the conversation's next turn, and each turn's
+	// opening message carries that turn's own attachments. Nil means no turn
+	// carries any, which is the truth for a host that stores none.
+	inputs Inputs
+
 	// blocks is the ordered content of the step currently streaming. Deltas
 	// arrive interleaved (reasoning, then text, then more reasoning), so the
 	// blocks are appended in arrival order and merged into the previous block
@@ -163,9 +170,32 @@ type wireChunks struct {
 	texts []string
 }
 
+// Attachment is the display half of one attachment a prompt carried: what a
+// console message block names, not the bytes. Kind is "image" or "file"; an image
+// states its media type and pixel dimensions, a file states its size and may have
+// neither.
+//
+// It exists because the projected user message has to show what the model was
+// given, and the durable log's run.started payload holds the prompt's text and
+// identity only -- the host that admitted the prompt knows the rest.
+type Attachment struct {
+	Kind         string `json:"kind"`
+	AttachmentID string `json:"attachmentId"`
+	Name         string `json:"name,omitempty"`
+	MediaType    string `json:"mediaType,omitempty"`
+	Bytes        int    `json:"bytes"`
+	Width        int    `json:"width,omitempty"`
+	Height       int    `json:"height,omitempty"`
+}
+
+// Inputs answers the attachments recorded for one run, in the order the prompt
+// carried them. A nil Inputs means none.
+type Inputs func(runID string) []Attachment
+
 // New returns a projector that stamps assistant messages with the given identity.
-func New(identity Identity) *Projector {
-	return &Projector{identity: identity, steps: map[string]int{}}
+// inputs may be nil, which projects every turn as an unattached prompt.
+func New(identity Identity, inputs Inputs) *Projector {
+	return &Projector{identity: identity, inputs: inputs, steps: map[string]int{}}
 }
 
 // Projection is a run's whole log projected by one projector. It is the shape
@@ -187,8 +217,8 @@ type Projection struct {
 // projection keeps the projector so a live tail can continue it: the follower
 // appends later durable events with Append rather than re-projecting, which keeps
 // a step's streamed blocks accumulated exactly once.
-func Project(events []zenforge.Event, identity Identity) *Projection {
-	projection := &Projection{projector: New(identity)}
+func Project(events []zenforge.Event, identity Identity, inputs Inputs) *Projection {
+	projection := &Projection{projector: New(identity, inputs)}
 	projection.Append(events...)
 	return projection
 }
@@ -262,7 +292,7 @@ func (p *Projector) project(event zenforge.Event) []Event {
 			// stays on screen as a second copy of the question (ADR 0111).
 			seq := p.nextSeq()
 			out = append(out, p.surface(Event{Seq: seq, Time: event.Timestamp}, "user/message",
-				userMessage(seq, text, promptIdentity(data))))
+				userMessage(seq, text, promptIdentity(data), p.runAttachments(event))))
 		}
 		return out
 	case zenforge.EventSystemPrompt:
@@ -330,7 +360,7 @@ func (p *Projector) projectOne(event zenforge.Event) (Event, bool) {
 		if text, ok := firstStringField(data, "input", "text", "content", "message"); ok {
 			// A queued turn arrives durably as request.steer; the host passes the
 			// prompt's requestId as the steer id, so the same identity is here.
-			return p.emit(p.surface(base, "user/message", userMessage(base.Seq, text, steerIdentity(data))))
+			return p.emit(p.surface(base, "user/message", userMessage(base.Seq, text, steerIdentity(data), nil)))
 		}
 	case zenforge.EventSessionTitle:
 		// The console names a conversation from the `title` projection it folds out
@@ -671,8 +701,65 @@ func messageID(seq int64) string {
 	return fmt.Sprintf("msg-%d", seq)
 }
 
-func userMessage(seq int64, text, rpcID string) map[string]any {
-	return UserMessage(messageID(seq), text, rpcID)
+func userMessage(seq int64, text, rpcID string, attachments []map[string]any) map[string]any {
+	return UserMessageWithAttachments(messageID(seq), text, rpcID, attachments)
+}
+
+// runAttachments projects the attachments the prompt of one run carried, as the
+// content blocks the console renders: an image names its stored attachment and
+// the dimensions it is drawn at, a file names its stored attachment and size.
+// They precede the text, which is the order the console submits them in
+// (ui-conversation serializeAttachments: attachments first, then the words).
+func (p *Projector) runAttachments(event zenforge.Event) []map[string]any {
+	if p.inputs == nil {
+		return nil
+	}
+	attachments := p.inputs(event.RunID())
+	if len(attachments) == 0 {
+		return nil
+	}
+	blocks := make([]map[string]any, 0, len(attachments))
+	for _, attachment := range attachments {
+		switch attachment.Kind {
+		case "image":
+			if attachment.AttachmentID == "" || attachment.MediaType == "" || attachment.Width <= 0 || attachment.Height <= 0 {
+				// An image block without the facts the console draws with would
+				// render as a broken attachment; a descriptor that cannot be
+				// rendered is not one.
+				continue
+			}
+			block := map[string]any{
+				"type": "image",
+				"attachment": map[string]any{
+					"attachmentId": attachment.AttachmentID,
+					"mediaType":    attachment.MediaType,
+					"bytes":        attachment.Bytes,
+					"width":        attachment.Width,
+					"height":       attachment.Height,
+				},
+			}
+			if attachment.Name != "" {
+				block["attachment"].(map[string]any)["name"] = attachment.Name
+			}
+			blocks = append(blocks, block)
+		case "file":
+			if attachment.AttachmentID == "" {
+				continue
+			}
+			blocks = append(blocks, map[string]any{
+				"type": "file",
+				"attachment": map[string]any{
+					"attachmentId": attachment.AttachmentID,
+					"name":         attachment.Name,
+					"bytes":        attachment.Bytes,
+				},
+			})
+		}
+	}
+	if len(blocks) == 0 {
+		return nil
+	}
+	return blocks
 }
 
 // UserMessage builds one console user message: `{id, role, content, source}` with
@@ -683,14 +770,29 @@ func userMessage(seq int64, text, rpcID string) map[string]any {
 // id the console queued the message under -- so the two cannot disagree about
 // what a message looks like.
 func UserMessage(id, text, rpcID string) map[string]any {
+	return UserMessageWithAttachments(id, text, rpcID, nil)
+}
+
+// UserMessageWithAttachments builds one console user message whose content is the
+// prompt's attachments followed by its words. A nil or empty attachments slice
+// produces the single text block `UserMessage` has always produced, so the two
+// carriers of a user's words cannot disagree about what a message looks like.
+func UserMessageWithAttachments(id, text, rpcID string, attachments []map[string]any) map[string]any {
 	source := map[string]any{"kind": "user"}
 	if rpcID != "" {
 		source["rpcId"] = rpcID
 	}
+	content := make([]any, 0, len(attachments)+1)
+	for _, block := range attachments {
+		content = append(content, block)
+	}
+	if text != "" {
+		content = append(content, map[string]any{"type": "text", "text": text})
+	}
 	return map[string]any{
 		"id":      id,
 		"role":    "user",
-		"content": []any{map[string]any{"type": "text", "text": text}},
+		"content": content,
 		"source":  source,
 	}
 }

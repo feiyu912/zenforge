@@ -378,10 +378,10 @@ func (t *assistantTracker) baselineOf() *assistantActiveAttempt {
 // snapshot can hand over as a baseline and a live tail can continue -- which is
 // what keeps a reconnecting console from being sent a second start frame for an
 // attempt it already has open (ADR 0118).
-func replayAssistant(sessionID string, turn int, cursor int64, identity dshwire.Identity, events []zenforge.Event) *assistantTracker {
+func replayAssistant(sessionID string, turn int, cursor int64, identity dshwire.Identity, events []zenforge.Event, inputs dshwire.Inputs) *assistantTracker {
 	tracker := newAssistantTracker(sessionID, cursor)
 	tracker.startTurn(sessionID, turn)
-	tail := dshwire.Project(nil, identity)
+	tail := dshwire.Project(nil, identity, inputs)
 	for _, event := range events {
 		tracker.onEvent(event)
 		before := len(tail.Events)

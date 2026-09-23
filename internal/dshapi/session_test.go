@@ -290,24 +290,33 @@ func TestSessionPromptRejectsBadArguments(t *testing.T) {
 	}
 }
 
+// Every part the console can submit is either admitted or refused by name. A part
+// this host has no carrier for is `session/unsupported-content` and names itself;
+// an attachment on a host with no store is the family's own unimplemented answer,
+// which names the store and both parts it carries (ADR 0139).
 func TestSessionPromptRefusesUnsupportedContent(t *testing.T) {
 	f := newFixture(t, Config{})
 	sessionID := mustJSON(t, f.createSession(t))
 	cases := []struct {
+		name string
 		part string
 		want string
+		code string
 	}{
-		{`{"type":"image","mediaType":"image/png","data":"AAAA"}`, "image"},
-		{`{"type":"file","receiptId":"receipt-1"}`, "file"},
-		{`{"type":"audio","data":"AAAA"}`, "audio"},
+		{"image bytes that are not an image", `{"type":"image","mediaType":"image/png","data":"AAAA"}`, "image", codeUnsupportedContent},
+		{"image with no data", `{"type":"image","mediaType":"image/png"}`, "data", codeArgumentsInvalid},
+		{"an unknown part type", `{"type":"audio","data":"AAAA"}`, "audio", codeUnsupportedContent},
+		{"an attachment on a host with no store", `{"type":"file","receiptId":"receipt-1"}`, "file", codeUnimplemented},
 	}
 	for _, testCase := range cases {
-		args := fmt.Sprintf(`{"requestId":"req","sessionId":%s,"mode":"queue","content":[%s]}`, sessionID, testCase.part)
-		recorder := f.post(t, "/api/session/prompt", rpcBody(t, "rpc-prompt", "session/prompt", args))
-		envelope := assertMethodFailure(t, recorder, codeUnsupportedContent)
-		if !strings.Contains(envelope.Result.Error.Message, testCase.want) {
-			t.Fatalf("message %q does not name the part %q", envelope.Result.Error.Message, testCase.want)
-		}
+		t.Run(testCase.name, func(t *testing.T) {
+			args := fmt.Sprintf(`{"requestId":"req","sessionId":%s,"mode":"queue","content":[{"type":"text","text":"hello"},%s]}`, sessionID, testCase.part)
+			recorder := f.post(t, "/api/session/prompt", rpcBody(t, "rpc-prompt", "session/prompt", args))
+			envelope := assertMethodFailure(t, recorder, testCase.code)
+			if !strings.Contains(envelope.Result.Error.Message, testCase.want) {
+				t.Fatalf("message %q does not name %q", envelope.Result.Error.Message, testCase.want)
+			}
+		})
 	}
 }
 

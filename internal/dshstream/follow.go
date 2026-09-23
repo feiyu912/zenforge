@@ -121,7 +121,7 @@ func (h *Handler) runFollow(ctx context.Context, payload []byte, send func(any) 
 		identity.Turn = turn
 		return identity
 	}
-	log, err := dshwire.Session(ctx, h, request.sessionID, turnIdentity)
+	log, err := dshwire.Session(ctx, h, request.sessionID, turnIdentity, h.cfg.InputAttachments)
 	if err != nil {
 		return streamFail(codeInternal, "read session log: "+err.Error(), nil)
 	}
@@ -162,7 +162,7 @@ func (h *Handler) runFollow(ctx context.Context, payload []byte, send func(any) 
 		// instead of being announced a second time (ADR 0118).
 		assistant = newAssistantTracker(runID, cursor)
 		if len(log.NewestEvents) > 0 {
-			assistant = replayAssistant(runID, log.NewestTurn, cursor, log.NewestIdentity, log.NewestEvents)
+			assistant = replayAssistant(runID, log.NewestTurn, cursor, log.NewestIdentity, log.NewestEvents, h.cfg.InputAttachments)
 		}
 	}
 	// The conversation's name travels as a projection cell, not as a field: the
@@ -222,13 +222,13 @@ func (h *Handler) runFollow(ctx context.Context, payload []byte, send func(any) 
 		// whole first turn. The tail starts empty and is fed by that replay, which
 		// projects it exactly once.
 		draftTurn = 1
-		tail = dshwire.Project(nil, turnIdentity(1))
+		tail = dshwire.Project(nil, turnIdentity(1), nil)
 		afterSeq = 0
 	}
 	if tail == nil {
 		// A turn whose log is still empty (a run that has just started) has no
 		// events to project yet; its first event creates the record.
-		tail = dshwire.Project(nil, turnIdentity(draftTurn))
+		tail = dshwire.Project(nil, turnIdentity(draftTurn), h.cfg.InputAttachments)
 	}
 	if assistant != nil {
 		assistant.startTurn(runID, draftTurn)
@@ -264,7 +264,7 @@ func (h *Handler) runFollow(ctx context.Context, payload []byte, send func(any) 
 		if next == "" {
 			return ctx.Err()
 		}
-		nextLog, err := dshwire.Session(ctx, h, request.sessionID, turnIdentity)
+		nextLog, err := dshwire.Session(ctx, h, request.sessionID, turnIdentity, h.cfg.InputAttachments)
 		if err != nil {
 			return streamFail(codeInternal, "read session log: "+err.Error(), nil)
 		}
@@ -273,7 +273,7 @@ func (h *Handler) runFollow(ctx context.Context, payload []byte, send func(any) 
 		// The next turn's events are all new to this stream, and its stamped
 		// identity is where its own durable sequence moves onto the session's, so
 		// the first frame it projects is one past the cursor the console holds.
-		tail = dshwire.Project(nil, nextLog.NewestIdentity)
+		tail = dshwire.Project(nil, nextLog.NewestIdentity, h.cfg.InputAttachments)
 		if assistant != nil {
 			assistant.startTurn(runID, nextLog.NewestTurn)
 		}

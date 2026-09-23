@@ -26,6 +26,12 @@ type Config struct {
 	// Zero selects that default.
 	HeartbeatInterval time.Duration
 
+	// InputAttachments, when set, reports the attachments a turn's prompt
+	// carried, by run id. The projected user message carries them as content
+	// blocks, so the transcript shows what the model was given (ADR 0139). Nil
+	// projects every turn as an unattached prompt.
+	InputAttachments dshwire.Inputs
+
 	// ModelSelections, when set, reports every session's durable model selection:
 	// the control baseline publishes them and a follow snapshot carries the one
 	// the followed session holds. Nil reports none, which is what a host that

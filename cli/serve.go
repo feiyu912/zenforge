@@ -487,6 +487,10 @@ func newServeApp(ctx context.Context, opts *options, ioStreams IO, config serveC
 		}
 		return dshwire.Identity{Provider: route, Model: strings.TrimSpace(view.Model)}
 	}
+	// The attachment store is built once and handed to both halves: the mount
+	// publishes what a prompt carried, and the stream reads it back so the
+	// console's transcript of that turn shows it (ADR 0139).
+	attachments := consoleAttachments(opts.checkpointDir, opts.workspace)
 	console, err := dshmount.New(runtime.Manager, runtime.Events, dshmount.Config{
 		AllowRemote:      config.allowRemote,
 		ModelCatalog:     modelCatalog,
@@ -504,7 +508,7 @@ func newServeApp(ctx context.Context, opts *options, ioStreams IO, config serveC
 		FileReferences: consoleFileReferences(opts.workspace),
 		// The console's attachments live in the host's own state tree, next to the
 		// sessions that refer to them (cli/attachments.go).
-		Attachments: consoleAttachments(opts.checkpointDir),
+		Attachments: attachments,
 		Commands:    consoleCommandCatalog(opts),
 		Workspaces:  workspaceRegistry,
 		Goals:       consoleGoalStore,
@@ -522,6 +526,7 @@ func newServeApp(ctx context.Context, opts *options, ioStreams IO, config serveC
 	// package exports, so the two halves cannot drift apart.
 	stream, err := dshstream.New(runtime.Manager, runtime.Events, inbox, dshstream.Config{
 		AllowRemote:           config.allowRemote,
+		InputAttachments:      dshapi.PromptInputAttachments(consolePromptAttachments(attachments, context.Background())),
 		ModelSelections:       selections.States,
 		ModelSelectionUpdates: selections.Updates,
 		Workspaces:            workspaceBaseline,

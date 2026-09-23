@@ -67,7 +67,7 @@ func (h *Handler) sessionFork(ctx context.Context, args map[string]json.RawMessa
 		identity := h.wireIdentity(sessionID)
 		identity.Turn = turn
 		return identity
-	})
+	}, nil)
 	if err != nil {
 		return nil, fail(codeInternal, fmt.Sprintf("fork source unavailable for session %q: %s", sessionID, err),
 			map[string]any{"sessionId": sessionID})
