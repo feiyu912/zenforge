@@ -5,6 +5,12 @@ Status: accepted
 Superseded in part by ADR 0093: the first-party console is deleted; the console
 `zenforge serve` offers is the rebranded upstream one (ADR 0079).
 
+Superseded in part by [ADR 0141](0141-a-deployed-host-authenticates-its-callers.md):
+an optional token boundary now sits in front of the same routes — off by default
+on loopback, required by `--allow-remote` unless the operator opts out — so a
+caller without a credential is refused before any route answers, and every
+admission decision is appended to an audit trail.
+
 ## Context
 
 `server/harnesshttp` has served a complete detached-run API for several

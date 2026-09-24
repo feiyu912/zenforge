@@ -143,6 +143,53 @@ prevents two owners; it does not automatically start recovery. Resume begins
 from the last committed checkpoint boundary and does not continue a provider
 stream mid-token.
 
+## Authenticate Callers
+
+`zenforge serve` installs the caller identity the harness deliberately does not
+own (ADR 0099): one boundary over the whole route table (ADR 0141). A deployment
+on the network mints its tokens with `zenforge token create --tenant <tenant>
+--subject <subject>`, which prints the plaintext once; the token file keeps only
+`sha256:` hashes, so a lost token is replaced rather than recovered. `zenforge
+token list` reports id, tenant, subject and note but never a hash or a secret,
+and `zenforge token revoke --id <id>` invalidates one. A running host re-reads
+the token file every two seconds, so a mint or a revoke made in another process
+takes effect without a restart.
+
+The four serve flags are:
+
+- `--auth-token-file` names the token file; the default is `tokens.json` in the
+  host configuration directory, beside the console's settings document.
+- `--require-auth` serves only requests that present a valid token.
+- `--allow-anonymous-remote` is the escape hatch that lets `--allow-remote`
+  expose the host without tokens, for a network the operator already trusts.
+- `--audit-log` names the audit trail; the default is `audit.jsonl` in the host
+  configuration directory whenever authentication is required.
+
+`--allow-remote` implies `--require-auth` unless `--allow-anonymous-remote` is
+also given, so binding a network interface is fail-closed: an existing
+`--allow-remote` deployment refuses to start until it mints a token or passes
+the escape hatch. The same rule covers the trail — a host that must require
+tokens and holds none, or that requires authentication and cannot keep an audit
+trail, refuses to start and names the flag to fix. There is no loopback
+exemption when authentication is required: a reverse proxy on the same machine
+reaches this host as a loopback peer, so a loopback caller presents a token like
+any other.
+
+The audit trail is append-only JSONL, one line per decision, opened with
+`O_APPEND` and never truncated. A line records the time, the decision, the
+reason, the method, the path, the status the caller actually got, the remote
+address, and the tenant, subject and token id when an identity resolved. It
+never records a request body, a header value or a credential, and the path is
+recorded without its query string.
+
+An embedding application that already has its own tokens or its own user
+directory does not need any of this. It keeps `server/harnesshttp`'s
+`AccessController`, which gained `AccessDecision.ApprovalNamespace`: a decision
+that allows may carry the caller's tenant and subject, and the harness puts them
+on the `zenforge.Task` it starts, so each run's persistent approval grants are
+recorded under that caller's namespace rather than the host's configured one. A
+host that installs no controller behaves as before.
+
 ## Deployment Acceptance
 
 ### Platform canary

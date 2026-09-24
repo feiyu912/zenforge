@@ -310,6 +310,9 @@ See [Quickstart](https://feiyu912.github.io/zenforge/quickstart/) and the
   status across managers; applications still own auth, routes, and lifecycle.
 - HMAC-signed webhooks can start runs without holding a credential; a local
   web console rides in `zenforge serve`.
+- A network-bound `zenforge serve` authenticates its callers: `--allow-remote`
+  implies `--require-auth`, and `zenforge token create` mints the tokens
+  ([ADR 0141](docs/adr/0141-a-deployed-host-authenticates-its-callers.md)).
 - Background jobs (`exec_command`/`write_stdin`/`job_output`) run detached,
   including pseudo-terminals for interactive programs, with bounded head+tail
   buffers that report — never hide — dropped output.

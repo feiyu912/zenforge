@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/feiyu912/zenforge"
+	"github.com/feiyu912/zenforge/approval"
 	"github.com/feiyu912/zenforge/internal/dshsession"
 	"github.com/feiyu912/zenforge/internal/dshwire"
 	"github.com/feiyu912/zenforge/server/harnesshttp"
@@ -385,6 +386,12 @@ func (h *Handler) sessionPrompt(ctx context.Context, args map[string]json.RawMes
 			RunID:    sessionID,
 			Input:    admission.text,
 			PromptID: strings.TrimSpace(requestID),
+			// The caller the host authenticated, when it authenticated one. The
+			// run records it as its namespace, so the persistent approval grants
+			// this run consults are the caller's own: a grant one tenant recorded
+			// never answers for another tenant's call. An unauthenticated host
+			// has no identity to give and the run keeps the host's namespace.
+			ApprovalNamespace: callerIdentity(ctx),
 			// The run's own model is the session's selection, resolved and built
 			// here and carried on the task: the run holds it for every step, so a
 			// selection made later -- by this session or another -- cannot change
@@ -488,6 +495,10 @@ func (h *Handler) sessionPrompt(ctx context.Context, args map[string]json.RawMes
 		RunID:  continuationID,
 		Input:  admission.text,
 		Images: admission.images,
+		// The caller's identity, exactly as the first turn carries it: a
+		// continuation is the same conversation, so it runs under the same
+		// namespace and consults the same grants.
+		ApprovalNamespace: callerIdentity(ctx),
 		// The turn's own model, exactly as the first turn's is: the adapter this
 		// session's route built rides on the task with the route itself, and the
 		// run it starts is the one that holds both.
@@ -545,6 +556,17 @@ func (h *Handler) sessionModelRoute(sessionID string) (ModelRoute, bool, *method
 // markModelUsed records that a run actually started on the session's route, which
 // is what the console's "last used" hint reports. A host with no selection store
 // has nothing to record.
+// callerIdentity is the authenticated caller of a console request, when the host
+// resolved one. The console's own trust fence decides whether a peer may speak to
+// this host at all (ADR 0081); a deployment that requires tokens puts the caller
+// in the request context before the RPC handler runs, and this is where that
+// identity reaches the run the request starts. A host that authenticates nobody
+// returns the zero namespace, which leaves the run on the host's own.
+func callerIdentity(ctx context.Context) approval.Namespace {
+	namespace, _ := approval.NamespaceFrom(ctx)
+	return namespace
+}
+
 func (h *Handler) markModelUsed(sessionID string) {
 	store := h.modelSelectionStore()
 	if store == nil {

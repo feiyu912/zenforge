@@ -558,6 +558,57 @@ wrote an event is omitted, because `session/page` answers not-found for it; and 
 log has no terminal event is recorded as cancelled when it is adopted. Drafts stay
 process-local (ADR 0104).
 
+## Shipped: the host authenticates its callers (2026-09-24)
+
+Every route this host serves is now behind one admission boundary
+([ADR 0141](adr/0141-a-deployed-host-authenticates-its-callers.md)).
+`server/auth` is the caller identity: a token carrying a tenant and a subject, a
+store that keeps only `sha256:` hashes, an authenticator that accepts
+`Authorization: Bearer` or the `zenforge_session` cookie, and an append-only
+JSONL audit trail. `cli/serve.go`'s `newServeMux` returns `cfg.auth.wrap(mux)`
+instead of the bare mux, so the console's `/api/*`, the harness routes,
+`/api/settings`, `/api/server`, both stream paths and the signed webhook are all
+behind the one boundary.
+
+- `--allow-remote` implies `--require-auth` unless `--allow-anonymous-remote`
+  is also given; a host asked to require tokens that holds none, or that cannot
+  keep an audit trail, refuses to start and names the fix.
+- `GET /auth` is a constant sign-in document and `POST /auth/session` sets
+  `zenforge_session` (`HttpOnly`, `SameSite=Strict`, `Secure` only when
+  configured). A browser navigation to `/` or `/index.html` is `303` to `/auth`;
+  any other unauthenticated call gets `401` with `WWW-Authenticate: Bearer` and
+  `{"error":{"code":"unauthorized",...}}`.
+- The identity is `approval.Namespace`. `AccessDecision` gained
+  `ApprovalNamespace`; the harness routes and the console's own prompt path put
+  it on the `Task` they start, and a run's persistent approval grants are
+  recorded under the caller's tenant and subject, so a grant one tenant
+  recorded never answers for another's call (`approval/identity.go`).
+- `zenforge token create|list|revoke` is the only minter. `create` prints the
+  plaintext once, the file keeps only hashes, and a running host re-reads it
+  every two seconds, so a mint or a revoke takes effect without a restart.
+
+Live: ADR 0141's verification carries the transcript of a real
+`serve --addr 0.0.0.0:9622 --allow-remote` -- the refusal before it binds, the
+mint, an anonymous `401`, the same call with the bearer token served, the
+sign-in form and its cookie, the audit lines, a token minted while the host ran,
+and a revoke that takes effect after the reload interval.
+
+What the boundary does not do: the console's data plane stays host-global, so a
+deployment that must isolate tenants runs one process per tenant.
+
+## Next: per-tenant session ownership
+
+The boundary authenticates and attributes, and that is all it does: the
+sessions, the event log and checkpoints under `--checkpoint-dir`, the goal
+store, the attachment store, the console's workspace registry and settings
+document, the jobs manager and the pending-approval broadcast are one set for
+the whole process. The next chain is per-tenant session ownership at the
+`RunManager` and projection seam -- a run recorded with its owner's namespace,
+`session/list` and `session/page` filtered by it, and the approval inbox queried
+per run instead of with an empty filter -- so two tenants on one host stop
+sharing one data plane. Until it lands, the interim guidance is one process per
+tenant (ADR 0141).
+
 ## Shipped: a run keeps the model it started on (2026-09-24)
 
 The model picker was per session in name only: `session/prompt` installed the
@@ -599,7 +650,7 @@ session's requests carry `gpt-4.1`, both of the other session's carry `acme-larg
 and the harness's verdict reads `NO WRONG-MODEL ATTRIBUTION FOR S1`. The request
 logs and both binary digests are in ADR 0140's verification section.
 
-## Next: the remaining refused families, still in the order the console notices them
+## Next at the time: the remaining refused families, still in the order the console notices them
 
 This chain closed a limitation rather than a ledger gap, so the next chains are the
 same four the console can open and find empty: the **terminal** (this host has no

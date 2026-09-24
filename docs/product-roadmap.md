@@ -67,7 +67,7 @@ V0.2 Production hardening
 | S8 | The built-in Docker sandbox, fake sandbox backend, and Container Hub beta adapter are contract-tested. A gated real-Docker consumer test verifies Linux execution and a read-only workspace mount; `TestAdapterRunsAgainstRealContainerHub` can create, execute, and close a disposable session against a live Hub endpoint. Production Hub deployment remains external acceptance. |
 | MVP | Repository-scoped acceptance is implemented and test-mapped. The complete `examples/harness-agent` CLI app, loopback-only `examples/http-harness-agent` service, and independent `integration/consumer` module cover environment-owned models, Agent Skill progressive disclosure, typed tools, HITL, Docker-backed shell execution, and detached HTTP lifecycle assembly. Live provider credentials remain an application-owned smoke test. |
 | V0.1 | `v0.1.0` was tagged. Repository wire goldens cover the ZenMind DTO/projector/approval/event-line boundary at `agent-platform@1893edb5`. The downstream engine bridge, feature-flag selector, HTTP/SSE/WS, approval, attach, and fallback integration is restored in `agent-platform main@f6d89da`; platform Go 1.26 tests, race tests, and HTTP stream integration pass. A 2026-07-18 isolated local API and webclient canary enabled ZenForge and a real compatible provider, producing the expected query/run/content/usage SSE lifecycle and a rendered, completed UI response. Deployed UI verification remains external acceptance. |
-| V0.2 | Repository hardening includes SQLite soak coverage, Go 1.26-only CI, JSONL crash/concurrency safety, typed tools, filesystem Agent Skill catalogs with instruction/resource progressive disclosure, bounded shell/Hub/Docker responses, fail-closed checkpoint/ZenMind adapter loading, host-resolved run assembly, approval correlation recovery, run-scoped strict projection with v2/v1 state compatibility, optional cross-run persistent rule authorization, durable model-attempt replacement, replay-to-live SSE, canonical detached HTTP lifecycle, optional memory/SQLite run registries for shared claims, durable status/listing, cross-manager durable attach/cancel, explicit stale-run recovery, plus deployment routing and shutdown guidance. Independent consumer CI is also present. Marketplace lifecycle and external acceptance remain incomplete. This roadmap stage is not declared complete. |
+| V0.2 | Repository hardening includes SQLite soak coverage, Go 1.26-only CI, JSONL crash/concurrency safety, typed tools, filesystem Agent Skill catalogs with instruction/resource progressive disclosure, bounded shell/Hub/Docker responses, fail-closed checkpoint/ZenMind adapter loading, host-resolved run assembly, approval correlation recovery, run-scoped strict projection with v2/v1 state compatibility, optional cross-run persistent rule authorization, durable model-attempt replacement, replay-to-live SSE, canonical detached HTTP lifecycle, optional memory/SQLite run registries for shared claims, durable status/listing, cross-manager durable attach/cancel, explicit stale-run recovery, plus deployment routing and shutdown guidance, and a served host's caller identity boundary with an append-only admission audit (identity, admission, audit; ADR 0141). Per-tenant session ownership, quotas and rate limits, and cost accounting remain. Independent consumer CI is also present. Marketplace lifecycle and external acceptance remain incomplete. This roadmap stage is not declared complete. |
 
 Completion in this table distinguishes ZenForge repository tests from platform
 integration tests. `agent-platform main@f6d89da` restores its ZenForge changes,
@@ -516,12 +516,19 @@ Completed in this repository:
 - durable approval inboxes with memory/SQLite stores, polling broker, shared
   HTTP approval list/submit, idempotent decision retries, conflict detection,
   and resume consumption after waiter cancellation;
+- a served host's caller identity: one token boundary over every `zenforge
+  serve` route, a caller's tenant and subject carried onto each run's persistent
+  approval grants, an append-only audit trail of every admission decision, and
+  `zenforge token create|list|revoke` as the only minter (ADR 0141);
 - benchmark and soak tests (`BenchmarkAgentRunStaticModel`,
   `TestSQLiteDurableRunSoak`);
 - failure-mode documentation (`docs/failure-modes.md`).
 
 Remaining:
 
+- per-tenant session ownership for a served host, and per-tenant quotas, rate
+  limits and cost accounting; until then a deployment that must isolate tenants
+  runs one process per tenant (ADR 0141);
 - provider-native mid-token continuation; the portable harness behavior is
   same-step attempt replacement from the committed prompt boundary;
 - external acceptance, including current platform re-integration/deployment and

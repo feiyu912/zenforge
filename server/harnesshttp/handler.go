@@ -42,8 +42,19 @@ type Operation struct {
 	RunID string
 }
 
+// AccessDecision is what an AccessController allows, plus what it learned about
+// the caller. Meta is merged into the run's metadata and wins over anything the
+// client sent, which is the point: a client must not be able to assert a fact the
+// host resolved for itself.
 type AccessDecision struct {
+	// Meta is trusted run metadata. It is merged over the client's.
 	Meta map[string]any
+	// ApprovalNamespace is the caller's identity, when the controller resolved
+	// one. It becomes the run's identity: the tenant and subject its persistent
+	// approval grants are recorded under, so a grant one caller made never
+	// answers for another's call. A zero value means the controller had no
+	// identity to give, and the run keeps the host's configured namespace.
+	ApprovalNamespace approval.Namespace
 }
 
 type AccessController interface {
@@ -119,9 +130,10 @@ func (h *Handler) ServeRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	events, err := h.Agent.Stream(r.Context(), zenforge.Task{
-		RunID: req.RunID,
-		Input: req.Input,
-		Meta:  mergeMeta(req.Meta, decision.Meta),
+		RunID:             req.RunID,
+		Input:             req.Input,
+		Meta:              mergeMeta(req.Meta, decision.Meta),
+		ApprovalNamespace: decision.ApprovalNamespace,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "run_failed", err.Error())
@@ -190,9 +202,10 @@ func (h *Handler) ServeDetachedStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	info, err := h.Manager.Start(r.Context(), zenforge.Task{
-		RunID: req.RunID,
-		Input: req.Input,
-		Meta:  mergeMeta(req.Meta, decision.Meta),
+		RunID:             req.RunID,
+		Input:             req.Input,
+		Meta:              mergeMeta(req.Meta, decision.Meta),
+		ApprovalNamespace: decision.ApprovalNamespace,
 	})
 	if err != nil {
 		writeManagerError(w, "detached_start_failed", err)

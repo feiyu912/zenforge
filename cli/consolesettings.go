@@ -218,6 +218,24 @@ func consoleSettingsPath(explicit string) (string, error) {
 	return filepath.Join(configDir, consoleSettingsFileName), nil
 }
 
+// pathIsInsideWorkspace reports whether path textually lands inside the workspace
+// this host serves. Cleaned absolute paths are compared without resolving links:
+// a file that is not on disk yet cannot be evaluated, and a path that textually
+// lands inside the workspace is the case being refused.
+func pathIsInsideWorkspace(path, workspace string) bool {
+	if strings.TrimSpace(path) == "" || strings.TrimSpace(workspace) == "" {
+		return false
+	}
+	relative, err := filepath.Rel(filepath.Clean(workspace), filepath.Clean(path))
+	if err != nil {
+		return false
+	}
+	if filepath.IsAbs(relative) || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return false
+	}
+	return true
+}
+
 // refuseSettingsFileInWorkspace stops the document from being placed where the
 // console can already read it back. The file sidebar serves paths under the
 // workspace root (ADR 0089), so a document inside one -- which is exactly what a
@@ -225,22 +243,12 @@ func consoleSettingsPath(explicit string) (string, error) {
 // defaults to the working directory -- would expose the credential as a browsable
 // file. The repository checkout is the common case of that.
 func refuseSettingsFileInWorkspace(path, workspace string) error {
-	if strings.TrimSpace(path) == "" || strings.TrimSpace(workspace) == "" {
+	if !pathIsInsideWorkspace(path, workspace) {
 		return nil
 	}
-	// Cleaned absolute paths are compared without resolving links: a document
-	// that is not on disk yet cannot be evaluated, and a path that textually
-	// lands inside the workspace is the case being refused.
-	document := filepath.Clean(path)
-	root := filepath.Clean(workspace)
-	relative, err := filepath.Rel(root, document)
-	if err != nil {
-		return nil
-	}
-	if filepath.IsAbs(relative) || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return nil
-	}
-	return fmt.Errorf("--settings-file %s is inside the workspace this host serves (%s), and the console reads workspace files back to the browser: keep the settings document outside the workspace, or point the host at another directory with --workspace", document, root)
+	return fmt.Errorf(
+		"--settings-file %s is inside the workspace this host serves (%s), and the console reads workspace files back to the browser: keep the settings document outside the workspace, or point the host at another directory with --workspace",
+		filepath.Clean(path), filepath.Clean(workspace))
 }
 
 // loadConsoleSettingsFile reads the document. The second result says whether a

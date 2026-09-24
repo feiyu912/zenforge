@@ -222,12 +222,21 @@ handler.Access = harnesshttp.AccessFunc(func(ctx context.Context, r *http.Reques
             "userId":   user.ID,
             "tenantId": tenant.ID,
         },
+        ApprovalNamespace: approval.Namespace{
+            Tenant:  tenant.ID,
+            Subject: user.ID,
+        },
     }, nil
 })
 ```
 
 For `ServeRun` and `ServeDetachedStart`, trusted access metadata is merged into
 `zenforge.Task.Meta` and wins over client-supplied metadata on key conflicts.
+A decision that allows may also carry the caller's tenant and subject in
+`AccessDecision.ApprovalNamespace`; the harness puts that identity on the
+`zenforge.Task` it starts, and the run's persistent approval grants are recorded
+under it, so a grant one caller made never answers for another's call. An empty
+namespace leaves the run on the host's configured one (ADR 0141).
 The same hook authorizes synchronous and detached resume, status, attach,
 cancel, event, and live-event operations by run id. For
 `ServeApproval`, the handler resolves the pending approval request first and

@@ -35,7 +35,11 @@ does not persist.
 | Flag | Default | Meaning |
 | --- | --- | --- |
 | `--addr` | `127.0.0.1:8787` | Address to bind. A non-loopback address requires `--allow-remote`. |
-| `--allow-remote` | off | Permit binding a non-loopback address. |
+| `--allow-remote` | off | Permit binding a non-loopback address. Implies `--require-auth` unless `--allow-anonymous-remote` is also given. |
+| `--require-auth` | off | Serve only requests that present a valid token. Implied by `--allow-remote`. |
+| `--allow-anonymous-remote` | off | Let `--allow-remote` expose the host without tokens, for a network already trusted. |
+| `--auth-token-file` | `<config dir>/tokens.json` | File the accepted tokens are kept in (hashes only). |
+| `--audit-log` | `<config dir>/audit.jsonl` when authentication is required | File every admission decision is appended to. |
 | `--run-timeout` | server default | Bound on a run started from the console. |
 | `--webhook-secret` | unset | When set, the signed webhook endpoint (ADR 0070) is served as well. |
 | `--settings-file` | `<config dir>/console-settings.json` | The file the console's settings and credential persist to (ADR 0102). |
@@ -90,8 +94,20 @@ options. `zenforge serve --help` lists them.
 The console can start runs in the server's workspace, with the server's tools,
 so a console reachable from the network is a remote shell with a stylesheet.
 `127.0.0.1` is the default for that reason, and `--allow-remote` makes widening
-it a deliberate act. The console has no user accounts and no authentication;
-it is a local operator's tool.
+it a deliberate act. Authentication is optional and off by default on loopback:
+a host started without it serves every caller that can reach it.
+
+`--allow-remote` now requires tokens unless the operator also passes
+`--allow-anonymous-remote`, so a network-bound host refuses an unauthenticated
+caller before any route answers, and a host that must require tokens and holds
+none — or cannot keep an audit trail — refuses to start. A deployment mints its
+tokens with `zenforge token create`; a person signs in once at `/auth`, and an
+API client presents `Authorization: Bearer <token>`. Whenever authentication is
+required, every admission decision is appended to the audit trail (`--audit-log`,
+by default `audit.jsonl` in the host configuration directory). The console still
+has no user accounts of its own, and a token attributes a run rather than
+partitioning the console's data plane. See
+[ADR 0141](adr/0141-a-deployed-host-authenticates-its-callers.md).
 
 ## Related
 

@@ -126,6 +126,11 @@ func Main(ctx context.Context, args []string, ioStreams IO) int {
 		err = mcpServerCommand(ctx, args[1:], ioStreams)
 	case "serve":
 		err = serveCommand(ctx, args[1:], ioStreams)
+	case "token":
+		// The tokens a served host accepts. It is a subcommand of its own because
+		// minting one is the operator's act, and because the plaintext exists only
+		// in this command's output: nothing else in this program can create one.
+		err = tokenCommand(ctx, args[1:], ioStreams)
 	case "init":
 		err = initConfig(args[1:], ioStreams)
 	case "version":
@@ -1700,7 +1705,7 @@ func stringValue(value any) string {
 }
 
 func printUsage(out io.Writer) {
-	_, _ = fmt.Fprintln(out, "usage: zenforge <run|exec|code|resume|fork|revert|goal|ralph|events|runs|grants|schedule|mcp-server|serve|init|version> [options]")
+	_, _ = fmt.Fprintln(out, "usage: zenforge <run|exec|code|resume|fork|revert|goal|ralph|events|runs|grants|schedule|mcp-server|serve|token|init|version> [options]")
 }
 
 type multiFlag []string

@@ -367,6 +367,38 @@ read-only inside writable roots (`.git` and `.zenforge` by default). Since
 the default configuration does not set `shell.sandbox`, the block is
 omitted from the default file above and the shell stays local.
 
+## Served host authentication
+
+`zenforge serve` takes four flags that decide who this host serves (ADR 0141).
+They are serve flags, not JSON config fields.
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--auth-token-file` | `<config dir>/tokens.json` | File the tokens this host accepts are kept in (hashes only). |
+| `--require-auth` | off | Serve only requests that present a valid token. |
+| `--allow-anonymous-remote` | off | Let `--allow-remote` expose the host without tokens, for a network already trusted. |
+| `--audit-log` | `<config dir>/audit.jsonl` when authentication is required | File every admission decision is appended to. |
+
+`--allow-remote` implies `--require-auth` unless `--allow-anonymous-remote` is
+also given. A host that must require tokens and holds none refuses to start,
+naming the mint command, and a host that requires authentication and cannot keep
+an audit trail refuses too.
+
+The tokens those flags read are managed by `zenforge token`:
+
+```bash
+zenforge token create --tenant acme --subject ci
+zenforge token list
+zenforge token revoke --id tok_260b7338dc23
+```
+
+`create` prints the plaintext exactly once and stores only its `sha256:` hash,
+so a minted token is never recoverable; `list` reports id, tenant, subject,
+creation time and note but never a hash or a secret; `revoke` removes a token by
+id. Each subcommand takes `--token-file` to name a file other than the default,
+and a running host re-reads that file every two seconds, so a mint or a revoke
+takes effect without a restart.
+
 ## Secrets
 
 `model.apiKey` holds an inline key. Every formatting path (`%v`, `%s`, `%#v`,

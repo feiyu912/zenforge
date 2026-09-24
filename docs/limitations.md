@@ -822,3 +822,33 @@ session-log state and the `inbox` cell is a fold over it (ADR 0136), so a queued
 message outlives its run and is handed to the session's next turn. One liveness
 difference remains, and it is deliberate: a restored row waits for the next prompt
 rather than starting a turn of its own.
+
+## A token authenticates and attributes; it does not partition
+
+A served host's caller identity is a token carrying a tenant and a subject
+(ADR 0141). It proves who is calling and attributes a run's persistent approval
+grants to that caller, so a grant one tenant recorded never answers for another's
+call. It does **not** partition the console's data plane, which is host-global by
+construction. One process serving two tenants serves one set of everything: the
+sessions and the durable run registry, the event log and the checkpoints under
+`--checkpoint-dir`, the goal store, the attachment store, the console's workspace
+registry, `console-settings.json` — including the single provider credential
+every tenant would be using — and the jobs manager. The pending-approval plane is
+un-namespaced too: the approval inbox is listed with an empty filter, so every
+pending approval is broadcast to every connected client and an answer is matched
+by event id alone. A token therefore does not keep one tenant's approval prompt
+out of another tenant's panel.
+
+There are also no quotas and no rate limits — `MaxActive` remains one global
+semaphore, so one tenant can consume the host's run slots — and no cost
+accounting, so a token does not let an operator say what a tenant spent. Tokens
+do not expire, and one is invalidated by revoking it by id with `zenforge token
+revoke`.
+
+A deployment that must isolate tenants meanwhile runs one process per tenant,
+each with its own `--addr`, `--workspace`, `--checkpoint-dir`, `--settings-file`
+and token file. That isolates all of the above at once, precisely because all of
+it is process state. Per-tenant session ownership is the next chain — a run
+recorded with its owner's namespace and the session and approval reads filtered
+by it — and it is work this host has not built, not a standing isolation a
+two-tenant host already has.

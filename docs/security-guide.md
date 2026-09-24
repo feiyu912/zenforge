@@ -162,6 +162,44 @@ Guidelines:
 - store artifact references instead of large contents;
 - document where event logs and checkpoints are stored.
 
+## Served Host Authentication
+
+`zenforge serve` can put a caller-identity boundary in front of every route it
+serves — the console's `/api/*`, the harness run routes, `/api/settings` (which
+holds the provider credential), `/api/server`, both stream paths and the signed
+webhook (ADR 0141). It is off by default on loopback and required by
+`--allow-remote` unless the operator passes `--allow-anonymous-remote`. There is
+deliberately no loopback exemption when the requirement is on: a reverse proxy
+on the same machine reaches this host as a loopback peer, so "the peer is
+loopback" is not by itself a security property.
+
+Callers present a token as `Authorization: Bearer <token>` or as the
+`zenforge_session` cookie the `/auth` sign-in page sets. The cookie is
+`HttpOnly`, `SameSite=Strict`, and `Secure` only when configured; its value is
+the token itself, so the host keeps no session table and revoking the token ends
+the browser session on its next request. A refused request gets `401` with
+`WWW-Authenticate: Bearer` and the host's usual JSON error envelope.
+
+Tokens are stored hashed. `zenforge token create` is the only code that produces
+a plaintext token and it prints that plaintext once; the token file keeps only
+`sha256:` hashes and is refused at open unless it is readable only by its owner
+(the refusal names `chmod 600`). Tokens do not expire. A running host re-reads
+the token file every two seconds, so a `zenforge token revoke` made in another
+process takes effect without a restart.
+
+Every admission decision — allow or refuse — is appended to the audit trail
+named by `--audit-log`, which defaults to `audit.jsonl` beside the token file
+whenever authentication is required. A line records the time, the decision, the
+reason, the method, the path, the status the caller got, the remote address, and
+the tenant, subject and token id when one resolved. It never records a request
+body, a header value or a credential, and the path is recorded without its query
+string. Both secret-bearing files are refused inside the workspace this host
+serves, because the console reads workspace files back to the browser (ADR 0089).
+
+The boundary authenticates and attributes; it does not partition the console's
+data plane, which stays host-global. See [Limitations](limitations.md) for the
+shared surfaces and the one process per tenant interim guidance.
+
 ## What ZenForge Does Not Guarantee
 
 ZenForge can provide safe defaults and hooks, but application owners remain

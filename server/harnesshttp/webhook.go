@@ -129,8 +129,9 @@ func (h *Handler) ServeWebhookRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	info, err := h.Manager.Start(r.Context(), zenforge.Task{
-		Input: req.Prompt,
-		Meta:  mergeMeta(req.Metadata, decision.Meta),
+		Input:             req.Prompt,
+		Meta:              mergeMeta(req.Metadata, decision.Meta),
+		ApprovalNamespace: decision.ApprovalNamespace,
 	})
 	if err != nil {
 		writeManagerError(w, "webhook_run_failed", err)

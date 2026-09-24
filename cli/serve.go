@@ -27,14 +27,16 @@ import (
 	"github.com/feiyu912/zenforge/internal/dshwire"
 	"github.com/feiyu912/zenforge/model"
 	"github.com/feiyu912/zenforge/model/provider"
+	"github.com/feiyu912/zenforge/server/auth"
 	"github.com/feiyu912/zenforge/server/harnesshttp"
 )
 
 const (
-	// defaultServeAddr is loopback because the run and settings APIs have no
-	// authentication: the operator is expected to be sitting at the machine
-	// that runs the server, and --allow-remote is the explicit decision to
-	// expose it further.
+	// defaultServeAddr is loopback because the run and settings APIs are
+	// unauthenticated unless the operator asks for tokens: the operator is
+	// expected to be sitting at the machine that runs the server, and
+	// --allow-remote is the explicit decision to expose it further -- which now
+	// also requires tokens unless --allow-anonymous-remote is given (ADR 0141).
 	defaultServeAddr = "127.0.0.1:8787"
 	// defaultServeRunTimeout bounds one served run, matching the detached
 	// example harness: a browser tab that is closed must not leave a run
@@ -64,6 +66,13 @@ func serveCommand(ctx context.Context, args []string, ioStreams IO) error {
 	// not where they want their credential kept, and -- like every other secret
 	// flag here -- it is taken verbatim.
 	settingsFile := fs.String("settings-file", "", "file the console's settings and credential persist to; defaults to console-settings.json in the host configuration directory")
+	// The caller-identity flags. --allow-remote used to be the only gate on a
+	// network-bound host, and it opened every route at once: the tokens below are
+	// what a deployment exposes instead, so a remote peer has to name itself.
+	authTokenFile := fs.String("auth-token-file", "", "file the tokens this host accepts are kept in; defaults to tokens.json in the host configuration directory")
+	requireAuth := fs.Bool("require-auth", false, "serve only requests that present a valid token; implied by --allow-remote unless --allow-anonymous-remote is given")
+	allowAnonymousRemote := fs.Bool("allow-anonymous-remote", false, "let --allow-remote expose this host without tokens (only for a network you already trust)")
+	auditLogFile := fs.String("audit-log", "", "file every admission decision is appended to; defaults to audit.jsonl in the host configuration directory whenever authentication is required")
 	// The secret falls back to the environment so it is not visible in argv,
 	// and an empty secret disables the signed webhook route rather than
 	// allowing an unauthenticated run trigger.
@@ -85,8 +94,31 @@ func serveCommand(ctx context.Context, args []string, ioStreams IO) error {
 	// even though neither string looks like a name, so anything not provably
 	// loopback has to be opted into.
 	if !*allowRemote && !isLoopbackListenAddr(*addr) {
-		return invalidUsage(fmt.Errorf("--addr %q is not a loopback address; the run and settings APIs are unauthenticated, so pass --allow-remote to bind it deliberately", *addr))
+		return invalidUsage(fmt.Errorf("--addr %q is not a loopback address; pass --allow-remote to bind it deliberately, which now also requires tokens unless --allow-anonymous-remote is given", *addr))
 	}
+
+	// The identity decision is made before anything is built, and fails closed:
+	// a host asked to require tokens that holds none would only refuse every
+	// caller, and one that cannot keep an audit trail would be unaccountable.
+	authConfig, err := resolveServeAuth(serveAuthOptions{
+		requireAuth:          *requireAuth,
+		allowRemote:          *allowRemote,
+		allowAnonymousRemote: *allowAnonymousRemote,
+		tokenFile:            *authTokenFile,
+		auditLog:             *auditLogFile,
+		workspace:            opts.workspace,
+	})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := authConfig.close(); err != nil {
+			_, _ = fmt.Fprintf(ioStreams.Stderr, "warning: closing the audit log: %v\n", err)
+		}
+	}()
+	// A running host has to see a mint or a revoke made in another process; the
+	// request path reads the in-memory set and this is what refreshes it.
+	go authConfig.watchTokens(ctx, authTokenReloadInterval)
 
 	// Registered before anything is built so every path out releases the
 	// stores and MCP processes buildAgentConfig opens.
@@ -97,6 +129,7 @@ func serveCommand(ctx context.Context, args []string, ioStreams IO) error {
 		webhookSecret: *webhookSecret,
 		allowRemote:   *allowRemote,
 		settingsFile:  *settingsFile,
+		auth:          authConfig,
 	})
 	if err != nil {
 		return err
@@ -120,6 +153,14 @@ func serveCommand(ctx context.Context, args []string, ioStreams IO) error {
 	}()
 	_, _ = fmt.Fprintf(ioStreams.Stdout, "zenforge serve listening on http://%s\n", listener.Addr())
 	_, _ = fmt.Fprintln(ioStreams.Stdout, "open it in a browser; set the model endpoint and API key under the gear icon")
+	if authConfig.required {
+		_, _ = fmt.Fprintf(ioStreams.Stdout, "authentication: required; sign in at http://%s%s, and present tokens as `Authorization: Bearer <token>`\n", listener.Addr(), auth.SignInPath)
+		if authConfig.audit != nil {
+			_, _ = fmt.Fprintf(ioStreams.Stdout, "audit trail: %s\n", authConfig.audit.Path())
+		}
+	} else {
+		_, _ = fmt.Fprintln(ioStreams.Stdout, "authentication: not required; every caller that can reach this host is served (--require-auth changes that)")
+	}
 
 	select {
 	case err := <-serverErrors:
@@ -283,6 +324,10 @@ type serveConfig struct {
 	// settings document lives at, or empty for the host's own configuration
 	// directory (ADR 0102).
 	settingsFile string
+	// auth is the caller-identity decision: the tokens this host accepts, whether
+	// it requires one, and the audit trail it appends every decision to. Nil means
+	// the tests' default: no tokens, nothing required, nothing recorded.
+	auth *serveAuth
 }
 
 // serveApp is the assembled server a command or a test can drive. It exists
@@ -293,6 +338,7 @@ type serveApp struct {
 	handler   http.Handler
 	settings  *settingsStore
 	workspace string
+	auth      *serveAuth
 }
 
 // Handler returns the fully routed handler: harness routes, settings API, and
@@ -408,6 +454,12 @@ func newServeApp(ctx context.Context, opts *options, ioStreams IO, config serveC
 	runtime, err := harnesshttp.NewRuntime(agentConfig, events, harnesshttp.RuntimeOptions{
 		ApprovalInbox: inbox,
 		Webhook:       harnesshttp.WebhookOptions{Secret: config.webhookSecret},
+		// The identity the boundary resolved reaches every run this host starts
+		// through its harness routes, so the run's approval grants are recorded
+		// under the caller's own namespace. It does not refuse: the boundary is
+		// the one policy, and a second opinion here would be a second thing to
+		// keep in step.
+		Access: config.auth.accessController(),
 		Manager: harnesshttp.RunManagerOptions{
 			MaxActive:         16,
 			RunTimeout:        config.runTimeout,
@@ -564,6 +616,7 @@ func newServeApp(ctx context.Context, opts *options, ioStreams IO, config serveC
 	}
 
 	mux := newServeMux(serveMuxConfig{
+		auth: config.auth,
 		registerHarness: func(mux *http.ServeMux) {
 			handler := runtime.Handler
 			mux.HandleFunc("/runs/start", handler.ServeDetachedStart)
@@ -585,7 +638,13 @@ func newServeApp(ctx context.Context, opts *options, ioStreams IO, config serveC
 		stream:      stream,
 	})
 
-	return &serveApp{runtime: runtime, handler: mux, settings: settings, workspace: workspace}, nil
+	return &serveApp{
+		runtime:   runtime,
+		handler:   mux,
+		settings:  settings,
+		workspace: workspace,
+		auth:      config.auth,
+	}, nil
 }
 
 // serveMuxConfig is the route table's inputs. They are handlers and a
@@ -593,6 +652,10 @@ func newServeApp(ctx context.Context, opts *options, ioStreams IO, config serveC
 // built and asserted in a test without a model, an event store, or a run
 // manager; newServeApp is the only production caller.
 type serveMuxConfig struct {
+	// auth is the admission policy every route below is wrapped in. Nil means this
+	// host decides nothing about its callers, which is what a test that only cares
+	// about routing wants.
+	auth            *serveAuth
 	registerHarness func(*http.ServeMux)
 	settings        *settingsStore
 	workspace       string
@@ -612,10 +675,37 @@ type serveMuxConfig struct {
 // The console is the only HTML surface serve offers: the interim first-party
 // console is deliberately not mounted, so a browser that asks for /classic/
 // falls through to the console's own 404 rather than a second interface.
-func newServeMux(cfg serveMuxConfig) *http.ServeMux {
+//
+// The returned handler is the admission policy wrapped around the table when one
+// was configured (ADR 0141). It is a handler rather than the mux itself so the
+// policy cannot be forgotten by a caller that assembles a listener by hand.
+func newServeMux(cfg serveMuxConfig) http.Handler {
 	mux := http.NewServeMux()
 	if cfg.registerHarness != nil {
 		cfg.registerHarness(mux)
+	}
+	// The sign-in routes are registered before the console's catch-all. They are
+	// the only paths a caller without a token may reach, because a browser with no
+	// session has to be able to reach the form that gives it one.
+	if cfg.auth != nil {
+		authenticator := cfg.auth.authenticator()
+		mux.HandleFunc(auth.SignInPath, authenticator.ServeSignInPage)
+		mux.HandleFunc(auth.SessionPath, func(w http.ResponseWriter, r *http.Request) {
+			switch r.Method {
+			case http.MethodPost:
+				authenticator.ServeSignIn(w, r)
+			case http.MethodGet:
+				authenticator.ServeCurrent(w, r)
+			case http.MethodDelete:
+				authenticator.ServeSignOut(w, r)
+			default:
+				auth.WriteRefusal(w, auth.Refusal{
+					Status:  http.StatusMethodNotAllowed,
+					Code:    "method_not_allowed",
+					Message: "the session route answers GET, POST and DELETE",
+				})
+			}
+		})
 	}
 	mux.HandleFunc("/api/settings", cfg.settings.serveHTTP)
 	mux.HandleFunc("/api/server", func(w http.ResponseWriter, r *http.Request) {
@@ -633,7 +723,11 @@ func newServeMux(cfg serveMuxConfig) *http.ServeMux {
 		mux.Handle(dshstream.EventsResultPath, cfg.stream)
 	}
 	mux.Handle("/", cfg.dsh)
-	return mux
+	// The boundary wraps the assembled table rather than any one route: it is the
+	// only layer that sees the console's /api/*, the harness routes, the settings
+	// API, the sign-in routes and both streams, which is what makes it the one
+	// place that decides who is served.
+	return cfg.auth.wrap(mux)
 }
 
 // isLoopbackListenAddr reports whether addr proves it binds only the loopback
