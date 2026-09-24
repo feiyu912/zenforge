@@ -104,6 +104,16 @@ go run ./cmd/zenforge run --approve never "Run useful checks"
 ```bash
 go run ./examples/sdk-embedded-agent
 ZENFORGE_PROVIDER=openai ZENFORGE_MODEL=... ZENFORGE_API_KEY=... \
+  go run ./examples/qa-agent -sandbox local \
+    -question "What does this project do?"
+ZENFORGE_PROVIDER=openai ZENFORGE_MODEL=... ZENFORGE_API_KEY=... \
+  go run ./examples/long-task-agent -task "Summarize every Go package in order"
+# That run pauses for an approval and exits 75 with the run id; finish it with:
+ZENFORGE_PROVIDER=openai ZENFORGE_MODEL=... ZENFORGE_API_KEY=... \
+  go run ./examples/long-task-agent -resume <run-id>
+ZENFORGE_PROVIDER=openai ZENFORGE_MODEL=... ZENFORGE_API_KEY=... \
+  go run ./examples/coding-agent -workspace . -task "Add a doc comment to main.go"
+ZENFORGE_PROVIDER=openai ZENFORGE_MODEL=... ZENFORGE_API_KEY=... \
   go run ./examples/harness-agent -skill-root examples/harness-agent/skills \
     -question "Inspect this project"
 ZENFORGE_PROVIDER=anthropic ZENFORGE_MODEL=... ZENFORGE_API_KEY=... \
@@ -115,9 +125,13 @@ OPENAI_API_KEY=... go run ./examples/code-review-agent
 ```
 
 The SDK embedded example uses a local scripted model and runs without an API
-key. `harness-agent` combines an environment-selected OpenAI- or
-Anthropic-compatible provider with a filesystem Agent Skill, an ordinary typed
-tool, HITL, and Docker. `ZENFORGE_SKILL_ROOT` can replace `-skill-root`.
+key. `qa-agent`, `long-task-agent` and `coding-agent` are the three scenario
+examples: they are tested end to end in CI against a scripted OpenAI-compatible
+endpoint, so `go test ./examples/...` reproduces them without a credential, and
+`-sandbox local` runs `qa-agent` without Docker. `harness-agent` combines an
+environment-selected OpenAI- or Anthropic-compatible provider with a filesystem
+Agent Skill, an ordinary typed tool, HITL, and Docker. `ZENFORGE_SKILL_ROOT` can
+replace `-skill-root`.
 `http-harness-agent` uses the same application-owned provider configuration in
 a loopback-only service with durable SQLite events, checkpoints, approvals, and
 detached runs; add application auth before exposing it beyond localhost.

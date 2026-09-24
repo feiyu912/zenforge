@@ -334,18 +334,23 @@ See [Quickstart](https://feiyu912.github.io/zenforge/quickstart/) and the
 
 ## Examples
 
-Each example is a runnable Go program under [`examples/`](examples/). The SDK
-embedded example runs locally without an API key; provider-backed examples need
-`OPENAI_API_KEY` or an OpenAI-compatible endpoint.
+Each example is a runnable Go program under [`examples/`](examples/). Running
+one for real needs `OPENAI_API_KEY` or an OpenAI-compatible endpoint; the three
+scenario examples below are exercised end to end in CI against a scripted
+OpenAI-compatible endpoint (`examples/internal/modelstub`), so their tests need
+no credential, no network and no Docker.
 
 | Example | What it shows |
 | --- | --- |
+| [`qa-agent`](examples/qa-agent) | Question answering with HITL approval, a filesystem Agent Skill, and a sandboxed shell. |
+| [`long-task-agent`](examples/long-task-agent) | A long task that pauses for an operator decision and finishes in a second process from its checkpoint. |
+| [`coding-agent`](examples/coding-agent) | An agent that reads, edits and runs an allowlisted command, with approval before it acts. |
 | [`sdk-embedded-agent`](examples/sdk-embedded-agent) | Embed ZenForge in a Go service; runs without an API key. |
 | [`harness-agent`](examples/harness-agent) | Env provider + Agent Skills + typed tool + HITL + Docker sandbox. |
 | [`http-harness-agent`](examples/http-harness-agent) | Loopback-only HTTP service: detached runs, SSE, durable SQLite stores, webhooks. |
 | [`simple-tool-agent`](examples/simple-tool-agent) | Minimal model + tool loop. |
-| [`code-review-agent`](examples/code-review-agent) | Workspace + shell with approval. |
-| [`repo-refactor-agent`](examples/repo-refactor-agent) | Long task with checkpoints and resume. |
+| [`code-review-agent`](examples/code-review-agent) | Workspace + shell with approval, read-mostly by policy. |
+| [`repo-refactor-agent`](examples/repo-refactor-agent) | Plan/execute/summary preset with JSONL events, checkpoints and streaming. |
 
 The flagship assembly end to end:
 

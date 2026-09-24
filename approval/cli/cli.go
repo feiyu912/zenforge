@@ -16,10 +16,30 @@ import (
 type Broker struct {
 	In  io.Reader
 	Out io.Writer
+
+	// reader is the buffered view of In that New installs. It is created
+	// once so that every prompt shares one buffer: a caller that pipes or
+	// pre-writes several answers would otherwise lose all but the first,
+	// because each prompt's own bufio.Reader read ahead of the next one.
+	reader *bufio.Reader
 }
 
 func New(in io.Reader, out io.Writer) Broker {
-	return Broker{In: in, Out: out}
+	broker := Broker{In: in, Out: out}
+	if in != nil {
+		broker.reader = bufio.NewReader(in)
+	}
+	return broker
+}
+
+// bufferedReader is the reader prompts read one line from. A Broker built by
+// New shares one buffer for the whole session; a Broker assembled as a struct
+// literal falls back to wrapping In for that prompt.
+func (b Broker) bufferedReader() *bufio.Reader {
+	if b.reader != nil {
+		return b.reader
+	}
+	return bufio.NewReader(b.In)
 }
 
 func (b Broker) Request(ctx context.Context, req approval.Request) (approval.Decision, error) {
@@ -58,7 +78,7 @@ func (b Broker) Request(ctx context.Context, req approval.Request) (approval.Dec
 	}
 	ch := make(chan response, 1)
 	go func() {
-		line, err := bufio.NewReader(b.In).ReadString('\n')
+		line, err := b.bufferedReader().ReadString('\n')
 		if err != nil && len(line) == 0 {
 			ch <- response{err: err}
 			return
@@ -100,7 +120,7 @@ func (b Broker) answerQuestions(ctx context.Context, req approval.Request) (appr
 	}
 	ch := make(chan response, 1)
 	go func() {
-		reader := bufio.NewReader(b.In)
+		reader := b.bufferedReader()
 		answers := make(map[string]any, len(questions))
 		for _, question := range questions {
 			if question.Header != "" {

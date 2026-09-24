@@ -185,7 +185,12 @@ access, `--sandbox-protected` selects the basenames pinned read-only
 inside writable roots, `--sandbox-restricted` switches bubblewrap from a
 read-only host root to an empty root plus approved read roots,
 `--sandbox-image` selects the container image, and `--sandbox-timeout`
-bounds one sandboxed command (defaulting to `shell.timeout`). An unknown
+bounds one sandboxed command (defaulting to `shell.timeout`). The
+`docker` backend has a filesystem of its own, so each writable root is
+bind-mounted into the container at its host path — without that mount
+the container ran in an empty working directory and `--sandbox-root`
+had no effect; the mounts are read-write unless `--sandbox-restricted`
+asks for the tighter read-only layout. An unknown
 backend is a usage error, and a backend that is unavailable on the host
 fails the command with `sandbox_unavailable` rather than running
 unsandboxed. The `landlock` backend confines the filesystem with Landlock

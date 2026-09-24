@@ -20,6 +20,170 @@ execute / summary workflow with approval gating.
 
 ---
 
+## The three scenario examples
+
+`qa-agent`, `long-task-agent` and `coding-agent` are the examples the acceptance
+suite runs end to end. They are written the way a deployment is written — the
+provider comes from the environment and the model's words arrive over HTTP —
+and their tests point that provider at a scripted OpenAI-compatible endpoint on
+loopback (`examples/internal/modelstub`). The adapter, the agent loop, the
+tools, the approval broker, the skill catalog and the checkpoint store are all
+the real ones; only the model is scripted. So `go test ./examples/...`
+reproduces each scenario with no credential, no network and, except where noted,
+no Docker.
+
+## qa-agent
+
+Question answering with the three things that make an answer trustworthy: a
+filesystem Agent Skill the model loads on demand, a shell it can inspect the
+workspace with, and an operator who approves every command before it runs.
+
+```bash
+export ZENFORGE_PROVIDER=openai
+export ZENFORGE_MODEL=...
+export ZENFORGE_API_KEY=...
+go run ./examples/qa-agent -question "What does this workspace contain?"
+```
+
+The default `-sandbox docker` runs the command in `alpine:3.20` with the
+workspace mounted read-only at `/workspace`; `-image` selects another image.
+`-sandbox local` runs it on the host instead, which is what CI uses. The skill
+root defaults to the `skills` directory beside the example, so a checkout needs
+no configuration; `-skill-root` or `ZENFORGE_SKILL_ROOT` select an
+application-owned catalog.
+
+The shipped skill (`skills/qa-evidence-lookup/SKILL.md`) tells the model to
+answer from observed evidence and name the command that produced each fact. The
+transcript is one line per observable step, and the approval prompt is the
+numbered CLI prompt on stderr:
+
+```text
+skill: loaded qa-evidence-lookup
+tool: load_skill
+tool: shell
+Approval required: Approve shell command
+1. Approve
+2. Reject
+> approval: shell approve
+answer: the command printed qa-live-ok
+```
+
+`go test ./examples/qa-agent/` proves progressive disclosure on the wire: the
+first model request carries the skill's name and description and *not* its body,
+the second carries the body only after `load_skill` ran, and the third carries
+the approved command's stdout. Setting `ZENFORGE_DOCKER_INTEGRATION=1` runs the
+same path inside the container; the Docker CI job runs it.
+
+## long-task-agent
+
+A long task that stops durably in the middle of its work and finishes in a later
+process. The agent records each completed step in a workspace task log, and the
+step that closes the task out needs a human decision — so it pauses there.
+
+```bash
+export ZENFORGE_PROVIDER=openai
+export ZENFORGE_MODEL=...
+export ZENFORGE_API_KEY=...
+
+# First process: work the task until the decision is needed.
+go run ./examples/long-task-agent \
+  -task "Audit the workspace step by step, then finalize the report."
+
+# It prints the run id and the resume command, then exits 75 (EX_TEMPFAIL):
+#   run: incomplete long_1790...
+#   run: resume with: long-task-agent -run-dir .zenforge/long-task \
+#     -workspace . -resume long_1790...
+
+# Second process: resume from the checkpoint and answer the pending decision.
+go run ./examples/long-task-agent -resume long_1790...
+```
+
+The interruption is an **approval pause**, not a step limit, and the README says
+why: `MaxSteps` exhaustion is a bound, not a boundary — the runner appends its
+tool-use-limit instruction, makes one final model call and ends the run
+`completed`, so `Resume` on that checkpoint would only replay the terminal
+event. A waiting approval is the one public-API stop that leaves a genuinely
+resumable run, so the example configures no approval broker in the first process
+(`approval.RequiredResult` + `approval.ErrRequired` from `finalize_task`), and
+`-max-steps` stays generous so a real run reaches the decision instead of the
+finalization path.
+
+State is durable throughout: `-run-dir` holds the JSONL event log and
+checkpoints, and the transcript prints one `checkpoint:` line per durable
+boundary with the sequence, the phase and the file a resume reads. The second
+process is a fresh program over the same store — it answers with the numbered
+CLI option and drains the run to `run: done`:
+
+```text
+run: incomplete long_live_1
+checkpoint: seq=18 phase=approval file=.../latest.json
+run: resume with: long-task-agent -run-dir ... -workspace ... -resume long_live_1
+
+run: resumed long_live_1
+Approval required: Finalize the long task
+1. Approve
+2. Reject
+> approval: finalize_task approve
+tool: finalize_task
+run: done long_live_1
+answer: The operator signed the report off; the long task is complete.
+```
+
+`go test ./examples/long-task-agent/` runs the whole two-process scenario as real
+child processes against the scripted endpoint, plus a second case where a
+completed checkpoint replays its terminal event without a model call. The
+resumed run makes exactly one model call, and that request is asserted to carry
+the tool results recorded *before* the pause (`Delivered("record_step")`,
+`Delivered("finalize_task")`) and the pre-pause notes as text — which is what
+distinguishes a resume from a restart.
+
+## coding-agent
+
+A workspace-editing agent with a human in the loop: it reads a file, edits it,
+and runs a command to verify the change, with every write and every
+non-allowlisted command gated behind the operator.
+
+```bash
+export ZENFORGE_PROVIDER=openai
+export ZENFORGE_MODEL=...
+export ZENFORGE_API_KEY=...
+go run ./examples/coding-agent -workspace . \
+  -task "Correct the greeting in greeting.txt and verify the change."
+```
+
+`-workspace` is both the agent's root and the hard filesystem boundary, and
+`-run-dir` (or `ZENFORGE_RUN_DIR`) holds the JSONL event log and checkpoints, so
+a coding run is inspectable after the fact. The policy is deliberately split:
+reads inside the workspace need no prompt, while no write root is pre-authorized,
+so `workspace_write` and `workspace_edit` always ask, and a path that escapes the
+workspace is refused outright rather than offered for approval. The shell
+allowlist is the no-prompt tier — `go build ./...` and `go test ./...` run
+directly — and anything else is approved per call. The write side keeps the
+snapshot guard on: a write to a path this run has not read is refused.
+
+```text
+tool: workspace_read
+Approval required: Approve workspace write
+1. Approve
+2. Reject
+> approval: workspace_write approve
+tool: workspace_write
+write: greeting.txt
+approval: shell approve
+shell: printf 'check-ok\n'
+answer: Updated greeting.txt and verified it with printf check-ok.
+```
+
+`go test ./examples/coding-agent/` runs two scenarios against the scripted
+endpoint. The first asserts the file on disk really changed, that both prompts
+appeared, that a read result preceded the write call in the model's requests, and
+that the command's output reached the model. The second answers the write prompt
+with `2` and asserts the SDK's real behaviour: the agent loop synthesizes the
+`approval_rejected` tool error itself, never calls the tool, leaves the file
+byte-identical, and lets the run finish.
+
+---
+
 ## harness-agent
 
 The full external-application shape: `provider.FromEnv()`, a real filesystem

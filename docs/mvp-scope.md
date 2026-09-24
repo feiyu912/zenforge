@@ -50,8 +50,14 @@ examples/sdk-embedded-agent
 examples/simple-tool-agent
 ```
 
-The most important one is `repo-refactor-agent`, because it exercises planning,
-file reading, grep, shell, todo updates, trace, and final summary.
+The three scenario examples added later are the ones the acceptance suite runs
+end to end: `examples/qa-agent` (HITL, Agent Skill, sandboxed shell),
+`examples/long-task-agent` (checkpoint and resume), and `examples/coding-agent`
+(read, edit and allowlisted shell behind approval).
+
+The most important of the original four is `repo-refactor-agent`, because it
+exercises planning, file reading, grep, shell, todo updates, trace, and final
+summary.
 
 ## Success Criteria
 

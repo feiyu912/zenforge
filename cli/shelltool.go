@@ -11,7 +11,18 @@ import (
 // paths share one policy: a command file cannot grant itself a shell the
 // user did not configure.
 func buildShellTool(opts options) (tool.Tool, error) {
-	sandboxBackend, err := buildSandbox(sandboxOptions{
+	config, err := shellToolConfig(opts)
+	if err != nil {
+		return nil, err
+	}
+	return shelltool.New(config)
+}
+
+// shellToolConfig resolves the shell tool configuration, including the
+// sandbox backend and the mounts a container backend needs. It is separate
+// from buildShellTool so the wiring is testable without executing a command.
+func shellToolConfig(opts options) (shelltool.Config, error) {
+	sandboxOptions := sandboxOptions{
 		Backend:        opts.sandboxBackend,
 		Roots:          []string(opts.sandboxRoots),
 		AllowNetwork:   opts.sandboxAllowNetwork,
@@ -19,9 +30,10 @@ func buildShellTool(opts options) (tool.Tool, error) {
 		Image:          opts.sandboxImage,
 		Timeout:        opts.sandboxTimeout,
 		ProtectedNames: []string(opts.sandboxProtected),
-	}, opts.shellWorkingDir, opts.shellTimeout)
+	}
+	sandboxBackend, err := buildSandbox(sandboxOptions, opts.shellWorkingDir, opts.shellTimeout)
 	if err != nil {
-		return nil, err
+		return shelltool.Config{}, err
 	}
 	shellConfig := shelltool.Config{Policy: policy.ShellPolicy{
 		WorkingDir:      opts.shellWorkingDir,
@@ -39,5 +51,12 @@ func buildShellTool(opts options) (tool.Tool, error) {
 		shellConfig.EnvironmentID = opts.sandboxImage
 		shellConfig.KeepSessionOpen = true
 	}
-	return shelltool.New(shellConfig)
+	if isDockerBackend(opts.sandboxBackend) {
+		mounts, err := dockerMounts(sandboxRoots(sandboxOptions, opts.shellWorkingDir), opts.sandboxRestricted)
+		if err != nil {
+			return shelltool.Config{}, err
+		}
+		shellConfig.Mounts = mounts
+	}
+	return shellConfig, nil
 }

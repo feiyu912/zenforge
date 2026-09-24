@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -52,6 +53,58 @@ func validateSandboxBackend(backend string) error {
 	}
 }
 
+// isDockerBackend reports whether the configured backend is the container
+// backend, which is the only one that needs explicit bind mounts.
+func isDockerBackend(backend string) bool {
+	return strings.EqualFold(strings.TrimSpace(backend), SandboxDocker)
+}
+
+// sandboxRoots is the resolved writable-root list: the explicit
+// --sandbox-root values, or the shell working directory when none were given.
+// buildSandbox and the Docker mount wiring must agree on it, or the
+// documented "the shell working directory by default" promise holds on one
+// backend and not the other.
+func sandboxRoots(opts sandboxOptions, defaultWorkingDir string) []string {
+	roots := append([]string(nil), opts.Roots...)
+	if len(roots) == 0 && defaultWorkingDir != "" {
+		roots = append(roots, defaultWorkingDir)
+	}
+	return roots
+}
+
+// dockerMounts turns the writable roots into container bind mounts. A Docker
+// container has a filesystem of its own: without a mount the model's shell
+// runs in an empty working directory and cannot read the project at all, so
+// --sandbox-root would be a documented flag with no effect. Each root keeps
+// its absolute host path inside the container, which is what lets the shell
+// tool map the host working directory onto the mount. Roots are writable
+// unless --sandbox-restricted asked for the tighter layout, matching the
+// documented meaning of the flag.
+func dockerMounts(roots []string, restricted bool) ([]sandbox.Mount, error) {
+	mode := "rw"
+	if restricted {
+		mode = "ro"
+	}
+	mounts := make([]sandbox.Mount, 0, len(roots))
+	seen := make(map[string]struct{}, len(roots))
+	for _, root := range roots {
+		trimmed := strings.TrimSpace(root)
+		if trimmed == "" {
+			continue
+		}
+		absolute, err := filepath.Abs(trimmed)
+		if err != nil {
+			return nil, fmt.Errorf("resolving sandbox root %q: %w", root, err)
+		}
+		if _, ok := seen[absolute]; ok {
+			continue
+		}
+		seen[absolute] = struct{}{}
+		mounts = append(mounts, sandbox.Mount{Source: absolute, Destination: absolute, Mode: mode})
+	}
+	return mounts, nil
+}
+
 // buildSandbox constructs the configured backend. An empty or "none"
 // backend returns a nil sandbox, which keeps the shell local.
 func buildSandbox(opts sandboxOptions, defaultWorkingDir string, fallbackTimeout time.Duration) (sandbox.Sandbox, error) {
@@ -59,10 +112,7 @@ func buildSandbox(opts sandboxOptions, defaultWorkingDir string, fallbackTimeout
 	if timeout <= 0 {
 		timeout = fallbackTimeout
 	}
-	roots := append([]string(nil), opts.Roots...)
-	if len(roots) == 0 && defaultWorkingDir != "" {
-		roots = append(roots, defaultWorkingDir)
-	}
+	roots := sandboxRoots(opts, defaultWorkingDir)
 	switch strings.ToLower(strings.TrimSpace(opts.Backend)) {
 	case "", SandboxNone:
 		return nil, nil

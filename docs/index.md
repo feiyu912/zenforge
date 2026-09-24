@@ -187,8 +187,9 @@ interface that you can satisfy, wrap, mock, or leave nil.
    OpenAI, MiniMax, and custom adapters.
 4. **Embedding ZenForge in an existing Go service?** → [SDK guide](sdk-guide.md)
    covers the import paths, lifecycle, and edge cases.
-5. **Looking for code to copy?** → [Examples](examples.md) ships six
-   reference agents you can read top-to-bottom.
+5. **Looking for code to copy?** → [Examples](examples.md) ships nine
+   reference agents you can read top-to-bottom; three of them run end to end in
+   CI against a scripted endpoint.
 6. **Running long, tool-heavy conversations?** → [Compaction
    guide](compaction-guide.md) covers retry, pressure compaction, and
    overflow recovery.

@@ -283,6 +283,7 @@ nav:
       - 0139 Every recorded attachment deviation is closed: adr/0139-every-recorded-attachment-deviation-is-closed.md
       - 0140 A run keeps the model it started on: adr/0140-a-run-keeps-the-model-it-started-on.md
       - 0141 A deployed host authenticates its callers: adr/0141-a-deployed-host-authenticates-its-callers.md
+      - 0142 The scenario examples run end to end: adr/0142-the-scenario-examples-run-end-to-end.md
 
 extra:
   social:

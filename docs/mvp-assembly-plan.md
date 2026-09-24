@@ -74,7 +74,9 @@ and get:
 
 - `examples/repo-refactor-agent`;
 - `examples/code-review-agent`;
-- `examples/simple-tool-agent`.
+- `examples/simple-tool-agent`;
+- the three runnable scenarios: `examples/qa-agent`,
+  `examples/long-task-agent`, `examples/coding-agent`.
 
 ## MVP Can Defer
 

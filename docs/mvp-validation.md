@@ -340,6 +340,21 @@ rg -n '"[^"[:space:]]*agent-platform[^"[:space:]]*"' --glob "*.go" .
 The expected result is no platform module import strings. Protocol comments and
 fixture provenance under `adapters/zenmind` may name the external repository.
 
+## Scenario Examples
+
+| Requirement | Evidence |
+| --- | --- |
+| the three scenario examples run end to end against a scripted OpenAI-compatible endpoint, with no credential, no network and no TTY | `examples/qa-agent.TestQAAgentLoadsSkillAndRunsApprovedLocalShell`, `examples/long-task-agent.TestLongTaskAgentPausesForApprovalAndResumesFromCheckpoint`, `examples/long-task-agent.TestLongTaskAgentResumesWithoutAPendingDecision`, `examples/coding-agent.TestCodingAgentEditsAFileAndRunsAnApprovedCommand`, `examples/coding-agent.TestCodingAgentHonoursADeniedWrite` |
+| the scripted endpoint drives the real provider adapter, the agent loop and its typed tools | `examples/internal/modelstub.TestScriptedEndpointDrivesARealAgentRun`, `examples/internal/modelstub.TestScriptedEndpointRepeatsItsLastTurn` |
+| the scenario examples use public SDK paths only, and the scripted endpoint is reachable from a test file only | `examples.TestScenarioExamplesUseOnlyPublicSDKPaths` |
+| a Q&A agent advertises a skill's description before its body, loads it on demand, and runs an approved shell command whose output reaches the model | `examples/qa-agent.TestQAAgentLoadsSkillAndRunsApprovedLocalShell` |
+| the same Q&A path runs inside the Docker sandbox, auto-mounted read-only at `/workspace` | `examples/qa-agent.TestQAAgentRunsApprovedDockerShellWhenDockerIsEnabled` when `ZENFORGE_DOCKER_INTEGRATION=1` |
+| a durable run pauses on an approval, and a second process resumes it from the checkpoint with its pre-pause tool results and notes | `examples/long-task-agent.TestLongTaskAgentPausesForApprovalAndResumesFromCheckpoint` |
+| a completed checkpoint replays its terminal event without a model call | `examples/long-task-agent.TestLongTaskAgentResumesWithoutAPendingDecision` |
+| an editing agent's write and command each require approval, and a rejected approval leaves the file byte-identical | `examples/coding-agent.TestCodingAgentEditsAFileAndRunsAnApprovedCommand`, `examples/coding-agent.TestCodingAgentHonoursADeniedWrite` |
+| the Docker CLI sandbox mounts the configured writable roots at their host paths, read-write or read-only under `--sandbox-restricted` | `cli.TestDockerSandboxMountsTheWritableRoots` |
+| the CLI approval broker reads every prompt through one shared buffer, so answers written ahead of time all arrive | `approval/cli.TestCLIBrokerKeepsTheAnswersAFullRunWasGiven`, `approval/cli.TestCLIBrokerReadsOneAnswerPerPromptFromALiteral` |
+
 ## CI Evidence
 
 After each pushed phase, verify the latest commit with:

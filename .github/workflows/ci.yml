@@ -94,8 +94,13 @@ jobs:
           docker info
           docker pull alpine:3.20
 
-      - name: Run Docker HTTP harness integration
-        run: go test ./examples/http-harness-agent -run '^TestHTTPHarnessRunsApprovedDockerShellWhenEnabled$' -v
+      - name: Run Docker sandbox adapter integration
+        run: go test ./sandbox/docker -run '^TestDockerIntegration$' -v
+
+      - name: Run Docker example integrations
+        run: |
+          go test ./examples/http-harness-agent ./examples/qa-agent \
+            -run '^(TestHTTPHarnessRunsApprovedDockerShellWhenEnabled|TestQAAgentRunsApprovedDockerShellWhenDockerIsEnabled)$' -v
 
       - name: Run Docker consumer integration
         working-directory: integration/consumer

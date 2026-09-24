@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -155,5 +156,60 @@ func TestCLIBrokerQuestionRequestWithoutQuestionsFails(t *testing.T) {
 	broker := New(strings.NewReader(""), &bytes.Buffer{})
 	if _, err := broker.Request(context.Background(), req); err == nil || !strings.Contains(err.Error(), "carries no questions") {
 		t.Fatalf("Request error = %v, want missing-questions failure", err)
+	}
+}
+
+// TestCLIBrokerKeepsTheAnswersAFullRunWasGiven pins what a scripted or piped
+// operator depends on: a broker built by New reads every prompt from one
+// buffer. Reading each prompt with its own bufio.Reader swallowed the rest of
+// the input ahead of the next prompt, so a caller that wrote two answers up
+// front had the second prompt read EOF and the run fail -- the exact shape of
+// a CI job that drives an approval-gated example.
+func TestCLIBrokerKeepsTheAnswersAFullRunWasGiven(t *testing.T) {
+	requests := []approval.Request{
+		{
+			ID: "approval_write", RunID: "run_1", Operation: "workspace.write",
+			Title: "Approve workspace write", Risk: approval.RiskHigh,
+			Options: approval.DefaultOptions(), CreatedAt: time.Now().UTC(),
+		},
+		{
+			ID: "approval_shell", RunID: "run_1", Operation: "shell.command",
+			Title: "Approve shell command", Risk: approval.RiskHigh,
+			Options: approval.DefaultOptions(), CreatedAt: time.Now().UTC(),
+		},
+	}
+	// Both answers are written before the first prompt is answered.
+	broker := New(strings.NewReader("1\n2\n"), io.Discard)
+	for index, req := range requests {
+		decision, err := broker.Request(context.Background(), req)
+		if err != nil {
+			t.Fatalf("prompt %d returned error: %v", index+1, err)
+		}
+		want := approval.DecisionApprove
+		if index == 1 {
+			want = approval.DecisionReject
+		}
+		if decision.Action != want {
+			t.Fatalf("prompt %d answered %q, want %q", index+1, decision.Action, want)
+		}
+	}
+}
+
+// TestCLIBrokerReadsOneAnswerPerPromptFromALiteral checks the same property for
+// a Broker assembled without New: the first prompt's reader may consume what it
+// can, but the second prompt still reads what it was given.
+func TestCLIBrokerReadsOneAnswerPerPromptFromALiteral(t *testing.T) {
+	req := approval.Request{
+		ID: "approval_1", RunID: "run_1", Operation: "shell.command",
+		Title: "Approve shell command", Risk: approval.RiskHigh,
+		Options: approval.DefaultOptions(), CreatedAt: time.Now().UTC(),
+	}
+	broker := Broker{In: strings.NewReader("1\n"), Out: io.Discard}
+	decision, err := broker.Request(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Request returned error: %v", err)
+	}
+	if decision.Action != approval.DecisionApprove {
+		t.Fatalf("action = %q, want approve", decision.Action)
 	}
 }

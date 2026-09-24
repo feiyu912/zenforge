@@ -9,10 +9,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/feiyu912/zenforge/sandbox"
 	"github.com/feiyu912/zenforge/sandbox/bwrap"
 	"github.com/feiyu912/zenforge/sandbox/docker"
 	"github.com/feiyu912/zenforge/sandbox/linuxsandbox"
 	"github.com/feiyu912/zenforge/sandbox/seatbelt"
+	shelltool "github.com/feiyu912/zenforge/tools/shell"
 )
 
 func TestValidateSandboxBackend(t *testing.T) {
@@ -158,4 +160,79 @@ func TestLinuxSandboxHelperSubcommandIsWired(t *testing.T) {
 	if !strings.Contains(stderr.String(), "landlock") {
 		t.Fatalf("the failure does not explain the missing layer: %q", stderr.String())
 	}
+}
+
+func TestDockerSandboxMountsTheWritableRoots(t *testing.T) {
+	workspace := t.TempDir()
+	extra := t.TempDir()
+
+	t.Run("the working directory by default", func(t *testing.T) {
+		// A container has a filesystem of its own, so --sandbox-root has to
+		// become a bind mount. Without it the documented default ("the shell
+		// working directory") was silently a no-op for the docker backend:
+		// the model's shell ran in an empty directory and could not read the
+		// project at all.
+		opts := defaultOptions()
+		opts.sandboxBackend = SandboxDocker
+		opts.shellWorkingDir = workspace
+		config, err := shellToolConfig(opts)
+		if err != nil {
+			t.Fatalf("shellToolConfig returned error: %v", err)
+		}
+		if config.Backend != shelltool.ShellBackendSandbox {
+			t.Fatalf("backend = %q, want %q", config.Backend, shelltool.ShellBackendSandbox)
+		}
+		mount := singleMount(t, config.Mounts)
+		if mount.Source != workspace || mount.Destination != workspace {
+			t.Fatalf("mount = %#v, want the workspace mounted at its host path", mount)
+		}
+		if mount.Mode != "rw" {
+			t.Fatalf("mode = %q, want rw: --sandbox-root is documented as a writable root", mount.Mode)
+		}
+	})
+
+	t.Run("explicit roots and the restricted layout", func(t *testing.T) {
+		opts := defaultOptions()
+		opts.sandboxBackend = SandboxDocker
+		opts.shellWorkingDir = workspace
+		opts.sandboxRoots = []string{workspace, extra, workspace}
+		opts.sandboxRestricted = true
+		config, err := shellToolConfig(opts)
+		if err != nil {
+			t.Fatalf("shellToolConfig returned error: %v", err)
+		}
+		if len(config.Mounts) != 2 {
+			t.Fatalf("mounts = %#v, want two: explicit roots in order, duplicates dropped", config.Mounts)
+		}
+		for _, mount := range config.Mounts {
+			if mount.Mode != "ro" {
+				t.Fatalf("mode = %q, want ro under --sandbox-restricted", mount.Mode)
+			}
+		}
+	})
+
+	t.Run("no mounts for the non-container backends", func(t *testing.T) {
+		// The local shell runs on the host, and the other backends confine
+		// it in place; a bind mount would be meaningless or misleading.
+		for _, backend := range []string{"", SandboxNone, SandboxBwrap, SandboxLandlock} {
+			opts := defaultOptions()
+			opts.sandboxBackend = backend
+			opts.shellWorkingDir = workspace
+			config, err := shellToolConfig(opts)
+			if err != nil {
+				t.Fatalf("backend %q returned error: %v", backend, err)
+			}
+			if len(config.Mounts) != 0 {
+				t.Fatalf("backend %q produced mounts: %#v", backend, config.Mounts)
+			}
+		}
+	})
+}
+
+func singleMount(t *testing.T, mounts []sandbox.Mount) sandbox.Mount {
+	t.Helper()
+	if len(mounts) != 1 {
+		t.Fatalf("mounts = %#v, want exactly one", mounts)
+	}
+	return mounts[0]
 }

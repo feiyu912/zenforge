@@ -1,2 +1,8 @@
 site/
 .zenforge/
+# Binaries left by `go build ./examples/<name>/` run from the repository root.
+# The leading slash keeps these anchored to the root, so the example
+# directories themselves are never ignored.
+/qa-agent
+/long-task-agent
+/coding-agent
