@@ -378,9 +378,9 @@ on GitHub Pages at **[feiyu912.github.io/zenforge](https://feiyu912.github.io/ze
 | [Tool authoring](https://feiyu912.github.io/zenforge/tool-authoring-guide/) | [Sandboxing](https://feiyu912.github.io/zenforge/sandbox-guide/) · [Security](https://feiyu912.github.io/zenforge/security-guide/) |
 | [Providers](https://feiyu912.github.io/zenforge/provider-guide/) | [HTTP server](https://feiyu912.github.io/zenforge/server-http-guide/) · [SSE](https://feiyu912.github.io/zenforge/server-sse-guide/) · [Deployment](https://feiyu912.github.io/zenforge/deployment-guide/) |
 | [Agent Skills](https://feiyu912.github.io/zenforge/agent-skills-spec/) | [MCP](https://feiyu912.github.io/zenforge/mcp-adapter-guide/) · [Memory](https://feiyu912.github.io/zenforge/memory-adapter-guide/) · [ZenMind](https://feiyu912.github.io/zenforge/zenmind-adapter-guide/) |
-| [Configuration reference](https://feiyu912.github.io/zenforge/config-reference/) | [Failure modes](https://feiyu912.github.io/zenforge/failure-modes/) · [Limitations](https://feiyu912.github.io/zenforge/limitations/) · [Tracing](https://feiyu912.github.io/zenforge/trace-guide/) |
+| [Configuration reference](https://feiyu912.github.io/zenforge/config-reference/) | [Failure modes](https://feiyu912.github.io/zenforge/failure-modes/) · [Limitations](https://feiyu912.github.io/zenforge/limitations/) · [Benchmarks](https://feiyu912.github.io/zenforge/benchmarks/) · [Tracing](https://feiyu912.github.io/zenforge/trace-guide/) |
 
-Eighty-one architecture decision records live in
+One hundred and forty-three architecture decision records live in
 [`docs/adr/`](docs/adr/) and on the
 [site](https://feiyu912.github.io/zenforge/adr/).
 
@@ -400,6 +400,12 @@ breaking changes. The highlights of `main`:
 - Protocol surface: MCP client and server modes, signed webhooks, detached
   HTTP lifecycle with cross-replica registries, a local web console.
 - Time travel: fork from any checkpoint boundary; revert with full history.
+- Evidence: three scenario examples run end to end in CI against a scripted
+  provider endpoint ([ADR 0142](docs/adr/0142-the-scenario-examples-run-end-to-end.md)),
+  and a reproducible cross-framework benchmark compares ZenForge with
+  DeepAgents, LangGraph and Eino on success, latency, cost and recovery under
+  one scripted model ([`benchmarks/`](benchmarks/),
+  [ADR 0143](docs/adr/0143-the-cross-framework-benchmark.md)).
 
 The complete [CHANGELOG](CHANGELOG.md) tracks every change since v0.1.0, and
 the [release notes](https://feiyu912.github.io/zenforge/release-notes-v0.1/)

@@ -522,6 +522,10 @@ Completed in this repository:
   `zenforge token create|list|revoke` as the only minter (ADR 0141);
 - benchmark and soak tests (`BenchmarkAgentRunStaticModel`,
   `TestSQLiteDurableRunSoak`);
+- a reproducible cross-framework benchmark (`benchmarks/`, run by the CI
+  `Benchmark` job) that compares ZenForge with DeepAgents, LangGraph and Eino on
+  task success, latency, prompt cost and cross-process recovery under one
+  scripted model, with the per-runner assembly cost recorded (ADR 0143);
 - failure-mode documentation (`docs/failure-modes.md`).
 
 Remaining:

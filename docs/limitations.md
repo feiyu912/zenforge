@@ -531,6 +531,32 @@ what is experimental, and what remains adapter territory.
 - ZenMind marketplace entitlement, materialization, UI, and APIs are not
   implemented in core; a platform adapter may supply trusted catalog inputs.
 
+## The cross-framework benchmark
+
+`benchmarks/` compares ZenForge with DeepAgents, LangGraph and Eino on task
+success, latency, cost and recovery, and every one of those numbers is measured
+against a **scripted** OpenAI-compatible endpoint (ADR 0143). What that means for
+a reader:
+
+- It measures the harness, not the model. The scripted model answers identically
+  for every framework, so the comparison says nothing about model quality, and a
+  smaller prompt or a faster loop is not "smarter".
+- Cost is reported in **prompt bytes and request counts**, not money. A dollar
+  figure would price a model that was never called; the ratio between frameworks
+  is what a real provider would bill in proportion to.
+- Latency is measured on one machine, with each framework's own process startup
+  included, and is reported as a median of repeated runs. It is a comparison of
+  overhead under those conditions, not a service-level promise.
+- Three tasks cover three scenarios. They are not a benchmark suite: a framework
+  that wins all three is not thereby better for a workload nobody ran.
+- The external runners are pinned to specific versions
+  (`benchmarks/runners/python/requirements.txt`, the Eino module's `go.mod`), and
+  each runner uses its framework's own agent loop, approval mechanism, durable
+  store and OpenAI client. A framework's own store, or the lack of one, is part
+  of the recovery result rather than compensated for.
+- Live measurement against a real provider is `-live-model`, it needs a
+  credential, and it is not part of CI.
+
 ## Platform Boundary
 
 ZenForge should not import `agent-platform` or ZenMind server/chat packages.

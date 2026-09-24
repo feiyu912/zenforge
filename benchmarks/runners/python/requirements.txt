@@ -1,0 +1,37 @@
+# Python runners for the cross-framework benchmark.
+#
+# Install with:
+#   python3 -m venv .venv && .venv/bin/pip install -r runners/python/requirements.txt
+#
+# The first block is the frozen pin set the benchmark was specified with. The
+# second block is what the two Python runners genuinely needed on top of it, and
+# each entry names the runner feature that requires it: no runner emulates
+# durability or the OpenAI protocol by hand, so every line here is a package
+# both frameworks' own code paths use.
+
+# --- frozen pin set -------------------------------------------------------
+deepagents==0.7.18
+langgraph==1.2.12
+langgraph-checkpoint==4.2.0
+langgraph-prebuilt==1.1.0
+langchain-core==1.6.4
+langchain-protocol==0.0.19
+openai==3.19.2
+langchain==1.4.2
+
+# --- added: canonical OpenAI client --------------------------------------
+# Both runners talk to the scripted endpoint through langchain-openai
+# (ChatOpenAI), which deepagents and LangGraph both document and neither ships.
+langchain-openai==1.6.5
+# transitive dependencies of langchain-openai, pinned with it
+tiktoken==0.14.0
+regex==2026.9.10
+
+# --- added: durable checkpoints ------------------------------------------
+# langgraph.checkpoint.sqlite.SqliteSaver, used by BOTH runners for the
+# durable pause/resume of durable-task. langgraph-checkpoint alone only ships
+# in-memory and the serde layer.
+langgraph-checkpoint-sqlite==3.1.1
+# transitive dependencies of langgraph-checkpoint-sqlite, pinned with it
+aiosqlite==0.22.1
+sqlite-vec==0.1.9

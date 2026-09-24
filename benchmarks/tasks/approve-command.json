@@ -1,0 +1,14 @@
+{
+  "task": "approve-command",
+  "query": "Append the word approved to approval.txt with a shell command.",
+  "turns": [
+    {
+      "tool_calls": [
+        {"name": "run_shell", "arguments": {"command": "echo approved | tee -a approval.txt"}}
+      ]
+    },
+    {
+      "content": "The command was handled according to the operator's decision."
+    }
+  ]
+}

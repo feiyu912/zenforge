@@ -1,0 +1,25 @@
+{
+  "task": "edit-file",
+  "query": "Read input.txt, then write its edited contents to out.txt.",
+  "turns": [
+    {
+      "tool_calls": [
+        {"name": "read_file", "arguments": {"path": "input.txt"}}
+      ]
+    },
+    {
+      "tool_calls": [
+        {
+          "name": "write_file",
+          "arguments": {
+            "path": "out.txt",
+            "content": "hello from the cross-framework benchmark\n(edited)\n"
+          }
+        }
+      ]
+    },
+    {
+      "content": "Read input.txt and wrote the edited contents to out.txt."
+    }
+  ]
+}

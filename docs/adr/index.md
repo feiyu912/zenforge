@@ -171,3 +171,4 @@ and what the adapter answers today is
 | [0140](0140-a-run-keeps-the-model-it-started-on.md) | A run keeps the model it started on: the task names its own route, the run resolves it once, and the console stops installing a host-wide adapter |
 | [0141](0141-a-deployed-host-authenticates-its-callers.md) | A deployed host authenticates its callers: one boundary over every route, the browser session is the token, and a token attributes rather than partitions |
 | [0142](0142-the-scenario-examples-run-end-to-end.md) | The scenario examples run end to end: a scripted endpoint drives the real path, and the two defects the examples surfaced are fixed |
+| [0143](0143-the-cross-framework-benchmark.md) | A cross-framework benchmark that measures the harness: one scripted endpoint behind four frameworks, and four metrics that are not about model quality |

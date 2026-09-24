@@ -355,6 +355,19 @@ fixture provenance under `adapters/zenmind` may name the external repository.
 | the Docker CLI sandbox mounts the configured writable roots at their host paths, read-write or read-only under `--sandbox-restricted` | `cli.TestDockerSandboxMountsTheWritableRoots` |
 | the CLI approval broker reads every prompt through one shared buffer, so answers written ahead of time all arrive | `approval/cli.TestCLIBrokerKeepsTheAnswersAFullRunWasGiven`, `approval/cli.TestCLIBrokerReadsOneAnswerPerPromptFromALiteral` |
 
+## Cross-Framework Benchmark
+
+| Requirement | Evidence |
+| --- | --- |
+| the benchmark's endpoint replays committed turn scripts and advances only on a tool result for a call it issued, so an extra model call cannot desynchronize another framework | `TestTurnSelectionAdvancesOnlyOnIssuedToolResults`, `TestStreamingServesSSEWithUsage`, `TestStreamOmitsUsageUnlessAsked` |
+| the runner protocol carries the documented environment, maps the four statuses to their exit codes, and reports a missing runner as unavailable instead of dropping it from the comparison | `TestEnvironmentIsTheDocumentedProtocol`, `TestStatusExitCodeMapping`, `TestRunTreatsAMissingBinaryAsUnavailable`, `TestRunRemovesAStaleResult`, `TestRunCapturesStderrAndBoundsIt` |
+| every task's success is judged from the artifact on disk and the call order the endpoint recorded, never from what a runner says about itself | `TestVerifyEditFile`, `TestVerifyApproveCommand`, `TestVerifyDurableTask`, `TestPassStatusRequiresVerification`, `TestDurableTaskResumesInASecondProcess` |
+| a durable run that never pauses, or resumes without durable state, cannot be reported as a completed pass | `TestRunCellFailsWhenADurableRunDoesNotPause`, `TestRequirePauseWithoutInterruptFails`, `TestResumeWithoutDurableStateFails` |
+| a rejected approval leaves the workspace untouched, in the Eino runner as well as in the harness's verifier | `TestGraphRejectsCommandAndDoesNotRunIt`, `TestVerifyApproveCommand` |
+| the Eino runner pauses and resumes across processes through Eino's own interrupt and checkpoint APIs | `TestDurablePauseThenResumeInFreshProcess`, `TestGraphApprovesCommandAndRunsItOnce`, `TestFileCheckPointStoreLifecycle`, `TestRunShellInterruptsBeforeRunning` |
+| every runner's file tools stay inside the workspace it was given | `TestWorkspaceResolve`, `TestReadWriteFileToolsConfinement`, `TestRunShellRejectsEmptyCommand` |
+| the live mode that needs a credential is refused clearly rather than silently skipping | `TestLiveModeIsRefusedClearly` |
+
 ## CI Evidence
 
 After each pushed phase, verify the latest commit with:

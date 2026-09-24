@@ -190,7 +190,11 @@ interface that you can satisfy, wrap, mock, or leave nil.
 5. **Looking for code to copy?** → [Examples](examples.md) ships nine
    reference agents you can read top-to-bottom; three of them run end to end in
    CI against a scripted endpoint.
-6. **Running long, tool-heavy conversations?** → [Compaction
+6. **Choosing a harness, or wondering what a run costs before the model answers?**
+   → [Benchmarks](benchmarks.md) compares ZenForge with DeepAgents, LangGraph and
+   Eino on success, latency, prompt bytes and cross-process recovery, with the
+   protocol and its limits stated before the numbers.
+7. **Running long, tool-heavy conversations?** → [Compaction
    guide](compaction-guide.md) covers retry, pressure compaction, and
    overflow recovery.
 

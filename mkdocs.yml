@@ -140,6 +140,7 @@ nav:
       - Web console: web-console.md
       - Web console coverage: dsh-console-coverage.md
   - Examples: examples.md
+  - Benchmarks: benchmarks.md
   - ADRs:
       - Overview: adr/index.md
       - 0001 Event log and checkpoint: adr/0001-event-log-and-checkpoint.md
@@ -284,6 +285,7 @@ nav:
       - 0140 A run keeps the model it started on: adr/0140-a-run-keeps-the-model-it-started-on.md
       - 0141 A deployed host authenticates its callers: adr/0141-a-deployed-host-authenticates-its-callers.md
       - 0142 The scenario examples run end to end: adr/0142-the-scenario-examples-run-end-to-end.md
+      - 0143 A cross-framework benchmark that measures the harness: adr/0143-the-cross-framework-benchmark.md
 
 extra:
   social:

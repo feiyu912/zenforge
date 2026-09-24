@@ -1,0 +1,41 @@
+{
+  "task": "durable-task",
+  "query": "Record step 1 and step 2 in steps.txt, create milestone.txt with a shell command, then write the final artifact to out.txt.",
+  "turns": [
+    {
+      "tool_calls": [
+        {
+          "name": "write_file",
+          "arguments": {"path": "steps.txt", "content": "step 1: read the input\n"}
+        }
+      ]
+    },
+    {
+      "tool_calls": [
+        {
+          "name": "write_file",
+          "arguments": {
+            "path": "steps.txt",
+            "content": "step 1: read the input\nstep 2: draft the output\n"
+          }
+        }
+      ]
+    },
+    {
+      "tool_calls": [
+        {"name": "run_shell", "arguments": {"command": "echo milestone | tee milestone.txt"}}
+      ]
+    },
+    {
+      "tool_calls": [
+        {
+          "name": "write_file",
+          "arguments": {"path": "out.txt", "content": "durable task complete\n"}
+        }
+      ]
+    },
+    {
+      "content": "Recorded both steps, ran the approved command, and wrote the artifact."
+    }
+  ]
+}

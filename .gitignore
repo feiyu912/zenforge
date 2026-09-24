@@ -6,3 +6,9 @@ site/
 /qa-agent
 /long-task-agent
 /coding-agent
+
+# The benchmark's Python runners are installed into a virtualenv on demand.
+/benchmarks/.venv/
+
+# The Python runners create bytecode caches when they run.
+__pycache__/
