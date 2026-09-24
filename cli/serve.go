@@ -379,6 +379,13 @@ func newServeApp(ctx context.Context, opts *options, ioStreams IO, config serveC
 	if err != nil {
 		return nil, err
 	}
+	// A run started from a session's selection carries its own adapter, but a
+	// resumed one carries only the route its checkpoint froze, so this host must
+	// be able to rebuild that route by name. The console's catalog answers for
+	// every route it declares, and anything it does not declare at all falls to
+	// the CLI's resolver, which is how a workflow script's agent() still names a
+	// provider the console never added (ADR 0140).
+	agentConfig.ModelResolver = consoleRouteResolver{models: models, fallback: agentConfig.ModelResolver}
 	// The run registry is what the console lists sessions from, so it is durable:
 	// with only the manager's in-process records, a restart -- and the ten-minute
 	// terminal retention -- emptied the sidebar while every transcript stayed in
@@ -1455,14 +1462,32 @@ func (s *settingsStore) view() settingsView {
 	}
 }
 
-// hasAPIKey reports whether a key would be found: an inline key the operator
-// or page supplied, or the environment variable the CLI named. It never
-// reveals which.
-// setModelAdapter installs the adapter a session's selected model names. It
-// deliberately does not touch the stored settings: the operator's configuration
-// did not change, only which of the models this host can serve the run uses.
-func (s *settingsStore) setModelAdapter(adapter model.Model) {
-	s.model.set(adapter, nil)
+// adapterForModel builds an adapter for the configured route with the given model
+// name. It deliberately leaves the live swappable adapter alone: a run that
+// resolved the configured route gets its own adapter from this call, so a settings
+// change made later reaches the runs that start after it and never a run already
+// answering (ADR 0140). The model name is the caller's, because a caller that
+// names one -- a checkpoint's frozen route, a workflow script -- is not the
+// picker, and the catalog's list is the picker's rule.
+func (s *settingsStore) adapterForModel(modelName string) (model.Model, error) {
+	s.mu.RLock()
+	current := s.current
+	s.mu.RUnlock()
+	return provider.FromEnv(provider.Config{
+		Protocol:  current.provider,
+		Model:     strings.TrimSpace(modelName),
+		BaseURL:   current.baseURL,
+		APIKey:    current.apiKey,
+		APIKeyEnv: current.apiKeyEnv,
+	})
+}
+
+// adapterFromSettings builds the adapter the settings as they stand name.
+func (s *settingsStore) adapterFromSettings() (model.Model, error) {
+	s.mu.RLock()
+	current := s.current
+	s.mu.RUnlock()
+	return s.adapterForModel(current.model)
 }
 
 // configuredAPIKey reports the operator's own key. It exists for the provider
@@ -1475,6 +1500,9 @@ func (s *settingsStore) configuredAPIKey() string {
 	return s.current.apiKey
 }
 
+// hasAPIKey reports whether a key would be found: an inline key the operator
+// or page supplied, or the environment variable the CLI named. It never
+// reveals which.
 func (s *settingsStore) hasAPIKey(current serverSettings) bool {
 	if strings.TrimSpace(current.apiKey) != "" {
 		return true
@@ -1485,21 +1513,12 @@ func (s *settingsStore) hasAPIKey(current serverSettings) bool {
 	return strings.TrimSpace(os.Getenv(current.apiKeyEnv)) != ""
 }
 
-// rebuild builds the adapter from the current settings. A failure is recorded
-// rather than returned: at startup the server must still come up so the
-// operator can fix the settings in the browser, and the error surfaces from
-// the model call a run makes.
+// rebuild builds the adapter from the current settings and installs it as the
+// live default. A failure is recorded rather than returned: at startup the server
+// must still come up so the operator can fix the settings in the browser, and the
+// error surfaces from the model call a run makes.
 func (s *settingsStore) rebuild() {
-	s.mu.RLock()
-	current := s.current
-	s.mu.RUnlock()
-	adapter, err := provider.FromEnv(provider.Config{
-		Protocol:  current.provider,
-		Model:     current.model,
-		BaseURL:   current.baseURL,
-		APIKey:    current.apiKey,
-		APIKeyEnv: current.apiKeyEnv,
-	})
+	adapter, err := s.adapterFromSettings()
 	s.model.set(adapter, err)
 }
 

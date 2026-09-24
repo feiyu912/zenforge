@@ -168,3 +168,4 @@ and what the adapter answers today is
 | [0137](0137-the-verification-recipe-is-enforced.md) | The verification recipe is enforced, and its environment-dependent part is named |
 | [0138](0138-the-console-attachments-are-stored.md) | The console's attachments are stored, images reach the model, and files are refused for the reason they cannot |
 | [0139](0139-every-recorded-attachment-deviation-is-closed.md) | Every recorded attachment deviation is closed: WebP is measured, the transcript shows the prompt's attachments, and a file is delivered as upstream delivers it |
+| [0140](0140-a-run-keeps-the-model-it-started-on.md) | A run keeps the model it started on: the task names its own route, the run resolves it once, and the console stops installing a host-wide adapter |

@@ -558,6 +558,62 @@ wrote an event is omitted, because `session/page` answers not-found for it; and 
 log has no terminal event is recorded as cancelled when it is adopted. Drafts stay
 process-local (ADR 0104).
 
+## Shipped: a run keeps the model it started on (2026-09-24)
+
+The model picker was per session in name only: `session/prompt` installed the
+session's adapter into the serve command's one `swappableModel`, so two sessions
+running concurrently overwrote each other and a run already answering changed
+models between its own steps. ADR 0096 stated that as a limitation; ADR 0140
+removes it by making the selection the run's own model, resolved once:
+
+- `zenforge.Task` grew `Model` (the adapter a caller has already built),
+  `ModelProvider` and `ModelName` (the route, which is what is durable). A run
+  resolves the route exactly once as it starts, keeps that adapter for every step
+  it makes (the `Agent`'s per-run registry, read through `modelForRun`), and drops
+  it when the run ends. A task that names nothing still runs on the host's
+  configured adapter, so nothing changed for a CLI run.
+- The route is frozen into the run's durable `Meta`
+  (`zenforge.model_provider` / `zenforge.model_name`), so a resume -- and a fork --
+  re-resolves the model the run started on. A route this host can no longer build
+  is a refused resume rather than a run on another model.
+- `dshapi.ModelSelectionStore`'s `ApplyModelSelection(sessionID) error` became
+  `ModelRoute(sessionID) (ModelRoute, bool, error)` plus `MarkModelUsed`: the prompt
+  path puts the session's own adapter and route on the task it starts, and marks the
+  route used only once the run has really started. The projected transcript's
+  provenance read stays a cheap map read that consumes nothing.
+- `swappableModel` stays, for the operator's own default: only the gear icon's
+  settings page swaps it, and nothing a session selects installs globally any more.
+- serve installs a console-aware `zenforge.ModelResolver`, so a resumed run's route
+  is rebuilt from the settings as they stand or from the declared profile that holds
+  it. A provider the console does not declare at all still falls through to the
+  CLI's own resolver, which is how a workflow script's `agent()` still names a route
+  the operator never added.
+
+Live, on a real host (a scripted OpenAI-compatible endpoint that logs every request
+body at receive time; two sessions created through the console's own RPC surface,
+one selecting `openai/gpt-4.1` and the other `acme/acme-large`; each prompted in
+`mode: "queue"`, with the endpoint holding the first run's first step open so the
+second session's prompt lands while that run is mid-step): before the fix the first
+session's own **second** request carried `acme-large`; after it, both of that
+session's requests carry `gpt-4.1`, both of the other session's carry `acme-large`,
+and the harness's verdict reads `NO WRONG-MODEL ATTRIBUTION FOR S1`. The request
+logs and both binary digests are in ADR 0140's verification section.
+
+## Next: the remaining refused families, still in the order the console notices them
+
+This chain closed a limitation rather than a ledger gap, so the next chains are the
+same four the console can open and find empty: the **terminal** (this host has no
+PTY, and the sandbox this repo is developed in cannot allocate one -- ADR 0137),
+**child sessions** (a projection from the subagent registry, not a capability), the
+**`@`-mention resolver for conversations** (the file half works, ADR 0134), and
+**office/PDF conversion** (no converter is linked). They are stated in full in the
+section below, which is that list as of ADR 0139.
+
+One correction landed with this chain: `dsh-console-coverage.md`'s `Next up` item 3
+("an attachment store") was shipped by ADR 0138 and is removed from that list. The
+ledger's own rows are unchanged -- no method, route or projected state was added --
+so `session/selectModel` keeps its single served row.
+
 ## Shipped: every recorded attachment deviation is closed (2026-09-22)
 
 ADR 0138 left three gaps; ADR 0139 closes them, and the live host shows all three:
@@ -599,7 +655,7 @@ is **already answering** (the queue and steer paths carry text only), a part tha
 is neither text, image nor file, and `session/attachment` for a non-image (the
 pinned client's descriptor is an image union with no shape for anything else).
 
-## Next: the remaining refused families, in the order the console notices them
+## Next at the time: the remaining refused families, in the order the console notices them
 
 The attachment plane is served end to end now. What the ledger still refuses is
 what this host genuinely has no half for, so the next chains are the families the

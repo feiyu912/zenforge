@@ -179,6 +179,10 @@ The pending queue's durability, which used to head this list, is closed: it is n
 session-log state and the `inbox` cell is a fold over it (ADR 0136), so a queued message
 outlives its run and is handed to the session's next turn.
 
+The attachment store, which used to be item 3 of this list, is closed as well (ADR 0138,
+ADR 0139): a prompt's image and file parts are submitted, the upload routes exist, and a
+file is delivered to the model the way upstream delivers it.
+
 1. **An embeddable terminal**, if the console's terminal panel is ever staged again.
    It would need an attachment layer, a runtime resize (the PTY master is not exposed and
    nothing calls `pty.Setsize`) and a screen model for the follow stream (there is no VT
@@ -188,10 +192,7 @@ outlives its run and is handed to the session's next turn.
 2. **A child-session plane**, if the subagent panel is ever wanted. Children are one-shot
    runs inside the parent's own run, streamed off the agent rather than registered, and
    the follow stream refuses the subagent address arm on purpose.
-3. **An attachment store.** A prompt's image and file parts cannot be submitted and
-   no upload route exists, so both halves of that seam refuse with one sentence; an
-   attachment intake would have to land before either can be served.
-4. **An `@`-mention parser and expander**, so a picked conversation reference reaches the
+3. **An `@`-mention parser and expander**, so a picked conversation reference reaches the
    model as a reference rather than as literal text.
 
 ## Regenerating this ledger

@@ -16,6 +16,25 @@ type Task struct {
 	// providers reject and the rest read in the wrong order. Empty for a run
 	// started without images, such as a CLI run.
 	Images []model.Image
+	// Model, when set, is the adapter this run uses for every model call
+	// instead of the route below. It is the most specific thing a caller can say
+	// about a run's model, and it takes precedence so a caller that has already
+	// built the adapter does not have it built a second time. It is not
+	// serialized -- a model is a live client, and a run that arrives as JSON must
+	// not be able to name one -- so a run that must survive a resume names the
+	// route as well: only the route can be resolved again from a checkpoint.
+	Model model.Model
+	// ModelProvider and ModelName, when set, name the route this run's model
+	// comes from. The run resolves the pair once through [Config.ModelResolver]
+	// as it starts and keeps that adapter for every model call it makes, so a
+	// concurrent run under another route -- or a host whose configured adapter
+	// changed in between -- cannot move it. The pair is written into the run's
+	// durable Meta, which is how a resume resolves the same route again; a route
+	// that cannot be resolved again is a refused resume rather than a run on
+	// another model. Empty for a run that uses the agent's configured adapter,
+	// such as a CLI run.
+	ModelProvider string
+	ModelName     string
 	// PromptID is the caller's identity for the prompt that starts this run --
 	// the console's `requestId`, which it also sends on the prompt RPC and uses
 	// to match the durable message with the submission it echoed locally. It is

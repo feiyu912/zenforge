@@ -373,7 +373,8 @@ func (h *Handler) sessionPrompt(ctx context.Context, args map[string]json.RawMes
 	}
 
 	if h.takePending(sessionID) {
-		if failure := h.applyModelSelection(sessionID); failure != nil {
+		route, named, failure := h.sessionModelRoute(sessionID)
+		if failure != nil {
 			// The allocation survives so the console can retry after fixing the
 			// selection; starting the run anyway would use a model the operator
 			// did not choose.
@@ -384,6 +385,14 @@ func (h *Handler) sessionPrompt(ctx context.Context, args map[string]json.RawMes
 			RunID:    sessionID,
 			Input:    admission.text,
 			PromptID: strings.TrimSpace(requestID),
+			// The run's own model is the session's selection, resolved and built
+			// here and carried on the task: the run holds it for every step, so a
+			// selection made later -- by this session or another -- cannot change
+			// a run that is already answering (ADR 0140). A session that chose
+			// nothing carries no route and runs on the host's configured adapter.
+			Model:         route.Adapter,
+			ModelProvider: route.Provider,
+			ModelName:     route.Model,
 			// The turn's own images ride on the message this run starts with, so
 			// the model sees them exactly once and every later request of the
 			// conversation replays them (zenforge.Task.Images).
@@ -397,6 +406,10 @@ func (h *Handler) sessionPrompt(ctx context.Context, args map[string]json.RawMes
 			// console can retry the prompt without re-creating the session.
 			_ = h.rememberPending(sessionID)
 			return nil, startFailure(sessionID, err)
+		}
+		if named {
+			// The route is consumed only now, once a run really started on it.
+			h.markModelUsed(sessionID)
 		}
 		h.recordPromptAttachments(ctx, sessionID, sessionID, admission.attachments)
 		// A turn is running, so input the durable inbox still holds -- queued for
@@ -465,15 +478,22 @@ func (h *Handler) sessionPrompt(ctx context.Context, args map[string]json.RawMes
 	// conversation: a new run id from the chain, carrying the exchange so far.
 	turn := dshsession.NextTurn(runIDs)
 	continuationID := dshsession.ContinuationRunID(sessionID, turn)
-	if failure := h.applyModelSelection(sessionID); failure != nil {
-		// Every turn re-applies the selection: the adapter is host-wide, so a
-		// later turn must not inherit whichever session ran last.
+	route, named, failure := h.sessionModelRoute(sessionID)
+	if failure != nil {
+		// Every turn reads the session's own route, so a continuation of one
+		// session can never inherit the model another session is running on.
 		return nil, failure
 	}
 	task := zenforge.Task{
 		RunID:  continuationID,
 		Input:  admission.text,
 		Images: admission.images,
+		// The turn's own model, exactly as the first turn's is: the adapter this
+		// session's route built rides on the task with the route itself, and the
+		// run it starts is the one that holds both.
+		Model:         route.Adapter,
+		ModelProvider: route.Provider,
+		ModelName:     route.Model,
 		// Every turn carries the identity of the prompt that started it: the
 		// console retires one echo per submission, so a continuation's prompt
 		// needs its own identity just as the first turn's does (ADR 0111).
@@ -484,6 +504,9 @@ func (h *Handler) sessionPrompt(ctx context.Context, args map[string]json.RawMes
 	if _, err := h.manager.Start(ctx, task); err != nil {
 		return nil, startFailure(continuationID, err)
 	}
+	if named {
+		h.markModelUsed(sessionID)
+	}
 	h.recordPromptAttachments(ctx, sessionID, continuationID, admission.attachments)
 	// The new turn is handed whatever the durable inbox still holds: input queued
 	// for an earlier turn whose boundary never came, restored here rather than
@@ -492,20 +515,42 @@ func (h *Handler) sessionPrompt(ctx context.Context, args map[string]json.RawMes
 	return map[string]any{"accepted": true}, nil
 }
 
-// applyModelSelection makes the session's chosen model the adapter the run about
-// to start will use. A session that never chose one keeps the host's configured
-// adapter, and a host with no selection store has nothing to apply.
-func (h *Handler) applyModelSelection(sessionID string) *methodError {
+// sessionModelRoute reads the route the session's run must start on. A session
+// that never chose a model reports no route, and its run uses the host's
+// configured adapter. A recorded choice this host can no longer resolve --
+// the credential it named is gone, or the route is no longer declared -- refuses
+// the prompt, because starting the run anyway would answer on a model the
+// operator did not choose.
+//
+// named, the second return value, is what separates those two cases for the
+// caller: only a run that really started on a session's own route is one to mark
+// used.
+func (h *Handler) sessionModelRoute(sessionID string) (ModelRoute, bool, *methodError) {
 	store := h.modelSelectionStore()
 	if store == nil {
-		return nil
+		return ModelRoute{}, false, nil
 	}
-	if err := store.ApplyModelSelection(sessionID); err != nil {
-		return fail(codeArgumentsInvalid,
+	route, ok, err := store.ModelRoute(sessionID)
+	if err != nil {
+		return ModelRoute{}, false, fail(codeArgumentsInvalid,
 			fmt.Sprintf("session %q has a model selection this host cannot apply: %s", sessionID, err.Error()),
 			map[string]any{"sessionId": sessionID})
 	}
-	return nil
+	if !ok {
+		return ModelRoute{}, false, nil
+	}
+	return route, true, nil
+}
+
+// markModelUsed records that a run actually started on the session's route, which
+// is what the console's "last used" hint reports. A host with no selection store
+// has nothing to record.
+func (h *Handler) markModelUsed(sessionID string) {
+	store := h.modelSelectionStore()
+	if store == nil {
+		return
+	}
+	store.MarkModelUsed(sessionID)
 }
 
 // decodePromptContent flattens the console content parts into the single text
@@ -851,8 +896,10 @@ func decodePageAddress(args map[string]json.RawMessage) (string, *methodError) {
 // a session's assistant messages to. A session that chose a model shows the
 // chosen one; a session that chose nothing runs on the host's configured model,
 // which is what ModelDefault reports. The identity is provenance on the wire --
-// the run itself is served by the adapter the selection path already applied --
-// so an empty answer is legal and simply leaves the label unset.
+// the run itself is served by the adapter the session's own route built -- so an
+// empty answer is legal and simply leaves the label unset, and the read stays
+// cheap: it reports the recorded choice without building an adapter for a
+// transcript that will never call one.
 func (h *Handler) wireIdentity(sessionID string) dshwire.Identity {
 	if store := h.modelSelectionStore(); store != nil {
 		if identity, ok := store.(sessionModelIdentity); ok {

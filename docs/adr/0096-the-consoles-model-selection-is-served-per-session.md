@@ -2,6 +2,11 @@
 
 Status: accepted
 
+Superseded in part by ADR 0140: the run's model is now its own -- resolved once
+per run and frozen in the run's Meta -- instead of an adapter installed on the
+host's single model before each run, so the concurrent-sessions limitation this
+ADR stated no longer holds.
+
 ## Context
 
 ADR 0095 made a custom provider declarable: the Models page's "Add a custom

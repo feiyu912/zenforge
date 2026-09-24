@@ -77,6 +77,14 @@ const (
 	// metaActiveTools is the durable list of deferred tool names a
 	// tool_search activated for this run.
 	metaActiveTools = "zenforge.active_tools"
+	// metaModelProvider and metaModelName freeze the route a run's model came
+	// from. A task may name a provider and model instead of taking the agent's
+	// configured adapter; the pair is resolved once as the run starts and
+	// written here, which is where a resume reads it back. A run that named no
+	// route writes neither key, so the host's configured adapter stays the
+	// default instead of being recorded as a choice nobody made.
+	metaModelProvider = "zenforge.model_provider"
+	metaModelName     = "zenforge.model_name"
 )
 
 // turnDiffBudget bounds in-process unified-diff rendering at each turn
@@ -93,6 +101,18 @@ type Agent struct {
 	compactor          *compaction.Compactor
 	retry              *modelretry.Config
 	streamIdleTimeout  time.Duration
+
+	// models is the adapter each open run resolved for itself, keyed by run
+	// id. A run that named a route is fixed to the adapter that route resolved
+	// to at the moment it started, and every model call it makes reads that
+	// adapter here rather than the host's configured one -- so two runs under
+	// different routes cannot overwrite each other, and an operator
+	// reconfiguring the host cannot change a run in flight. A run that named no
+	// route has no entry and uses the agent's configured adapter. The entry
+	// lives only while its run is open: the goroutine that opened the run
+	// removes it when the run finishes.
+	modelsMu sync.RWMutex
+	models   map[string]model.Model
 }
 
 // New creates an Agent with the provided runtime configuration.
@@ -207,6 +227,139 @@ func (a *Agent) Run(ctx context.Context, task Task) (*Result, error) {
 	return &result, nil
 }
 
+// modelRoute is a provider and model name pair: the route a caller names when it
+// wants its run's model built by the host rather than handed over ready-made.
+type modelRoute struct {
+	provider string
+	model    string
+}
+
+// named reports whether a route was named at all. Either half may be empty: a
+// caller may name only a model and let the host pick the provider, or only a
+// provider and let the host pick the model, and the resolver decides what an
+// empty half means.
+func (r modelRoute) named() bool { return r.provider != "" || r.model != "" }
+
+// runModelSelection is what a run knows about its own model before the run
+// starts: an adapter the caller already built, a route to build, or neither --
+// which means the agent's configured adapter.
+type runModelSelection struct {
+	adapter model.Model
+	route   modelRoute
+}
+
+// taskModelSelection is the selection a task states.
+func taskModelSelection(task Task) runModelSelection {
+	return runModelSelection{
+		adapter: task.Model,
+		route: modelRoute{
+			provider: strings.TrimSpace(task.ModelProvider),
+			model:    strings.TrimSpace(task.ModelName),
+		},
+	}
+}
+
+// metaModelSelection is the selection a checkpointed run was frozen on. Only a
+// route can be written down -- an adapter is a live client -- so this is the read
+// a resume needs: the pair a fresh run recorded beside the rest of the prompt
+// context it must replay.
+func metaModelSelection(meta map[string]any) runModelSelection {
+	rawProvider, hasProvider := meta[metaModelProvider]
+	rawModel, hasModel := meta[metaModelName]
+	if !hasProvider && !hasModel {
+		return runModelSelection{}
+	}
+	providerName, _ := rawProvider.(string)
+	modelName, _ := rawModel.(string)
+	return runModelSelection{route: modelRoute{
+		provider: strings.TrimSpace(providerName),
+		model:    strings.TrimSpace(modelName),
+	}}
+}
+
+// freezeModelRoute writes the route into the Meta a run is checkpointed with.
+func freezeModelRoute(meta map[string]any, route modelRoute) map[string]any {
+	frozen := cloneMap(meta)
+	if frozen == nil {
+		frozen = map[string]any{}
+	}
+	frozen[metaModelProvider] = route.provider
+	frozen[metaModelName] = route.model
+	return frozen
+}
+
+// resolveModelRoute builds the adapter a route names through the seam the host
+// supplied. A host without that seam, and a route it cannot build, are errors
+// the caller reports: running the task anyway would answer on a model the caller
+// did not choose, which is the disagreement a named route exists to remove.
+func (a *Agent) resolveModelRoute(route modelRoute) (model.Model, error) {
+	if a.config.ModelResolver == nil {
+		return nil, fmt.Errorf("this host cannot resolve a model by name (provider %q, model %q): no ModelResolver is configured", route.provider, route.model)
+	}
+	resolved, err := a.config.ModelResolver.Resolve(route.provider, route.model)
+	if err != nil {
+		return nil, fmt.Errorf("resolve the run's model (provider %q, model %q): %w", route.provider, route.model, err)
+	}
+	if resolved == nil {
+		return nil, fmt.Errorf("the model resolver returned no model for provider %q, model %q", route.provider, route.model)
+	}
+	return resolved, nil
+}
+
+// openRunModel fixes the adapter a run starting now will use and remembers it
+// under the run's id. An adapter the caller handed over is used as it is, and a
+// route is resolved exactly once here, so every later step of the run reads the
+// adapter fixed at this moment rather than asking again. A selection that names
+// nothing gets no entry: the run uses the agent's configured adapter, which is
+// the operator's own default rather than a per-run choice.
+func (a *Agent) openRunModel(runID string, selection runModelSelection) (model.Model, error) {
+	resolved := selection.adapter
+	if resolved == nil && selection.route.named() {
+		built, err := a.resolveModelRoute(selection.route)
+		if err != nil {
+			return nil, err
+		}
+		resolved = built
+	}
+	if resolved == nil {
+		return nil, nil
+	}
+	a.modelsMu.Lock()
+	if a.models == nil {
+		a.models = map[string]model.Model{}
+	}
+	a.models[runID] = resolved
+	a.modelsMu.Unlock()
+	return resolved, nil
+}
+
+// closeRunModel drops the adapter a finished run resolved. It is deferred by the
+// goroutine that opened the run, so an entry lives exactly as long as its run.
+func (a *Agent) closeRunModel(runID string) {
+	a.modelsMu.Lock()
+	delete(a.models, runID)
+	a.modelsMu.Unlock()
+}
+
+// runModel reports the adapter a run resolved for itself, if it resolved one. It
+// is also the read a child run uses to inherit the model of the run that spawned
+// it, so a subagent answers on the same model as its parent.
+func (a *Agent) runModel(runID string) (model.Model, bool) {
+	a.modelsMu.RLock()
+	defer a.modelsMu.RUnlock()
+	resolved, ok := a.models[runID]
+	return resolved, ok
+}
+
+// modelForRun is the adapter one model call belongs to: the run's own when it
+// resolved one, and the agent's configured adapter otherwise.
+func (a *Agent) modelForRun(runID string) model.Model {
+	if resolved, ok := a.runModel(runID); ok {
+		return resolved
+	}
+	return a.config.Model
+}
+
 // Stream executes a task and returns a stream of runtime events.
 func (a *Agent) Stream(ctx context.Context, task Task) (<-chan Event, error) {
 	if a.configErr != nil {
@@ -216,14 +369,31 @@ func (a *Agent) Stream(ctx context.Context, task Task) (<-chan Event, error) {
 	if runID == "" {
 		runID = newRunID()
 	}
-	if a.config.Model == nil {
+	// The run's model is fixed before anything else about the run is decided:
+	// an adapter the caller handed over is used as it is, and a route the task
+	// named is resolved exactly once here, so every step of this run reads the
+	// adapter fixed at this moment. A task that named neither keeps the agent's
+	// configured adapter, so a host with that adapter missing is still a no-op
+	// run.
+	selection := taskModelSelection(task)
+	runModel, err := a.openRunModel(runID, selection)
+	if err != nil {
+		return nil, err
+	}
+	if a.config.Model == nil && runModel == nil {
 		return a.streamNoop(ctx, runID, task.Input, task.PromptID), nil
 	}
 	if err := a.openRunControl(runID); err != nil {
+		a.closeRunModel(runID)
 		return nil, err
 	}
 	if grantStoreConfigured(a.config.ApprovalGrants) {
 		task.Meta = approvalNamespaceMeta(task.Meta, a.approvalNamespace(task.ApprovalNamespace))
+	}
+	if selection.route.named() {
+		// The route rides in durable Meta, so the run's checkpoint is what a
+		// resume resolves again rather than whatever adapter the host holds then.
+		task.Meta = freezeModelRoute(task.Meta, selection.route)
 	}
 	mode := agentModeForConfig(a.config)
 	if mode == ModePlanExecute {
@@ -231,6 +401,7 @@ func (a *Agent) Stream(ctx context.Context, task Task) (<-chan Event, error) {
 		go func() {
 			defer close(events)
 			defer a.closeRunControl(runID)
+			defer a.closeRunModel(runID)
 			a.runPlanExecute(ctx, events, runID, task, nil)
 		}()
 		return events, nil
@@ -242,6 +413,7 @@ func (a *Agent) Stream(ctx context.Context, task Task) (<-chan Event, error) {
 	go func() {
 		defer close(events)
 		defer a.closeRunControl(runID)
+		defer a.closeRunModel(runID)
 		a.runLoop(ctx, events, state, false)
 	}()
 	return events, nil
@@ -271,13 +443,22 @@ func (a *Agent) Resume(ctx context.Context, runID string) (<-chan Event, error) 
 	if err := a.validateCheckpointSkills(cp.State); err != nil {
 		return nil, err
 	}
+	// A resumed run keeps the model it was frozen on: the route travels in the
+	// checkpoint's own Meta, so it is resolved here exactly as a fresh run
+	// resolved it, and a route this host can no longer build is a refused resume
+	// rather than a silent run on another adapter.
+	if _, err := a.openRunModel(runID, metaModelSelection(cp.State.Meta)); err != nil {
+		return nil, err
+	}
 	if err := a.openRunControl(runID); err != nil {
+		a.closeRunModel(runID)
 		return nil, err
 	}
 	events := make(chan Event, 32)
 	go func() {
 		defer close(events)
 		defer a.closeRunControl(runID)
+		defer a.closeRunModel(runID)
 		if AgentMode(cp.State.Mode) == ModePlanExecute || isPlanExecuteState(cp.State) {
 			a.runPlanExecute(ctx, events, runID, Task{
 				Input: planExecuteOriginalInput(cp.State),
@@ -1391,7 +1572,7 @@ func (a *Agent) callModel(ctx context.Context, emit eventEmitter, state harness.
 	if err := a.validatePrompt(state); err != nil {
 		return harness.MessageState{}, model.Usage{}, err
 	}
-	stream, err := a.config.Model.Stream(ctx, model.Request{
+	stream, err := a.modelForRun(state.RunID).Stream(ctx, model.Request{
 		Messages:           a.modelMessages(state),
 		Tools:              a.toolSpecs(state),
 		ToolChoice:         choice,
@@ -1626,7 +1807,7 @@ func (a *Agent) callModelAttemptDurable(
 		}
 	}
 
-	stream, err := a.config.Model.Stream(ctx, model.Request{
+	stream, err := a.modelForRun(state.RunID).Stream(ctx, model.Request{
 		Messages:           a.modelMessages(*state),
 		Tools:              a.toolSpecs(*state),
 		ToolChoice:         choice,
@@ -2844,6 +3025,14 @@ func (a *Agent) runChildSubAgent(ctx context.Context, spec subagent.SubAgentSpec
 	childModel := task.Model
 	if childModel == nil {
 		childModel = spec.Model
+	}
+	if childModel == nil {
+		// A child of a run that resolved its own model answers on that model:
+		// the child is part of the same run, and reading the host's configured
+		// adapter here would put one run's delegate on another model.
+		if inherited, ok := a.runModel(req.RunID); ok {
+			childModel = inherited
+		}
 	}
 	if childModel == nil {
 		childModel = a.config.Model

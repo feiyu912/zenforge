@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/feiyu912/zenforge"
 	"github.com/feiyu912/zenforge/internal/dshapi"
 	"github.com/feiyu912/zenforge/internal/dshstream"
 	"github.com/feiyu912/zenforge/model"
@@ -130,23 +131,62 @@ func (m consoleModels) Offers(selection dshapi.ModelSelection) error {
 }
 
 // AdapterFor builds the adapter a selection names, or explains why it cannot be
-// built: the model is not offered, or the route's credential is missing.
+// built: the catalog does not offer the model, or the route's credential is
+// missing.
 func (m consoleModels) AdapterFor(selection dshapi.ModelSelection) (model.Model, error) {
 	if err := m.Offers(selection); err != nil {
 		return nil, err
 	}
-	view := m.settings.view()
-	if selection.Provider == consoleConfiguredRoute(view) && selection.Model == strings.TrimSpace(view.Model) {
-		// The configured route is already built and live.
-		return m.settings.model.current()
+	return m.Resolve(selection.Provider, selection.Model)
+}
+
+// Resolve builds the adapter a provider and model name, with the route's own
+// endpoint and credential: the configured route from the settings as they stand
+// (never the live adapter the settings page swaps, so a settings change made later
+// cannot reach a run already answering), and a declared profile from its own
+// fields. It is the zenforge.ModelResolver seam, and it is what makes a resumed
+// run rebuild the adapter its original run used.
+//
+// It deliberately does not apply the catalog's membership rule. That rule is the
+// picker's -- what the model list may offer and what a selection may name -- and a
+// caller that names its route and model explicitly, a workflow script's agent()
+// option or the route a checkpoint froze, is not the picker. The route still has
+// to be one this host knows, and its credential still has to resolve, which is
+// where the honest refusals come from.
+func (m consoleModels) Resolve(providerName, modelName string) (model.Model, error) {
+	providerName = strings.TrimSpace(providerName)
+	modelName = strings.TrimSpace(modelName)
+	if providerName == consoleConfiguredRoute(m.settings.view()) {
+		return m.settings.adapterForModel(modelName)
 	}
 	for _, status := range m.declared() {
-		if status.Profile.Provider != selection.Provider {
+		if status.Profile.Provider != providerName {
 			continue
 		}
-		return consoleBuildAdapter(m.settings, status.Profile, selection.Model)
+		return consoleBuildAdapter(m.settings, status.Profile, modelName)
 	}
-	return nil, fmt.Errorf("provider %q has no profile this host can build an adapter from", selection.Provider)
+	return nil, fmt.Errorf("provider %q has no profile this host can build an adapter from", providerName)
+}
+
+// declares reports whether this host lists a provider as one it can route to:
+// the configured route, or a declared profile. It is what tells a route this
+// console owns from a provider name that reached the resolver some other way. An
+// empty provider is not a route name -- it is a caller saying only which model it
+// wants, and the CLI's resolver is what decides what that means.
+func (m consoleModels) declares(providerName string) bool {
+	trimmed := strings.TrimSpace(providerName)
+	if trimmed == "" {
+		return false
+	}
+	if trimmed == consoleConfiguredRoute(m.settings.view()) {
+		return true
+	}
+	for _, status := range m.declared() {
+		if status.Profile.Provider == trimmed {
+			return true
+		}
+	}
+	return false
 }
 
 // consoleBuildAdapter builds the adapter a declared profile serves one of its
@@ -247,6 +287,34 @@ func consoleGroupOffers(groups []dshapi.ModelProviderGroup, route, modelName str
 	return false
 }
 
+// consoleRouteResolver is this host's zenforge.ModelResolver in serve mode: a
+// route the console knows resolves to the endpoint and credential that route
+// holds, which is the same resolution the selection itself goes through, so the
+// adapter a resumed run rebuilds is the adapter its original run used.
+//
+// A provider the console does not declare at all falls through to the CLI's
+// resolver, which is how this seam behaved before per-run models existed and how
+// a workflow script's agent() still names a provider the operator never added to
+// the console (and how a caller that names only a model gets the host's own
+// route). A provider the console does declare never falls through: its own
+// refusal -- a credential that is gone -- is the answer, because resolving it
+// somewhere else would run the caller on a different endpoint than the one it
+// named.
+type consoleRouteResolver struct {
+	models   consoleModels
+	fallback zenforge.ModelResolver
+}
+
+func (r consoleRouteResolver) Resolve(providerName, modelName string) (model.Model, error) {
+	if r.models.declares(providerName) {
+		return r.models.Resolve(providerName, modelName)
+	}
+	if r.fallback == nil {
+		return r.models.Resolve(providerName, modelName)
+	}
+	return r.fallback.Resolve(providerName, modelName)
+}
+
 // consoleSelectionLimit bounds how many chosen models the settings document
 // carries. A selection is a per-session convenience, not a transcript -- the run
 // log holds the conversation -- and an unbounded map keyed by session would grow
@@ -255,24 +323,18 @@ func consoleGroupOffers(groups []dshapi.ModelProviderGroup, route, modelName str
 const consoleSelectionLimit = 64
 
 // consoleModelSelection records each session's chosen model and makes it real: it
-// resolves the selection against the catalog and installs that adapter before the
-// session's next run.
+// resolves the selection against the catalog and builds the adapter that
+// session's own next run is started on.
 //
-// This host has one model adapter, so the selection is per-session while its
-// effect is host-wide for the duration of a run. Every prompt re-applies the
-// adapter for the session being prompted -- its own selection, or the operator's
-// configured one when it has none -- so a later session never inherits a model a
-// previous session chose. Two sessions running concurrently under different
-// selections share whichever was applied last; the ADR and docs/limitations.md
-// state that plainly rather than implying the harness holds several adapters.
+// The selection is per-session in effect as well as in name. A session's route is
+// read once, at the prompt that starts its turn, and travels on the run itself
+// (ADR 0140), so two sessions running concurrently under different selections
+// keep their own adapters, and a selection made while a run is answering cannot
+// reach that run. The host's configured adapter is only what a session with no
+// choice runs on, and only the settings page swaps it.
 type consoleModelSelection struct {
 	settings *settingsStore
 	models   consoleModels
-
-	// install is where an applied adapter goes. It is a field so a test can see
-	// which adapter a run would use without reaching into the settings store;
-	// production wires it to settingsStore.setModelAdapter.
-	install func(model.Model)
 
 	mu        sync.Mutex
 	seq       int64
@@ -297,7 +359,6 @@ func newConsoleModelSelection(settings *settingsStore, models consoleModels) *co
 	return &consoleModelSelection{
 		settings:  settings,
 		models:    models,
-		install:   settings.setModelAdapter,
 		records:   map[string]consoleSelectionRecord{},
 		observers: map[int]func(dshstream.ModelSelectionUpdate){},
 	}
@@ -429,9 +490,10 @@ func (s *consoleModelSelection) AdoptSelectionRecords(records map[string]console
 	}
 }
 
-// ApplyModelSelection installs the adapter this session's run should use. A
-// session that never chose a model gets the operator's configured adapter, so a
-// fresh session cannot inherit the previous one's choice.
+// ModelRoute builds the route this session's next run must start on: the
+// provider and model its operator chose, with the adapter this host built for the
+// pair. A session that never chose a model reports no route, and dshapi starts
+// its run on the host's configured adapter instead.
 //
 // The test is the record's own `selected` flag, not its presence in the map: a
 // session is registered the moment it is created so the console's projection has
@@ -439,11 +501,55 @@ func (s *consoleModelSelection) AdoptSelectionRecords(records map[string]console
 // choice is exactly the session that must keep the configured adapter. Reading
 // the presence as a choice made every fresh session's first prompt fail with
 // "provider \"\" is not one this host can route to".
+//
+// A recorded choice this host can no longer build is returned as an error, which
+// dshapi answers by refusing the prompt: the adapter is built here, once, so a
+// credential that went missing fails where the operator can still see it rather
+// than becoming a failed run.
+//
+// The read has no side effect. Marking the route used is dshapi's separate call
+// once the run has actually started, because this one is also what a projected
+// transcript asks to name the model a session runs on.
+func (s *consoleModelSelection) ModelRoute(sessionID string) (dshapi.ModelRoute, bool, error) {
+	s.mu.Lock()
+	record, known := s.records[sessionID]
+	s.mu.Unlock()
+	if !known || !record.selected {
+		return dshapi.ModelRoute{}, false, nil
+	}
+	selection := dshapi.ModelSelection{Provider: record.selection.Provider, Model: record.selection.Model}
+	adapter, err := s.models.AdapterFor(selection)
+	if err != nil {
+		return dshapi.ModelRoute{}, false, err
+	}
+	return dshapi.ModelRoute{Provider: selection.Provider, Model: selection.Model, Adapter: adapter}, true, nil
+}
+
+// MarkModelUsed records that a run actually started on this session's route,
+// which is what the console's "last used" hint reports. A session that chose
+// nothing has no route to consume, and marking one would invent a model no
+// operator picked.
+func (s *consoleModelSelection) MarkModelUsed(sessionID string) {
+	s.mu.Lock()
+	record, known := s.records[sessionID]
+	if !known || !record.selected {
+		s.mu.Unlock()
+		return
+	}
+	lastUsed := record.selection
+	record.lastUsed = &lastUsed
+	record.seq = s.bumpLocked()
+	s.records[sessionID] = record
+	s.mu.Unlock()
+	s.notify(sessionID, record)
+}
+
 // SessionModelIdentity reports what a session will run on. It is the optional
 // half of the selection store dshapi asks for when it labels a projected
 // transcript: a session that chose a model reports it, and a session that chose
 // nothing reports nothing so the caller falls back to the host's configured
-// default rather than inventing a route.
+// default rather than inventing a route. It stays a map read -- provenance must
+// not build an adapter, and must not consume the route it reports.
 func (s *consoleModelSelection) SessionModelIdentity(sessionID string) (string, string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -452,31 +558,6 @@ func (s *consoleModelSelection) SessionModelIdentity(sessionID string) (string, 
 		return "", "", false
 	}
 	return record.selection.Provider, record.selection.Model, true
-}
-
-func (s *consoleModelSelection) ApplyModelSelection(sessionID string) error {
-	s.mu.Lock()
-	record, known := s.records[sessionID]
-	s.mu.Unlock()
-	if !known || !record.selected {
-		s.settings.rebuild()
-		return nil
-	}
-	selection := dshapi.ModelSelection{Provider: record.selection.Provider, Model: record.selection.Model}
-	adapter, err := s.models.AdapterFor(selection)
-	if err != nil {
-		return err
-	}
-	s.install(adapter)
-	lastUsed := record.selection
-	s.mu.Lock()
-	record = s.records[sessionID]
-	record.lastUsed = &lastUsed
-	record.seq = s.bumpLocked()
-	s.records[sessionID] = record
-	s.mu.Unlock()
-	s.notify(sessionID, record)
-	return nil
 }
 
 // States reports every recorded selection for the stream's projection baselines.

@@ -281,6 +281,7 @@ nav:
       - 0137 The verification recipe is enforced: adr/0137-the-verification-recipe-is-enforced.md
       - 0138 The console's attachments are stored: adr/0138-the-console-attachments-are-stored.md
       - 0139 Every recorded attachment deviation is closed: adr/0139-every-recorded-attachment-deviation-is-closed.md
+      - 0140 A run keeps the model it started on: adr/0140-a-run-keeps-the-model-it-started-on.md
 
 extra:
   social:

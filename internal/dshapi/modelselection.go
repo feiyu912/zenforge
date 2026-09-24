@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/feiyu912/zenforge/model"
 )
 
 // POST /api/session/selectModel: the console's model picker submits the complete
@@ -18,25 +20,42 @@ import (
 // (session-controller/lib/types/types.d.ts:270-276), and SessionSelectModelValue is
 // `{selected: ModelSelection}`.
 //
-// This host has one model adapter (ADR 0084's single credential, the serve
-// command's one provider). A session's selection is therefore applied to that
-// adapter before each of its runs rather than held per run: the selection is
-// per-session, its effect is host-wide for the duration of the run. Two sessions
-// running concurrently under different selections share whichever adapter was
-// applied last, which is stated in the ADR and in docs/limitations.md.
+// This host builds one adapter per session and hands it to that session's run
+// instead of installing it as the host's adapter (ADR 0140). A run's model is
+// therefore its own: two sessions running concurrently under different
+// selections keep the adapters their own selections resolved to, and a
+// selection made later can no longer change a run that is already answering.
+
+// ModelRoute is one session's run model: the provider and model its operator
+// chose, together with the adapter this host built for that pair. The pair is
+// what a resume or a fork resolves again; the adapter is what a run that is
+// starting now uses.
+type ModelRoute struct {
+	Provider string
+	Model    string
+	Adapter  model.Model
+}
 
 // ModelSelectionStore is where a session's chosen provider and model lives, and
-// what makes the choice real: applying it rebuilds the adapter the run uses. It is
-// injected like the other seams, because only the serve command knows how to build
-// an adapter and what it can route to.
+// what makes the choice real: the route it reports is what the session's next run
+// is started on. It is injected like the other seams, because only the serve
+// command knows how to build an adapter and what it can route to.
 type ModelSelectionStore interface {
 	// SelectModel validates a selection against what this host can route to and
 	// records it for the session, returning what it resolved.
 	SelectModel(sessionID string, selection ModelSelection) (ModelSelection, error)
-	// ApplyModelSelection makes the session's recorded selection the adapter the
-	// run about to start will use. A session with no selection leaves the host's
-	// configured adapter in place.
-	ApplyModelSelection(sessionID string) error
+	// ModelRoute builds and reports the route this session's next run must use.
+	// ok is false for a session with no recorded choice, which runs on the host's
+	// configured adapter. An error is a recorded choice this host can no longer
+	// resolve, which refuses the prompt rather than running it on another model.
+	// The read has no side effect, so a projection asking what a session runs on
+	// consumes nothing.
+	ModelRoute(sessionID string) (ModelRoute, bool, error)
+	// MarkModelUsed records that a run actually started on the session's route.
+	// It is what the console's "last used" hint reports, and it is separate from
+	// ModelRoute because a read must not consume: a projection asking what a
+	// session runs on would otherwise report a model no run has used.
+	MarkModelUsed(sessionID string)
 }
 
 // sessionRegistrar is the optional half of the model-selection store a host
@@ -51,8 +70,9 @@ type sessionRegistrar interface {
 
 // sessionModelIdentity is the optional half of the model-selection store that
 // names what a session currently runs on. It is optional because a store that can
-// apply a selection does not have to be able to read one back, and the only
-// consumer is the provenance stamped on a projected transcript.
+// build a session's adapter does not have to be able to answer this cheaply, and
+// the only consumer is the provenance stamped on a projected transcript: a read
+// that must not build anything, and must not consume the route it reports.
 type sessionModelIdentity interface {
 	// SessionModelIdentity reports the provider and model a session will run on.
 	// ok is false for a session with no recorded choice, which the caller answers
@@ -61,8 +81,8 @@ type sessionModelIdentity interface {
 }
 
 // SetModelSelections installs the store session/selectModel answers through and
-// the prompt path applies. Nil leaves the method unserved, which is the honest
-// answer for a host that cannot rebuild a per-session adapter.
+// the prompt path reads for the run's own model. Nil leaves the method unserved,
+// which is the honest answer for a host that cannot build a per-session adapter.
 func (h *Handler) SetModelSelections(store ModelSelectionStore) {
 	h.modelSelectionsMu.Lock()
 	h.modelSelections = store

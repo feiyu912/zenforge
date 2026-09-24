@@ -6,7 +6,6 @@ import (
 
 	"github.com/feiyu912/zenforge/internal/dshapi"
 	"github.com/feiyu912/zenforge/internal/dshstream"
-	"github.com/feiyu912/zenforge/model"
 	"github.com/feiyu912/zenforge/model/provider"
 )
 
@@ -251,43 +250,65 @@ func TestSelectModelRefusesWhatTheHostCannotServe(t *testing.T) {
 	}
 }
 
-// Applying is what makes a selection real: the session's own adapter goes in, and
-// a session that chose nothing gets the operator's configured adapter back rather
-// than inheriting the previous session's choice.
-func TestApplyInstallsTheSelectedAdapterAndRestoresTheConfiguredOne(t *testing.T) {
+// Reading the route is what makes a selection real: the session's own adapter
+// comes back with it, the host's live adapter is left exactly as the settings page
+// put it, and a session that chose nothing reports no route at all rather than
+// inheriting the previous session's choice.
+func TestModelRouteBuildsTheSessionsOwnAdapterAndLeavesTheHostsAlone(t *testing.T) {
 	models, settings, _ := catalogFixture(t)
 	selections := newConsoleModelSelection(settings, *models)
-	var installed []model.Model
-	selections.install = func(adapter model.Model) { installed = append(installed, adapter) }
+	configured, err := settings.model.current()
+	if err != nil || configured == nil {
+		t.Fatalf("configured adapter = (%v, %v), want the operator's own model", configured, err)
+	}
 
 	if _, err := selections.SelectModel("run-1", dshapi.ModelSelection{Provider: "acme", Model: "acme-large"}); err != nil {
 		t.Fatalf("SelectModel: %v", err)
 	}
-	if err := selections.ApplyModelSelection("run-1"); err != nil {
-		t.Fatalf("ApplyModelSelection: %v", err)
+	route, ok, err := selections.ModelRoute("run-1")
+	if err != nil || !ok {
+		t.Fatalf("ModelRoute = (%+v, %v, %v), want the session's own route", route, ok, err)
 	}
-	if len(installed) != 1 || installed[0] == nil {
-		t.Fatalf("installed = %v, want the selected provider's adapter", installed)
+	if route.Provider != "acme" || route.Model != "acme-large" || route.Adapter == nil {
+		t.Fatalf("route = %+v, want the selected provider's adapter", route)
 	}
+	// A registered session with no choice has no route, which is how dshapi knows
+	// to start its run on the host's configured adapter.
+	if route, ok, err := selections.ModelRoute("run-2"); ok || err != nil || route.Adapter != nil {
+		t.Fatalf("ModelRoute for a session that chose nothing = (%+v, %v, %v), want no route", route, ok, err)
+	}
+	// The read must not consume: the console's "last used" hint is about a run
+	// that really started, so nothing is recorded until dshapi says so.
+	if state := selections.States()["run-1"]; state.Projection.LastUsed != nil {
+		t.Fatalf("state = %+v, want no last-used before a run started", state)
+	}
+	if current, err := settings.model.current(); err != nil || current != configured {
+		t.Fatalf("live adapter = (%v, %v), want the operator's own model still in place", current, err)
+	}
+}
+
+// Consuming a route is what the console's "last used" hint reports, and a session
+// that chose nothing has no route to consume.
+func TestMarkModelUsedRecordsTheRunAndLeavesAChoiceLessSessionAlone(t *testing.T) {
+	models, settings, _ := catalogFixture(t)
+	selections := newConsoleModelSelection(settings, *models)
+	if _, err := selections.SelectModel("run-1", dshapi.ModelSelection{Provider: "acme", Model: "acme-large"}); err != nil {
+		t.Fatalf("SelectModel: %v", err)
+	}
+	selections.MarkModelUsed("run-1")
 	state := selections.States()["run-1"]
 	if state.Projection.LastUsed == nil || state.Projection.LastUsed.Model != "acme-large" {
 		t.Fatalf("state = %+v, want the run to have consumed the selection", state)
 	}
-	// A fresh session has no selection: the configured adapter is rebuilt and
-	// nothing else is installed.
-	if err := selections.ApplyModelSelection("run-2"); err != nil {
-		t.Fatalf("ApplyModelSelection: %v", err)
-	}
-	if len(installed) != 1 {
-		t.Fatalf("installed = %v, want no session adapter for a session that chose none", installed)
-	}
-	adapter, err := settings.model.current()
-	if err != nil || adapter == nil {
-		t.Fatalf("configured adapter = (%v, %v), want the operator's own model in place", adapter, err)
+	selections.MarkModelUsed("run-2")
+	if state := selections.States()["run-2"]; state.Projection.LastUsed != nil {
+		t.Fatalf("state = %+v, want nothing consumed for a session that chose nothing", state)
 	}
 }
 
-func TestApplyRefusesWhenTheCredentialIsGone(t *testing.T) {
+// A recorded choice whose route can no longer be built is refused where the
+// operator can still see it, rather than becoming a failed run on another model.
+func TestModelRouteRefusesWhenTheCredentialIsGone(t *testing.T) {
 	models, settings, _ := catalogFixture(t)
 	selections := newConsoleModelSelection(settings, *models)
 	if _, err := selections.SelectModel("run-1", dshapi.ModelSelection{Provider: "acme", Model: "acme-large"}); err != nil {
@@ -298,9 +319,12 @@ func TestApplyRefusesWhenTheCredentialIsGone(t *testing.T) {
 		t.Fatalf("clearAPIKey: %v", err)
 	}
 	t.Setenv("ACME_API_KEY", "")
-	err := selections.ApplyModelSelection("run-1")
+	route, ok, err := selections.ModelRoute("run-1")
 	if err == nil {
-		t.Fatal("the run was allowed to start with no credential for its selected provider")
+		t.Fatalf("route = %+v, want a refusal with no credential for its selected provider", route)
+	}
+	if ok || route.Adapter != nil {
+		t.Fatalf("route = %+v, ok = %v, want no route alongside the refusal", route, ok)
 	}
 	if !strings.Contains(err.Error(), "ACME_API_KEY") {
 		t.Fatalf("error = %q, want the missing credential named", err)

@@ -79,13 +79,22 @@ func (a *Agent) Fork(ctx context.Context, parentRunID string, atSeq int64) (stri
 	state.Meta[MetaForkParentRun] = parentRunID
 	state.Meta[MetaForkParentSeq] = parent.Seq
 
+	// A fork continues the parent's work, so it continues on the parent's
+	// model: the route the parent was frozen on is re-resolved for the child run
+	// exactly as a resume resolves it, and a route this host can no longer build
+	// refuses the fork instead of continuing on another adapter.
+	if _, err := a.openRunModel(childRunID, metaModelSelection(state.Meta)); err != nil {
+		return "", nil, err
+	}
 	if err := a.openRunControl(childRunID); err != nil {
+		a.closeRunModel(childRunID)
 		return "", nil, err
 	}
 	events := make(chan Event, 32)
 	go func() {
 		defer close(events)
 		defer a.closeRunControl(childRunID)
+		defer a.closeRunModel(childRunID)
 		// The child's first persisted event is its own run.started, which
 		// both satisfies the log invariant and records the lineage.
 		if _, err := a.record(ctx, EventRunStarted, childRunID, map[string]any{

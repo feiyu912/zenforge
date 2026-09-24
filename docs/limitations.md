@@ -220,19 +220,22 @@ what is experimental, and what remains adapter territory.
   instead of left to a 404, because the panel that would ask for one exists
   (ADR 0128); forking is served by copying the source's completed turns
   (ADR 0129); and the desktop half is answered rather than built (ADR 0126).
-- **The model picker works, and a declared provider can be run on** (ADR 0096).
-  `session/modelCatalog` lists the configured route and every declared provider's
-  models, `session/selectModel` accepts a selection and refuses one this host
-  cannot serve, and the selection is published as the session's `modelSelection`
-  projection (control baseline, follow snapshot and live control frames), which is
-  what the composer renders. The selection is applied to this host's single model
-  adapter before each of that session's runs, first turn and continuations alike,
-  so a session that chose nothing gets the operator's configured model rather than
-  the previous session's choice. The honest limits: two sessions running
-  **concurrently** under different selections share whichever adapter was applied
-  last, because the harness's task carries no model field and this host owns one
-  adapter; no model-selection event is written to the session log; and no model
-  exposes a reasoning-effort choice.
+- **The model picker works, and a declared provider can be run on** (ADR 0096,
+  ADR 0140). `session/modelCatalog` lists the configured route and every declared
+  provider's models, `session/selectModel` accepts a selection and refuses one this
+  host cannot serve, and the selection is published as the session's
+  `modelSelection` projection (control baseline, follow snapshot and live control
+  frames), which is what the composer renders. The selection is the run's own
+  model: it is resolved once, as the prompt that starts the turn is admitted, and
+  the run carries that adapter for every step it makes, first turns and
+  continuations alike, so two sessions running concurrently under different
+  selections keep their own models, and a selection made while a run is answering
+  cannot reach it. A session that chose nothing runs on the operator's configured
+  adapter, which only the settings page swaps. A resumed run re-resolves the route
+  its checkpoint froze, and a route this host can no longer build is a refused
+  resume rather than a run on another model. The honest limits: no
+  model-selection event is written to the session log; and no model exposes a
+  reasoning-effort choice.
   The console *reads* the log through a projection (ADR 0105), not verbatim: the
   host's events are mapped onto the console's session vocabulary, an event with no
   console meaning produces no record at all, and the records are numbered as the

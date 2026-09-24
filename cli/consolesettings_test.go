@@ -13,7 +13,6 @@ import (
 	"testing"
 
 	"github.com/feiyu912/zenforge/internal/dshapi"
-	"github.com/feiyu912/zenforge/model"
 	"github.com/feiyu912/zenforge/model/provider"
 )
 
@@ -869,17 +868,18 @@ func TestRegisteredSessionWithoutAChoiceKeepsTheConfiguredModel(t *testing.T) {
 	harness.store.mu.Lock()
 	harness.store.current.apiKey = "sk-acme-test"
 	harness.store.mu.Unlock()
+	// The live adapter is the settings page's, not a selection's: whatever it is
+	// (here an unbuilt one, because the operator's own key is absent), reading a
+	// session's route must leave it exactly as it was.
+	before, beforeErr := harness.store.model.current()
 
-	var installed []string
-	harness.selections.install = func(adapter model.Model) {
-		installed = append(installed, fmt.Sprintf("%T", adapter))
-	}
 	harness.selections.RegisterSession("session-fresh")
-	if err := harness.selections.ApplyModelSelection("session-fresh"); err != nil {
-		t.Fatalf("ApplyModelSelection for a registered session with no choice: %v", err)
+	route, ok, err := harness.selections.ModelRoute("session-fresh")
+	if err != nil {
+		t.Fatalf("ModelRoute for a registered session with no choice: %v", err)
 	}
-	if len(installed) != 0 {
-		t.Fatalf("installed %v, want the configured adapter left in place", installed)
+	if ok || route.Adapter != nil {
+		t.Fatalf("route = %+v, want no route so the configured model serves the run", route)
 	}
 	// The record is still there, still with no choice, so the composer keeps its
 	// projection key and the session is not silently forgotten.
@@ -904,11 +904,18 @@ func TestRegisteredSessionWithoutAChoiceKeepsTheConfiguredModel(t *testing.T) {
 	if _, err := harness.selections.SelectModel("session-chosen", dshapi.ModelSelection{Provider: "acme", Model: "acme-1"}); err != nil {
 		t.Fatalf("SelectModel: %v", err)
 	}
-	if err := harness.selections.ApplyModelSelection("session-chosen"); err != nil {
-		t.Fatalf("ApplyModelSelection for a chosen session: %v", err)
+	chosen, ok, err := harness.selections.ModelRoute("session-chosen")
+	if err != nil || !ok {
+		t.Fatalf("ModelRoute for a chosen session = (%+v, %v, %v), want its own route", chosen, ok, err)
 	}
-	if len(installed) != 1 {
-		t.Fatalf("installed %v, want exactly the chosen session's adapter", installed)
+	if chosen.Adapter == nil || chosen.Provider != "acme" || chosen.Model != "acme-1" {
+		t.Fatalf("route = %+v, want exactly the chosen session's adapter", chosen)
+	}
+	// And the host's live adapter is untouched by either read: only the settings
+	// page decides what that one is (ADR 0140).
+	after, afterErr := harness.store.model.current()
+	if after != before || (afterErr == nil) != (beforeErr == nil) {
+		t.Fatalf("live adapter changed from (%v, %v) to (%v, %v)", before, beforeErr, after, afterErr)
 	}
 }
 
