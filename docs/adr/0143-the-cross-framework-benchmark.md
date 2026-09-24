@@ -182,7 +182,15 @@ $ cd benchmarks && go run ./cmd/bench -tasks all \
 | durable-task | eino | success | 3 | 40 | 40 | 5 | 11857 | 6270 | paused -> completed |
 
 The exit status is 0: every cell passed every verifier check, and every cell's
-request count and byte counts were identical across its three repeats. The run
+request count and byte counts were identical across its three repeats. The same
+command is the CI `Benchmark` job, and it passed all twelve cells on
+`ubuntu-latest` as well; the latencies there are a different machine's (ZenForge
+is 76-116 ms on Linux against 732-1340 ms on macOS, where process start-up is
+dearer), and the prompt sizes differ by a few bytes because the workspace path
+travels in the requests (7108 against 7152 for one cell). Byte counts are
+therefore comparable between frameworks on one machine and reproducible across
+repeats on that machine, which is what the comparison uses them for; they are not
+identical across machines, and no claim here rests on them being so. The run
 was repeated independently by the harness author on the same machine, and the
 deterministic columns came out identical while the medians moved by roughly ten
 percent, which is the noise a wall-clock median is there to absorb.
@@ -285,6 +293,14 @@ during implementation, and the boundaries this chain deliberately stops at:
     the benchmark had no entry on the front door. Both are fixed here because the
     chain edits that file anyway, and a wrong count on the front door is the same
     class of defect these chains exist to remove.
+
+11. **Prompt bytes are comparable per machine, not across machines.** Every
+    request carries the workspace path, so a Linux checkout of a different length
+    shifts the absolute count by a few bytes (7108 against 7152 for one CI cell).
+    The harness's determinism rule is scoped correctly -- it asserts that a cell's
+    bytes do not differ between *its own* repeats -- and the table above is
+    labelled with the machine it was taken on. A reader reproducing it elsewhere
+    should compare frameworks within their own run, not to these absolutes.
 
 Deliberately **not** done: this chain does not measure a real provider (see 5), it
 does not add more tasks, and it does not tune any runner to improve a number.
