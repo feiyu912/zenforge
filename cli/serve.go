@@ -45,6 +45,19 @@ const (
 	// maxSettingsBodyBytes caps the settings body. The fields are short, and
 	// an endpoint that accepts a key should not accept an unbounded upload.
 	maxSettingsBodyBytes = 1 << 16
+	// serveConsoleOn and serveConsoleOff are the only two values --console
+	// accepts. The console is opt-out rather than opt-in because serving it is
+	// what `zenforge serve` has always done and a default that changed would
+	// silently take a surface away from every existing deployment; off is the
+	// headless mode a caller who wants the harness API alone asks for, and it is
+	// the runtime half of the layering rule in ADR 0099.
+	serveConsoleOn  = "on"
+	serveConsoleOff = "off"
+	// consoleDisabledCode is the error code a console-off host answers every
+	// path it does not otherwise serve with. It names the missing capability
+	// rather than the absent file, which is what lets a client tell "this host
+	// runs headless" from "this route never existed".
+	consoleDisabledCode = "console_disabled"
 )
 
 // serveCommand hosts the HTTP harness and the built-in console. It is the
@@ -77,6 +90,14 @@ func serveCommand(ctx context.Context, args []string, ioStreams IO) error {
 	// and an empty secret disables the signed webhook route rather than
 	// allowing an unauthenticated run trigger.
 	webhookSecret := fs.String("webhook-secret", strings.TrimSpace(os.Getenv("ZENFORGE_WEBHOOK_SECRET")), "shared secret for the signed POST /webhook/run trigger; empty disables the endpoint")
+	// The console is the one HTML surface this command offers, so it is opt-out:
+	// --console=off builds a host that serves the harness routes, /api/server and
+	// -- when authentication is configured -- the sign-in page, with no console
+	// path, no WebSocket mux and no settings document at all. The sign-in page is
+	// the one exception to "no HTML", because a caller without a token has to be
+	// able to reach the form that gives it one. It is serve-only -- no other
+	// subcommand mounts the console -- so it stays out of the shared option set.
+	consoleMode := fs.String("console", serveConsoleOn, "serve the built-in DSH console at / (on), or serve the harness API alone with no console surface (off)")
 	if err := fs.Parse(args); err != nil {
 		return invalidUsage(err)
 	}
@@ -85,6 +106,18 @@ func serveCommand(ctx context.Context, args []string, ioStreams IO) error {
 	}
 	if err := validateOptionEnums(opts); err != nil {
 		return invalidUsage(err)
+	}
+	if err := validateConsoleMode(*consoleMode); err != nil {
+		return invalidUsage(err)
+	}
+	// --settings-file names the console's settings document, and a headless host
+	// neither reads nor writes one: it takes its model from the flags the way
+	// `zenforge run` does. Accepting the flag there would drop what an operator
+	// asked for without saying so, which is the failure this whole command
+	// refuses elsewhere -- a host that cannot do what it was told to refuses to
+	// start instead of starting differently.
+	if !consoleEnabled(*consoleMode) && strings.TrimSpace(*settingsFile) != "" {
+		return invalidUsage(errors.New("--settings-file names the console's settings document, which a host started with --console=off never reads or writes; configure that host with --provider, --model, --api-key and --base-url instead"))
 	}
 	if *runTimeout <= 0 {
 		return invalidUsage(errors.New("--run-timeout must be positive"))
@@ -129,6 +162,7 @@ func serveCommand(ctx context.Context, args []string, ioStreams IO) error {
 		webhookSecret: *webhookSecret,
 		allowRemote:   *allowRemote,
 		settingsFile:  *settingsFile,
+		console:       *consoleMode,
 		auth:          authConfig,
 	})
 	if err != nil {
@@ -152,7 +186,13 @@ func serveCommand(ctx context.Context, args []string, ioStreams IO) error {
 		serverErrors <- server.Serve(listener)
 	}()
 	_, _ = fmt.Fprintf(ioStreams.Stdout, "zenforge serve listening on http://%s\n", listener.Addr())
-	_, _ = fmt.Fprintln(ioStreams.Stdout, "open it in a browser; set the model endpoint and API key under the gear icon")
+	if consoleEnabled(*consoleMode) {
+		_, _ = fmt.Fprintln(ioStreams.Stdout, "open it in a browser; set the model endpoint and API key under the gear icon")
+	} else {
+		// A headless host tells the operator what it is instead of pointing them
+		// at a page that would answer the disabled-console envelope.
+		_, _ = fmt.Fprintln(ioStreams.Stdout, "console: disabled (--console=off); this host serves the harness API only")
+	}
 	if authConfig.required {
 		_, _ = fmt.Fprintf(ioStreams.Stdout, "authentication: required; sign in at http://%s%s, and present tokens as `Authorization: Bearer <token>`\n", listener.Addr(), auth.SignInPath)
 		if authConfig.audit != nil {
@@ -324,25 +364,84 @@ type serveConfig struct {
 	// settings document lives at, or empty for the host's own configuration
 	// directory (ADR 0102).
 	settingsFile string
+	// console is the --console decision: serve the DSH console at "/" (on), or
+	// run headless with no console surface at all (off). An empty value is
+	// the zero serveConfig a test builds, and it means on, so the default this
+	// field protects is the flag's own default.
+	console string
 	// auth is the caller-identity decision: the tokens this host accepts, whether
 	// it requires one, and the audit trail it appends every decision to. Nil means
 	// the tests' default: no tokens, nothing required, nothing recorded.
 	auth *serveAuth
 }
 
+// consoleEnabled reports whether a --console value asks for the console. It is a
+// function of the value rather than a method so the startup line and the
+// assembly below cannot disagree about what "off" means.
+func consoleEnabled(mode string) bool {
+	return !strings.EqualFold(strings.TrimSpace(mode), serveConsoleOff)
+}
+
+// consoleEnabled reports whether this host was asked to serve the console.
+func (c serveConfig) consoleEnabled() bool { return consoleEnabled(c.console) }
+
+// validateConsoleMode refuses a --console value this host does not implement, in
+// the same shape validateSandboxBackend uses: the value and the accepted list
+// are both named, so a typo is a usage error rather than a host that silently
+// serves -- or silently withholds -- the console.
+func validateConsoleMode(mode string) error {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case serveConsoleOn, serveConsoleOff:
+		return nil
+	default:
+		return fmt.Errorf("unknown console mode %q (want on or off)", mode)
+	}
+}
+
+// requireServeModel refuses a host that has neither a console nor a model.
+//
+// A console host may start with no credential: the settings panel is where an
+// operator pastes one, and the run path reports the provider's failure when a
+// run needs it. A headless host has no page to fix anything on, so starting
+// without a model would mean serving an address whose every run fails with a
+// provider error the caller cannot repair. It fails closed here instead, the way
+// the identity rules in this file refuse a host that cannot authenticate.
+//
+// The flags are named because the provider's own error names an environment
+// variable, and an operator who passed --provider or --model would not otherwise
+// learn that the flag was accepted and the host still has no model. An explicit
+// model override counts as configured: it is the caller's own adapter, and
+// buildAgentConfig deliberately never falls back past one.
+func requireServeModel(opts *options) error {
+	if opts.modelOverride != nil {
+		return nil
+	}
+	if _, err := buildModel(*opts); err != nil {
+		return fmt.Errorf(
+			"a host started with --console=off has no settings page to configure a model on, and this one has none: %w; start it with --provider, --model, --api-key and/or --base-url, or with the environment variables those flags read, or serve it with --console=on and fill in the settings panel",
+			err)
+	}
+	return nil
+}
+
 // serveApp is the assembled server a command or a test can drive. It exists
 // as a value so the tests exercise the real handler through httptest instead
 // of binding a port and racing a goroutine to learn it.
 type serveApp struct {
-	runtime   *harnesshttp.Runtime
-	handler   http.Handler
+	runtime *harnesshttp.Runtime
+	handler http.Handler
+	// settings is the console's settings store, and nil on a host started with
+	// --console=off: that host has no settings document, no /api/settings route,
+	// and no console page that could read one. A caller must not assume it.
 	settings  *settingsStore
 	workspace string
 	auth      *serveAuth
 }
 
-// Handler returns the fully routed handler: harness routes, settings API, and
-// the embedded console, in the same precedence a browser sees.
+// Handler returns the fully routed handler: harness routes, the server-info
+// route, and the embedded console when one was built, in the same precedence a
+// browser sees. /api/settings is part of the console and is only routed on a
+// console host.
 func (a *serveApp) Handler() http.Handler {
 	return a.handler
 }
@@ -358,6 +457,14 @@ func (a *serveApp) Close(ctx context.Context) error {
 // newServeApp builds the model, stores, approval broker, run manager, and
 // route table exactly once. It is the seam the tests use: everything about
 // serving except the listener lives here.
+//
+// The assembly is in two tiers. What is built unconditionally is what the
+// harness and the host's own APIs need: the approval broker, the agent
+// configuration and its model, the run registry, the harness runtime, and the
+// route table. The console is built by newConsoleAdapter at the end and only
+// when this host was asked for it, so --console=off is a host that never
+// constructs dshmount, dshstream, the settings document or the console's model
+// configuration rather than one that builds a console and hides it (ADR 0099).
 func newServeApp(ctx context.Context, opts *options, ioStreams IO, config serveConfig) (*serveApp, error) {
 	// Approvals are answered from the browser through /approvals and
 	// /approval, so the run's broker is the same in-memory pending broker the
@@ -366,79 +473,106 @@ func newServeApp(ctx context.Context, opts *options, ioStreams IO, config serveC
 	inbox := approval.NewPendingBroker(0)
 	opts.approvalOverride = inbox
 
-	// The model is a delegating adapter rather than a concrete one: the agent
-	// is assembled once, and a later settings POST has to affect runs that
-	// start afterwards without rebuilding the agent (which would drop the
-	// tools, stores, and MCP processes already wired). Every model call reads
-	// the adapter current at that moment.
-	swappable := newSwappableModel()
-	opts.modelOverride = swappable
-
-	// The startup seed: what --base-url, --model, --api-key and the config layers
-	// produced. The settings document is compared against it so the host can name
-	// the fields it overrides.
-	seed := serverSettings{
-		baseURL:   opts.baseURL,
-		model:     opts.model,
-		provider:  opts.provider,
-		apiKey:    opts.apiKey,
-		apiKeyEnv: opts.apiKeyEnv,
-	}
-	settings := &settingsStore{
-		current: seed,
-		seed:    seed,
-		model:   swappable,
-
-		allowRemote: config.allowRemote,
-	}
-	// The served directory, resolved before anything reads it: the settings
-	// document is refused inside it, and the console's workspace registry is
-	// built around it.
+	// The served directory. /api/server reports it and the console builds its
+	// workspace registry around it; computing it here keeps the two the same
+	// value, and it is resolved before anything reads it.
 	workspace := opts.workspace
 	if absolute, absErr := filepath.Abs(opts.workspace); absErr == nil {
 		workspace = absolute
 	}
-	profiles := newConsoleProviderProfiles(settings)
-	settings.profiles = profiles
-	// The model-selection store is built before the document is read, because the
-	// document carries the model each session chose and a restart restores it
-	// through this store (ADR 0103). It is wired to the settings store both ways:
-	// the document's snapshot asks it for the records, and a recorded choice asks
-	// the settings store to write the document.
-	models := consoleModels{settings: settings, profiles: profiles}
-	selections := newConsoleModelSelection(settings, models)
-	settings.selections = selections
-	// The console's settings document is read before the adapter is built, so the
-	// first run this host serves already uses the endpoint, the model and the
-	// credential the operator set in the browser last time (ADR 0102). A document
-	// that exists but cannot be read stops the host here, before a listener is
-	// opened, with the file named.
-	if _, err := newConsoleSettingsDocument(config.settingsFile, workspace, settings, profiles); err != nil {
+
+	// The console's model path is the console's alone, and it is all-or-nothing.
+	// A console host seeds a settings store from its flags, installs a delegating
+	// adapter a settings POST can swap, wires the provider and selection stores the
+	// console's pages read, and reads the durable document that outlives a restart.
+	// A headless host builds none of it: no store, no document, no swappable
+	// adapter. Its model is what `zenforge run` would use -- the flags and the
+	// environment, read by buildAgentConfig below -- so --console=off removes the
+	// coupling instead of hiding it behind the console's configuration.
+	var (
+		settings   *settingsStore
+		profiles   *consoleProviderProfiles
+		models     consoleModels
+		selections *consoleModelSelection
+	)
+	if config.consoleEnabled() {
+		// The model is a delegating adapter rather than a concrete one: the agent
+		// is assembled once, and a later settings POST has to affect runs that
+		// start afterwards without rebuilding the agent (which would drop the
+		// tools, stores, and MCP processes already wired). Every model call reads
+		// the adapter current at that moment.
+		swappable := newSwappableModel()
+		opts.modelOverride = swappable
+
+		// The startup seed: what --base-url, --model, --api-key and the config
+		// layers produced. The settings document is compared against it so the
+		// host can name the fields it overrides.
+		seed := serverSettings{
+			baseURL:   opts.baseURL,
+			model:     opts.model,
+			provider:  opts.provider,
+			apiKey:    opts.apiKey,
+			apiKeyEnv: opts.apiKeyEnv,
+		}
+		settings = &settingsStore{
+			current: seed,
+			seed:    seed,
+			model:   swappable,
+
+			allowRemote: config.allowRemote,
+		}
+		profiles = newConsoleProviderProfiles(settings)
+		settings.profiles = profiles
+		// The model-selection store is built before the document is read, because
+		// the document carries the model each session chose and a restart restores
+		// it through this store (ADR 0103). It is wired to the settings store both
+		// ways: the document's snapshot asks it for the records, and a recorded
+		// choice asks the settings store to write the document.
+		models = consoleModels{settings: settings, profiles: profiles}
+		selections = newConsoleModelSelection(settings, models)
+		settings.selections = selections
+		// The settings document is read before the adapter is built, so the first
+		// run this host serves already uses the endpoint, the model and the
+		// credential the operator set in the browser last time (ADR 0102). A
+		// document that exists but cannot be read stops the host here, before a
+		// listener is opened, with the file named.
+		if _, err := newConsoleSettingsDocument(config.settingsFile, workspace, settings, profiles); err != nil {
+			return nil, err
+		}
+		// A missing key at startup is not fatal for a console host: the settings
+		// panel exists so an operator can paste one. The build error is kept and
+		// reported when a run actually needs the model, instead of refusing to start
+		// the server.
+		settings.rebuild()
+	} else if err := requireServeModel(opts); err != nil {
 		return nil, err
 	}
-	// A missing key at startup is not fatal: the console exists so an
-	// operator can paste one. The build error is kept and reported when a run
-	// actually needs the model, instead of refusing to start the server.
-	settings.rebuild()
 
 	agentConfig, events, err := buildAgentConfig(ctx, opts, ioStreams)
 	if err != nil {
 		return nil, err
 	}
-	// A run started from a session's selection carries its own adapter, but a
-	// resumed one carries only the route its checkpoint froze, so this host must
-	// be able to rebuild that route by name. The console's catalog answers for
-	// every route it declares, and anything it does not declare at all falls to
-	// the CLI's resolver, which is how a workflow script's agent() still names a
-	// provider the console never added (ADR 0140).
-	agentConfig.ModelResolver = consoleRouteResolver{models: models, fallback: agentConfig.ModelResolver}
-	// The run registry is what the console lists sessions from, so it is durable:
-	// with only the manager's in-process records, a restart -- and the ten-minute
-	// terminal retention -- emptied the sidebar while every transcript stayed in
-	// the event store. A SQLite registry next to the store keeps the status of
-	// every run this install served, and a run whose owner died keeps its
-	// active status but loses its lease, which the console reads as not running
-	// (ADR 0109).
+	if config.consoleEnabled() {
+		// A run started from a session's selection carries its own adapter, but a
+		// resumed one carries only the route its checkpoint froze, so this host
+		// must be able to rebuild that route by name. The console's catalog answers
+		// for every route it declares, and anything it does not declare at all
+		// falls to the CLI's resolver, which is how a workflow script's agent()
+		// still names a provider the console never added (ADR 0140).
+		//
+		// A headless host keeps the CLI's resolver as buildAgentConfig set it,
+		// which knows the host's own route and each provider's conventional
+		// environment, and nothing else.
+		agentConfig.ModelResolver = consoleRouteResolver{models: models, fallback: agentConfig.ModelResolver}
+	}
+	// The run registry is durable, and it belongs to the host rather than to the
+	// console: the harness's own /runs route lists from it with or without a
+	// console, and the console's session list is a projection of the same rows.
+	// With only the manager's in-process records, a restart -- and the ten-minute
+	// terminal retention -- emptied that list while every transcript stayed in the
+	// event store. A SQLite registry next to the store keeps the status of every
+	// run this install served, and a run whose owner died keeps its active status
+	// but loses its lease, which a reader sees as not running (ADR 0109).
 	registryPath, err := runRegistryPath(opts)
 	if err != nil {
 		return nil, err
@@ -472,148 +606,24 @@ func newServeApp(ctx context.Context, opts *options, ioStreams IO, config serveC
 		return nil, err
 	}
 
-	// The console groups sessions by workspace, and this host runs every
-	// session in one directory: the registry it hands the console is built
-	// around that directory (ADR 0101). A workspace that cannot be opened
-	// leaves the face nil, so the namespace answers unimplemented with the
-	// dependency named instead of showing an empty registry -- and the reason
-	// is logged once, here, instead of on every request.
-	workspaces, workspacesErr := newConsoleWorkspaces(workspace)
-	if workspacesErr != nil {
-		slog.Warn("console workspace grouping is disabled: the host workspace could not be opened",
-			"workspace", workspace, "error", workspacesErr)
-	}
-	var workspaceRegistry dshapi.WorkspaceRegistry
-	var workspaceBaseline func() dshstream.WorkspaceBaseline
-	var workspaceUpdates func(observe func(dshstream.WorkspaceUpdate)) (unsubscribe func())
-	if workspaces != nil {
-		workspaceRegistry = workspaces
-		workspaceBaseline = workspaces.Baseline
-		workspaceUpdates = workspaces.Subscribe
-	}
-
-	// The DSH console is the product surface: its boot-injected shell, staged
-	// assets, module bundles, and unary RPCs share one origin, which is what the
-	// console requires (its RPC base is hard-wired to the page origin). Building
-	// it is where a roster that cannot boot fails, before a listener is opened.
-	// The console's model selector asks the host what it is configured with.
-	// The settings store is the answer, so the picker reports the operator's
-	// own endpoint and model instead of an invented one; an unconfigured host
-	// returns an empty catalog and the console says so.
-	modelCatalog := models.Catalog
-	// The console's goal dock reads and mutates a session's goal through the
-	// goals/* namespace. The state is the framework's own goal store, in the same
-	// directory the command line and the goal tools use, so a goal is the same
-	// goal whichever surface created it (ADR 0125).
-	consoleGoalStore := newConsoleGoals(goals.NewFileStore(goalStorePath(opts.checkpointDir)))
-	// The Models page loads its provider directory before it renders any card,
-	// so a missing answer is not a missing nicety: the page reports that loading
-	// the directory failed and shows nothing. The live half is the route this
-	// host is configured to serve; the configurable half is every route the
-	// host's own adapter factory accepts.
-	llmDirectory := func() dshapi.LlmDirectory {
-		liveProvider := strings.TrimSpace(settings.view().Provider)
-		if liveProvider == "" {
-			liveProvider = provider.OpenAI
-		}
-		configurable := []dshapi.LlmConfigurableProvider{}
-		// Every configurable route carries its address in the pi-ai namespace: the
-		// built-in routes are seeded there with the host's own configuration, and
-		// hand-declared routes follow them (ADR 0122). A route advertised under a
-		// namespace name the console does not know renders as a card with no fields
-		// and a disabled save, which is what the Models page used to show.
-		for _, status := range profiles.ProviderProfiles() {
-			configurable = append(configurable, consoleDeclaredProvider(status))
-		}
-		return dshapi.LlmDirectory{
-			Live: []dshapi.LlmProviderInfo{{
-				ID:   liveProvider,
-				Name: consoleProviderName(liveProvider),
-			}},
-			Configurable: configurable,
-		}
-	}
-	// A projected transcript labels each assistant message with the model that
-	// answered. The session's own choice wins where there is one (the console's
-	// selection store reports it); this is the fallback: the route and model the
-	// host was configured to serve, which is exactly what a session that chose
-	// nothing runs on.
-	modelDefault := func() dshwire.Identity {
-		view := settings.view()
-		route := strings.TrimSpace(view.Provider)
-		if route == "" {
-			route = provider.OpenAI
-		}
-		return dshwire.Identity{Provider: route, Model: strings.TrimSpace(view.Model)}
-	}
-	// The attachment store is built once and handed to both halves: the mount
-	// publishes what a prompt carried, and the stream reads it back so the
-	// console's transcript of that turn shows it (ADR 0139).
-	attachments := consoleAttachments(opts.checkpointDir, opts.workspace)
-	console, err := dshmount.New(runtime.Manager, runtime.Events, dshmount.Config{
-		AllowRemote:      config.allowRemote,
-		ModelCatalog:     modelCatalog,
-		ModelDefault:     modelDefault,
-		Logger:           slog.Default(),
-		Credentials:      consoleCredentials{settings: settings},
-		LlmDirectory:     llmDirectory,
-		Settings:         consoleSettings{settings: settings},
-		ProviderProfiles: profiles,
-		ModelSelections:  selections,
-		Presets:          consolePresets(opts),
-		WorkspaceFiles:   consoleFileFace(opts),
-		// The console's `@` menu reads the same directory the file browser does
-		// (ADR 0134), so a path it offers is a path the host can read.
-		FileReferences: consoleFileReferences(opts.workspace),
-		// The console's attachments live in the host's own state tree, next to the
-		// sessions that refer to them (cli/attachments.go).
-		Attachments: attachments,
-		Commands:    consoleCommandCatalog(opts),
-		Workspaces:  workspaceRegistry,
-		Goals:       consoleGoalStore,
-		// The skills panel reads the same catalog the runs advertise (ADR 0131),
-		// so the panel cannot list a skill the agent would not be able to load.
-		Skills: consoleSkillCatalog(*opts),
+	// The console is assembled last and separately, because it is optional: with
+	// --console=off this is a nil adapter and not one of the stores, catalogs or
+	// handlers below is built. The stores it is handed were built in the guarded
+	// block above, which a headless host skips entirely.
+	adapter, err := newConsoleAdapter(consoleAdapterConfig{
+		opts:       opts,
+		config:     config,
+		settings:   settings,
+		workspace:  workspace,
+		profiles:   profiles,
+		models:     models,
+		selections: selections,
+		runtime:    runtime,
 	})
 	if err != nil {
 		return nil, err
 	}
-
-	// The console cannot follow a session over unary RPC: sessions, live events
-	// and approvals travel on the WebSocket mux, and an approval is answered on
-	// its own route. Both are the same handler, mounted at the paths that
-	// package exports, so the two halves cannot drift apart.
-	stream, err := dshstream.New(runtime.Manager, runtime.Events, inbox, dshstream.Config{
-		AllowRemote:           config.allowRemote,
-		InputAttachments:      dshapi.PromptInputAttachments(consolePromptAttachments(attachments, context.Background())),
-		ModelSelections:       selections.States,
-		ModelSelectionUpdates: selections.Updates,
-		Workspaces:            workspaceBaseline,
-		WorkspaceUpdates:      workspaceUpdates,
-		// The console opens a session's history the moment it creates it, before
-		// the first prompt has started a run. The RPC handler is the only place
-		// that knows which sessions those drafts are, so the follow stream asks it
-		// rather than refusing a session this host created (ADR 0104).
-		DraftSessions: console.IsDraftSession,
-		// The same provenance label session/page writes, resolved the same way
-		// (the session's choice first) so the transcript reads the same live and
-		// after a reload.
-		ModelDefault: modelDefault,
-		// The goal dock's two live carriers: the control stream's projection
-		// frames and the `goal/activation-changed` emit both ride this change
-		// feed, so the two cannot disagree about a commit.
-		Goals:       consoleGoalStore.Projection,
-		GoalUpdates: consoleGoalStore.Updates,
-		// The console's pending queue: the messages a prompt queued while a turn
-		// was running, in the `inbox` cell the queue rows and the submission-echo
-		// retirement read, and the change feed the control stream's frames ride
-		// (ADR 0130).
-		Queue:        console.PendingQueue,
-		QueueUpdates: console.PendingQueueUpdates,
-	})
-	if err != nil {
-		return nil, err
-	}
+	console, stream := adapter.handlers()
 
 	mux := newServeMux(serveMuxConfig{
 		auth: config.auth,
@@ -647,6 +657,224 @@ func newServeApp(ctx context.Context, opts *options, ioStreams IO, config serveC
 	}, nil
 }
 
+// consoleAdapterConfig is what the console-only assembly reads from the core
+// assembly: the stores the console's namespaces answer from, the runtime whose
+// manager and event store the mount and the stream share, and the serve knobs
+// the console mirrors. It is a value rather than a list of arguments so the
+// boundary between newServeApp and newConsoleAdapter is one readable call, and
+// so a test can build an adapter without rebuilding a host.
+type consoleAdapterConfig struct {
+	opts *options
+	// config carries the console decision itself, plus the one serve knob the
+	// console's mount and stream mirror: --allow-remote, which decides whether
+	// the console may be reached from off this machine.
+	config serveConfig
+	// settings is the console's model configuration and credential. The console
+	// writes it through its own settings and credentials faces, and /api/settings
+	// serves the same store; it is never nil here, because newConsoleAdapter
+	// returns before reading it when this host has no console.
+	settings *settingsStore
+	// workspace is the absolute served directory the console's workspace
+	// registry, file face and `@` menu are all built around.
+	workspace string
+	// profiles and models are the provider stores the Models page reads. They are
+	// built by newServeApp because the host's settings document is read there,
+	// before the adapter exists, and the document snapshots the profiles -- the
+	// console is their reader, not their owner.
+	profiles *consoleProviderProfiles
+	models   consoleModels
+	// selections is the per-session model-choice store the composer writes and
+	// the follow stream's model-selection projections read.
+	selections *consoleModelSelection
+	// runtime is the assembled harness runtime. The console's mount answers
+	// unary RPCs through its manager and event store, and its stream carries the
+	// same runs' sessions, approvals and live events.
+	runtime *harnesshttp.Runtime
+}
+
+// consoleAdapter is the console's two served halves: the unary mount at "/" and
+// the WebSocket mux at the paths dshstream exports. They are one value because
+// they are built from one set of stores, and a host either has both or neither.
+type consoleAdapter struct {
+	mount  *dshmount.Mux
+	stream *dshstream.Handler
+}
+
+// handlers returns the handlers the route table mounts, or (nil, nil) on a host
+// with no console. A nil adapter is not a failure to report: it is the
+// --console=off host, and the route table answers the paths the console would
+// have claimed with the disabled-console envelope instead of mounting a surface
+// that was never built.
+func (a *consoleAdapter) handlers() (http.Handler, http.Handler) {
+	if a == nil {
+		return nil, nil
+	}
+	return a.mount, a.stream
+}
+
+// newConsoleAdapter builds the DSH console mount and its stream, or returns a
+// nil adapter when this host was asked to run headless.
+//
+// This function is the console tier's assembly, in one place: every store,
+// catalog and handler below exists to build a dshmount.Config or a
+// dshstream.Config, and none of them is constructed with --console=off. It is
+// handed stores newServeApp built in the same guarded block -- the settings
+// store, its provider and selection stores -- because those have to exist before
+// the settings document is read and before the run's route resolver is wired,
+// both of which happen before the adapter is assembled.
+//
+// The mount is also where a roster that cannot boot fails, before a listener is
+// opened: a console host either serves a working console or does not start.
+func newConsoleAdapter(cfg consoleAdapterConfig) (*consoleAdapter, error) {
+	// A headless host returns before any of these stores is read, so the nil
+	// settings, profiles and selections its config carries are never touched.
+	if !cfg.config.consoleEnabled() {
+		return nil, nil
+	}
+	// The console groups sessions by workspace, and this host runs every
+	// session in one directory: the registry it hands the console is built
+	// around that directory (ADR 0101). A workspace that cannot be opened
+	// leaves the face nil, so the namespace answers unimplemented with the
+	// dependency named instead of showing an empty registry -- and the reason
+	// is logged once, here, instead of on every request.
+	workspaces, workspacesErr := newConsoleWorkspaces(cfg.workspace)
+	if workspacesErr != nil {
+		slog.Warn("console workspace grouping is disabled: the host workspace could not be opened",
+			"workspace", cfg.workspace, "error", workspacesErr)
+	}
+	var workspaceRegistry dshapi.WorkspaceRegistry
+	var workspaceBaseline func() dshstream.WorkspaceBaseline
+	var workspaceUpdates func(observe func(dshstream.WorkspaceUpdate)) (unsubscribe func())
+	if workspaces != nil {
+		workspaceRegistry = workspaces
+		workspaceBaseline = workspaces.Baseline
+		workspaceUpdates = workspaces.Subscribe
+	}
+
+	// The DSH console is the product surface: its boot-injected shell, staged
+	// assets, module bundles, and unary RPCs share one origin, which is what the
+	// console requires (its RPC base is hard-wired to the page origin).
+	// The console's model selector asks the host what it is configured with.
+	// The settings store is the answer, so the picker reports the operator's
+	// own endpoint and model instead of an invented one; an unconfigured host
+	// returns an empty catalog and the console says so.
+	modelCatalog := cfg.models.Catalog
+	// The console's goal dock reads and mutates a session's goal through the
+	// goals/* namespace. The state is the framework's own goal store, in the same
+	// directory the command line and the goal tools use, so a goal is the same
+	// goal whichever surface created it (ADR 0125).
+	consoleGoalStore := newConsoleGoals(goals.NewFileStore(goalStorePath(cfg.opts.checkpointDir)))
+	// The Models page loads its provider directory before it renders any card,
+	// so a missing answer is not a missing nicety: the page reports that loading
+	// the directory failed and shows nothing. The live half is the route this
+	// host is configured to serve; the configurable half is every route the
+	// host's own adapter factory accepts.
+	llmDirectory := func() dshapi.LlmDirectory {
+		liveProvider := strings.TrimSpace(cfg.settings.view().Provider)
+		if liveProvider == "" {
+			liveProvider = provider.OpenAI
+		}
+		configurable := []dshapi.LlmConfigurableProvider{}
+		// Every configurable route carries its address in the pi-ai namespace: the
+		// built-in routes are seeded there with the host's own configuration, and
+		// hand-declared routes follow them (ADR 0122). A route advertised under a
+		// namespace name the console does not know renders as a card with no fields
+		// and a disabled save, which is what the Models page used to show.
+		for _, status := range cfg.profiles.ProviderProfiles() {
+			configurable = append(configurable, consoleDeclaredProvider(status))
+		}
+		return dshapi.LlmDirectory{
+			Live: []dshapi.LlmProviderInfo{{
+				ID:   liveProvider,
+				Name: consoleProviderName(liveProvider),
+			}},
+			Configurable: configurable,
+		}
+	}
+	// A projected transcript labels each assistant message with the model that
+	// answered. The session's own choice wins where there is one (the console's
+	// selection store reports it); this is the fallback: the route and model the
+	// host was configured to serve, which is exactly what a session that chose
+	// nothing runs on.
+	modelDefault := func() dshwire.Identity {
+		view := cfg.settings.view()
+		route := strings.TrimSpace(view.Provider)
+		if route == "" {
+			route = provider.OpenAI
+		}
+		return dshwire.Identity{Provider: route, Model: strings.TrimSpace(view.Model)}
+	}
+	// The attachment store is built once and handed to both halves: the mount
+	// publishes what a prompt carried, and the stream reads it back so the
+	// console's transcript of that turn shows it (ADR 0139).
+	attachments := consoleAttachments(cfg.opts.checkpointDir, cfg.opts.workspace)
+	mount, err := dshmount.New(cfg.runtime.Manager, cfg.runtime.Events, dshmount.Config{
+		AllowRemote:      cfg.config.allowRemote,
+		ModelCatalog:     modelCatalog,
+		ModelDefault:     modelDefault,
+		Logger:           slog.Default(),
+		Credentials:      consoleCredentials{settings: cfg.settings},
+		LlmDirectory:     llmDirectory,
+		Settings:         consoleSettings{settings: cfg.settings},
+		ProviderProfiles: cfg.profiles,
+		ModelSelections:  cfg.selections,
+		Presets:          consolePresets(cfg.opts),
+		WorkspaceFiles:   consoleFileFace(cfg.opts),
+		// The console's `@` menu reads the same directory the file browser does
+		// (ADR 0134), so a path it offers is a path the host can read.
+		FileReferences: consoleFileReferences(cfg.opts.workspace),
+		// The console's attachments live in the host's own state tree, next to the
+		// sessions that refer to them (cli/attachments.go).
+		Attachments: attachments,
+		Commands:    consoleCommandCatalog(cfg.opts),
+		Workspaces:  workspaceRegistry,
+		Goals:       consoleGoalStore,
+		// The skills panel reads the same catalog the runs advertise (ADR 0131),
+		// so the panel cannot list a skill the agent would not be able to load.
+		Skills: consoleSkillCatalog(*cfg.opts),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// The console cannot follow a session over unary RPC: sessions, live events
+	// and approvals travel on the WebSocket mux, and an approval is answered on
+	// its own route. Both are the same handler, mounted at the paths that
+	// package exports, so the two halves cannot drift apart.
+	stream, err := dshstream.New(cfg.runtime.Manager, cfg.runtime.Events, cfg.runtime.ApprovalInbox, dshstream.Config{
+		AllowRemote:           cfg.config.allowRemote,
+		InputAttachments:      dshapi.PromptInputAttachments(consolePromptAttachments(attachments, context.Background())),
+		ModelSelections:       cfg.selections.States,
+		ModelSelectionUpdates: cfg.selections.Updates,
+		Workspaces:            workspaceBaseline,
+		WorkspaceUpdates:      workspaceUpdates,
+		// The console opens a session's history the moment it creates it, before
+		// the first prompt has started a run. The RPC handler is the only place
+		// that knows which sessions those drafts are, so the follow stream asks it
+		// rather than refusing a session this host created (ADR 0104).
+		DraftSessions: mount.IsDraftSession,
+		// The same provenance label session/page writes, resolved the same way
+		// (the session's choice first) so the transcript reads the same live and
+		// after a reload.
+		ModelDefault: modelDefault,
+		// The goal dock's two live carriers: the control stream's projection
+		// frames and the `goal/activation-changed` emit both ride this change
+		// feed, so the two cannot disagree about a commit.
+		Goals:       consoleGoalStore.Projection,
+		GoalUpdates: consoleGoalStore.Updates,
+		// The console's pending queue: the messages a prompt queued while a turn
+		// was running, in the `inbox` cell the queue rows and the submission-echo
+		// retirement read, and the change feed the control stream's frames ride
+		// (ADR 0130).
+		Queue:        mount.PendingQueue,
+		QueueUpdates: mount.PendingQueueUpdates,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &consoleAdapter{mount: mount, stream: stream}, nil
+}
+
 // serveMuxConfig is the route table's inputs. They are handlers and a
 // registration callback rather than the runtime itself so the table can be
 // built and asserted in a test without a model, an event store, or a run
@@ -657,24 +885,39 @@ type serveMuxConfig struct {
 	// about routing wants.
 	auth            *serveAuth
 	registerHarness func(*http.ServeMux)
-	settings        *settingsStore
-	workspace       string
-	allowRemote     bool
-	dsh             http.Handler
-	stream          http.Handler
+	// settings is the console's settings store, and nil on a host with no
+	// console. A nil store means /api/settings is not registered, so it reaches
+	// the disabled-console catch-all instead of a handler over a document this
+	// host does not have.
+	settings    *settingsStore
+	workspace   string
+	allowRemote bool
+	// dsh is the console mount, or nil on a host started with --console=off. A
+	// nil one is not a routing mistake: the root catch-all below mounts the
+	// disabled-console envelope for it.
+	dsh http.Handler
+	// stream is the console's WebSocket mux, nil on the same host. Its paths are
+	// simply not registered then, so they reach the same disabled envelope.
+	stream http.Handler
 }
 
 // newServeMux assembles every served route. Precedence is the point:
 //
-//   - the harness routes, the settings API, and the server-info route register
-//     their exact patterns and win over the console catch-all;
+//   - the harness routes and the server-info route register their exact patterns
+//     and win over the console catch-all; /api/settings is the console's
+//     settings-document API and is registered with them only on a console host;
 //   - the DSH console is mounted at "/", where its own handler claims the shell,
 //     the staged assets, /plugins/..., and /api/... — the root path is required
-//     because the shell's asset URLs are relative.
+//     because the shell's asset URLs are relative;
+//   - on a host built with --console=off there is no console handler, no stream
+//     and no settings store, so the same catch-all answers the console's paths —
+//     /api/settings among them — with the 404 console_disabled envelope.
 //
-// The console is the only HTML surface serve offers: the interim first-party
+// The console is the only console surface serve offers: the interim first-party
 // console is deliberately not mounted, so a browser that asks for /classic/
-// falls through to the console's own 404 rather than a second interface.
+// falls through to the console's own 404 rather than a second interface. (The
+// sign-in page at /auth is a route, not a console, and it is served in either
+// mode when authentication is configured.)
 //
 // The returned handler is the admission policy wrapped around the table when one
 // was configured (ADR 0141). It is a handler rather than the mux itself so the
@@ -707,7 +950,14 @@ func newServeMux(cfg serveMuxConfig) http.Handler {
 			}
 		})
 	}
-	mux.HandleFunc("/api/settings", cfg.settings.serveHTTP)
+	// /api/settings is the console's settings-document API: its POST rewrites the
+	// model this host runs on through that document. A host built with
+	// --console=off has no document to read or write (cfg.settings is nil), so the
+	// route is not registered at all and falls to the catch-all below with every
+	// other console path.
+	if cfg.settings != nil {
+		mux.HandleFunc("/api/settings", cfg.settings.serveHTTP)
+	}
 	mux.HandleFunc("/api/server", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			writeServeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "server info requires GET")
@@ -722,12 +972,45 @@ func newServeMux(cfg serveMuxConfig) http.Handler {
 		mux.Handle(dshstream.MuxPath, cfg.stream)
 		mux.Handle(dshstream.EventsResultPath, cfg.stream)
 	}
-	mux.Handle("/", cfg.dsh)
+	if cfg.dsh != nil {
+		mux.Handle("/", cfg.dsh)
+	} else {
+		// A host started with --console=off has no console to mount, and the
+		// catch-all is still needed: without it, a path none of the exact routes
+		// claimed would be answered by net/http's own plain-text 404 instead of
+		// this host's envelope, and a client that already parses this host's
+		// failures would need a second parser for one answer.
+		mux.Handle("/", consoleDisabledHandler())
+	}
 	// The boundary wraps the assembled table rather than any one route: it is the
 	// only layer that sees the console's /api/*, the harness routes, the settings
 	// API, the sign-in routes and both streams, which is what makes it the one
 	// place that decides who is served.
 	return cfg.auth.wrap(mux)
+}
+
+// consoleDisabledHandler answers every path a console would have claimed on a
+// host started with --console=off. It is what makes the console optional at
+// runtime rather than only at compile time: with no console mounted, the paths
+// it owned -- the shell, the staged assets, /plugins/..., the settings-document
+// API at /api/settings, and every /api/<namespace>/<method> the console's client
+// declares -- reach this handler instead of an empty page.
+//
+// The answer is a 404 with the host's usual envelope and the code
+// console_disabled, not a 501: the path is genuinely not part of this host's
+// API, and a client probing /api/session/page must read "no such surface here"
+// rather than "this host is broken". The message names the flag, because an
+// operator who forgot which mode a deployment runs in has to be able to tell
+// from the response.
+//
+// It writes no HTML: a missing API path has to answer in the envelope every
+// other failure of this host uses, and the one page this host could render --
+// the sign-in form -- belongs to its own route rather than to a fallback.
+func consoleDisabledHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeServeError(w, http.StatusNotFound, consoleDisabledCode,
+			"the DSH console is not served by this host: it was started with --console=off, so only the harness routes, /api/server and (when authentication is configured) the sign-in routes are answered here")
+	})
 }
 
 // isLoopbackListenAddr reports whether addr proves it binds only the loopback

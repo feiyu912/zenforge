@@ -116,6 +116,34 @@ what is experimental, and what remains adapter territory.
   the only place a second provider's key can live. A name that cannot be
   resolved is a fatal `AGENT_START`, never a silent run on the host's model.
 
+## A headless host serves the API and nothing else
+
+`zenforge serve --console=off` is a supported mode, not a degraded one, and this
+is what it does not have (ADR 0144):
+
+- **No page, so no runtime model change.** The model comes from `--provider`,
+  `--model`, `--api-key`, `--base-url` and the environment, and there is no
+  settings document on that path: `/api/settings` is not registered, and a
+  deployment that wants to change the model restarts the host with different
+  flags. A host with no model **refuses to start**, naming those flags, because
+  there is nowhere to add a credential later; `--settings-file` is refused rather
+  than ignored for the same reason.
+- **No console paths at all.** `/`, `/assets/...`, `/plugins/...`, `/api/remote.mux`
+  and every `/api/<namespace>/<method>` answer `404` with
+  `{"error":{"code":"console_disabled",...}}` -- including the methods this host
+  *does* serve when the console is on. That code is deliberately distinct from the
+  console's own refusals (ADR 0082): a client can tell a host that runs headless
+  from a route that never existed.
+- **A resumed run keeps its frozen model, not the flags' model.** The flags supply
+  the endpoint and the credential; a checkpoint that froze provider `openai` and
+  model `the-checkpoints-model` resumes on that model name, and a route this host
+  does not know is refused by name (`unknown model provider: ...`) rather than
+  redirected to the configured endpoint (ADR 0140).
+- **The sign-in page is the one HTML surface that stays** when authentication is
+  configured: a caller with no token has to be able to reach the form that gives
+  it one. With `--require-auth` a headless host is therefore not literally
+  HTML-free, only console-free.
+
 ## Browser Console
 
 - The console `zenforge serve` offers at `/` is the **rebranded upstream DSH

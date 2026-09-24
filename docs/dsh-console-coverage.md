@@ -11,6 +11,14 @@ framework: the framework's own API is the deep API and the harness core, and it
 depends on none of this. See
 [ADR 0099](adr/0099-the-framework-core-and-the-console-adapter-are-separate-layers.md).
 
+It is also documentation of a surface a host can decline to serve. Since ADR 0144
+`zenforge serve --console=off` mounts no console at all: every row below is
+unreachable on that host, whose unmatched paths -- `/api/session/list` and
+`/assets/...` included -- answer `404` with the code `console_disabled` rather
+than any of the states in this table. The harness API the same host does serve is
+[the HTTP server guide](server-http-guide.md), which owes nothing to this
+ledger.
+
 ## How to read it
 
 | State | Meaning |
@@ -107,6 +115,7 @@ attach the prompt to the session it has open (ADR 0115).
 | `session/control` | stream | The control stream: job and model-selection projections. |
 | `session/follow` | stream | The follow stream: a session's durable event log, projected into the console's vocabulary. A draft's stream opens empty and waits for its first turn (ADR 0104, ADR 0105). A resumed stream cites a cursor ahead of the one the console already applied, so a second prompt does not break history loading (ADR 0108). A turn ending does not end the stream: it waits for the conversation's next turn and continues the same sequence, because the client treats a clean end after the snapshot as a carrier failure and reconnects over whatever `Load earlier` fetched (ADR 0114). The answer streams: the same durable deltas are minted into the console's dense `assistant-stream` frames (start/block-start/chunk/block-end/end, a per-frame revision, the settlement released by the end frame that names it), so prose renders as it arrives instead of at the step's settlement (ADR 0116). The window holds the console's events alone -- the host's bookkeeping and the deltas produce no records and consume no sequence numbers -- and the served sequence numbers records rather than durable events, so a conversation of several turns fits the window (ADR 0117). A reconnect in the middle of an answer is handed the attempt that is still streaming (`assistantStream.activeAttempt`, with the compact prefix of its chunks), and the live tail continues it instead of announcing a second start (ADR 0118); the snapshot cites the accumulator's real frame counter and publishes the conversation's `title` projection (ADR 0119). |
 | `workspace/follow` | stream | The workspace stream: every registration and the archived set. |
+| `workspaceFiles/changes` | stream | The subscription a file resource opens before it stats anything: the `ready` frame unblocks the tab, and this host sends no `change` frames because it watches no files (ADR 0120). A stream, not a unary route: the unary dispatcher has no arm for it, so a client that asks over HTTP gets the host's 404 and the subscription is opened on the mux. |
 | `fileUploads/upload` | served | stores the bytes and answers `{receiptId, file: {attachmentId, name, bytes}}`; the raw-byte route `/api/session/uploadFileBinary` writes into the same store (ADR 0138) |
 | `session/attachment` | served | answers `{attachment: {attachmentId, mediaType, bytes, width, height, name?}, data}` from the attachment store (ADRs 0138, 0139), with real dimensions read from the image header for PNG, JPEG, GIF and WebP alike; an id this session never stored, bytes that are not an image, or an image whose header this host cannot read is refused by name |
 
@@ -129,7 +138,6 @@ attach the prompt to the session it has open (ADR 0115).
 | `session/openWorkspacePath` | refused | this host serves the console in a browser and has no desktop carrier to open a path on; workspaceFiles/list and workspaceFiles/read show a file inside the session instead |
 | `settings/openAgentPresetDirectory` | refused | this host has no native editor to open a settings document or a preset directory in; configure the host with --base-url, --model, --api-key or the settings panel instead |
 | `settings/openSettingsDocument` | refused | this host has no native editor to open a settings document or a preset directory in; configure the host with --base-url, --model, --api-key or the settings panel instead |
-| `workspaceFiles/changes` | stream | The subscription a file resource opens before it stats anything: the `ready` frame unblocks the tab, and this host sends no `change` frames because it watches no files (ADR 0120). |
 | `workspaceFiles/readRelated` | refused | this host does not read a file relative to another; read the file by its own path |
 
 | `dynamicCordisRunner/getClientCode` | refused | this host ships a fixed set of console bundles and has no dynamic plugin runtime, so nothing in this namespace could be run, inspected or settled |

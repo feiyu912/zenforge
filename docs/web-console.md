@@ -6,6 +6,38 @@ is served by the same process and the same origin as the API: there is no second
 server to start, no CORS to configure, and no build step — the interface is
 embedded in the binary.
 
+## Running without the console
+
+The console is optional, and `serve` says so on its own command line:
+
+```bash
+zenforge serve --console=off --base-url https://api.openai.com/v1 \
+  --model gpt-4o-mini --api-key "$OPENAI_API_KEY"
+```
+
+That host serves the harness API and nothing else: `/runs/start`, `/runs/resume`,
+`/runs/status`, `/runs`, `/runs/attach`, `/runs/cancel`, `/approvals`,
+`/approval`, the signed webhook when `--webhook-secret` is set, `/api/server`,
+and the sign-in routes when authentication is configured. Every other path --
+including `/api/settings`, which is this console's own settings document API --
+answers `404` with the code `console_disabled`, so a client can tell a headless
+host from a route that never existed. There is no WebSocket mux, no settings
+document, and no page: the model comes from the flags and the environment, the
+way `zenforge run` takes it.
+
+Two consequences follow from having no page. The host **refuses to start without
+a model** (naming `--provider`, `--model`, `--api-key` and `--base-url`), because
+there would be nowhere to add a credential later; and `--settings-file` is
+refused with `--console=off` rather than accepted and ignored, because that flag
+names this console's document. A resumed run still keeps the model its checkpoint
+froze: the flags supply the endpoint and the credential, and a route the host does
+not know is refused by name instead of being redirected somewhere else.
+
+What the console adds is what a headless host gives up: the page, the session
+sidebar, per-session model selection, the goal dock, the file browser,
+attachments and the skills panel. ADR 0144 has the boundary and the tests that
+hold it.
+
 The page is the DSH console's own client interface, vendored unchanged, and it
 is a *consumer* of this host: each control is backed by a remote method the
 host answers. This host answers a subset of them, and refuses others by name

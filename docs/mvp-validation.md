@@ -368,6 +368,23 @@ fixture provenance under `adapters/zenmind` may name the external repository.
 | every runner's file tools stay inside the workspace it was given | `TestWorkspaceResolve`, `TestReadWriteFileToolsConfinement`, `TestRunShellRejectsEmptyCommand` |
 | the live mode that needs a credential is refused clearly rather than silently skipping | `TestLiveModeIsRefusedClearly` |
 
+## The Console Is Optional
+
+| Requirement | Evidence |
+| --- | --- |
+| `zenforge serve --console=off` starts a host that serves the harness API and nothing else, and says so on stdout | `cli.TestServeComesUpHeadlessFromTheFlag`, `cli.TestConsoleOffHostServesAFullDetachedRun` |
+| a headless host runs a real detached run end to end over HTTP -- start, status, list, attach -- on the model its flags named, and never reads or rewrites the settings document | `cli.TestConsoleOffHostServesAFullDetachedRun` |
+| the console is mounted with it on and named `console_disabled` with it off: console routes, the shell, the assets, the plugin bundles, the mux and `/api/settings` all differ between the two modes | `cli.TestTheConsoleIsMountedOrNamedDisabled` |
+| a host with no page to configure a model on refuses to start, naming the flags that configure one | `cli.TestConsoleOffHostRefusesToStartWithoutAModel` |
+| `--settings-file` is refused with `--console=off` rather than accepted and ignored | `cli.TestServeRefusesASettingsFileItWouldIgnore` |
+| an unknown `--console` value is a usage error naming the accepted ones | `cli.TestServeRefusesAnUnknownConsoleMode` |
+| a headless host still keeps the durable run registry and adopts the runs already in its state directory | `cli.TestConsoleOffHostAdoptsItsStoredRuns` |
+| a headless host keeps its admission boundary: the sign-in routes are reachable without a token and everything else is not | `cli.TestConsoleOffHostKeepsItsSignInRoutesAndItsBoundary` |
+| a resumed run keeps the model its checkpoint froze, and a route the host does not know is refused by name rather than redirected | `cli.TestConsoleOffHostResumesThroughTheCoreResolver` |
+| the console-on host still takes its model from the settings document, so making the console optional changed nothing for it | `cli.TestTheConsoleHostTakesItsModelFromTheSettingsDocument` |
+| the console adapter is still a separate layer at compile time: no file outside the adapter tier imports it or uses its vocabulary | `docs.TestCoreDoesNotImportTheConsoleAdapter`, `docs.TestConsoleVocabularyStaysOutOfTheCore` |
+| the coverage ledger still describes exactly what the served client declares, after the stream row moved to the stream section | `TestConsoleCoverageLedgerMatchesTheRoutingTable`, `TestConsoleCoverageLedgerListsExactlyWhatTheClientDeclares`, `TestConsoleCoverageNextUpNamesOnlyUnshippedGaps` |
+
 ## CI Evidence
 
 After each pushed phase, verify the latest commit with:

@@ -172,3 +172,4 @@ and what the adapter answers today is
 | [0141](0141-a-deployed-host-authenticates-its-callers.md) | A deployed host authenticates its callers: one boundary over every route, the browser session is the token, and a token attributes rather than partitions |
 | [0142](0142-the-scenario-examples-run-end-to-end.md) | The scenario examples run end to end: a scripted endpoint drives the real path, and the two defects the examples surfaced are fixed |
 | [0143](0143-the-cross-framework-benchmark.md) | A cross-framework benchmark that measures the harness: one scripted endpoint behind four frameworks, and four metrics that are not about model quality |
+| [0144](0144-the-console-is-optional-at-runtime.md) | The console is optional at runtime: one flag, one seam, and a served run that proves it |

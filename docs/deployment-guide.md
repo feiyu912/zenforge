@@ -190,6 +190,28 @@ on the `zenforge.Task` it starts, so each run's persistent approval grants are
 recorded under that caller's namespace rather than the host's configured one. A
 host that installs no controller behaves as before.
 
+## Run the Harness Without the Console
+
+A deployment that wants the HTTP API and no browser surface starts the headless
+host (ADR 0144):
+
+```bash
+zenforge serve --console=off --addr 0.0.0.0:8787 --allow-remote \
+  --auth-token-file /etc/zenforge/tokens.json \
+  --base-url https://api.openai.com/v1 --model gpt-4o-mini
+```
+
+It serves the harness routes, `/api/server` and the sign-in routes, mounts no
+console, keeps no settings document, and takes its model from those flags. A path
+it does not serve answers `404` with `{"error":{"code":"console_disabled",...}}`.
+Two startup rules are specific to this mode: a host with no model refuses to start
+(naming the flags, because there is no page to configure one on), and
+`--settings-file` is refused rather than ignored, because it names the console's
+document. Everything else in this guide -- tokens, the audit trail, the admission
+boundary, the durable run registry, stale-run recovery -- is unchanged, and the
+three scenario examples plus `examples/http-harness-agent` are the embedding
+reference if the harness is being embedded in another process rather than served.
+
 ## Deployment Acceptance
 
 ### Platform canary

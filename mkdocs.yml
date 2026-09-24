@@ -286,6 +286,7 @@ nav:
       - 0141 A deployed host authenticates its callers: adr/0141-a-deployed-host-authenticates-its-callers.md
       - 0142 The scenario examples run end to end: adr/0142-the-scenario-examples-run-end-to-end.md
       - 0143 A cross-framework benchmark that measures the harness: adr/0143-the-cross-framework-benchmark.md
+      - 0144 The console is optional at runtime: adr/0144-the-console-is-optional-at-runtime.md
 
 extra:
   social:

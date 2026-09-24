@@ -309,7 +309,9 @@ See [Quickstart](https://feiyu912.github.io/zenforge/quickstart/) and the
 - Optional run registries (memory/SQLite) share claims, leases, and durable
   status across managers; applications still own auth, routes, and lifecycle.
 - HMAC-signed webhooks can start runs without holding a credential; a local
-  web console rides in `zenforge serve`.
+  web console rides in `zenforge serve`, and `--console=off` serves the harness
+  API alone with no console, no settings document and the model taken from the
+  flags ([ADR 0144](docs/adr/0144-the-console-is-optional-at-runtime.md)).
 - A network-bound `zenforge serve` authenticates its callers: `--allow-remote`
   implies `--require-auth`, and `zenforge token create` mints the tokens
   ([ADR 0141](docs/adr/0141-a-deployed-host-authenticates-its-callers.md)).

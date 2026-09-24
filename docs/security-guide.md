@@ -173,6 +173,16 @@ deliberately no loopback exemption when the requirement is on: a reverse proxy
 on the same machine reaches this host as a loopback peer, so "the peer is
 loopback" is not by itself a security property.
 
+A host started with `--console=off` (ADR 0144) has fewer surfaces under that
+same boundary: no console shell or assets, no `/api/*` namespace, no WebSocket
+mux, and no `/api/settings` -- because that route is the console's settings
+document API, and the settings document is what fields the provider credential
+from the page. The harness run routes, `/api/server` and the sign-in routes
+remain, and a path the host does not serve answers `404` with the code
+`console_disabled` rather than an empty success. A headless host is configured
+with `--provider`, `--model`, `--api-key` and `--base-url` only, refuses to start
+without a model, and refuses `--settings-file` rather than ignoring it.
+
 Callers present a token as `Authorization: Bearer <token>` or as the
 `zenforge_session` cookie the `/auth` sign-in page sets. The cookie is
 `HttpOnly`, `SameSite=Strict`, and `Secure` only when configured; its value is

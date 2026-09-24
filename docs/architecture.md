@@ -19,6 +19,15 @@ user has to build, import, or know about. The rule is recorded in
 and enforced by `console_boundary_test.go`; what that adapter answers today is
 [the console coverage ledger](dsh-console-coverage.md).
 
+That rule is a compile-time one, and since ADR 0144 it is also a runtime one:
+`zenforge serve --console=off` serves the harness API, the server-info route and
+the sign-in routes with no console mounted, no settings document and no
+console-tier model configuration, and `cli/console_disabled_test.go` drives a
+real detached run over HTTP to keep that true. `examples/http-harness-agent`
+remains the embedding reference: `server/harnesshttp` alone serves detached runs,
+SSE, approvals, durable stores and webhooks with nothing from the adapter tier
+imported at all.
+
 ## Current Package Layout
 
 ```text
